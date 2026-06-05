@@ -25,8 +25,19 @@ export function registerIdentity(ctx: AppContext): Router {
       const provider = req.params.provider ?? "";
       const verifier = oauth.get(provider);
       if (!verifier) throw new ApiError("NOT_FOUND", "Unknown provider");
-      const { code } = parseBody(z.object({ code: z.string().min(1) }), req.body);
-      const profile = await verifier.verify(code);
+      const body = parseBody(
+        z.object({
+          code: z.string().min(1),
+          redirect_uri: z.string().url().optional(),
+          code_verifier: z.string().min(1).optional(),
+        }),
+        req.body,
+      );
+      const profile = await verifier.verify({
+        code: body.code,
+        ...(body.redirect_uri ? { redirectUri: body.redirect_uri } : {}),
+        ...(body.code_verifier ? { codeVerifier: body.code_verifier } : {}),
+      });
       const tokens = await svc.loginWithOAuth(profile);
       res.status(200).json(tokens);
     }),
