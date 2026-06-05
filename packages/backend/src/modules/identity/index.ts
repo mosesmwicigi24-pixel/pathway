@@ -60,6 +60,24 @@ export function registerIdentity(ctx: AppContext): Router {
     }),
   );
 
+  // --- Step-up MFA (§5.3) ---
+  r.post(
+    "/auth/mfa/enroll",
+    auth,
+    handler(async (req, res) => {
+      res.status(201).json(await svc.enrollMfa(requirePrincipal(req).userId));
+    }),
+  );
+
+  r.post(
+    "/auth/mfa/verify",
+    auth,
+    handler(async (req, res) => {
+      const { code } = parseBody(z.object({ code: z.string().regex(/^\d{6,10}$/) }), req.body);
+      res.json(await svc.verifyMfa(requirePrincipal(req).userId, code));
+    }),
+  );
+
   // --- Authenticated profile routes ---
   r.get(
     "/me",

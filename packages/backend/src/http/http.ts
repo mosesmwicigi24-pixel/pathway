@@ -10,6 +10,8 @@ export interface Principal {
   userId: string;
   role: AccessClaims["role"];
   congregationId: string;
+  mfa?: boolean; // a second factor was verified for the presenting token (§5.3)
+  mfaAt?: number; // unix seconds of that verification
 }
 
 // Augment Express Request with our principal.

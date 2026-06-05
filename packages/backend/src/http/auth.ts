@@ -30,7 +30,13 @@ export function authenticate(env: Env) {
         throw new ApiError("AUTH_REQUIRED", "Missing bearer token");
       }
       const claims = verifyAccessToken(env, header.slice("Bearer ".length).trim());
-      req.principal = { userId: claims.sub, role: claims.role, congregationId: claims.cong };
+      req.principal = {
+        userId: claims.sub,
+        role: claims.role,
+        congregationId: claims.cong,
+        ...(claims.mfa === true ? { mfa: true } : {}),
+        ...(typeof claims.mfa_at === "number" ? { mfaAt: claims.mfa_at } : {}),
+      };
       next();
     } catch (err) {
       next(err);
@@ -45,6 +51,29 @@ export function requireRole(min: UserRole) {
     if (!p) return next(new ApiError("AUTH_REQUIRED", "Authentication required"));
     if (ROLE_RANK[p.role] < ROLE_RANK[min]) {
       return next(new ApiError("FORBIDDEN_SCOPE", "Insufficient role"));
+    }
+    next();
+  };
+}
+
+/**
+ * Step-up MFA gate (§5.3): the presenting access token must carry a verified
+ * second factor that is still fresh. Compose with requireRole for SuperAdmin /
+ * financial-config actions, e.g. `r.post(path, auth, requireRole("SuperAdmin"),
+ * requireStepUp(), handler(...))`. The freshness window forces a re-prompt for
+ * sensitive operations even within an otherwise-valid session.
+ */
+export function requireStepUp(maxAgeSeconds = 900) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    const p = req.principal;
+    if (!p) return next(new ApiError("AUTH_REQUIRED", "Authentication required"));
+    const now = Math.floor(Date.now() / 1000);
+    if (p.mfa !== true || typeof p.mfaAt !== "number" || now - p.mfaAt > maxAgeSeconds) {
+      return next(
+        new ApiError("FORBIDDEN_SCOPE", "Step-up MFA required for this action", {
+          mfa_required: true,
+        }),
+      );
     }
     next();
   };

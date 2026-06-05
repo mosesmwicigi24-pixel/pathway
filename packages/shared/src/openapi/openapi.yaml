@@ -77,6 +77,33 @@ paths:
       responses:
         "204": { description: Logged out }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/mfa/enroll:
+    post:
+      tags: [auth]
+      summary: Begin TOTP enrollment; returns an otpauth URI for an authenticator app (§5.3).
+      responses:
+        "201":
+          description: Enrollment started (activates on first verify)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MfaEnroll" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/mfa/verify:
+    post:
+      tags: [auth]
+      summary: Verify a TOTP code; returns an MFA-elevated access token for step-up (§5.3).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MfaVerify" }
+      responses:
+        "200":
+          description: MFA-elevated access token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MfaElevation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me:
     get:
       tags: [auth]
@@ -504,6 +531,25 @@ components:
         platform: { type: string, enum: [ios, android] }
         app_version: { type: string, maxLength: 20 }
         push_token: { type: string, maxLength: 512 }
+    MfaEnroll:
+      type: object
+      required: [otpauth_uri, secret]
+      properties:
+        otpauth_uri: { type: string, description: otpauth:// URI for QR provisioning }
+        secret: { type: string, description: base32 TOTP secret (shown once for manual entry) }
+    MfaVerify:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, pattern: "^[0-9]{6,10}$" }
+    MfaElevation:
+      type: object
+      required: [access_token, token_type, expires_in, mfa_enabled]
+      properties:
+        access_token: { type: string, description: Access token carrying the verified mfa claim }
+        token_type: { type: string, enum: [Bearer] }
+        expires_in: { type: integer }
+        mfa_enabled: { type: boolean }
 
     GivingIntentRequest:
       type: object
