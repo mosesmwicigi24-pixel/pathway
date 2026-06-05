@@ -447,14 +447,34 @@ paths:
     post:
       tags: [system]
       summary: Delta pull — cursors in, changed rows + tombstones + new cursors out.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SyncPullRequest" }
       responses:
-        "200": { description: Delta }
+        "200":
+          description: Delta
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncPullResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /sync/push:
     post:
       tags: [system]
       summary: Replay the offline mutation queue; per-mutation results.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SyncPushRequest" }
       responses:
-        "200": { description: Per-mutation results }
+        "200":
+          description: Per-mutation results
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncPushResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
 components:
   securitySchemes:
@@ -728,3 +748,64 @@ components:
         review_id: { type: string, format: uuid }
         state: { type: string, enum: [approved, rejected] }
         leveled_up: { type: boolean }
+
+    # --- Offline sync (§3.6) ---
+    SyncPullRequest:
+      type: object
+      properties:
+        device_id: { type: string, format: uuid }
+        cursors:
+          type: object
+          additionalProperties: { type: integer }
+          description: Per-domain last-seen change_id
+    SyncPullResponse:
+      type: object
+      required: [changes, tombstones, cursors]
+      properties:
+        changes:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: object
+              required: [op, row]
+              properties:
+                op: { type: string, enum: [upsert] }
+                row: { type: object, additionalProperties: true }
+        tombstones:
+          type: object
+          additionalProperties: { type: array, items: { type: string, format: uuid } }
+        cursors:
+          type: object
+          additionalProperties: { type: integer }
+    SyncPushRequest:
+      type: object
+      required: [mutations]
+      properties:
+        device_id: { type: string, format: uuid }
+        mutations:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+            required: [mutation_id, seq, domain, op]
+            properties:
+              mutation_id: { type: string, format: uuid }
+              seq: { type: integer }
+              domain: { type: string }
+              op: { type: string }
+              payload: { type: object, additionalProperties: true }
+    SyncPushResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            required: [mutation_id, status]
+            properties:
+              mutation_id: { type: string, format: uuid }
+              status: { type: string, enum: [applied, duplicate, rejected] }
+              code: { type: string }
+              detail: { type: string }
