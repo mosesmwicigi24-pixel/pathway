@@ -217,11 +217,18 @@ paths:
   /modules/{id}/quiz:
     get:
       tags: [assessment]
-      summary: Assemble a randomised quiz from the module bank.
+      summary: Assemble a randomised quiz from the module bank (no answers returned).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: Served question set }
+        "200":
+          description: Served question set
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuizAssembly" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/GateLocked" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /modules/{id}/quiz/attempts:
     post:
       tags: [assessment]
@@ -239,6 +246,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/QuizResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "409": { $ref: "#/components/responses/GateLocked" }
   /levels/{n}/exam/attempts:
     post:
@@ -582,3 +590,20 @@ components:
         is_passed: { type: boolean }
         pass_mark: { type: number }
         unlocked_next_module_id: { type: [string, "null"] }
+        duplicate: { type: boolean, description: True when a replayed client_mutation_id returned the prior attempt }
+    QuizAssembly:
+      type: object
+      required: [module_id, question_count, questions]
+      properties:
+        module_id: { type: string, format: uuid }
+        question_count: { type: integer }
+        questions:
+          type: array
+          items:
+            type: object
+            required: [question_id, q_type, question_text]
+            properties:
+              question_id: { type: string, format: uuid }
+              q_type: { type: string, enum: [MultipleChoice, TrueFalse, FillInTheBlank] }
+              question_text: { type: string }
+              answer_options: { type: [array, "null"], items: { type: string } }
