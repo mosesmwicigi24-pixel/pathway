@@ -67,6 +67,17 @@ export class ReflectionService {
         });
       }
 
+      // §1.9 rule 2: the level exam must be passed before the reflection gate.
+      const exam = await maybeOne<{ ok: number }>(
+        c,
+        `SELECT 1 AS ok FROM level_exam_attempts
+          WHERE enrollment_id = $1 AND level_number = $2 AND is_passed LIMIT 1`,
+        [enrollment.enrollment_id, levelNumber],
+      );
+      if (!exam) {
+        throw new ApiError("GATE_LOCKED", "Pass the level exam before submitting your reflection");
+      }
+
       const existing = await maybeOne<{ state: string }>(
         c,
         `SELECT state FROM reflection_reviews WHERE user_id = $1 AND level_number = $2`,

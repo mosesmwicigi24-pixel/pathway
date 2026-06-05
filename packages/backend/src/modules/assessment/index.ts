@@ -8,12 +8,14 @@ import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { AssessmentService } from "./service.js";
 import { ReflectionService } from "./reflection.js";
+import { ExamService } from "./exam.js";
 
 export const assessmentRouter: Router = Router();
 
 export function registerAssessment(ctx: AppContext): Router {
   const svc = new AssessmentService(ctx.db.primary);
   const reflections = new ReflectionService(ctx.db.primary);
+  const exams = new ExamService(ctx.db.primary);
   const auth = authenticate(ctx.env);
   const r = assessmentRouter;
 
@@ -33,6 +35,26 @@ export function registerAssessment(ctx: AppContext): Router {
     handler(async (req, res) => {
       const sub = parseBody(AssessmentService.QuizSubmission, req.body);
       res.json(await svc.submitQuiz(requirePrincipal(req).userId, req.params.id ?? "", sub));
+    }),
+  );
+
+  // --- Level exam (§1.9 rule 2) ---
+  r.get(
+    "/levels/:n/exam",
+    auth,
+    handler(async (req, res) => {
+      const n = parseBody(z.coerce.number().int().min(1).max(5), req.params.n);
+      res.json(await exams.assemble(requirePrincipal(req).userId, n));
+    }),
+  );
+
+  r.post(
+    "/levels/:n/exam/attempts",
+    auth,
+    handler(async (req, res) => {
+      const n = parseBody(z.coerce.number().int().min(1).max(5), req.params.n);
+      const sub = parseBody(ExamService.ExamSubmission, req.body);
+      res.json(await exams.submit(requirePrincipal(req).userId, n, sub));
     }),
   );
 

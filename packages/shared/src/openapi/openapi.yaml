@@ -248,14 +248,40 @@ paths:
               schema: { $ref: "#/components/schemas/QuizResult" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "409": { $ref: "#/components/responses/GateLocked" }
+  /levels/{n}/exam:
+    get:
+      tags: [assessment]
+      summary: Assemble the level exit exam from the level's active question pool.
+      parameters:
+        - { name: n, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Served exam question set
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamAssembly" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/GateLocked" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /levels/{n}/exam/attempts:
     post:
       tags: [assessment]
       summary: Submit the level exit exam; ≥ pass mark required to proceed.
       parameters:
         - { name: n, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QuizSubmission" }
       responses:
-        "200": { description: Scored }
+        "200":
+          description: Scored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/GateLocked" }
   /levels/{n}/reflection:
     post:
       tags: [assessment]
@@ -641,6 +667,31 @@ components:
               q_type: { type: string, enum: [MultipleChoice, TrueFalse, FillInTheBlank] }
               question_text: { type: string }
               answer_options: { type: [array, "null"], items: { type: string } }
+    ExamAssembly:
+      type: object
+      required: [level_number, question_count, questions]
+      properties:
+        level_number: { type: integer }
+        question_count: { type: integer }
+        questions:
+          type: array
+          items:
+            type: object
+            required: [question_id, q_type, question_text]
+            properties:
+              question_id: { type: string, format: uuid }
+              q_type: { type: string, enum: [MultipleChoice, TrueFalse, FillInTheBlank] }
+              question_text: { type: string }
+              answer_options: { type: [array, "null"], items: { type: string } }
+    ExamResult:
+      type: object
+      required: [exam_attempt_id, score_achieved, is_passed, pass_mark]
+      properties:
+        exam_attempt_id: { type: string, format: uuid }
+        score_achieved: { type: number }
+        is_passed: { type: boolean }
+        pass_mark: { type: number }
+        duplicate: { type: boolean }
     ReflectionSubmit:
       type: object
       required: [reflection_text]

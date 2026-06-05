@@ -12,11 +12,13 @@ import {
 } from "./helpers/factories.js";
 import { ProgressService } from "../src/modules/progress/service.js";
 import { AssessmentService } from "../src/modules/assessment/service.js";
+import { ExamService } from "../src/modules/assessment/exam.js";
 import { ReflectionService } from "../src/modules/assessment/reflection.js";
 import type { Principal } from "../src/http/http.js";
 
 const progress = () => new ProgressService(testPool());
 const assess = () => new AssessmentService(testPool());
+const exam = () => new ExamService(testPool());
 const refl = () => new ReflectionService(testPool());
 
 const principal = (userId: string, role: Principal["role"]): Principal => ({
@@ -44,11 +46,16 @@ describe("reflection review + level transition (§1.9)", () => {
     await closeTestPool();
   });
 
-  // Bring the student to "level 1 content finished".
+  // Bring the student to "level 1 finished + exam passed" (the reflection
+  // precondition: all modules complete/passed AND the level exam passed, §1.9).
   async function finishLevel1(): Promise<void> {
     await progress().completeModule(student, l1m1, null);
     await assess().submitQuiz(student, l1m1, {
       client_mutation_id: "99999999-9999-4999-8999-999999999999",
+      answers: [{ question_id: q, given_answer: "A" }],
+    });
+    await exam().submit(student, 1, {
+      client_mutation_id: "88888888-8888-4888-8888-888888888888",
       answers: [{ question_id: q, given_answer: "A" }],
     });
   }
