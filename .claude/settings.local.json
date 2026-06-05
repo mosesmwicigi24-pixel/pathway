@@ -17,7 +17,8 @@
       "Bash(lsof -nP -iTCP:8080 -sTCP:LISTEN -t)",
       "Read(//opt/homebrew/opt/**)",
       "Read(//opt/homebrew/opt/gh/**)",
-      "Read(//opt/homebrew/Cellar/**)"
+      "Read(//opt/homebrew/Cellar/**)",
+      "Bash(git -c 'user.name=Nuru Dev' -c user.email=dev@nuruplace.org commit -q -m 'docs\\(readme\\): flag SSO-provisioning \\(011\\) and admin-MFA \\(012\\) deviations *)"
     ]
   }
 }
