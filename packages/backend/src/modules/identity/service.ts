@@ -40,7 +40,12 @@ export class IdentityService {
       role: user.role,
       cong: user.congregation_id ?? "",
     });
-    const refresh = await issueRefreshToken(this.pool, user.user_id, this.env, { deviceId });
+    const refresh = await issueRefreshToken(
+      this.pool,
+      user.user_id,
+      this.env,
+      deviceId == null ? {} : { deviceId },
+    );
     return {
       access_token: access,
       refresh_token: refresh.token,
@@ -236,7 +241,7 @@ export class IdentityService {
 
   async registerDevice(
     userId: string,
-    input: { platform: string; app_version?: string; push_token?: string },
+    input: { platform: string; app_version?: string | undefined; push_token?: string | undefined },
   ): Promise<{ device_id: string }> {
     return tx(this.pool, async (c) => {
       const device = await one<{ device_id: string }>(
