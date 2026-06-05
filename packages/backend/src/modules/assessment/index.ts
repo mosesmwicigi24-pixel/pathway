@@ -2,15 +2,18 @@
 // Owns: Randomised quiz assembly, server-side scoring, attempt logs, reflection
 // submission & review queue. Endpoints per §3.3 (assessment).
 import { Router } from "express";
+import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
-import { authenticate } from "../../http/auth.js";
+import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { AssessmentService } from "./service.js";
+import { ReflectionService } from "./reflection.js";
 
 export const assessmentRouter: Router = Router();
 
 export function registerAssessment(ctx: AppContext): Router {
   const svc = new AssessmentService(ctx.db.primary);
+  const reflections = new ReflectionService(ctx.db.primary);
   const auth = authenticate(ctx.env);
   const r = assessmentRouter;
 
@@ -30,6 +33,37 @@ export function registerAssessment(ctx: AppContext): Router {
     handler(async (req, res) => {
       const sub = parseBody(AssessmentService.QuizSubmission, req.body);
       res.json(await svc.submitQuiz(requirePrincipal(req).userId, req.params.id ?? "", sub));
+    }),
+  );
+
+  // --- Reflection submission + review queue (§1.9 rule 3) ---
+  r.post(
+    "/levels/:n/reflection",
+    auth,
+    handler(async (req, res) => {
+      const n = parseBody(z.coerce.number().int().min(1).max(5), req.params.n);
+      const body = parseBody(ReflectionService.SubmitSchema, req.body);
+      res.status(201).json(await reflections.submit(requirePrincipal(req).userId, n, body.reflection_text));
+    }),
+  );
+
+  // Review queue — Instructor+ only, scoped to assigned cohorts (§5.4).
+  r.get(
+    "/reviews",
+    auth,
+    requireRole("Instructor"),
+    handler(async (req, res) => {
+      res.json({ data: await reflections.listPending(requirePrincipal(req)) });
+    }),
+  );
+
+  r.post(
+    "/reviews/:id/decision",
+    auth,
+    requireRole("Instructor"),
+    handler(async (req, res) => {
+      const body = parseBody(ReflectionService.DecisionSchema, req.body);
+      res.json(await reflections.decide(requirePrincipal(req), req.params.id ?? "", body));
     }),
   );
 

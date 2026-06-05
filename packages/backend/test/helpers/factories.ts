@@ -71,6 +71,14 @@ export async function createModule(
   return rows[0]!.module_id;
 }
 
+export async function createLeaderAssignment(leaderUserId: string, cellGroupId: string): Promise<string> {
+  const { rows } = await testPool().query<{ assignment_id: string }>(
+    `INSERT INTO leader_assignments (leader_user_id, cell_group_id) VALUES ($1,$2) RETURNING assignment_id`,
+    [leaderUserId, cellGroupId],
+  );
+  return rows[0]!.assignment_id;
+}
+
 export async function addQuestion(
   moduleId: string,
   correct: string,

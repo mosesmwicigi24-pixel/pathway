@@ -6,12 +6,11 @@
 // validate the Bearer JWT ourselves. Either way the principal is attached to the
 // request. RBAC role checks and leader_assignments scoping build on top.
 import type { NextFunction, Request, Response } from "express";
-import type { Pool } from "pg";
 import type { UserRole } from "@nuru/shared";
 import type { Env } from "../config/env.js";
 import { ApiError } from "./errors.js";
 import { verifyAccessToken } from "../modules/identity/tokens.js";
-import { many } from "../db/db.js";
+import { many, type Queryable } from "../db/db.js";
 import type { Principal } from "./http.js";
 
 const ROLE_RANK: Record<UserRole, number> = {
@@ -84,10 +83,10 @@ export function requireStepUp(maxAgeSeconds = 900) {
  * SuperAdmin/Admin pass; an Instructor/Multiplier must have a leader_assignments
  * row for that cell. Enforced in the query layer — out-of-scope ids 403.
  */
-export async function assertCellInScope(pool: Pool, principal: Principal, cellGroupId: string): Promise<void> {
+export async function assertCellInScope(q: Queryable, principal: Principal, cellGroupId: string): Promise<void> {
   if (principal.role === "SuperAdmin" || principal.role === "Admin") return;
   const rows = await many<{ cell_group_id: string }>(
-    pool,
+    q,
     `SELECT cell_group_id FROM leader_assignments WHERE leader_user_id = $1 AND cell_group_id = $2`,
     [principal.userId, cellGroupId],
   );

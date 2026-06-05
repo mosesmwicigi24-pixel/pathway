@@ -262,8 +262,20 @@ paths:
       summary: Submit the descriptive reflection; enqueues to the review queue.
       parameters:
         - { name: n, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReflectionSubmit" }
       responses:
-        "201": { description: Enqueued }
+        "201":
+          description: Enqueued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReflectionReview" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/GateLocked" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /events/{id}/attendance:
     post:
       tags: [progress]
@@ -303,15 +315,37 @@ paths:
       parameters:
         - { name: state, in: query, schema: { type: string, enum: [pending, approved, rejected] } }
       responses:
-        "200": { description: Queue }
+        "200":
+          description: Queue
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/ReviewQueueItem" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /reviews/{id}/decision:
     post:
       tags: [portal]
       summary: Approve/reject a reflection; approval flips the level and triggers certificate issuance.
       parameters:
         - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewDecision" }
       responses:
-        "200": { description: Decision recorded }
+        "200":
+          description: Decision recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewDecisionResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /relationships:
     post:
       tags: [portal]
@@ -607,3 +641,39 @@ components:
               q_type: { type: string, enum: [MultipleChoice, TrueFalse, FillInTheBlank] }
               question_text: { type: string }
               answer_options: { type: [array, "null"], items: { type: string } }
+    ReflectionSubmit:
+      type: object
+      required: [reflection_text]
+      properties:
+        reflection_text: { type: string, minLength: 20, maxLength: 5000 }
+    ReflectionReview:
+      type: object
+      required: [review_id, state, level_number]
+      properties:
+        review_id: { type: string, format: uuid }
+        state: { type: string, enum: [pending, approved, rejected] }
+        level_number: { type: integer }
+    ReviewQueueItem:
+      type: object
+      required: [review_id, user_id, level_number, reflection_text, submitted_at]
+      properties:
+        review_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        full_name: { type: string }
+        level_number: { type: integer }
+        reflection_text: { type: string }
+        cell_group_id: { type: [string, "null"], format: uuid }
+        submitted_at: { type: string, format: date-time }
+    ReviewDecision:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [approve, reject] }
+        feedback_notes: { type: string, maxLength: 2000 }
+    ReviewDecisionResult:
+      type: object
+      required: [review_id, state, leveled_up]
+      properties:
+        review_id: { type: string, format: uuid }
+        state: { type: string, enum: [approved, rejected] }
+        leveled_up: { type: boolean }
