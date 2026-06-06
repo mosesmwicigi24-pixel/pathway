@@ -414,13 +414,29 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/GivingIntentRequest" }
       responses:
-        "201": { description: Intent created }
+        "201":
+          description: Intent created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GivingIntentResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/UpstreamUnavailable" }
   /giving/history:
     get:
       tags: [giving]
       summary: The caller's own giving/purchase ledger.
       responses:
-        "200": { description: Ledger }
+        "200":
+          description: Ledger
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/GivingRecord" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /products:
     get:
       tags: [giving]
@@ -665,8 +681,29 @@ components:
       required: [fund, amount_minor, currency]
       properties:
         fund: { type: string, enum: [tithe, offering, general, media] }
-        amount_minor: { type: integer, format: int64 }
+        amount_minor: { type: integer, format: int64, description: Minor units, never floats }
         currency: { type: string, minLength: 3, maxLength: 3 }
+        idempotency_key: { type: string, minLength: 8, maxLength: 255, description: Client-supplied; replays return the same transaction }
+    GivingIntentResult:
+      type: object
+      required: [transaction_id, status, idempotency_key, reused]
+      properties:
+        transaction_id: { type: string, format: uuid }
+        client_secret: { type: string, description: Stripe PaymentIntent client secret (absent on a reused intent) }
+        status: { type: string, enum: [processing, succeeded, failed, requires_action, refunded] }
+        idempotency_key: { type: string }
+        reused: { type: boolean }
+    GivingRecord:
+      type: object
+      required: [transaction_id, amount_minor, currency, status]
+      properties:
+        transaction_id: { type: string, format: uuid }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        status: { type: string }
+        fund: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        settled_at: { type: [string, "null"], format: date-time }
 
     QuizSubmission:
       type: object

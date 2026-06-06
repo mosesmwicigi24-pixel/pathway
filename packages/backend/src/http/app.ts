@@ -23,7 +23,14 @@ import { registerMedia } from "../modules/media/index.js";
 export function createApp(ctx: AppContext): Express {
   const app = express();
   app.disable("x-powered-by");
-  app.use(express.json({ limit: "256kb" })); // payload cap mirrors §5.8 hardening
+  // Parse JSON for everything EXCEPT the Stripe webhook, which needs the raw body
+  // bytes for HMAC signature verification (§3.5). That route installs its own
+  // express.raw() parser. Payload cap mirrors §5.8 hardening.
+  const json = express.json({ limit: "256kb" });
+  app.use((req, res, next) => {
+    if (req.path === "/v1/webhooks/stripe") return next();
+    json(req, res, next);
+  });
 
   // Correlation id (§3.1 / §4.7): reuse the gateway's header or mint one.
   app.use((req, res, next) => {
