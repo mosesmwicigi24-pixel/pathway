@@ -18,6 +18,7 @@ import { AttendanceService } from "../progress/attendance.js";
 import { VideoService } from "../media/video.js";
 import { MediaService } from "../media/service.js";
 import { CloudinaryProvider } from "../media/pipeline.js";
+import { CalendarService } from "../calendar/service.js";
 
 interface DomainSpec {
   table: string;
@@ -34,6 +35,7 @@ const PULL_DOMAINS: Record<string, DomainSpec> = {
   level_exam_attempts: { table: "level_exam_attempts", idCol: "exam_attempt_id", scope: "row" },
   enrollments: { table: "enrollments", idCol: "enrollment_id", scope: "user" },
   video_progress: { table: "video_progress", idCol: "media_asset_id", scope: "user" },
+  event_rsvps: { table: "event_rsvps", idCol: "rsvp_id", scope: "user" },
 };
 
 const PAGE = 1000;
@@ -67,6 +69,7 @@ export class SyncService {
   private readonly exams: ExamService;
   private readonly attendance: AttendanceService;
   private readonly video: VideoService;
+  private readonly calendar: CalendarService;
 
   constructor(private readonly pool: Pool) {
     this.progress = new ProgressService(pool);
@@ -75,6 +78,7 @@ export class SyncService {
     this.attendance = new AttendanceService(pool);
     // Progress upsert only needs the pool; media/pipeline deps are unused on this path.
     this.video = new VideoService(pool, new MediaService(undefined), new CloudinaryProvider());
+    this.calendar = new CalendarService(pool);
   }
 
   /** Delta pull: changed rows + tombstones + new cursors since the client's cursors. */
@@ -194,6 +198,14 @@ export class SyncService {
           media_asset_id: String(p.media_asset_id ?? ""),
           position_sec: Number(p.position_sec ?? 0),
           completed_pct: Number(p.completed_pct ?? 0),
+          ...(typeof p.client_mutation_id === "string" ? { client_mutation_id: p.client_mutation_id } : {}),
+        });
+        return r.duplicate;
+      }
+      case "event_rsvps:set": {
+        // Offline-queueable RSVP (§C.2). Idempotent on client_mutation_id.
+        const r = await this.calendar.setRsvp(userId, String(p.event_id ?? ""), {
+          status: String(p.status ?? "going") as "going" | "maybe" | "declined",
           ...(typeof p.client_mutation_id === "string" ? { client_mutation_id: p.client_mutation_id } : {}),
         });
         return r.duplicate;
