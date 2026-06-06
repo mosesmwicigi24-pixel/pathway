@@ -6,6 +6,9 @@ import { CertificateService } from "../modules/certificates/service.js";
 import { InMemoryObjectStore } from "../modules/certificates/objectStore.js";
 import { EngagementService } from "../modules/engagement/service.js";
 import { NotificationService } from "../modules/notifications/service.js";
+import { MediaService } from "../modules/media/service.js";
+import { VideoService } from "../modules/media/video.js";
+import { buildVideoPipeline } from "../modules/media/pipeline.js";
 import type { OutboxHandler } from "./outbox.js";
 
 export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler> {
@@ -18,8 +21,14 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   );
   const engagement = new EngagementService(ctx.db.primary);
   const notifications = new NotificationService(ctx.db.primary);
+  const video = new VideoService(ctx.db.primary, new MediaService(ctx.env.CLOUDINARY_URL), buildVideoPipeline(ctx.env));
 
   const handlers = new Map<string, OutboxHandler>();
+
+  // Features v2 §V.3: transcode a completed upload (idempotent on asset+content_hash).
+  handlers.set("media.transcode", async (p) => {
+    await video.transcodeAsset({ media_asset_id: String(p.media_asset_id), content_hash: String(p.content_hash) });
+  });
 
   // Flow B: an approved reflection enqueues this; issue the level credential.
   handlers.set("certificate.issue", async (p) => {
