@@ -1,10 +1,16 @@
 // Axios client for the portal. Injects the gateway-issued JWT (§1.3). Base URL is
 // the versioned API surface (§3.1). The portal is online-only (§1.3).
 import axios from "axios";
+import type { AxiosError, InternalAxiosRequestConfig } from "axios";
 
 let accessToken: string | null = null;
 export function setAccessToken(token: string | null): void {
   accessToken = token;
+}
+
+let refreshHandler: (() => Promise<string | null>) | null = null;
+export function setRefreshHandler(fn: (() => Promise<string | null>) | null): void {
+  refreshHandler = fn;
 }
 
 export const api = axios.create({
@@ -16,6 +22,24 @@ api.interceptors.request.use((config) => {
   if (accessToken) config.headers.Authorization = `Bearer ${accessToken}`;
   return config;
 });
+
+// Rotate the access token once on a 401 and replay the request.
+api.interceptors.response.use(
+  (res) => res,
+  async (error: AxiosError) => {
+    const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
+    if (error.response?.status === 401 && refreshHandler && original && !original._retry) {
+      original._retry = true;
+      const token = await refreshHandler();
+      if (token) {
+        setAccessToken(token);
+        original.headers.Authorization = `Bearer ${token}`;
+        return api(original);
+      }
+    }
+    return Promise.reject(error);
+  },
+);
 
 export interface CohortMember {
   user_id: string;

@@ -27,6 +27,23 @@ security:
   - bearerAuth: []
 
 paths:
+  # --- Health (§4.7) ---
+  /healthz:
+    get:
+      tags: [system]
+      summary: Liveness probe.
+      security: []
+      responses:
+        "200": { description: Process is up }
+  /readyz:
+    get:
+      tags: [system]
+      summary: Readiness probe (checks database reachability).
+      security: []
+      responses:
+        "200": { description: Ready }
+        "503": { description: A dependency is unavailable }
+
   # --- Authentication & identity (§3.3) ---
   /auth/oauth/{provider}:
     post:

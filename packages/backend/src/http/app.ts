@@ -6,6 +6,7 @@
 // forwards. Per-request correlation echoes X-Request-Id (§3.1, §4.7).
 import express, { type Express } from "express";
 import { randomUUID } from "node:crypto";
+import { pinoHttp } from "pino-http";
 import { ApiError } from "./errors.js";
 import type { AppContext } from "./context.js";
 
@@ -40,7 +41,22 @@ export function createApp(ctx: AppContext): Express {
     next();
   });
 
+  // Structured per-request logging (§4.7), correlated to the request id.
+  app.use(
+    pinoHttp({
+      logger: ctx.log,
+      genReqId: (_req, res) => String(res.getHeader("X-Request-Id") ?? ""),
+    }),
+  );
+
+  // Liveness: the process is up. Readiness: dependencies (DB) are reachable.
   app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
+  app.get("/readyz", (_req, res) => {
+    ctx.db.primary
+      .query("SELECT 1")
+      .then(() => res.json({ status: "ready" }))
+      .catch(() => res.status(503).json({ status: "degraded" }));
+  });
 
   // Mount the ten logical modules under the versioned base path (§3.1).
   const v1 = express.Router();
