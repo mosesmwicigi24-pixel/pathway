@@ -909,6 +909,69 @@ paths:
         "201": { description: Exception recorded }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
 
+  # --- Onboarding (Features v2 §O) ---
+  /onboarding:
+    get:
+      tags: [auth]
+      summary: Resumable onboarding session state (current step, completed, next required).
+      responses:
+        "200": { description: Session state }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /onboarding/steps/profile:
+    put:
+      tags: [auth]
+      summary: Save profile step (DOB, phone, salvation year, baptism).
+      responses:
+        "200": { description: Saved }
+  /onboarding/steps/cell_selection:
+    put:
+      tags: [auth]
+      summary: Select a cell; derives the congregation.
+      responses:
+        "200": { description: Saved }
+  /onboarding/steps/guardian_consent:
+    put:
+      tags: [auth]
+      summary: Minors only. Record guardian consent (immutable once granted; encrypted contact).
+      responses:
+        "200": { description: Recorded }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /onboarding/literacy-quiz:
+    get:
+      tags: [auth]
+      summary: Serve the literacy assessment items.
+      responses:
+        "200": { description: Items }
+  /onboarding/steps/literacy_quiz:
+    put:
+      tags: [auth]
+      summary: Submit literacy answers (server-scored; idempotent).
+      responses:
+        "200": { description: Scored }
+  /onboarding/steps/notifications:
+    put:
+      tags: [auth]
+      summary: Set quiet hours / opt-in preferences.
+      responses:
+        "200": { description: Saved }
+  /onboarding/finalize:
+    post:
+      tags: [auth]
+      summary: Validate all required steps (consent REQUIRED for minors) → enroll at L1.
+      responses:
+        "201": { description: Enrolled }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /directory/cell-groups:
+    get:
+      tags: [auth]
+      summary: Minimal-field cell directory for selection (auth + rate-limited).
+      parameters:
+        - { name: congregation, in: query, schema: { type: string, format: uuid } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Cells }
+
   # --- Webhooks & sync (system) (§3.3) ---
   /webhooks/stripe:
     post:
