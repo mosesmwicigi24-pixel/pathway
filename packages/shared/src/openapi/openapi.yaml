@@ -481,6 +481,27 @@ paths:
               schema: { $ref: "#/components/schemas/CertificateVerification" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  # --- Media (§4.5) ---
+  /media/url:
+    get:
+      tags: [system]
+      summary: Broker a short-lived signed delivery URL for an object key.
+      parameters:
+        - { name: key, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Signed URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expires_at]
+                properties:
+                  url: { type: string, format: uri }
+                  expires_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+
   # --- Webhooks & sync (system) (§3.3) ---
   /webhooks/stripe:
     post:

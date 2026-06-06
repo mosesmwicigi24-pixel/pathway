@@ -108,13 +108,14 @@ export class FinancialService {
   private async settle(c: PoolClient, paymentIntentId: string): Promise<void> {
     const txn = await maybeOne<{
       transaction_id: string;
+      user_id: string;
       amount_minor: string;
       currency: string;
       status: string;
       fund_code: string | null;
     }>(
       c,
-      `SELECT t.transaction_id, t.amount_minor, t.currency, t.status, f.code AS fund_code
+      `SELECT t.transaction_id, t.user_id, t.amount_minor, t.currency, t.status, f.code AS fund_code
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
         WHERE t.stripe_payment_intent = $1 FOR UPDATE OF t`,
       [paymentIntentId],
@@ -130,7 +131,7 @@ export class FinancialService {
        VALUES ($1, 'cash:stripe', 'debit', $2, $3), ($1, $4, 'credit', $2, $3)`,
       [txn.transaction_id, txn.amount_minor, txn.currency, `fund:${txn.fund_code ?? "general"}`],
     );
-    await enqueueOutbox(c, "giving.receipt", { transaction_id: txn.transaction_id });
+    await enqueueOutbox(c, "giving.receipt", { transaction_id: txn.transaction_id, user_id: txn.user_id });
   }
 
   /** A member's giving history (§3.3). */

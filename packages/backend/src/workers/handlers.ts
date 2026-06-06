@@ -4,11 +4,13 @@
 import type { AppContext } from "../http/context.js";
 import { CertificateService } from "../modules/certificates/service.js";
 import { EngagementService } from "../modules/engagement/service.js";
+import { NotificationService } from "../modules/notifications/service.js";
 import type { OutboxHandler } from "./outbox.js";
 
 export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler> {
   const certs = new CertificateService(ctx.db.primary, ctx.env.CERT_SIGNING_KEY ?? ctx.env.JWT_SIGNING_KEY);
   const engagement = new EngagementService(ctx.db.primary);
+  const notifications = new NotificationService(ctx.db.primary);
 
   const handlers = new Map<string, OutboxHandler>();
 
@@ -20,6 +22,24 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   // High-signal events trigger a single-member engagement refresh (§1.8).
   handlers.set("engagement.recompute", async (p) => {
     await engagement.recomputeOne(String(p.user_id));
+  });
+
+  // Member-facing nudges (§1.5), quiet-hours + daily-cap aware.
+  handlers.set("notification.level_completed", async (p) => {
+    await notifications.schedule({
+      userId: String(p.user_id),
+      channel: "push",
+      template: "level_completed",
+      payload: p,
+    });
+  });
+  handlers.set("giving.receipt", async (p) => {
+    await notifications.schedule({
+      userId: String(p.user_id ?? ""),
+      channel: "email",
+      template: "giving_receipt",
+      payload: p,
+    });
   });
 
   return handlers;
