@@ -9,6 +9,7 @@ import { InMemoryLocalStore } from "../db/inMemoryLocalStore";
 import type { SyncRow } from "../db/localStore";
 import { palette, radii, spacing, shadow } from "../theme/tokens";
 import { Pill, ProgressBar, Screen, T } from "../theme/components";
+import { BottomTabBar } from "../navigation/BottomTabBar";
 
 // In a full build this comes from the app-wide store/sync provider; kept local
 // here so the screen renders standalone.
@@ -63,7 +64,8 @@ export function HomeScreen(): ReactElement {
   );
 
   return (
-    <Screen padded={false}>
+    <View style={{ flex: 1 }}>
+      <Screen padded={false}>
       {/* Navy hero */}
       <View style={hero.wrap}>
         <View style={hero.row}>
@@ -127,7 +129,9 @@ export function HomeScreen(): ReactElement {
           <T tone="secondary" variant="caption">Give →</T>
         </Pressable>
       </View>
-    </Screen>
+      </Screen>
+      <BottomTabBar active="Home" />
+    </View>
   );
 }
 

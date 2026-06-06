@@ -10,6 +10,7 @@ import { uuidv4 } from "../util/uuid";
 import { assertOnlineForGiving, getConnectivity } from "../net/connectivity";
 import { palette, radii, spacing, shadow } from "../theme/tokens";
 import { PButton, T } from "../theme/components";
+import { BottomTabBar } from "../navigation/BottomTabBar";
 
 const FUNDS = ["tithe", "offering", "general", "media"] as const;
 const PRESETS = [500, 1000, 2500, 5000];
@@ -51,7 +52,7 @@ export function GivingScreen(): ReactElement {
         </View>
       </View>
 
-      <View style={{ padding: spacing.screen, gap: spacing.base }}>
+      <View style={{ flex: 1, padding: spacing.screen, gap: spacing.base }}>
         {/* Offline info card (kind, never red-shaming) */}
         {offline ? (
           <View style={st.offline}>
@@ -110,6 +111,7 @@ export function GivingScreen(): ReactElement {
           Card details are handled securely by Stripe — never stored by Nuru.
         </T>
       </View>
+      <BottomTabBar active="Giving" />
     </View>
   );
 }
