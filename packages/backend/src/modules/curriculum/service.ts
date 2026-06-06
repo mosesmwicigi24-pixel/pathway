@@ -128,8 +128,9 @@ export class CurriculumService {
         params.push(input.title);
       }
       if (input.is_published !== undefined) {
-        sets.push(`is_published = $${i++}`);
-        params.push(input.is_published);
+        // is_published is a generated mirror of status now — write status instead.
+        sets.push(`status = $${i++}`);
+        params.push(input.is_published ? "published" : "draft");
       }
       if (sets.length > 0) {
         params.push(moduleId);

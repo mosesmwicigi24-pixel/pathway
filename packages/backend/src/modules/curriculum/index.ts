@@ -29,7 +29,7 @@ export function registerCurriculum(ctx: AppContext): Router {
     "/levels/:n/modules",
     auth,
     handler(async (req, res) => {
-      const n = parseBody(z.coerce.number().int().min(1).max(5), req.params.n);
+      const n = parseBody(z.coerce.number().int().min(1), req.params.n);
       res.json({ data: await svc.listModulesForLevel(requirePrincipal(req).userId, n) });
     }),
   );
