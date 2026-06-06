@@ -4,6 +4,8 @@
 // Elements (later), never by us.
 import { useState, type ReactElement } from "react";
 import { Pressable, View } from "react-native";
+import { ArrowLeft } from "lucide-react-native";
+import { useNavigation } from "@react-navigation/native";
 import { NuruApi } from "../api/client";
 import { uuidv4 } from "../util/uuid";
 import { assertOnlineForGiving, getConnectivity } from "../net/connectivity";
@@ -15,6 +17,7 @@ const PRESETS = [500, 1000, 2500, 5000];
 const CURRENCY = "KES";
 
 export function GivingScreen(): ReactElement {
+  const nav = useNavigation();
   const [fund, setFund] = useState<(typeof FUNDS)[number]>("tithe");
   const [amount, setAmount] = useState(0); // major units
   const [status, setStatus] = useState<string | null>(null);
@@ -38,6 +41,14 @@ export function GivingScreen(): ReactElement {
     <View style={{ flex: 1, backgroundColor: palette.paper }}>
       {/* Header */}
       <View style={st.header}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          onPress={() => nav.goBack()}
+          style={({ pressed }) => [st.iconBtn, { marginBottom: spacing.md }, pressed && { transform: [{ scale: 0.95 }] }]}
+        >
+          <ArrowLeft size={20} color={palette.onNavy} />
+        </Pressable>
         <T variant="title" tone="onNavy">Give</T>
         <T variant="body" tone="onNavyDim">Sow into the Kingdom</T>
       </View>
