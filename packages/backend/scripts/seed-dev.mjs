@@ -16,13 +16,15 @@ if (!url) {
   process.exit(1);
 }
 
-// Each student's signal → drives a distinct band via the §1.8 aggregation.
+// Each student's signal → drives a distinct band via the §1.8 aggregation, so the
+// cohort spans thriving → at_risk.
 const STUDENTS = [
-  { name: "Ada Thriving", email: "dev+ada@nuru.test", days: 25, modules: 20, attend: 8 },
-  { name: "Ben Steady", email: "dev+ben@nuru.test", days: 20, modules: 14, attend: 6 },
-  { name: "Cara Watch", email: "dev+cara@nuru.test", days: 12, modules: 8, attend: 4 },
-  { name: "Dan AtRisk", email: "dev+dan@nuru.test", days: 3, modules: 1, attend: 1 },
-  { name: "Eve Silent", email: "dev+eve@nuru.test", days: 0, modules: 0, attend: 0 },
+  { name: "Ada Thriving", email: "student1@dev.local", days: 25, modules: 20, attend: 8 },
+  { name: "Ben Steady", email: "student2@dev.local", days: 20, modules: 14, attend: 6 },
+  { name: "Cara Watch", email: "student3@dev.local", days: 14, modules: 8, attend: 4 },
+  { name: "Dee Watch", email: "student4@dev.local", days: 12, modules: 7, attend: 4 },
+  { name: "Eli AtRisk", email: "student5@dev.local", days: 6, modules: 2, attend: 1 },
+  { name: "Fay Silent", email: "student6@dev.local", days: 0, modules: 0, attend: 0 },
 ];
 const DEV_MODULES = 20; // dev curriculum modules to complete against
 const DEV_EVENTS = 8; // dev events to check in against
@@ -33,7 +35,13 @@ try {
   await client.query("BEGIN");
 
   // --- wipe any prior dev dataset (order respects FKs) ---
-  await client.query(`DELETE FROM users WHERE email LIKE 'dev+%@nuru.test'`); // cascades user-owned rows
+  // Cover the current + any legacy dev email patterns; deleting users cascades
+  // their progress/attendance/etc. Then clear dev-module progress explicitly
+  // before removing the dev modules (belt-and-suspenders against FK restrict).
+  await client.query(`DELETE FROM users WHERE email LIKE '%@dev.local' OR email LIKE 'dev+%@nuru.test'`);
+  await client.query(
+    `DELETE FROM module_progress WHERE module_id IN (SELECT module_id FROM modules WHERE title LIKE 'Dev Module %')`,
+  );
   await client.query(`DELETE FROM modules WHERE title LIKE 'Dev Module %'`);
   await client.query(`DELETE FROM events WHERE event_id LIKE 'dev-evt-%'`);
   await client.query(`DELETE FROM cell_groups WHERE name LIKE 'Dev Cell %'`);
@@ -65,11 +73,11 @@ try {
       )
     ).rows[0].user_id;
 
-  const admin = await mkUser("Dev Admin", "dev+admin@nuru.test", "Admin", null);
-  const instructor = await mkUser("Dev Instructor", "dev+instructor@nuru.test", "Instructor", cellB);
+  const admin = await mkUser("Dev Admin", "admin@dev.local", "Admin", null);
+  const instructor = await mkUser("Dev Leader", "leader@dev.local", "Instructor", cellB);
   await client.query(`INSERT INTO leader_assignments (leader_user_id, cell_group_id) VALUES ($1,$2)`, [
     instructor,
-    cellA, // the instructor oversees Cell A (where the students live)
+    cellA, // the leader oversees Cell A / "cell group 1" (where the students live)
   ]);
 
   // dev curriculum modules (level 1) to complete against, and dev events to attend.
@@ -140,14 +148,15 @@ try {
   const bands = await client.query(
     `SELECT u.full_name, u.email, es.e_score, es.band
        FROM engagement_scores es JOIN users u ON u.user_id = es.user_id
-      WHERE u.email LIKE 'dev+%@nuru.test' ORDER BY es.e_score`,
+      WHERE u.email LIKE '%@dev.local' ORDER BY es.e_score`,
   );
-  console.warn("\nDev dataset seeded. Cell A cohort (lowest engagement first):");
+  console.warn("\nDev dataset seeded. Cell group 1 cohort (lowest engagement first):");
   for (const r of bands.rows) console.warn(`  ${r.e_score}  ${r.band.padEnd(9)}  ${r.full_name}`);
   console.warn("\nDev-login emails:");
-  console.warn("  dev+admin@nuru.test       (Admin — sees every cell)");
-  console.warn("  dev+instructor@nuru.test  (Instructor — sees Cell A only)");
-  console.warn(`\nCell A id: ${cellA}\nCell B id: ${cellB}\n`);
+  console.warn("  admin@dev.local    (Admin — sees every cell)");
+  console.warn("  leader@dev.local   (Instructor — sees cell group 1 only)");
+  console.warn("  student1@dev.local … student6@dev.local");
+  console.warn(`\nCell group 1 id (use in the portal): ${cellA}\nCell group 2 id: ${cellB}\n`);
 } catch (err) {
   await client.query("ROLLBACK");
   console.error("dev seed failed:", err);

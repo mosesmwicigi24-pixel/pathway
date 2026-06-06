@@ -205,7 +205,11 @@ To use the multiplier portal locally without OAuth:
   an Admin, an Instructor with a `leader_assignments` row on Cell A, and 5 students with varied
   interaction/attendance/progress, then runs the §2.5 aggregation so the cohort shows a spread of
   bands (thriving → steady → watch → at_risk). Idempotent (wipes the prior dev dataset first).
-  Seeded logins: `dev+admin@nuru.test` (all cells), `dev+instructor@nuru.test` (Cell A only).
+  Seeded logins: `admin@dev.local` (all cells), `leader@dev.local` (cell group 1), and
+  `student1@dev.local`…`student6@dev.local`.
+
+The portal talks to the API via a **Vite dev proxy** (`/v1` → `http://localhost:8080`, in
+`packages/admin-web/vite.config.ts`), so the browser stays same-origin and no CORS is needed.
 
 ### Run the cohort table locally
 
@@ -221,10 +225,67 @@ pnpm db:seed:dev       # dev congregation/cells/users (prints the Cell A id + lo
 # 2) Backend (http://localhost:8080)
 pnpm --filter @nuru/backend dev
 
-# 3) Portal (http://localhost:5173) — dev build targets localhost:8080 automatically
+# 3) Portal (http://localhost:5173) — Vite proxies /v1 → http://localhost:8080
 pnpm --filter @nuru/admin-web dev
 ```
 
-Open http://localhost:5173, dev-login as `dev+instructor@nuru.test`, paste the **Cell A id** from
+Open http://localhost:5173, dev-login as `leader@dev.local`, paste the **cell group 1 id** from
 the `seed:dev` output, and Load — you'll see the cohort sorted ascending by engagement with bands.
-`dev+admin@nuru.test` can load any cell; an instructor loading a cell they don't own gets 403.
+`admin@dev.local` can load any cell; the leader loading a cell they don't own gets 403.
+
+## Prompt 4 — Runnable system: background workers, scheduler, docker-compose, API hardening
+
+```
+Read CLAUDE.md, docs/NEXT_STEPS.md, and nuru-place-technical-spec.pdf §1.6 (outbox),
+§1.8 (engagement batch + incremental), §4.3-§4.4 (orchestration/data), §4.7 (observability),
+§5.8 (API hardening), §5.9 (retention). Goal: turn the tested services into a system that
+actually runs and operates. Work autonomously per CLAUDE.md; keep typecheck/lint/test green.
+
+WORKER PROCESS + SCHEDULER (new entrypoint, e.g. packages/backend/src/worker.ts):
+1. A standalone worker process (separate from the API) that runs the background jobs. Use a
+   small in-process scheduler (node-cron or an injectable timer) so jobs are testable.
+   Wire these existing services to real runners:
+   - Outbox drainer: continuously claim pending outbox rows (SELECT ... FOR UPDATE SKIP
+     LOCKED), dispatch the side-effect (certificate issuance, notification scheduling,
+     engagement recompute), mark done/dead with bounded retries + backoff. At-least-once,
+     consumers dedupe on event id (§1.6).
+   - Nightly engagement recompute: cron (per region/local low-traffic) calling recomputeAll,
+     upserting engagement_scores (§1.8).
+   - Notification cadence: scan for due notifications, honor quiet-hours by the member's
+     local timezone and max_daily cap, dispatch via the (faked) push/email provider (§1.5).
+   - Partition maintenance: provision N+2 months for interaction_events, prune > 13 months
+     (src/db/partition-maintenance.sql, §2.4/§5.9).
+   - is_minor refresh: nightly job recomputing the flag so it can't go stale (the flagged
+     §5.9 item). Document the choice in docs/NEXT_STEPS.md.
+   Make each job idempotent and safe to run concurrently across replicas (advisory locks or
+   SKIP LOCKED). Graceful shutdown drains in-flight work.
+
+API HARDENING (§5.8) — middleware on the API app:
+2. Rate limiting: token-bucket per IP and per user, with stricter buckets on auth, payment,
+   and sync routes; return 429 RATE_LIMITED with Retry-After and X-RateLimit-* headers.
+   Back it with Redis when REDIS_URL is set, in-memory otherwise (injectable store for tests).
+3. Security headers (helmet), strict body-size caps already present, and ensure X-Request-Id
+   correlation is on every response (§3.1/§4.7). Confirm no PII/token is ever logged.
+
+OBSERVABILITY (§4.7):
+4. Add /healthz (liveness) and /readyz (readiness: DB + Redis reachable) probes. Structured
+   JSON logs already exist — add a minimal RED-style request metric hook and OpenTelemetry
+   trace context propagation behind OTEL_EXPORTER_OTLP_ENDPOINT (no-op when unset).
+
+LOCAL FULL STACK:
+5. docker-compose.yml at the repo root bringing up: postgres:16, redis:7, PgBouncer
+   (transaction mode), the API, and the worker — one `docker compose up` starts everything,
+   runs migrations + seeds on boot, and the API is reachable on :8080. Add Dockerfiles for
+   the api and worker (multi-stage, non-root). Document the commands in docs/NEXT_STEPS.md.
+
+TESTS (Vitest, embedded Postgres):
+6. Outbox drainer: an enqueued event is delivered exactly once, a failing handler retries
+   then goes 'dead' after the cap, and two concurrent drainers never double-process.
+   Notification cadence respects quiet hours + max_daily. Partition provision/prune does the
+   right thing around the 13-month boundary. Rate limiter returns 429 past the bucket and
+   resets. /readyz fails when a dependency is down.
+
+DELIVERABLE: update docs/NEXT_STEPS.md with how to run the full stack (docker compose up),
+how to run just the worker (pnpm --filter @nuru/backend worker), and what each scheduled job
+does + its cadence. Definition of done: typecheck, lint, test, openapi:lint all green.
+```

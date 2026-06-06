@@ -14,11 +14,9 @@ export function setRefreshHandler(fn: (() => Promise<string | null>) | null): vo
 }
 
 export const api = axios.create({
-  // VITE_API_BASE overrides; otherwise dev targets the local backend and prod the
-  // deployed API.
-  baseURL:
-    import.meta.env.VITE_API_BASE ??
-    (import.meta.env.DEV ? "http://localhost:8080/v1" : "https://api.nuruplace.org/v1"),
+  // Relative "/v1": in dev the Vite proxy forwards to the backend (no CORS); in
+  // prod the portal is served behind the same gateway. VITE_API_BASE can override.
+  baseURL: import.meta.env.VITE_API_BASE ?? "/v1",
   timeout: 15_000,
 });
 

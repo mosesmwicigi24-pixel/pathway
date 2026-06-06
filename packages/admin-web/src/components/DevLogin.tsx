@@ -8,7 +8,7 @@ import { devLogin } from "../store/authSlice";
 export function DevLogin(): ReactElement {
   const dispatch = useAppDispatch();
   const { status, error } = useAppSelector((s) => s.auth);
-  const [email, setEmail] = useState("dev+instructor@nuru.test");
+  const [email, setEmail] = useState("leader@dev.local");
 
   return (
     <main style={{ fontFamily: "system-ui, sans-serif", maxWidth: 420, margin: "80px auto", padding: 24 }}>
