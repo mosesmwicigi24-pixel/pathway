@@ -681,7 +681,7 @@ components:
       required: [fund, amount_minor, currency]
       properties:
         fund: { type: string, enum: [tithe, offering, general, media] }
-        amount_minor: { type: integer, format: int64, description: Minor units, never floats }
+        amount_minor: { type: integer, format: int64, description: "Minor units, never floats" }
         currency: { type: string, minLength: 3, maxLength: 3 }
         idempotency_key: { type: string, minLength: 8, maxLength: 255, description: Client-supplied; replays return the same transaction }
     GivingIntentResult:
