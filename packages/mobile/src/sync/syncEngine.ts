@@ -8,6 +8,7 @@
 import type { PendingMutation, SyncPullResponse, SyncPushResponse } from "@nuru/shared";
 import type { LocalStore } from "../db/localStore";
 import { uuidv4 } from "../util/uuid";
+import { MONEY_DOMAINS, type ConnectivityPort } from "../net/connectivity";
 
 export interface SyncApi {
   pull(body: { device_id?: string; cursors: Record<string, number> }): Promise<SyncPullResponse>;
@@ -33,6 +34,10 @@ export class SyncEngine {
 
   /** Append an offline mutation with the next monotonic per-device seq. */
   async enqueue(domain: string, op: string, payload: Record<string, unknown>): Promise<PendingMutation> {
+    // Money is never queued offline (§5.6) — refuse it at the source.
+    if (MONEY_DOMAINS.has(domain)) {
+      throw new Error("Money is never queued offline (§5.6); the giving flow requires connectivity.");
+    }
     const pending = await this.store.pendingMutations();
     const seq = pending.reduce((max, m) => Math.max(max, m.seq), 0) + 1;
     const mutation: PendingMutation = {
@@ -87,5 +92,13 @@ export class SyncEngine {
     const pushed = await this.push();
     const pulled = await this.pull();
     return { push: pushed, pull: pulled };
+  }
+
+  /** Reconcile only when online; queue silently otherwise (§1.7). */
+  async syncIfOnline(
+    conn: ConnectivityPort,
+  ): Promise<{ push: SyncPushResponse | null; pull: SyncPullResponse } | null> {
+    if (!(await conn.isOnline())) return null;
+    return this.sync();
   }
 }

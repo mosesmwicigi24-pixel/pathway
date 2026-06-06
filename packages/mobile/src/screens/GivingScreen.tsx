@@ -6,6 +6,7 @@ import { Pressable, Text, TextInput, View } from "react-native";
 import { useNavigation } from "../navigation/RootNavigator";
 import { NuruApi } from "../api/client";
 import { uuidv4 } from "../util/uuid";
+import { assertOnlineForGiving, getConnectivity } from "../net/connectivity";
 
 const FUNDS = ["tithe", "offering", "general", "media"] as const;
 
@@ -23,10 +24,12 @@ export function GivingScreen(): ReactElement {
     }
     setStatus("Creating payment…");
     try {
+      // Money is never queued offline (§5.6): hard-block before doing anything.
+      await assertOnlineForGiving(getConnectivity());
       await NuruApi.giving({ fund, amount_minor: amountMinor, currency: "KES", idempotency_key: uuidv4() });
       setStatus("Payment started — confirm in the card sheet.");
     } catch {
-      setStatus("Could not start payment (giving requires connectivity).");
+      setStatus("Could not start payment — giving requires a connection (never queued offline).");
     }
   }
 

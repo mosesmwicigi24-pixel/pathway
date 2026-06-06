@@ -1,56 +1,60 @@
-// Sign-in (spec §5.3). Federated providers only; the authorization-code exchange
-// happens server-side and we store the returned tokens in the secure enclave.
+// Sign-in (spec §5.3, §5.7). Federated providers are the production path (stubbed
+// here); the dev path calls POST /v1/auth/dev-login with a seeded student and stores
+// the rotated tokens in the secure TokenVault. Render from local state first (§1.3).
 import { useState, type ReactElement } from "react";
 import { Pressable, Text, View } from "react-native";
-import { NuruApi, setAccessToken } from "../api/client";
+import { NuruApi } from "../api/client";
+import { getVault } from "../auth/vault";
 import { useNavigation } from "../navigation/RootNavigator";
 
 const PROVIDERS = ["kingschat", "google", "apple"] as const;
+const DEV_STUDENT = "student1@dev.local";
 
 export function LoginScreen(): ReactElement {
   const nav = useNavigation();
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function signIn(provider: (typeof PROVIDERS)[number]): Promise<void> {
-    setBusy(provider);
+  async function devSignIn(): Promise<void> {
+    setBusy(true);
     setError(null);
     try {
-      // The provider SDK yields an authorization code; exchanged server-side.
-      const code = await obtainAuthorizationCode(provider);
-      const tokens = await NuruApi.oauth(provider, code);
-      setAccessToken(tokens.access_token);
+      const tokens = await NuruApi.devLogin(DEV_STUDENT);
+      await getVault().setTokens(tokens.access_token, tokens.refresh_token);
       nav.navigate({ name: "Home" });
     } catch {
-      setError("Sign-in failed. Please try again.");
+      setError("Dev login failed — is the backend running and seeded (pnpm db:seed:dev)?");
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   }
 
   return (
     <View style={{ flex: 1, justifyContent: "center", padding: 24, gap: 12 }}>
       <Text style={{ fontSize: 24, fontWeight: "600", marginBottom: 16 }}>Nuru Place · Pathway</Text>
+
       {PROVIDERS.map((p) => (
         <Pressable
           key={p}
           accessibilityRole="button"
-          disabled={busy !== null}
-          onPress={() => void signIn(p)}
-          style={{ padding: 14, borderRadius: 8, backgroundColor: "#1f2937" }}
+          disabled // production OAuth not wired in this build
+          style={{ padding: 14, borderRadius: 8, backgroundColor: "#9ca3af" }}
         >
-          <Text style={{ color: "white", textAlign: "center" }}>
-            {busy === p ? "Connecting…" : `Continue with ${p}`}
-          </Text>
+          <Text style={{ color: "white", textAlign: "center" }}>Continue with {p} (soon)</Text>
         </Pressable>
       ))}
+
+      <Pressable
+        accessibilityRole="button"
+        disabled={busy}
+        onPress={() => void devSignIn()}
+        style={{ padding: 14, borderRadius: 8, backgroundColor: "#1f2937", marginTop: 8 }}
+      >
+        <Text style={{ color: "white", textAlign: "center" }}>
+          {busy ? "Signing in…" : `Dev sign in (${DEV_STUDENT})`}
+        </Text>
+      </Pressable>
       {error ? <Text style={{ color: "#b91c1c" }}>{error}</Text> : null}
     </View>
   );
-}
-
-// Placeholder for the provider SDK handshake (KingsChat/Google/Apple), wired per
-// platform once the native projects are generated.
-function obtainAuthorizationCode(_provider: string): Promise<string> {
-  return Promise.reject(new Error("provider SDK not wired in this build"));
 }

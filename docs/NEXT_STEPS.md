@@ -77,6 +77,13 @@ These are ready-to-run prompts for the next milestones. Run them in order — ea
 assumes the previous is green. They follow the autonomous-operation rules in
 `CLAUDE.md` (make the recommended call, add standard deps, keep going until tests pass).
 
+> **Run the whole chain hands-off:** paste this into Claude Code —
+> *"Work through the build prompts in docs/NEXT_STEPS.md in order (Prompt 1 → 2 → 3 → 4).
+> Complete each one and get it fully green (typecheck, lint, test, openapi:lint) before
+> starting the next. Follow CLAUDE.md autonomous-operation rules — don't stop to ask;
+> make the recommended choice and keep going. After each prompt, summarize what changed
+> and the test result, then continue to the next."*
+
 ## Prompt 1 — Get to 100% green + end-to-end journeys + OpenAPI contract
 
 ```
@@ -289,3 +296,22 @@ DELIVERABLE: update docs/NEXT_STEPS.md with how to run the full stack (docker co
 how to run just the worker (pnpm --filter @nuru/backend worker), and what each scheduled job
 does + its cadence. Definition of done: typecheck, lint, test, openapi:lint all green.
 ```
+
+## Mobile app — login + offline sync (NEXT_STEPS Prompt 3)
+
+The login + offline-sync loop is wired and **proven in Node** (no simulator needed):
+- `TokenVault` (secure enclave) — `KeychainTokenVault` for device, `InMemoryTokenVault` for tests (§5.7).
+- API client: `configureApiBase()` (default `http://localhost:8080/v1`), `installAuth(vault)` attaches the Bearer and does **401 → refresh → retry once**.
+- `SyncEngine`: mutation queue is the system of record — enqueue (monotonic seq) → push in order → drop applied/duplicate/rejected (rejected surfaces a reason) → pull deltas/tombstones, advance cursors. `syncIfOnline(connectivity)` queues when offline.
+- **Money guard (§5.6):** giving hard-blocks offline; the queue refuses money domains entirely.
+
+**Verified by tests** (`pnpm --filter @nuru/mobile test`, `pnpm --filter @nuru/backend test`):
+- mobile unit: TokenVault, `withRefresh` 401-path, money guard + money-domain enqueue refusal, queue seq order, rejected-mutation drop-with-reason.
+- backend HTTP integration (`test/journey-sync-http.test.ts`): dev-login → offline push (complete+quiz) → pull delta → idempotent replay, against the embedded Postgres.
+
+**Still needs the Mac native toolchain to see on a simulator** (not runnable here):
+1. Generate native projects (not committed): `npx react-native@0.74 init` shell or Expo prebuild; or add `ios/`+`android/` for RN 0.74.
+2. iOS: `cd ios && pod install`, then `pnpm --filter @nuru/mobile ios`. Android: `pnpm --filter @nuru/mobile android`.
+3. Backend host: iOS simulator uses `http://localhost:8080/v1`; **Android emulator must use `http://10.0.2.2:8080/v1`** — call `configureApiBase("http://10.0.2.2:8080/v1")` on Android.
+4. On device, swap the keychain vault in before `installAuth`: `setVault(new KeychainTokenVault())` (in `App.tsx`).
+5. Dev login uses `student1@dev.local` (from `pnpm db:seed:dev`); the real OAuth buttons are stubbed/disabled until the provider SDKs land.

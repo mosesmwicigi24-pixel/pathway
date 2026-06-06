@@ -56,6 +56,26 @@ describe("SyncEngine + InMemoryLocalStore", () => {
     expect(await engine.push()).toBeNull();
   });
 
+  it("drops a rejected mutation from the queue but surfaces its reason (§3.6)", async () => {
+    const rejecting: SyncApi = {
+      pull: () => Promise.resolve({ changes: {}, tombstones: {}, cursors: {} }),
+      push: (body) =>
+        Promise.resolve({
+          results: body.mutations.map((m) => ({
+            mutation_id: m.mutation_id,
+            status: "rejected" as const,
+            code: "GATE_LOCKED",
+            detail: "module 4 not yet unlocked",
+          })),
+        }),
+    };
+    const e = new SyncEngine(rejecting, store, "device-1");
+    await e.enqueue("module_progress", "complete", { module_id: "m4" });
+    const res = await e.push();
+    expect(res?.results[0]).toMatchObject({ status: "rejected", code: "GATE_LOCKED" });
+    expect(await store.pendingMutations()).toHaveLength(0); // removed, not retried forever
+  });
+
   it("pull caches upserts, applies tombstones, and advances cursors", async () => {
     await store.cacheUpsert("modules", "m-old", { module_id: "m-old", title: "Stale" });
 
