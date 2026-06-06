@@ -7,6 +7,7 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { EngagementService } from "./service.js";
+import { PortalService } from "./portal.js";
 
 export const engagementRouter: Router = Router();
 
@@ -18,6 +19,7 @@ const CohortQuery = z.object({
 
 export function registerEngagement(ctx: AppContext): Router {
   const svc = new EngagementService(ctx.db.primary);
+  const portal = new PortalService(ctx.db.primary);
   const auth = authenticate(ctx.env);
   const r = engagementRouter;
 
@@ -43,6 +45,27 @@ export function registerEngagement(ctx: AppContext): Router {
     requireRole("Instructor"),
     handler(async (req, res) => {
       res.json(await svc.member(requirePrincipal(req), req.params.id ?? ""));
+    }),
+  );
+
+  // Relationship tree + external milestones (§3.3), scoped to the actor (§5.4).
+  r.post(
+    "/relationships",
+    auth,
+    requireRole("Instructor"),
+    handler(async (req, res) => {
+      const body = parseBody(PortalService.RelationshipSchema, req.body);
+      res.status(201).json(await portal.addRelationship(requirePrincipal(req), body));
+    }),
+  );
+
+  r.patch(
+    "/members/:id/milestones",
+    auth,
+    requireRole("Instructor"),
+    handler(async (req, res) => {
+      const body = parseBody(PortalService.MilestoneSchema, req.body);
+      res.json(await portal.setMilestones(requirePrincipal(req), req.params.id ?? "", body));
     }),
   );
 

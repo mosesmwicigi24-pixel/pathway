@@ -93,7 +93,7 @@ export class FinancialService {
       if (ins.rowCount === 0) return { duplicate: true }; // already processed — idempotent no-op
 
       if (event.type === "payment_intent.succeeded") {
-        await this.settle(c, String(event.data.object.id ?? ""));
+        await this.settle(c, event.data.object);
       } else if (event.type === "payment_intent.payment_failed") {
         await c.query(
           `UPDATE transactions SET status = 'failed' WHERE stripe_payment_intent = $1 AND status <> 'succeeded'`,
@@ -104,8 +104,12 @@ export class FinancialService {
     });
   }
 
-  /** Mark a transaction succeeded and post the balanced double-entry rows. */
-  private async settle(c: PoolClient, paymentIntentId: string): Promise<void> {
+  /** Mark a transaction succeeded, post the double-entry, and grant a purchase if applicable. */
+  private async settle(c: PoolClient, intent: Record<string, unknown>): Promise<void> {
+    const paymentIntentId = String(intent.id ?? "");
+    const metadata = (intent.metadata as Record<string, unknown> | undefined) ?? {};
+    const productId = typeof metadata.product_id === "string" ? metadata.product_id : null;
+
     const txn = await maybeOne<{
       transaction_id: string;
       user_id: string;
@@ -125,13 +129,80 @@ export class FinancialService {
     await c.query(`UPDATE transactions SET status = 'succeeded', settled_at = now() WHERE transaction_id = $1`, [
       txn.transaction_id,
     ]);
-    // Debit cash, credit the fund — equal and opposite, same currency (§5.6).
+    // Debit cash, credit the fund (giving) or media sales (purchase) — balanced (§5.6).
+    const creditAccount = productId ? "sales:media" : `fund:${txn.fund_code ?? "general"}`;
     await c.query(
       `INSERT INTO ledger_entries (transaction_id, account, side, amount_minor, currency)
        VALUES ($1, 'cash:stripe', 'debit', $2, $3), ($1, $4, 'credit', $2, $3)`,
-      [txn.transaction_id, txn.amount_minor, txn.currency, `fund:${txn.fund_code ?? "general"}`],
+      [txn.transaction_id, txn.amount_minor, txn.currency, creditAccount],
     );
+
+    // A product purchase grants access on settlement (§3.3).
+    if (productId) {
+      await c.query(
+        `INSERT INTO purchases (user_id, product_id, transaction_id)
+         VALUES ($1, $2, $3) ON CONFLICT (user_id, product_id) DO NOTHING`,
+        [txn.user_id, productId, txn.transaction_id],
+      );
+    }
     await enqueueOutbox(c, "giving.receipt", { transaction_id: txn.transaction_id, user_id: txn.user_id });
+  }
+
+  /** Active media catalogue (§3.3). */
+  async listProducts(): Promise<unknown[]> {
+    const rows = await many<{ price_minor: string }>(
+      this.pool,
+      `SELECT product_id, title, price_minor, currency FROM products WHERE is_active ORDER BY title`,
+    );
+    return rows.map((r) => ({ ...r, price_minor: Number(r.price_minor) }));
+  }
+
+  /** Start a media purchase: PaymentIntent + pending transaction; grant lands on the webhook. */
+  async createPurchase(userId: string, productId: string): Promise<Record<string, unknown>> {
+    const product = await maybeOne<{ price_minor: string; currency: string }>(
+      this.pool,
+      `SELECT price_minor, currency FROM products WHERE product_id = $1 AND is_active`,
+      [productId],
+    );
+    if (!product) throw new ApiError("NOT_FOUND", "Product not found");
+
+    const owned = await maybeOne(
+      this.pool,
+      `SELECT 1 FROM purchases WHERE user_id = $1 AND product_id = $2`,
+      [userId, productId],
+    );
+    if (owned) throw new ApiError("CONFLICT", "Product already purchased");
+
+    const key = `purchase:${userId}:${productId}`;
+    const existing = await maybeOne<{ transaction_id: string; status: string }>(
+      this.pool,
+      `SELECT transaction_id, status FROM transactions WHERE idempotency_key = $1 AND user_id = $2`,
+      [key, userId],
+    );
+    if (existing) return { transaction_id: existing.transaction_id, status: existing.status, reused: true };
+
+    const currency = String(product.currency).toUpperCase();
+    const intent = await this.gateway.createIntent({
+      amountMinor: Number(product.price_minor),
+      currency,
+      metadata: { user_id: userId, product_id: productId, kind: "purchase" },
+    });
+    const txn = await one<{ transaction_id: string; status: string }>(
+      this.pool,
+      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, stripe_payment_intent, idempotency_key)
+       VALUES ($1, NULL, $2, $3, 'processing', $4, $5)
+       RETURNING transaction_id, status`,
+      [userId, product.price_minor, currency, intent.id, key],
+    );
+    await audit(this.pool, userId, "purchase.intent_created", "products", productId, {
+      transaction_id: txn.transaction_id,
+    });
+    return {
+      transaction_id: txn.transaction_id,
+      client_secret: intent.client_secret,
+      status: txn.status,
+      reused: false,
+    };
   }
 
   /** A member's giving history (§3.3). */

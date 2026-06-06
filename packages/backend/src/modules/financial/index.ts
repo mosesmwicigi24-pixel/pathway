@@ -32,6 +32,23 @@ export function registerFinancial(ctx: AppContext, gatewayOverride?: PaymentGate
     }),
   );
 
+  // Media store (§3.3): catalogue + purchase (access granted on the webhook).
+  r.get(
+    "/products",
+    auth,
+    handler(async (_req, res) => {
+      res.json({ data: await svc.listProducts() });
+    }),
+  );
+
+  r.post(
+    "/products/:id/purchase",
+    auth,
+    handler(async (req, res) => {
+      res.status(201).json(await svc.createPurchase(requirePrincipal(req).userId, req.params.id ?? ""));
+    }),
+  );
+
   // Stripe webhook: no session auth — authenticity is the HMAC signature. Uses a
   // raw body parser (app.ts skips JSON for this path) so the signature verifies.
   r.post(

@@ -449,16 +449,44 @@ paths:
     post:
       tags: [portal]
       summary: Log a multiplier→disciple edge in the relationship tree.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disciple_id]
+              properties:
+                disciple_id: { type: string, format: uuid }
+                multiplier_id: { type: string, format: uuid, description: Admin-only; defaults to the caller }
       responses:
-        "201": { description: Edge created }
+        "201":
+          description: Edge created
+          content:
+            application/json:
+              schema: { type: object, required: [tree_id], properties: { tree_id: { type: string, format: uuid } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /members/{id}/milestones:
     patch:
       tags: [portal]
       summary: Record external milestones (water baptism verified, etc.).
       parameters:
         - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                is_baptized: { type: boolean }
+                year_of_salvation: { type: [integer, "null"] }
       responses:
         "200": { description: Updated }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
 
   # --- Giving, products & certificates (§3.3) ---
   /giving/intents:
@@ -499,7 +527,25 @@ paths:
       tags: [giving]
       summary: Purchasable media catalogue.
       responses:
-        "200": { description: Products }
+        "200":
+          description: Products
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [product_id, title, price_minor, currency]
+                      properties:
+                        product_id: { type: string, format: uuid }
+                        title: { type: string }
+                        price_minor: { type: integer, format: int64 }
+                        currency: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /products/{id}/purchase:
     post:
       tags: [giving]
@@ -507,7 +553,14 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: Granted }
+        "201":
+          description: Purchase started (access granted on the webhook)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GivingIntentResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /certificates:
     get:
       tags: [certificates]

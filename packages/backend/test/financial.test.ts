@@ -119,4 +119,52 @@ describe("financial / giving (§1.10 C, §3.5)", () => {
       svc.createGivingIntent(user, { fund: "tithe", amount_minor: 1, currency: "kes", idempotency_key: "give-0005" }),
     ).resolves.toBeTruthy();
   });
+
+  async function makeProduct(price = 2500): Promise<string> {
+    const { rows } = await testPool().query<{ product_id: string }>(
+      `INSERT INTO products (title, price_minor, currency) VALUES ('Course', $1, 'KES') RETURNING product_id`,
+      [price],
+    );
+    return rows[0]!.product_id;
+  }
+
+  it("lists active products", async () => {
+    await makeProduct(2500);
+    const products = (await svc.listProducts()) as Array<{ price_minor: number }>;
+    expect(products).toHaveLength(1);
+    expect(products[0]!.price_minor).toBe(2500);
+  });
+
+  it("purchases a product and grants access on the webhook", async () => {
+    const productId = await makeProduct(2500);
+    const intent = (await svc.createPurchase(user, productId)) as { reused: boolean };
+    expect(intent.reused).toBe(false);
+    const pi = gw.lastIntentId;
+
+    const evt = JSON.stringify({
+      id: `evt_${pi}`,
+      type: "payment_intent.succeeded",
+      data: { object: { id: pi, metadata: { product_id: productId } } },
+    });
+    await svc.handleWebhook(evt, "valid");
+
+    const purchase = await testPool().query(
+      "SELECT count(*)::int n FROM purchases WHERE user_id=$1 AND product_id=$2",
+      [user, productId],
+    );
+    expect(purchase.rows[0].n).toBe(1);
+    const credit = await testPool().query("SELECT account FROM ledger_entries WHERE side='credit'");
+    expect(credit.rows.some((r) => r.account === "sales:media")).toBe(true);
+  });
+
+  it("refuses to buy an already-owned product", async () => {
+    const productId = await makeProduct(100);
+    await svc.createPurchase(user, productId);
+    const pi = gw.lastIntentId;
+    await svc.handleWebhook(
+      JSON.stringify({ id: `e_${pi}`, type: "payment_intent.succeeded", data: { object: { id: pi, metadata: { product_id: productId } } } }),
+      "valid",
+    );
+    await expect(svc.createPurchase(user, productId)).rejects.toMatchObject({ code: "CONFLICT" });
+  });
 });
