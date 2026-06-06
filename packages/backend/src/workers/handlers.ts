@@ -9,6 +9,7 @@ import { NotificationService } from "../modules/notifications/service.js";
 import { MediaService } from "../modules/media/service.js";
 import { VideoService } from "../modules/media/video.js";
 import { buildVideoPipeline } from "../modules/media/pipeline.js";
+import { CalendarService } from "../modules/calendar/service.js";
 import type { OutboxHandler } from "./outbox.js";
 
 export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler> {
@@ -28,6 +29,12 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   // Features v2 §V.3: transcode a completed upload (idempotent on asset+content_hash).
   handlers.set("media.transcode", async (p) => {
     await video.transcodeAsset({ media_asset_id: String(p.media_asset_id), content_hash: String(p.content_hash) });
+  });
+
+  // Features v2 §C.3: materialize a series' occurrences into events (idempotent).
+  const calendar = new CalendarService(ctx.db.primary, ctx.env.CAL_MATERIALIZE_HORIZON_DAYS, ctx.env.CAL_MAX_INSTANCES);
+  handlers.set("calendar.materialize", async (p) => {
+    await calendar.materialize(String(p.series_id));
   });
 
   // Flow B: an approved reflection enqueues this; issue the level credential.

@@ -838,6 +838,77 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  # --- Calendar (Features v2 §C) ---
+  /calendar:
+    get:
+      tags: [system]
+      summary: Projected occurrences in a bounded window (≤ 92 days), visibility-scoped.
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
+      responses:
+        "200": { description: Occurrences }
+        "400": { description: Invalid range }
+  /calendar/parse:
+    post:
+      tags: [system]
+      summary: Leader+. NLP quick-add → suggested title/start/end (never auto-creates).
+      responses:
+        "200": { description: Parsed suggestion }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /events/{id}:
+    get:
+      tags: [system]
+      summary: One occurrence — details, RSVP counts, my RSVP.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Event }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /events/{id}/rsvp:
+    post:
+      tags: [system]
+      summary: Set RSVP (idempotent via client_mutation_id; offline-queueable).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: RSVP recorded }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/events/series:
+    post:
+      tags: [system]
+      summary: Leader+/Admin. Create an event series (validated RRULE).
+      responses:
+        "201": { description: Series created }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /admin/events/series/{id}:
+    put:
+      tags: [system]
+      summary: Leader+/Admin. Edit a series (future occurrences).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Updated }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    delete:
+      tags: [system]
+      summary: Leader+/Admin. Soft-delete a series (past occurrences preserved).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Deleted }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/events/series/{id}/exceptions:
+    post:
+      tags: [system]
+      summary: Leader+/Admin. Cancel or reschedule one occurrence.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "201": { description: Exception recorded }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+
   # --- Webhooks & sync (system) (§3.3) ---
   /webhooks/stripe:
     post:
