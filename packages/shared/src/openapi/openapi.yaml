@@ -972,6 +972,67 @@ paths:
       responses:
         "200": { description: Cells }
 
+  # --- Gamification (Features v2 §G) ---
+  /me/achievements:
+    get:
+      tags: [system]
+      summary: My badges + streak + aggregate stats.
+      responses:
+        "200": { description: Achievements }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /badges:
+    get:
+      tags: [system]
+      summary: Active badge catalog (what's possible).
+      responses:
+        "200": { description: Catalog }
+  /cells/{id}/milestones:
+    get:
+      tags: [system]
+      summary: Aggregate-only cell encouragement (k-anonymity floor; never per-member ranks).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Aggregates }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /members/{id}/achievements:
+    get:
+      tags: [system]
+      summary: Leader-scoped pastoral view of a member's achievements.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Achievements }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/badges:
+    post:
+      tags: [system]
+      summary: Admin. Create a badge (criteria validated against the registered rule schema).
+      responses:
+        "201": { description: Created }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/badges/{code}:
+    delete:
+      tags: [system]
+      summary: Admin. Deactivate a badge (never revokes earned badges).
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Deactivated }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/members/{id}/badges/{code}/revoke:
+    post:
+      tags: [system]
+      summary: Admin. Data-correction revocation (audited, reason required).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Revoked }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # --- Webhooks & sync (system) (§3.3) ---
   /webhooks/stripe:
     post:

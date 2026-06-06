@@ -10,6 +10,7 @@ import { MediaService } from "../modules/media/service.js";
 import { VideoService } from "../modules/media/video.js";
 import { buildVideoPipeline } from "../modules/media/pipeline.js";
 import { CalendarService } from "../modules/calendar/service.js";
+import { GamificationService } from "../modules/gamification/service.js";
 import type { OutboxHandler } from "./outbox.js";
 
 export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler> {
@@ -35,6 +36,21 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   const calendar = new CalendarService(ctx.db.primary, ctx.env.CAL_MATERIALIZE_HORIZON_DAYS, ctx.env.CAL_MAX_INSTANCES);
   handlers.set("calendar.materialize", async (p) => {
     await calendar.materialize(String(p.series_id));
+  });
+
+  // Features v2 §G.3: re-evaluate the badge catalog against a member's verified
+  // stats on a high-signal event; award notification + the award itself.
+  const gamification = new GamificationService(ctx.db.primary);
+  handlers.set("gamification.evaluate", async (p) => {
+    await gamification.evaluateForUser(String(p.user_id));
+  });
+  handlers.set("notification.badge_awarded", async (p) => {
+    await notifications.schedule({
+      userId: String(p.user_id ?? ""),
+      channel: "push",
+      template: "badge_awarded",
+      payload: p,
+    });
   });
 
   // Flow B: an approved reflection enqueues this; issue the level credential.

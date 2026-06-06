@@ -32,6 +32,7 @@ import { registerSync } from "../modules/sync/index.js";
 import { registerMedia } from "../modules/media/index.js";
 import { registerCalendar } from "../modules/calendar/index.js";
 import { registerOnboarding } from "../modules/onboarding/index.js";
+import { registerGamification } from "../modules/gamification/index.js";
 
 export function createApp(ctx: AppContext): Express {
   const app = express();
@@ -130,6 +131,7 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerMedia(ctx));
   v1.use(registerCalendar(ctx));
   v1.use(registerOnboarding(ctx));
+  v1.use(registerGamification(ctx));
   app.use("/v1", v1);
 
   // Terminal error handler — always emits the §3.2 envelope.
