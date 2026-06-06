@@ -14,7 +14,11 @@ export function setRefreshHandler(fn: (() => Promise<string | null>) | null): vo
 }
 
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE ?? "https://api.nuruplace.org/v1",
+  // VITE_API_BASE overrides; otherwise dev targets the local backend and prod the
+  // deployed API.
+  baseURL:
+    import.meta.env.VITE_API_BASE ??
+    (import.meta.env.DEV ? "http://localhost:8080/v1" : "https://api.nuruplace.org/v1"),
   timeout: 15_000,
 });
 
@@ -49,6 +53,17 @@ export interface CohortMember {
   a_score: number;
   e_score: number;
   band: string;
+  last_active_days_ago?: number | null;
+}
+
+export interface CohortPage {
+  data: CohortMember[];
+  next_cursor: string | null;
+}
+
+export interface DevSession {
+  access_token: string;
+  refresh_token: string;
 }
 
 export interface ReviewItem {
@@ -61,12 +76,17 @@ export interface ReviewItem {
 }
 
 export const PortalApi = {
+  /** DEV ONLY: mint a session by email (no OAuth). 404s in production. */
+  async devLogin(email: string): Promise<DevSession> {
+    const { data } = await api.post<DevSession>("/auth/dev-login", { email });
+    return data;
+  },
   async cohort(
     cellId: string,
-    opts: { order?: "asc" | "desc"; band?: string } = {},
-  ): Promise<CohortMember[]> {
-    const { data } = await api.get<{ data: CohortMember[] }>(`/cohorts/${cellId}/members`, { params: opts });
-    return data.data;
+    opts: { band?: string; cursor?: string; limit?: number } = {},
+  ): Promise<CohortPage> {
+    const { data } = await api.get<CohortPage>(`/cohorts/${cellId}/members`, { params: opts });
+    return data;
   },
   async reviews(): Promise<ReviewItem[]> {
     const { data } = await api.get<{ data: ReviewItem[] }>("/reviews");

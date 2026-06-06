@@ -113,6 +113,26 @@ export class IdentityService {
   }
 
   /**
+   * DEV ONLY. Mint a real session for an already-seeded user, bypassing OAuth so
+   * the portal can authenticate locally. Uses the SAME token path as production
+   * (issueSession → signAccessToken + issueRefreshToken) — no parallel logic. The
+   * route is hard-gated to NODE_ENV !== 'production' and never mounted there.
+   */
+  async devLogin(input: { email?: string | undefined; user_id?: string | undefined }): Promise<SessionTokens> {
+    const byId = Boolean(input.user_id);
+    const key = input.user_id ?? input.email;
+    if (!key) throw new ApiError("VALIDATION_FAILED", "email or user_id is required");
+    const user = await maybeOne<UserAuthRow>(
+      this.pool,
+      `SELECT user_id, role, congregation_id FROM users
+        WHERE ${byId ? "user_id = $1" : "email = $1"} AND deleted_at IS NULL`,
+      [key],
+    );
+    if (!user) throw new ApiError("NOT_FOUND", "No such user");
+    return this.issueSession(user);
+  }
+
+  /**
    * Begin TOTP enrollment (§5.3): generate a secret, seal it at rest, and return
    * the otpauth:// URI for the authenticator app. The factor is not yet enabled —
    * it activates only when the first code is verified (verifyMfa), so a dropped

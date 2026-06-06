@@ -94,6 +94,27 @@ paths:
       responses:
         "204": { description: Logged out }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/dev-login:
+    post:
+      tags: [auth]
+      summary: DEV ONLY. Mint a session for a seeded user by email/user_id. 404 in production (never mounted).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                user_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Token pair issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /auth/mfa/enroll:
     post:
       tags: [auth]
@@ -375,21 +396,20 @@ paths:
       summary: Cohort members sorted by e_score asc; scoped to caller's leader_assignments.
       parameters:
         - { name: cell_id, in: path, required: true, schema: { type: string, format: uuid } }
-        - { name: sort, in: query, schema: { type: string, enum: [e_score] } }
-        - { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
         - { name: band, in: query, schema: { type: string, enum: [thriving, steady, watch, at_risk] } }
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
-          description: Cohort page
+          description: Cohort page (ascending by e_score)
           content:
             application/json:
               schema:
                 type: object
-                required: [data]
+                required: [data, next_cursor]
                 properties:
                   data: { type: array, items: { $ref: "#/components/schemas/EngagementBreakdown" } }
+                  next_cursor: { type: [string, "null"] }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /members/{id}/engagement:
@@ -1025,6 +1045,7 @@ components:
         a_score: { type: number, description: Attendance (0–1) }
         e_score: { type: number, description: Composite Eᵢ (0–1) }
         band: { type: string, enum: [thriving, steady, watch, at_risk] }
+        last_active_days_ago: { type: [integer, "null"] }
         window_end: { type: string, format: date }
         computed_at: { type: string, format: date-time }
 

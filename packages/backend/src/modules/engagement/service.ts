@@ -69,7 +69,7 @@ interface ScoreRow {
   computed_at: string;
 }
 
-function toBreakdown(r: ScoreRow): Record<string, unknown> {
+function toBreakdown(r: ScoreRow & { last_active_days_ago?: number | null }): Record<string, unknown> {
   return {
     user_id: r.user_id,
     ...(r.full_name !== undefined ? { full_name: r.full_name } : {}),
@@ -80,11 +80,18 @@ function toBreakdown(r: ScoreRow): Record<string, unknown> {
     band: r.band,
     window_end: r.window_end,
     computed_at: r.computed_at,
+    ...(r.last_active_days_ago !== undefined
+      ? { last_active_days_ago: r.last_active_days_ago === null ? null : Number(r.last_active_days_ago) }
+      : {}),
   };
 }
 
 export class EngagementService {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    // Reads (cohort/member) go to the replica (§1.6); writes to the primary.
+    private readonly replica: Pool = pool,
+  ) {}
 
   /** Nightly authoritative recompute for every active student (§1.8). */
   async recomputeAll(): Promise<{ updated: number }> {
@@ -92,56 +99,99 @@ export class EngagementService {
     return { updated: res.rowCount ?? 0 };
   }
 
+  /** Entry point the nightly worker / outbox calls (§1.8). */
+  runRecompute(): Promise<{ updated: number }> {
+    return this.recomputeAll();
+  }
+
   /** Incremental single-member recompute (driven by the outbox on high-signal events). */
   async recomputeOne(userId: string): Promise<void> {
     await this.pool.query(`${UPSERT} WHERE agg.user_id = $1 ${ON_CONFLICT}`, [userId]);
   }
 
-  /** Cohort table: members of a cell, lowest engagement first (§1.3). Scoped (§5.4). */
+  /**
+   * Cohort table: a cell's members, lowest engagement first (§1.3), cursor-paginated
+   * (§3.1). Scoped (§5.4) and read from the replica. Optional ?band= filter.
+   */
   async cohort(
     principal: Principal,
     cellGroupId: string,
-    opts: { order?: "asc" | "desc"; band?: string; limit?: number },
-  ): Promise<unknown[]> {
-    await assertCellInScope(this.pool, principal, cellGroupId);
+    opts: { band?: string; limit?: number; cursor?: string },
+  ): Promise<{ data: unknown[]; next_cursor: string | null }> {
+    await assertCellInScope(this.replica, principal, cellGroupId);
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+
     const params: unknown[] = [cellGroupId];
     let where = `WHERE es.cell_group_id = $1`;
     if (opts.band) {
       params.push(opts.band);
       where += ` AND es.band = $${params.length}::engagement_band`;
     }
-    const order = opts.order === "desc" ? "DESC" : "ASC";
-    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-    params.push(limit);
-    const rows = await many<ScoreRow>(
-      this.pool,
+    const cursor = decodeCursor(opts.cursor);
+    if (cursor) {
+      params.push(cursor.e, cursor.u);
+      // Stable keyset pagination on (e_score, user_id) ascending.
+      where += ` AND (es.e_score, es.user_id) > ($${params.length - 1}::numeric, $${params.length}::uuid)`;
+    }
+    params.push(limit + 1); // fetch one extra to detect a next page
+
+    const rows = await many<CohortRow>(
+      this.replica,
       `SELECT es.user_id, u.full_name, es.h_score, es.c_score, es.a_score, es.e_score,
-              es.band, es.window_end, es.computed_at
+              es.band, es.window_end, es.computed_at,
+              (SELECT (CURRENT_DATE - MAX(ie.occurred_at)::date)
+                 FROM interaction_events ie WHERE ie.user_id = es.user_id) AS last_active_days_ago
          FROM engagement_scores es JOIN users u ON u.user_id = es.user_id
          ${where}
-        ORDER BY es.e_score ${order}
+        ORDER BY es.e_score ASC, es.user_id ASC
         LIMIT $${params.length}`,
       params,
     );
-    return rows.map(toBreakdown);
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const last = page[page.length - 1];
+    const next_cursor = hasMore && last ? encodeCursor(last.e_score, last.user_id) : null;
+    return { data: page.map(toBreakdown), next_cursor };
   }
 
-  /** A member's Hᵢ/Cᵢ/Aᵢ breakdown from the latest snapshot (§3.3). Scoped (§5.4). */
+  /** A member's Hᵢ/Cᵢ/Aᵢ breakdown + recent signal history (§3.3). Scoped (§5.4). */
   async member(principal: Principal, userId: string): Promise<unknown> {
     const u = await maybeOne<{ cell_group_id: string | null }>(
-      this.pool,
+      this.replica,
       `SELECT cell_group_id FROM users WHERE user_id = $1 AND deleted_at IS NULL`,
       [userId],
     );
     if (!u) throw new ApiError("NOT_FOUND", "Member not found");
-    await assertCellInScope(this.pool, principal, u.cell_group_id ?? "");
+    await assertCellInScope(this.replica, principal, u.cell_group_id ?? "");
     const score = await maybeOne<ScoreRow>(
-      this.pool,
+      this.replica,
       `SELECT user_id, h_score, c_score, a_score, e_score, band, window_end, computed_at
          FROM engagement_scores WHERE user_id = $1`,
       [userId],
     );
     if (!score) throw new ApiError("NOT_FOUND", "No engagement snapshot yet for this member");
-    return toBreakdown(score);
+    const recentSignals = await many(
+      this.replica,
+      `SELECT kind, occurred_at FROM interaction_events WHERE user_id = $1 ORDER BY occurred_at DESC LIMIT 20`,
+      [userId],
+    );
+    return { ...toBreakdown(score), recent_signals: recentSignals };
   }
+}
+
+interface CohortRow extends ScoreRow {
+  last_active_days_ago: number | null;
+}
+
+function encodeCursor(eScore: string, userId: string): string {
+  return Buffer.from(`${eScore}|${userId}`, "utf8").toString("base64url");
+}
+
+function decodeCursor(cursor?: string): { e: string; u: string } | null {
+  if (!cursor) return null;
+  const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+  const sep = decoded.lastIndexOf("|");
+  if (sep <= 0) return null;
+  return { e: decoded.slice(0, sep), u: decoded.slice(sep + 1) };
 }

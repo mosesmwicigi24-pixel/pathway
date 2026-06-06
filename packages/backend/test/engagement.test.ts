@@ -58,18 +58,21 @@ describe("engagement pipeline (§1.8)", () => {
     expect(rows[0].band).toBe("at_risk");
   });
 
-  it("cohort lists members lowest-engagement-first, scoped to the instructor", async () => {
+  it("cohort lists members lowest-engagement-first with breakdown, scoped to the instructor", async () => {
     await addInteractionDays(active, 20);
     await eng().recomputeAll();
     await createLeaderAssignment(instructor, cell);
 
-    const list = (await eng().cohort(principal(instructor, "Instructor"), cell, {})) as Array<{
-      user_id: string;
-      e_score: number;
-    }>;
-    expect(list.length).toBe(2);
-    expect(list[0]!.user_id).toBe(quiet); // 0.0 sorts before 0.4 (ascending)
-    expect(list[1]!.user_id).toBe(active);
+    const res = (await eng().cohort(principal(instructor, "Instructor"), cell, {})) as {
+      data: Array<{ user_id: string; e_score: number; h_score: number; band: string; last_active_days_ago: number | null }>;
+      next_cursor: string | null;
+    };
+    expect(res.data.length).toBe(2);
+    expect(res.data[0]!.user_id).toBe(quiet); // 0.0 sorts before 0.4 (ascending)
+    expect(res.data[1]!.user_id).toBe(active);
+    expect(res.data[1]!.h_score).toBe(1); // breakdown present
+    expect(res.data[1]!.last_active_days_ago).not.toBeUndefined();
+    expect(res.next_cursor).toBeNull(); // fits in one page
   });
 
   it("an unassigned instructor cannot read the cohort (§5.4)", async () => {
@@ -77,6 +80,44 @@ describe("engagement pipeline (§1.8)", () => {
     await expect(eng().cohort(principal(instructor, "Instructor"), cell, {})).rejects.toMatchObject({
       code: "FORBIDDEN_SCOPE",
     });
+  });
+
+  it("Admin sees any cell without a leader_assignments row (§5.4)", async () => {
+    await eng().recomputeAll();
+    const res = (await eng().cohort(principal("admin-id", "Admin"), cell, {})) as { data: unknown[] };
+    expect(res.data.length).toBe(2);
+  });
+
+  it("?band= filters the cohort", async () => {
+    await addInteractionDays(active, 20); // active → watch, quiet → at_risk
+    await eng().recomputeAll();
+    await createLeaderAssignment(instructor, cell);
+    const res = (await eng().cohort(principal(instructor, "Instructor"), cell, { band: "watch" })) as {
+      data: Array<{ user_id: string; band: string }>;
+    };
+    expect(res.data).toHaveLength(1);
+    expect(res.data[0]!.band).toBe("watch");
+  });
+
+  it("cursor pagination walks the cohort in ascending order without overlap", async () => {
+    await addInteractionDays(active, 20);
+    await eng().recomputeAll();
+    await createLeaderAssignment(instructor, cell);
+
+    const p1 = (await eng().cohort(principal(instructor, "Instructor"), cell, { limit: 1 })) as {
+      data: Array<{ user_id: string }>;
+      next_cursor: string | null;
+    };
+    expect(p1.data).toHaveLength(1);
+    expect(p1.data[0]!.user_id).toBe(quiet);
+    expect(p1.next_cursor).not.toBeNull();
+
+    const p2 = (await eng().cohort(principal(instructor, "Instructor"), cell, {
+      limit: 1,
+      cursor: p1.next_cursor!,
+    })) as { data: Array<{ user_id: string }>; next_cursor: string | null };
+    expect(p2.data).toHaveLength(1);
+    expect(p2.data[0]!.user_id).toBe(active);
   });
 
   it("member breakdown returns the snapshot for an in-scope reviewer", async () => {

@@ -60,6 +60,21 @@ export function registerIdentity(ctx: AppContext): Router {
     }),
   );
 
+  // --- DEV ONLY login (never mounted in production) ---
+  // Hard-gated: in production this route does not exist, so it 404s.
+  if (ctx.env.NODE_ENV !== "production") {
+    r.post(
+      "/auth/dev-login",
+      handler(async (req, res) => {
+        const body = parseBody(
+          z.object({ email: z.string().email().optional(), user_id: z.string().uuid().optional() }),
+          req.body ?? {},
+        );
+        res.json(await svc.devLogin(body));
+      }),
+    );
+  }
+
   // --- Step-up MFA (§5.3) ---
   r.post(
     "/auth/mfa/enroll",
