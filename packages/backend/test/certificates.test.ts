@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser } from "./helpers/factories.js";
 import { CertificateService } from "../src/modules/certificates/service.js";
+import { InMemoryObjectStore } from "../src/modules/certificates/objectStore.js";
 
 const svc = () => new CertificateService(testPool(), "test-cert-signing-key");
 
@@ -56,5 +57,16 @@ describe("certificates (§5.5)", () => {
     const list = (await svc().listForUser(user)) as Array<{ download_url: string }>;
     expect(list).toHaveLength(1);
     expect(list[0]!.download_url).toContain("/media/certificates/");
+  });
+
+  it("renders and stores a PDF when an object store is provided", async () => {
+    const store = new InMemoryObjectStore();
+    const withStore = new CertificateService(testPool(), "test-cert-signing-key", store);
+    const { verification_code } = await withStore.issue(user, 3);
+
+    const pdf = await store.get(`certificates/${verification_code}.pdf`);
+    expect(pdf).not.toBeNull();
+    expect(pdf!.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    expect(pdf!.toString("latin1")).toContain("Grace M."); // recipient on the cert
   });
 });

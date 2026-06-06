@@ -10,6 +10,8 @@ import type { Pool, PoolClient } from "pg";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { maybeOne, one, many, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
+import { renderCertificatePdf } from "./pdf.js";
+import type { ObjectStore } from "./objectStore.js";
 
 function contentHash(facts: { user_id: string; level_number: number | null; verification_code: string }): string {
   // Bind to the immutable verification_code (round-trips exactly, unlike a
@@ -22,6 +24,7 @@ export class CertificateService {
   constructor(
     private readonly pool: Pool,
     private readonly signingKey: string,
+    private readonly store?: ObjectStore,
   ) {}
 
   private sign(hash: string): string {
@@ -57,6 +60,28 @@ export class CertificateService {
         issuedAt,
       ],
     );
+
+    // Render + store the PDF (object storage, §4.5). Best-effort: a render/store
+    // failure must not lose the issued credential — the row already exists and the
+    // PDF can be regenerated.
+    if (this.store) {
+      try {
+        const owner = await maybeOne<{ full_name: string }>(
+          c,
+          `SELECT full_name FROM users WHERE user_id = $1`,
+          [userId],
+        );
+        const pdf = renderCertificatePdf({
+          recipient: owner?.full_name ?? "Member",
+          levelLabel: levelNumber == null ? "Full programme" : `Level ${levelNumber}`,
+          code: verificationCode,
+          issuedAt: issuedAt.slice(0, 10),
+        });
+        await this.store.put(`certificates/${verificationCode}.pdf`, pdf, "application/pdf");
+      } catch {
+        // swallow — issuance succeeded; PDF is regenerable
+      }
+    }
     return row;
   }
 

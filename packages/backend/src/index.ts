@@ -8,6 +8,10 @@ import { createPools, closePools } from "./db/pool.js";
 import { createApp } from "./http/app.js";
 import { OutboxWorker } from "./workers/outbox.js";
 import { buildOutboxHandlers } from "./workers/handlers.js";
+import { NotificationWorker } from "./workers/notificationWorker.js";
+import { buildDispatchProvider } from "./workers/dispatch.js";
+import { NudgeScanner } from "./workers/nudgeScanner.js";
+import { NotificationService } from "./modules/notifications/service.js";
 
 function main(): void {
   const env = loadEnv();
@@ -16,10 +20,12 @@ function main(): void {
   const ctx = { env, db, log };
   const app = createApp(ctx);
 
-  // Drain the transactional outbox in-process (modular monolith). In a split
-  // deployment this is its own worker; the contract is unchanged (§1.6).
+  // Background workers (modular monolith). Each is its own deployable in a split
+  // topology; the contracts are unchanged (§1.6, §1.5, §1.8).
   const outbox = new OutboxWorker(db.primary, buildOutboxHandlers(ctx), log);
-  const stopOutbox = outbox.start(5_000);
+  const notifications = new NotificationWorker(db.primary, buildDispatchProvider(env, log), log);
+  const nudges = new NudgeScanner(db.primary, new NotificationService(db.primary), log);
+  const stopWorkers = [outbox.start(5_000), notifications.start(10_000), nudges.start(60 * 60 * 1000)];
 
   const server = app.listen(env.PORT, () => {
     log.info({ port: env.PORT, region: env.AWS_REGION, env: env.NODE_ENV }, "nuru backend up");
@@ -27,7 +33,7 @@ function main(): void {
 
   const shutdown = (signal: string): void => {
     log.info({ signal }, "shutting down");
-    stopOutbox();
+    for (const stop of stopWorkers) stop();
     server.close(() => {
       void closePools(db).then(() => process.exit(0));
     });
