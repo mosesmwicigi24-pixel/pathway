@@ -63,6 +63,14 @@ export class CurriculumService {
   async getModule(userId: string, moduleId: string): Promise<unknown> {
     const module = await loadModule(this.pool, moduleId);
     if (!module) throw new ApiError("NOT_FOUND", "Module not found");
+    // Students never receive non-published bodies — drafts/archived are invisible
+    // (the hard-lock invariant extends to lifecycle state, §1.9).
+    const pub = await maybeOne<{ is_published: boolean }>(
+      this.pool,
+      `SELECT is_published FROM modules WHERE module_id = $1`,
+      [moduleId],
+    );
+    if (!pub?.is_published) throw new ApiError("NOT_FOUND", "Module not found");
     const enrollment = await loadEnrollment(this.pool, userId);
     if (!enrollment || !(await isModuleUnlocked(this.pool, enrollment, module))) {
       throw new ApiError("GATE_LOCKED", "Module is not yet unlocked", {
