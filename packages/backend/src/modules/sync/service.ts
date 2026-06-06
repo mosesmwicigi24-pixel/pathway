@@ -36,6 +36,7 @@ const PULL_DOMAINS: Record<string, DomainSpec> = {
   enrollments: { table: "enrollments", idCol: "enrollment_id", scope: "user" },
   video_progress: { table: "video_progress", idCol: "media_asset_id", scope: "user" },
   event_rsvps: { table: "event_rsvps", idCol: "rsvp_id", scope: "user" },
+  achievements: { table: "user_badges", idCol: "user_badge_id", scope: "user" },
 };
 
 const PAGE = 1000;
@@ -225,6 +226,10 @@ export class SyncService {
           throw new ApiError("VALIDATION_FAILED", "Financial actions cannot be queued offline", {
             code: "OFFLINE_FORBIDDEN",
           });
+        }
+        // Achievements are server-derived only — no client push path (§G.2).
+        if (m.domain === "achievements") {
+          throw new ApiError("FORBIDDEN_SCOPE", "Achievements cannot be originated by the client");
         }
         throw new ApiError("VALIDATION_FAILED", `Unsupported mutation ${key}`);
     }
