@@ -202,8 +202,26 @@ paths:
     get:
       tags: [curriculum]
       summary: Sanitised YouVersion passage by ref + version + language.
+      parameters:
+        - { name: ref, in: query, required: true, schema: { type: string } }
+        - { name: version, in: query, schema: { type: string } }
+        - { name: language, in: query, schema: { type: string } }
       responses:
-        "200": { description: Passage }
+        "200":
+          description: Passage
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reference, text]
+                properties:
+                  reference: { type: string }
+                  version: { type: string }
+                  language: { type: string }
+                  text: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/UpstreamUnavailable" }
   /admin/modules/{id}:
     put:
       tags: [curriculum]
@@ -324,9 +342,31 @@ paths:
       tags: [progress]
       summary: Record a QR check-in (idempotent via client_scan_id); validates the scan token.
       parameters:
-        - $ref: "#/components/parameters/IdPath"
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [client_scan_id, scan_token]
+              properties:
+                client_scan_id: { type: string, format: uuid }
+                scan_token: { type: string }
       responses:
-        "201": { description: Checked in }
+        "201":
+          description: Checked in
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attendance_id, duplicate]
+                properties:
+                  attendance_id: { type: string, format: uuid }
+                  duplicate: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
 
   # --- Multiplier / admin portal (§3.3) ---
   /cohorts/{cell_id}/members:

@@ -90,6 +90,20 @@ export async function createLeaderAssignment(leaderUserId: string, cellGroupId: 
   return rows[0]!.assignment_id;
 }
 
+export async function createEvent(
+  congregationId: string,
+  opts: { eventId?: string; qrSecret?: string; cellGroupId?: string } = {},
+): Promise<{ event_id: string; qr_secret: string }> {
+  const eventId = opts.eventId ?? "sunday-service";
+  const qrSecret = opts.qrSecret ?? "qr-secret-123";
+  await testPool().query(
+    `INSERT INTO events (event_id, congregation_id, cell_group_id, title, occurs_at, qr_secret)
+     VALUES ($1, $2, $3, 'Service', now(), $4)`,
+    [eventId, congregationId, opts.cellGroupId ?? null, qrSecret],
+  );
+  return { event_id: eventId, qr_secret: qrSecret };
+}
+
 export async function addQuestion(
   moduleId: string,
   correct: string,

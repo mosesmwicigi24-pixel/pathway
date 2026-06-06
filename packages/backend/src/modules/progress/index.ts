@@ -7,11 +7,13 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ProgressService } from "./service.js";
+import { AttendanceService } from "./attendance.js";
 
 export const progressRouter: Router = Router();
 
 export function registerProgress(ctx: AppContext): Router {
   const svc = new ProgressService(ctx.db.primary);
+  const attendance = new AttendanceService(ctx.db.primary);
   const auth = authenticate(ctx.env);
   const r = progressRouter;
 
@@ -33,6 +35,19 @@ export function registerProgress(ctx: AppContext): Router {
         body.completed_at,
       );
       res.status(200).json(result);
+    }),
+  );
+
+  // QR attendance check-in (§3.3): validates the scan token, idempotent.
+  r.post(
+    "/events/:id/attendance",
+    auth,
+    handler(async (req, res) => {
+      const body = parseBody(
+        z.object({ client_scan_id: z.string().uuid(), scan_token: z.string().min(1) }),
+        req.body ?? {},
+      );
+      res.status(201).json(await attendance.checkIn(requirePrincipal(req).userId, req.params.id ?? "", body));
     }),
   );
 

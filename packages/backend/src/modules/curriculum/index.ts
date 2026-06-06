@@ -7,11 +7,13 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { CurriculumService } from "./service.js";
+import { ScriptureService, buildScriptureProvider } from "./scripture.js";
 
 export const curriculumRouter: Router = Router();
 
 export function registerCurriculum(ctx: AppContext): Router {
   const svc = new CurriculumService(ctx.db.primary);
+  const scripture = new ScriptureService(buildScriptureProvider(ctx.env), ctx.env.YOUVERSION_LANGUAGE_RANGES);
   const auth = authenticate(ctx.env);
   const r = curriculumRouter;
 
@@ -37,6 +39,19 @@ export function registerCurriculum(ctx: AppContext): Router {
     auth,
     handler(async (req, res) => {
       res.json(await svc.getModule(requirePrincipal(req).userId, req.params.id ?? ""));
+    }),
+  );
+
+  // Sanitised YouVersion passage by ref + version + language (§3.3).
+  r.get(
+    "/scripture",
+    auth,
+    handler(async (req, res) => {
+      const q = parseBody(
+        z.object({ ref: z.string().min(1), version: z.string().optional(), language: z.string().optional() }),
+        req.query,
+      );
+      res.json(await scripture.passage(q.ref, q.version, q.language));
     }),
   );
 
