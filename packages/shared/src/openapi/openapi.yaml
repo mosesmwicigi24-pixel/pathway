@@ -790,6 +790,54 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
 
+  # --- Video pipeline (Features v2 §V) ---
+  /media/{id}/manifest:
+    get:
+      tags: [system]
+      summary: Signed, expiring HLS master-manifest URL (gated like lesson content).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Signed manifest URL }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/GateLocked" }
+  /admin/media/uploads:
+    post:
+      tags: [system]
+      summary: Admin. Create a direct-to-storage upload session (signed PUT URL).
+      responses:
+        "201": { description: Upload session }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/media/uploads/{id}/complete:
+    post:
+      tags: [system]
+      summary: Admin. Mark upload complete; enqueues transcode. Idempotent.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Transcoding }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/media/{id}:
+    get:
+      tags: [system]
+      summary: Admin. Asset status, ladder, duration, error_detail.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Asset }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [system]
+      summary: Admin. Archive an asset (refused if a published module references it).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Archived }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   # --- Webhooks & sync (system) (§3.3) ---
   /webhooks/stripe:
     post:
