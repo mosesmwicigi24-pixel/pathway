@@ -456,7 +456,16 @@ paths:
       tags: [certificates]
       summary: The caller's issued certificates with download URLs.
       responses:
-        "200": { description: Certificates }
+        "200":
+          description: Certificates
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Certificate" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /verify/{code}:
     get:
       tags: [certificates]
@@ -465,7 +474,12 @@ paths:
       parameters:
         - { name: code, in: path, required: true, schema: { type: string } }
       responses:
-        "200": { description: Issuance facts + validity }
+        "200":
+          description: Issuance facts + validity
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateVerification" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # --- Webhooks & sync (system) (§3.3) ---
   /webhooks/stripe:
@@ -882,3 +896,23 @@ components:
         band: { type: string, enum: [thriving, steady, watch, at_risk] }
         window_end: { type: string, format: date }
         computed_at: { type: string, format: date-time }
+
+    # --- Certificates (§5.5) ---
+    Certificate:
+      type: object
+      required: [certificate_id, verification_code, issued_at]
+      properties:
+        certificate_id: { type: string, format: uuid }
+        level_number: { type: [integer, "null"] }
+        verification_code: { type: string }
+        pdf_object_key: { type: string }
+        issued_at: { type: string, format: date-time }
+        download_url: { type: string }
+    CertificateVerification:
+      type: object
+      required: [valid]
+      properties:
+        valid: { type: boolean }
+        recipient_name: { type: string }
+        level_number: { type: [integer, "null"] }
+        issued_at: { type: string, format: date-time }
