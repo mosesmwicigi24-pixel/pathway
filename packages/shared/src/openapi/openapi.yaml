@@ -324,7 +324,16 @@ paths:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
       responses:
-        "200": { description: Cohort page }
+        "200":
+          description: Cohort page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/EngagementBreakdown" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /members/{id}/engagement:
     get:
@@ -333,7 +342,14 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: Breakdown }
+        "200":
+          description: Breakdown
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EngagementBreakdown" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /reviews:
     get:
       tags: [portal]
@@ -523,6 +539,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     UpstreamUnavailable:
       description: A required dependency (e.g. the IdP) is unreachable or not configured.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: The requested resource does not exist.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -809,3 +830,18 @@ components:
               status: { type: string, enum: [applied, duplicate, rejected] }
               code: { type: string }
               detail: { type: string }
+
+    # --- Engagement (§1.8) ---
+    EngagementBreakdown:
+      type: object
+      required: [user_id, h_score, c_score, a_score, e_score, band]
+      properties:
+        user_id: { type: string, format: uuid }
+        full_name: { type: string }
+        h_score: { type: number, description: Habits (0–1) }
+        c_score: { type: number, description: Curriculum (0–1) }
+        a_score: { type: number, description: Attendance (0–1) }
+        e_score: { type: number, description: Composite Eᵢ (0–1) }
+        band: { type: string, enum: [thriving, steady, watch, at_risk] }
+        window_end: { type: string, format: date }
+        computed_at: { type: string, format: date-time }

@@ -71,6 +71,17 @@ export async function createModule(
   return rows[0]!.module_id;
 }
 
+/** Insert `days` interaction events on distinct recent days (drives the Hᵢ signal). */
+export async function addInteractionDays(userId: string, days: number): Promise<void> {
+  for (let i = 1; i <= days; i++) {
+    await testPool().query(
+      `INSERT INTO interaction_events (user_id, kind, occurred_at, client_event_id)
+       VALUES ($1, 'lesson_open', (CURRENT_DATE - ($2 || ' days')::interval), gen_random_uuid())`,
+      [userId, i],
+    );
+  }
+}
+
 export async function createLeaderAssignment(leaderUserId: string, cellGroupId: string): Promise<string> {
   const { rows } = await testPool().query<{ assignment_id: string }>(
     `INSERT INTO leader_assignments (leader_user_id, cell_group_id) VALUES ($1,$2) RETURNING assignment_id`,
