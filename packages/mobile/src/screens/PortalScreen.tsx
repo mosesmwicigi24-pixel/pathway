@@ -9,6 +9,17 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/types";
 import { palette, radii, spacing, shadow } from "../theme/tokens";
 import { Glow, T } from "../theme/components";
+import { useMe } from "../api/hooks";
+import { clearQueryCache } from "../api/query";
+import { getVault } from "../auth/vault";
+
+function initials(full?: string | null): string {
+  const parts = (full ?? "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "NP";
+  const a = parts[0]?.[0] ?? "";
+  const b = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
+  return (a + b).toUpperCase() || "NP";
+}
 
 interface Row {
   label: string;
@@ -23,7 +34,20 @@ const SECTIONS: { title: string; items: Row[] }[] = [
 
 export function PortalScreen(): ReactElement {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const signOut = (): void => nav.reset({ index: 0, routes: [{ name: "Login" }] });
+  const { data: me } = useMe();
+  const fullName = me?.profile?.full_name ?? "Member";
+  const level = me?.enrollment?.current_level ?? null;
+  const subtitle = [level ? `Level ${level} learner` : null, me?.profile?.email].filter(Boolean).join(" · ");
+
+  const signOut = async (): Promise<void> => {
+    try {
+      await getVault().clear();
+    } catch {
+      // ignore vault errors on sign-out
+    }
+    clearQueryCache();
+    nav.reset({ index: 0, routes: [{ name: "Login" }] });
+  };
 
   return (
     <View style={st.screen}>
@@ -41,11 +65,11 @@ export function PortalScreen(): ReactElement {
           {/* Identity card */}
           <View style={st.idCard}>
             <View style={st.avatar}>
-              <T variant="label" style={{ color: palette.gold }}>MM</T>
+              <T variant="label" style={{ color: palette.gold }}>{initials(fullName)}</T>
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
-              <T variant="heading">Moses Mwicigi</T>
-              <T variant="caption" tone="secondary" style={{ marginTop: 2 }}>Level 2 learner · Nairobi Campus</T>
+              <T variant="heading">{fullName}</T>
+              {subtitle ? <T variant="caption" tone="secondary" style={{ marginTop: 2 }}>{subtitle}</T> : null}
             </View>
             <View style={[st.badge, { backgroundColor: palette.activeBadgeBg }]}>
               <T variant="micro" style={{ color: palette.activeBadgeText }}>Active</T>
@@ -70,7 +94,7 @@ export function PortalScreen(): ReactElement {
             </View>
           ))}
 
-          <Pressable onPress={signOut} style={({ pressed }) => [st.signOut, pressed && { transform: [{ scale: 0.99 }] }]}>
+          <Pressable onPress={() => void signOut()} style={({ pressed }) => [st.signOut, pressed && { transform: [{ scale: 0.99 }] }]}>
             <T variant="heading" style={{ fontSize: 15, color: palette.error }}>Sign out</T>
           </Pressable>
         </View>

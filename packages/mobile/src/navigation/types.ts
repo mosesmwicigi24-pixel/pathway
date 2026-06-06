@@ -20,5 +20,5 @@ export type RootStackParamList = {
   Quiz: { moduleId: string };
   LevelComplete: undefined;
   Giving: undefined;
-  EventDetail: { eventId: string };
+  EventDetail: { eventId: string; title: string; startAt: string; endAt?: string; location?: string | null };
 };

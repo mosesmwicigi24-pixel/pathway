@@ -5,38 +5,38 @@
 // (§1.9). Renders instantly from local content; a background sync reconciles.
 import { useState, type ReactElement } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import {
-  ArrowLeft,
-  Check,
-  Clock,
-  Headphones,
-  Lock,
-  PlayCircle,
-  RefreshCw,
-  Video,
-} from "lucide-react-native";
+import { ArrowLeft, Check, Clock, FileText, Lock, PlayCircle } from "lucide-react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/types";
 import { palette, radii, spacing, shadow } from "../theme/tokens";
 import { Glow, T } from "../theme/components";
-import { getLevel, LEVEL_MODULES, type ModuleMeta } from "../data/pathway";
+import { useLevelModules, usePathway } from "../api/hooks";
+import { errorMessage } from "../api/query";
+import { Loading, ErrorState, Empty } from "../components/states";
+import type { LevelModule } from "../api/types";
 
 export function LevelScreen(): ReactElement {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { levelId } = useRoute<RouteProp<RootStackParamList, "Level">>().params;
-  const level = getLevel(levelId);
-  const pct = Math.round((level.completed / level.modules) * 100);
+  const { data: modules, isLoading, error, refetch } = useLevelModules(levelId);
+  const { data: pathway } = usePathway();
   const [toast, setToast] = useState<string | null>(null);
 
-  const tapModule = (mod: ModuleMeta): void => {
-    if (mod.status === "locked") {
-      const prev = LEVEL_MODULES[LEVEL_MODULES.findIndex((m) => m.id === mod.id) - 1];
-      setToast(`Complete "${prev?.title ?? "the previous module"}" first`);
+  const meta = pathway?.levels.find((l) => l.level_number === levelId);
+  const completed = modules?.filter((m) => m.completed).length ?? meta?.completed_modules ?? 0;
+  const total = modules?.length ?? meta?.total_modules ?? 0;
+  const minutes = modules?.reduce((s, m) => s + (m.estimated_minutes ?? 0), 0) ?? meta?.minutes ?? 0;
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  const tapModule = (mod: LevelModule, index: number): void => {
+    if (mod.locked) {
+      const prev = modules?.[index - 1];
+      setToast(`Complete “${prev?.title ?? "the previous module"}” first`);
       setTimeout(() => setToast(null), 2600);
       return;
     }
-    nav.navigate("Module", { moduleId: String(mod.id) });
+    nav.navigate("Module", { moduleId: mod.module_id });
   };
 
   return (
@@ -49,20 +49,16 @@ export function LevelScreen(): ReactElement {
             <Pressable onPress={() => nav.goBack()} style={({ pressed }) => [st.iconBtn, pressed && st.press]} accessibilityRole="button" accessibilityLabel="Back">
               <ArrowLeft size={20} color={palette.onNavy} />
             </Pressable>
-            <View style={st.syncPill}>
-              <RefreshCw size={10} color="rgba(255,255,255,0.55)" />
-              <T variant="micro" style={{ color: "rgba(255,255,255,0.45)" }}>Syncing offline</T>
-            </View>
           </View>
 
           <View style={st.heroCard}>
-            <T variant="overline" tone="gold">{`LEVEL ${level.id}`}</T>
-            <T variant="display" tone="onNavy" style={{ marginTop: spacing.sm }}>{level.title}</T>
-            <T variant="body" tone="onNavyDim" style={{ marginTop: spacing.sm }}>{level.subtitle}</T>
+            <T variant="overline" tone="gold">{`LEVEL ${levelId}`}</T>
+            <T variant="display" tone="onNavy" style={{ marginTop: spacing.sm }}>{meta?.title ?? `Level ${levelId}`}</T>
+            {meta?.theme ? <T variant="body" tone="onNavyDim" style={{ marginTop: spacing.sm }}>{meta.theme}</T> : null}
             <View style={st.heroProgressRow}>
               <View style={{ flex: 1 }}>
                 <View style={st.heroLabels}>
-                  <T variant="caption" tone="onNavyDim">{`${level.completed} of ${level.modules} modules`}</T>
+                  <T variant="caption" tone="onNavyDim">{`${completed} of ${total} modules`}</T>
                   <T variant="caption" tone="onNavyDim">{`${pct}%`}</T>
                 </View>
                 <View style={st.heroTrack}>
@@ -70,7 +66,7 @@ export function LevelScreen(): ReactElement {
                 </View>
               </View>
               <View style={st.minutes}>
-                <T variant="caption" tone="gold">{`≈ ${level.minutes} min`}</T>
+                <T variant="caption" tone="gold">{`≈ ${minutes} min`}</T>
               </View>
             </View>
           </View>
@@ -84,15 +80,23 @@ export function LevelScreen(): ReactElement {
               <T variant="title" style={{ marginTop: 2 }}>Learn step by step</T>
             </View>
             <View style={st.countPill}>
-              <T variant="caption" tone="secondary">{`${LEVEL_MODULES.length} lessons`}</T>
+              <T variant="caption" tone="secondary">{`${total} lessons`}</T>
             </View>
           </View>
 
-          <View style={{ gap: spacing.md }}>
-            {LEVEL_MODULES.map((m) => (
-              <ModuleCard key={m.id} module={m} onTap={() => tapModule(m)} />
-            ))}
-          </View>
+          {isLoading ? (
+            <Loading label="Loading modules…" />
+          ) : error ? (
+            <ErrorState message={errorMessage(error)} onRetry={() => void refetch()} />
+          ) : !modules || modules.length === 0 ? (
+            <Empty title="No published lessons yet" subtitle="Check back soon — content is being prepared for this level." />
+          ) : (
+            <View style={{ gap: spacing.md }}>
+              {modules.map((m, i) => (
+                <ModuleCard key={m.module_id} module={m} onTap={() => tapModule(m, i)} />
+              ))}
+            </View>
+          )}
         </View>
       </ScrollView>
 
@@ -105,34 +109,35 @@ export function LevelScreen(): ReactElement {
   );
 }
 
-function ModuleCard({ module, onTap }: { module: ModuleMeta; onTap: () => void }): ReactElement {
-  const locked = module.status === "locked";
-  const completed = module.status === "completed";
-  const next = module.status === "next";
+function ModuleCard({ module, onTap }: { module: LevelModule; onTap: () => void }): ReactElement {
+  const locked = module.locked;
+  const completed = module.completed;
+  const next = !completed && !locked;
   const iconBg = completed ? palette.goldTint : next ? palette.navy : palette.mutedBg;
   const iconFg = completed ? palette.goldLo : next ? palette.gold : palette.ink400;
   const fill = completed ? palette.gold : next ? palette.navy : palette.lockedFill;
+  const minutes = module.estimated_minutes ?? 0;
 
   return (
     <Pressable
       onPress={onTap}
       style={({ pressed }) => [st.card, next && { borderColor: "rgba(201,162,39,0.5)" }, locked && { opacity: 0.55 }, pressed && !locked && st.press]}
       accessibilityRole="button"
-      accessibilityLabel={`Module ${module.id}: ${module.title}${locked ? ", locked" : ""}`}
+      accessibilityLabel={`Module ${module.module_sequence_number}: ${module.title}${locked ? ", locked" : ""}`}
     >
       <View style={[st.cardIcon, { backgroundColor: iconBg }]}>
         {completed ? <Check size={20} color={iconFg} /> : locked ? <Lock size={18} color={iconFg} /> : <PlayCircle size={21} color={iconFg} />}
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
         <View style={st.cardMetaRow}>
-          <T variant="caption" tone="secondary">{`Module ${module.id}`}</T>
+          <T variant="caption" tone="secondary">{`Module ${module.module_sequence_number}`}</T>
           <View style={st.minRow}>
             <Clock size={12} color={palette.ink600} />
-            <T variant="caption" tone="secondary">{`${module.minutes} min`}</T>
+            <T variant="caption" tone="secondary">{`${minutes} min`}</T>
           </View>
         </View>
         <T variant="heading" style={{ marginTop: 2 }}>{module.title}</T>
-        <T variant="body" tone="secondary" style={{ marginTop: 2 }}>{module.summary}</T>
+        {module.summary ? <T variant="body" tone="secondary" style={{ marginTop: 2 }}>{module.summary}</T> : null}
         <View style={{ marginTop: spacing.md }}>
           <View style={st.progRow}>
             <T variant="micro" tone="tertiary">Progress</T>
@@ -143,22 +148,15 @@ function ModuleCard({ module, onTap }: { module: ModuleMeta; onTap: () => void }
           </View>
         </View>
         <View style={st.mediaRow}>
-          <T variant="micro" tone="tertiary">{`${module.minutes} min lesson`}</T>
+          <T variant="micro" tone="tertiary">{completed ? "Completed" : locked ? "Locked" : "Tap to begin"}</T>
           <View style={st.mediaIcons}>
-            {module.media.includes("audio") ? <MediaIcon kind="audio" /> : null}
-            {module.media.includes("video") ? <MediaIcon kind="video" /> : null}
+            <View style={st.mediaIcon}>
+              <FileText size={13} color="#506076" />
+            </View>
           </View>
         </View>
       </View>
     </Pressable>
-  );
-}
-
-function MediaIcon({ kind }: { kind: "audio" | "video" }): ReactElement {
-  return (
-    <View style={st.mediaIcon}>
-      {kind === "audio" ? <Headphones size={13} color="#506076" /> : <Video size={13} color="#506076" />}
-    </View>
   );
 }
 

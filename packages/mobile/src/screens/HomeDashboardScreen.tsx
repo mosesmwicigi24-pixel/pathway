@@ -10,13 +10,9 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/types";
 import { palette, radii, spacing, shadow, type as typ } from "../theme/tokens";
 import { Card, GradientBg, T } from "../theme/components";
-import { getActiveLevel } from "../data/pathway";
-
-const QUICK_STATS = [
-  { label: "Today", value: "12m" },
-  { label: "Streak", value: "6d" },
-  { label: "Progress", value: "23%" },
-] as const;
+import { useAchievements, useMe, usePathway } from "../api/hooks";
+import { errorMessage } from "../api/query";
+import { Loading, ErrorState } from "../components/states";
 
 function greeting(): string {
   const h = new Date().getHours();
@@ -29,10 +25,54 @@ function todayLabel(): string {
   return new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
 }
 
+function firstName(full?: string | null): string {
+  return (full ?? "Friend").trim().split(/\s+/)[0] ?? "Friend";
+}
+
+function initials(full?: string | null): string {
+  const parts = (full ?? "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "NP";
+  const a = parts[0]?.[0] ?? "";
+  const b = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
+  return (a + b).toUpperCase() || "NP";
+}
+
 export function HomeDashboardScreen(): ReactElement {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const active = getActiveLevel();
-  const activePct = Math.round((active.completed / active.modules) * 100);
+  const { data: pathway, isLoading, error, refetch } = usePathway();
+  const { data: me } = useMe();
+  const { data: achievements } = useAchievements();
+
+  if (isLoading) {
+    return (
+      <View style={[st.screen, { alignItems: "center", justifyContent: "center" }]}>
+        <Loading label="Loading your dashboard…" />
+      </View>
+    );
+  }
+  if (error || !pathway) {
+    return (
+      <View style={[st.screen, { alignItems: "center", justifyContent: "center" }]}>
+        <ErrorState message={errorMessage(error)} onRetry={() => void refetch()} />
+      </View>
+    );
+  }
+
+  const active =
+    pathway.levels.find((l) => l.status === "active") ??
+    pathway.levels.find((l) => l.level_number === pathway.current_level) ??
+    pathway.levels[0];
+  const activePct = active && active.total_modules > 0 ? Math.round((active.completed_modules / active.total_modules) * 100) : 0;
+  const totalModules = pathway.levels.reduce((s, l) => s + l.total_modules, 0);
+  const doneModules = pathway.levels.reduce((s, l) => s + l.completed_modules, 0);
+  const overallPct = totalModules > 0 ? Math.round((doneModules / totalModules) * 100) : 0;
+  const streak = achievements?.streak?.current ?? 0;
+
+  const quickStats = [
+    { label: "Current", value: `L${pathway.current_level}` },
+    { label: "Streak", value: `${streak}d` },
+    { label: "Progress", value: `${overallPct}%` },
+  ] as const;
 
   const quickStarts = [
     { label: "Lesson", Icon: BookOpen, onPress: () => nav.navigate("Tabs", { screen: "Levels" }) },
@@ -47,17 +87,17 @@ export function HomeDashboardScreen(): ReactElement {
       <View style={st.headRow}>
         <View style={{ flex: 1 }}>
           <T variant="micro" tone="gold" style={st.kicker}>{todayLabel().toUpperCase()}</T>
-          <T variant="title" style={{ marginTop: spacing.sm }}>{`${greeting()}, Moses.`}</T>
+          <T variant="title" style={{ marginTop: spacing.sm }}>{`${greeting()}, ${firstName(me?.profile?.full_name)}.`}</T>
           <T variant="caption" tone="secondary" style={{ marginTop: 2 }}>Grace for today&apos;s step.</T>
         </View>
         <View style={st.avatar}>
-          <T variant="label" style={{ color: palette.gold }}>MM</T>
+          <T variant="label" style={{ color: palette.gold }}>{initials(me?.profile?.full_name)}</T>
         </View>
       </View>
 
       {/* Quick stats */}
       <View style={st.statRow}>
-        {QUICK_STATS.map((s) => (
+        {quickStats.map((s) => (
           <View key={s.label} style={st.statCard}>
             <T variant="heading" style={{ fontSize: 17 }}>{s.value}</T>
             <T variant="micro" tone="tertiary" style={{ marginTop: 4 }}>{s.label}</T>
@@ -105,19 +145,21 @@ export function HomeDashboardScreen(): ReactElement {
       </Card>
 
       {/* Continue */}
-      <Pressable onPress={() => nav.navigate("Level", { levelId: active.id })} style={({ pressed }) => [st.continueCard, pressed && st.press]}>
-        <View style={st.continueIcon}>
-          <BookOpen size={19} color={palette.gold} />
-        </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <T variant="micro" tone="gold">CONTINUE</T>
-          <T variant="heading" tone="onNavy" style={{ marginTop: 2 }}>{active.title}</T>
-          <View style={st.continueTrack}>
-            <View style={[st.continueFill, { width: `${activePct}%` }]} />
+      {active ? (
+        <Pressable onPress={() => nav.navigate("Level", { levelId: active.level_number })} style={({ pressed }) => [st.continueCard, pressed && st.press]}>
+          <View style={st.continueIcon}>
+            <BookOpen size={19} color={palette.gold} />
           </View>
-        </View>
-        <ChevronRight size={18} color={palette.gold} />
-      </Pressable>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <T variant="micro" tone="gold">CONTINUE</T>
+            <T variant="heading" tone="onNavy" style={{ marginTop: 2 }}>{`Level ${active.level_number}: ${active.title}`}</T>
+            <View style={st.continueTrack}>
+              <View style={[st.continueFill, { width: `${activePct}%` }]} />
+            </View>
+          </View>
+          <ChevronRight size={18} color={palette.gold} />
+        </Pressable>
+      ) : null}
     </ScrollView>
   );
 }

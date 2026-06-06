@@ -12,17 +12,59 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/types";
 import { palette, radii, spacing, shadow } from "../theme/tokens";
 import { Glow, T } from "../theme/components";
-import { LEVELS, type LevelMeta } from "../data/pathway";
+import { usePathway, useMe } from "../api/hooks";
+import { errorMessage } from "../api/query";
+import { Loading, ErrorState } from "../components/states";
+import type { LevelStatus } from "../api/types";
+
+interface LevelView {
+  id: number;
+  title: string;
+  subtitle: string;
+  modules: number;
+  completed: number;
+  status: LevelStatus;
+}
+
+function firstName(full?: string | null): string {
+  return (full ?? "Friend").trim().split(/\s+/)[0] ?? "Friend";
+}
 
 export function LevelsScreen(): ReactElement {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const totalModules = LEVELS.reduce((s, l) => s + l.modules, 0);
-  const doneModules = LEVELS.reduce((s, l) => s + l.completed, 0);
-  const pct = Math.round((doneModules / totalModules) * 100);
-  const levelsDone = LEVELS.filter((l) => l.status === "completed").length;
-  const active = LEVELS.find((l) => l.status === "active");
+  const { data: pathway, isLoading, error, refetch } = usePathway();
+  const { data: me } = useMe();
 
   const open = (id: number): void => nav.navigate("Level", { levelId: id });
+
+  if (isLoading) {
+    return (
+      <View style={[st.screen, st.centerBox]}>
+        <Loading label="Loading your pathway…" />
+      </View>
+    );
+  }
+  if (error || !pathway) {
+    return (
+      <View style={[st.screen, st.centerBox]}>
+        <ErrorState message={errorMessage(error)} onRetry={() => void refetch()} />
+      </View>
+    );
+  }
+
+  const levels: LevelView[] = pathway.levels.map((l) => ({
+    id: l.level_number,
+    title: l.title,
+    subtitle: l.theme ?? "",
+    modules: l.total_modules,
+    completed: l.completed_modules,
+    status: l.status,
+  }));
+  const totalModules = levels.reduce((s, l) => s + l.modules, 0);
+  const doneModules = levels.reduce((s, l) => s + l.completed, 0);
+  const pct = totalModules > 0 ? Math.round((doneModules / totalModules) * 100) : 0;
+  const levelsDone = levels.filter((l) => l.status === "completed").length;
+  const active = levels.find((l) => l.status === "active");
 
   return (
     <View style={st.screen}>
@@ -31,7 +73,7 @@ export function LevelsScreen(): ReactElement {
         <View style={st.header}>
           <Glow size={220} color="rgba(201,162,39,0.12)" style={{ right: -60, top: -70 }} />
           <Glow size={96} color="rgba(95,143,200,0.15)" style={{ left: 24, top: 90 }} />
-          <T variant="micro" tone="gold" style={st.kicker}>WELCOME BACK, MOSES</T>
+          <T variant="micro" tone="gold" style={st.kicker}>{`WELCOME BACK, ${firstName(me?.profile?.full_name).toUpperCase()}`}</T>
           <View style={st.headRow}>
             <View style={{ flex: 1, paddingRight: spacing.base }}>
               <T variant="display" tone="onNavy" style={{ letterSpacing: -1.2 }}>Your pathway is unfolding.</T>
@@ -43,9 +85,9 @@ export function LevelsScreen(): ReactElement {
           </View>
 
           <View style={st.statRow}>
-            <StatCard label="Levels" value={`${levelsDone}/${LEVELS.length}`} />
+            <StatCard label="Levels" value={`${levelsDone}/${levels.length}`} />
             <StatCard label="Modules" value={`${doneModules}/${totalModules}`} />
-            <StatCard label="Offline" value="Ready" />
+            <StatCard label="Current" value={`L${pathway.current_level}`} />
           </View>
         </View>
 
@@ -59,7 +101,7 @@ export function LevelsScreen(): ReactElement {
                 <T variant="micro" tone="gold">CONTINUE YOUR JOURNEY</T>
                 <T variant="heading" style={{ marginTop: 2 }}>{`Level ${active.id}: ${active.title}`}</T>
                 <View style={st.miniTrack}>
-                  <View style={[st.miniFill, { width: `${Math.round((active.completed / active.modules) * 100)}%` }]} />
+                  <View style={[st.miniFill, { width: `${active.modules > 0 ? Math.round((active.completed / active.modules) * 100) : 0}%` }]} />
                 </View>
               </View>
               <ChevronRight size={20} color={palette.gold} />
@@ -68,7 +110,7 @@ export function LevelsScreen(): ReactElement {
 
           <View style={st.sectionHead}>
             <View>
-              <T variant="micro" tone="secondary" style={st.kicker}>SIX-LEVEL PATHWAY</T>
+              <T variant="micro" tone="secondary" style={st.kicker}>{`${levels.length}-LEVEL PATHWAY`}</T>
               <T variant="title" style={{ marginTop: 2 }}>Choose your level</T>
             </View>
             <View style={st.mapChip}>
@@ -77,7 +119,7 @@ export function LevelsScreen(): ReactElement {
           </View>
 
           <View style={{ gap: spacing.md }}>
-            {LEVELS.map((lvl) => (
+            {levels.map((lvl) => (
               <LevelCard key={lvl.id} level={lvl} onTap={() => lvl.status !== "locked" && open(lvl.id)} />
             ))}
           </View>
@@ -126,11 +168,11 @@ function ProgressRing({ pct }: { pct: number }): ReactElement {
   );
 }
 
-function LevelCard({ level, onTap }: { level: LevelMeta; onTap: () => void }): ReactElement {
+function LevelCard({ level, onTap }: { level: LevelView; onTap: () => void }): ReactElement {
   const completed = level.status === "completed";
   const active = level.status === "active";
   const locked = level.status === "locked";
-  const pct = Math.round((level.completed / level.modules) * 100);
+  const pct = level.modules > 0 ? Math.round((level.completed / level.modules) * 100) : 0;
   const iconBg = active ? palette.navy : completed ? palette.goldTint : palette.mutedBg;
   const iconFg = active ? palette.gold : completed ? palette.goldLo : palette.ink400;
 
@@ -177,7 +219,7 @@ function LevelCard({ level, onTap }: { level: LevelMeta; onTap: () => void }): R
   );
 }
 
-function Badge({ status }: { status: LevelMeta["status"] }): ReactElement {
+function Badge({ status }: { status: LevelStatus }): ReactElement {
   const map = {
     completed: { label: "Complete", bg: palette.goldTint, fg: palette.urgentText },
     active: { label: "Active", bg: palette.activeBadgeBg, fg: palette.activeBadgeText },
@@ -193,6 +235,7 @@ function Badge({ status }: { status: LevelMeta["status"] }): ReactElement {
 
 const st = {
   screen: { flex: 1, backgroundColor: palette.paper },
+  centerBox: { alignItems: "center", justifyContent: "center" },
   header: {
     backgroundColor: palette.navy,
     paddingHorizontal: spacing.screen,

@@ -3,7 +3,7 @@
 // with presets + a segmented fund selector. Card data is tokenized by Stripe
 // Elements (later), never by us.
 import { useState, type ReactElement } from "react";
-import { Pressable, View } from "react-native";
+import { Pressable, ScrollView, View } from "react-native";
 import { ArrowLeft } from "lucide-react-native";
 import { useNavigation } from "@react-navigation/native";
 import { NuruApi } from "../api/client";
@@ -11,6 +11,16 @@ import { uuidv4 } from "../util/uuid";
 import { assertOnlineForGiving, getConnectivity } from "../net/connectivity";
 import { palette, radii, spacing, shadow } from "../theme/tokens";
 import { PButton, T } from "../theme/components";
+import { useGivingHistory } from "../api/hooks";
+import { invalidateQueries } from "../api/query";
+import type { GivingRecord } from "../api/types";
+
+function money(minor: number, currency: string): string {
+  return `${currency} ${(minor / 100).toLocaleString(undefined, { minimumFractionDigits: 0 })}`;
+}
+function when(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
 
 const FUNDS = ["tithe", "offering", "general", "media"] as const;
 const PRESETS = [500, 1000, 2500, 5000];
@@ -22,6 +32,7 @@ export function GivingScreen(): ReactElement {
   const [amount, setAmount] = useState(0); // major units
   const [status, setStatus] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
+  const { data: history } = useGivingHistory();
 
   async function give(): Promise<void> {
     if (amount <= 0) return;
@@ -31,6 +42,7 @@ export function GivingScreen(): ReactElement {
       await NuruApi.giving({ fund, amount_minor: amount * 100, currency: CURRENCY, idempotency_key: uuidv4() });
       setOffline(false);
       setStatus("Payment started — confirm in the card sheet.");
+      invalidateQueries("giving");
     } catch {
       setOffline(true);
       setStatus(null);
@@ -53,7 +65,7 @@ export function GivingScreen(): ReactElement {
         <T variant="body" tone="onNavyDim">Sow into the Kingdom</T>
       </View>
 
-      <View style={{ flex: 1, padding: spacing.screen, gap: spacing.base }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: spacing.screen, gap: spacing.base, paddingBottom: spacing.xxl }} showsVerticalScrollIndicator={false}>
         {/* Offline info card (kind, never red-shaming) */}
         {offline ? (
           <View style={st.offline}>
@@ -111,7 +123,25 @@ export function GivingScreen(): ReactElement {
         <T variant="micro" tone="tertiary" style={{ textAlign: "center" }}>
           Card details are handled securely by Stripe — never stored by Nuru.
         </T>
-      </View>
+
+        {/* Giving history (real ledger from the server) */}
+        {history && history.length > 0 ? (
+          <View style={{ marginTop: spacing.base }}>
+            <T variant="overline" tone="secondary" style={{ marginBottom: spacing.sm }}>RECENT GIVING</T>
+            <View style={st.historyGroup}>
+              {history.slice(0, 8).map((g: GivingRecord, i) => (
+                <View key={g.transaction_id} style={[st.historyRow, i < Math.min(history.length, 8) - 1 && st.historyDivider]}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <T variant="heading" style={{ fontSize: 15, textTransform: "capitalize" }}>{g.fund}</T>
+                    <T variant="caption" tone="secondary" style={{ marginTop: 2 }}>{`${when(g.created_at)} · ${g.status}`}</T>
+                  </View>
+                  <T variant="heading" style={{ fontSize: 15 }}>{money(g.amount_minor, g.currency)}</T>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
+      </ScrollView>
     </View>
   );
 }
@@ -128,4 +158,7 @@ const st = {
   segItem: { flex: 1, height: 44, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   offline: { flexDirection: "row", gap: spacing.md, backgroundColor: palette.navy, borderRadius: radii.control, padding: spacing.base },
   offlineIcon: { width: 38, height: 38, borderRadius: 10, backgroundColor: "rgba(201,162,39,0.15)", alignItems: "center", justifyContent: "center" },
+  historyGroup: { backgroundColor: palette.white, borderRadius: radii.control, borderWidth: 1, borderColor: palette.border, overflow: "hidden", ...shadow.card },
+  historyRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: spacing.base, paddingVertical: 14 },
+  historyDivider: { borderBottomWidth: 1, borderBottomColor: "rgba(10,37,64,0.06)" },
 } as const;

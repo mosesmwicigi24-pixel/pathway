@@ -1,28 +1,28 @@
-// Event detail (Figma "EventDetail"). The full view for a calendar event — navy
-// header with date/time chips, a description card, then photo and video galleries.
-// Pushed from the Calendar screen with the event id.
+// Event detail (Figma "EventDetail"). The full view for a calendar occurrence —
+// navy header with date/time chips and a details card. The data comes from the
+// real calendar projection (passed in from the Calendar screen); projected
+// occurrences are virtual (no materialized event row), so this is a read view.
 import { type ReactElement } from "react";
 import { Pressable, ScrollView, View } from "react-native";
-import { Clock, Image as ImageIcon, MapPin, Play, X } from "lucide-react-native";
+import { Clock, MapPin, X } from "lucide-react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/types";
 import { palette, radii, spacing, shadow } from "../theme/tokens";
-import { GradientBg, Glow, T } from "../theme/components";
-import { findEvent } from "../data/calendar";
+import { Glow, T } from "../theme/components";
+
+function dateLabel(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+function timeLabel(iso: string): string {
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
 
 export function EventDetailScreen(): ReactElement {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const { eventId } = useRoute<RouteProp<RootStackParamList, "EventDetail">>().params;
-  const event = findEvent(eventId);
+  const { title, startAt, endAt, location } = useRoute<RouteProp<RootStackParamList, "EventDetail">>().params;
 
-  if (!event) {
-    return (
-      <View style={[st.screen, { alignItems: "center", justifyContent: "center" }]}>
-        <T tone="secondary">Event not found.</T>
-      </View>
-    );
-  }
+  const timeRange = endAt ? `${timeLabel(startAt)} – ${timeLabel(endAt)}` : timeLabel(startAt);
 
   return (
     <View style={st.screen}>
@@ -33,49 +33,27 @@ export function EventDetailScreen(): ReactElement {
             <X size={19} color="rgba(255,255,255,0.75)" />
           </Pressable>
           <T variant="micro" tone="gold" style={st.kicker}>EVENT DETAILS</T>
-          <T tone="onNavy" style={st.title}>{event.title}</T>
+          <T tone="onNavy" style={st.title}>{title}</T>
           <View style={st.chips}>
-            <Chip>{`June ${event.day}`}</Chip>
-            <Chip>{event.time}</Chip>
-            {event.urgent ? <Chip danger>Urgent</Chip> : null}
+            <Chip>{dateLabel(startAt)}</Chip>
+            <Chip>{timeRange}</Chip>
           </View>
         </View>
 
         <View style={{ paddingHorizontal: spacing.screen, paddingTop: spacing.lg }}>
-          {/* Description */}
           <View style={st.card}>
-            <T variant="overline" tone="secondary">DESCRIPTION</T>
-            <T variant="bodyLg" style={{ marginTop: spacing.sm, color: palette.ink }}>{event.description}</T>
+            <T variant="overline" tone="secondary">WHEN & WHERE</T>
             <View style={{ marginTop: spacing.base, gap: spacing.sm }}>
-              <View style={st.metaRow}><Clock size={15} color={palette.ink600} /><T variant="caption" tone="secondary">{event.time}</T></View>
-              <View style={st.metaRow}><MapPin size={15} color={palette.ink600} /><T variant="caption" tone="secondary">{event.location}</T></View>
+              <View style={st.metaRow}><Clock size={15} color={palette.ink600} /><T variant="caption" tone="secondary">{`${dateLabel(startAt)} · ${timeRange}`}</T></View>
+              <View style={st.metaRow}><MapPin size={15} color={palette.ink600} /><T variant="caption" tone="secondary">{location || "Location to be announced"}</T></View>
             </View>
           </View>
 
-          {/* Photos */}
-          <T variant="overline" tone="secondary" style={{ marginTop: spacing.lg, marginBottom: spacing.md }}>PHOTOS</T>
-          <View style={st.photoGrid}>
-            {event.photos.map((p) => (
-              <View key={p} style={st.photo}>
-                <GradientBg colors={["#E8EEF7", "rgba(216,184,77,0.30)"]} radius={24} />
-                <ImageIcon size={18} color="rgba(10,37,64,0.55)" />
-                <T variant="caption" style={{ marginTop: 40, color: palette.navy, fontWeight: "600" }}>{p}</T>
-              </View>
-            ))}
-          </View>
-
-          {/* Videos */}
-          <T variant="overline" tone="secondary" style={{ marginTop: spacing.lg, marginBottom: spacing.md }}>VIDEOS</T>
-          <View style={{ gap: spacing.md }}>
-            {event.videos.map((v) => (
-              <Pressable key={v} style={({ pressed }) => [st.videoRow, pressed && { transform: [{ scale: 0.99 }] }]}>
-                <View style={st.videoIcon}>
-                  <Play size={18} color={palette.gold} fill={palette.gold} />
-                </View>
-                <T variant="heading" style={{ flex: 1, fontSize: 15 }}>{v}</T>
-                <T variant="caption" tone="secondary">2:14</T>
-              </Pressable>
-            ))}
+          <View style={[st.card, { marginTop: spacing.base }]}>
+            <T variant="overline" tone="secondary">DETAILS</T>
+            <T variant="body" tone="secondary" style={{ marginTop: spacing.sm }}>
+              This event is part of your church and pathway schedule. Add it to your plans and arrive a few minutes early.
+            </T>
           </View>
         </View>
       </ScrollView>
@@ -83,10 +61,10 @@ export function EventDetailScreen(): ReactElement {
   );
 }
 
-function Chip({ children, danger }: { children: string; danger?: boolean }): ReactElement {
+function Chip({ children }: { children: string }): ReactElement {
   return (
-    <View style={[st.chip, danger && { backgroundColor: "rgba(212,24,61,0.20)" }]}>
-      <T variant="caption" style={{ color: danger ? "#FEC5CF" : "rgba(255,255,255,0.70)" }}>{children}</T>
+    <View style={st.chip}>
+      <T variant="caption" style={{ color: "rgba(255,255,255,0.70)" }}>{children}</T>
     </View>
   );
 }
@@ -101,8 +79,4 @@ const st = {
   chip: { backgroundColor: "rgba(255,255,255,0.08)", borderRadius: radii.pill, paddingHorizontal: 12, paddingVertical: 6 },
   card: { backgroundColor: palette.white, borderRadius: 24, borderWidth: 1, borderColor: palette.border, padding: spacing.base, ...shadow.card },
   metaRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  photoGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
-  photo: { width: "47%", flexGrow: 1, height: 112, borderRadius: 24, padding: spacing.md, overflow: "hidden", justifyContent: "flex-start" },
-  videoRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, backgroundColor: palette.white, borderRadius: 24, borderWidth: 1, borderColor: palette.border, padding: spacing.md, ...shadow.card },
-  videoIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: palette.navy, alignItems: "center", justifyContent: "center" },
 } as const;
