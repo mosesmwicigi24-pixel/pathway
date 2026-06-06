@@ -24,6 +24,26 @@ import { registerMedia } from "../modules/media/index.js";
 export function createApp(ctx: AppContext): Express {
   const app = express();
   app.disable("x-powered-by");
+
+  // Dev-only CORS so the local portal (:5173) can call the API (:8080). In
+  // production the API gateway terminates CORS (§1.4), so this is never enabled.
+  if (ctx.env.NODE_ENV !== "production") {
+    app.use((req, res, next) => {
+      const origin = req.header("Origin");
+      if (origin) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+        res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type,X-Request-Id");
+      }
+      if (req.method === "OPTIONS") {
+        res.sendStatus(204);
+        return;
+      }
+      next();
+    });
+  }
   // Parse JSON for everything EXCEPT the Stripe webhook, which needs the raw body
   // bytes for HMAC signature verification (§3.5). That route installs its own
   // express.raw() parser. Payload cap mirrors §5.8 hardening.
