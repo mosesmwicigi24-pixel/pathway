@@ -12,3 +12,7 @@ CREATE TABLE password_resets (
 
 CREATE UNIQUE INDEX idx_password_resets_token ON password_resets(token_hash);
 CREATE INDEX idx_password_resets_user ON password_resets(user_id);
+
+-- Down Migration
+
+DROP TABLE IF EXISTS password_resets;
