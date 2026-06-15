@@ -1,0 +1,10 @@
+# Caddy reverse proxy for the production API.
+# {$DOMAIN} is read from the DOMAIN env var (set in the VPS .env). Caddy obtains
+# and renews a Let's Encrypt certificate for it automatically — no manual TLS.
+#
+# To serve an additional host (e.g. the admin web app), add another block.
+
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy api:8080
+}

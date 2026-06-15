@@ -1,6 +1,9 @@
 # Keep the build context lean and force a clean, reproducible install in-image.
 **/node_modules
 **/dist
+# TS incremental caches (composite:true) — must NOT leak into the build context,
+# or `tsc` skips emitting dist/* in-image and @nuru/shared fails to resolve.
+**/*.tsbuildinfo
 **/.turbo
 .turbo
 .git

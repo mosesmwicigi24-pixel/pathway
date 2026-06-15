@@ -1,8 +1,12 @@
-name: CI
+name: CI / CD
 
-# Commit stage of the §4.6 pipeline: lint, type-check, unit tests, OpenAPI &
-# migration validation against an ephemeral Postgres. Build/scan/deploy stages
-# (container images, SBOM, canary) are added when a deploy target exists.
+# §4.6 pipeline.
+#   validate : lint, type-check, tests, OpenAPI + migration checks (every PR & push).
+#   build    : on green push to main, build the backend image and push it to GHCR.
+#   deploy   : on a successful build, SSH to the Hostinger VPS and roll it live.
+# PRs only run `validate`. Combined with branch protection (require `validate` +
+# require a PR), nothing reaches main — and therefore nothing deploys — unless CI
+# is green. build/deploy share one workflow so `needs:` strictly orders them.
 
 on:
   push:
@@ -77,3 +81,86 @@ jobs:
 
       - name: Unit + integration tests
         run: pnpm test
+
+  # ---- build: publish the backend image to GHCR (only on green push to main) ---
+  build:
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/pathway-backend
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---- deploy: pull the new image on the VPS and roll it live -------------------
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Deploy to Hostinger VPS over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_SSH_PORT }}
+          envs: GHCR_USER,GHCR_TOKEN,IMAGE_REF
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+
+            # Refresh deploy config (compose file, Caddyfile) from main. Image
+            # contents come from GHCR, not from this checkout.
+            git fetch --depth=1 origin main
+            git checkout -f origin/main
+
+            # Pin this deploy to the immutable commit-SHA image for clean rollback.
+            export BACKEND_IMAGE="ghcr.io/${GHCR_USER,,}/pathway-backend:sha-${IMAGE_REF}"
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml run --rm migrate
+            docker compose -f docker-compose.prod.yml up -d
+            docker logout ghcr.io
+            docker image prune -f
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_REF: ${{ github.sha }}
