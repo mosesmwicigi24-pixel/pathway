@@ -9,6 +9,7 @@ import { Image, Linking, Pressable, RefreshControl, ScrollView, View } from "rea
 import {
   BadgeCheck,
   Bell,
+  BookMarked,
   BookOpen,
   CalendarClock,
   Check,
@@ -17,11 +18,15 @@ import {
   Flame,
   Heart,
   Megaphone,
+  MessageSquareText,
   Play,
+  Quote,
   Share2,
   Sparkles,
+  Sun,
   Target,
   Users,
+  type LucideIcon,
 } from "lucide-react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -75,12 +80,13 @@ function welcomeVideoUrl(v: WelcomeVideo): string | null {
   return v.url;
 }
 
-// Human label for the source badge on the card.
-function welcomeVideoSourceLabel(source: WelcomeVideo["video_source"]): string {
-  if (source === "youtube") return "YouTube";
-  if (source === "vimeo") return "Vimeo";
-  return "Video";
-}
+// "Grow your faith" quick-access grid → the growth screens (D5/B9).
+const GROW: Array<{ label: string; sub: string; route: "Devotional" | "ReadingPlans" | "PrayerJournal" | "MemoryVerses"; Icon: LucideIcon; tint: string; fg: string }> = [
+  { label: "Devotional", sub: "Today's devotional", route: "Devotional", Icon: Sun, tint: palette.goldTint, fg: palette.goldLo },
+  { label: "Reading plan", sub: "Your reading plan", route: "ReadingPlans", Icon: BookMarked, tint: "#EDE9FE", fg: "#7C3AED" },
+  { label: "Prayer journal", sub: "Your prayers", route: "PrayerJournal", Icon: Heart, tint: "#FEE2E2", fg: "#DC2626" },
+  { label: "Memory verses", sub: "Practice & master", route: "MemoryVerses", Icon: Quote, tint: palette.goldTint, fg: palette.goldLo },
+];
 
 const RHYTHM: Array<{ key: "prayer" | "word" | "reflection"; label: string }> = [
   { key: "prayer", label: "Prayer" },
@@ -225,9 +231,7 @@ export function HomeDashboardScreen(): ReactElement {
               <T variant="caption" style={{ fontWeight: "600" }}>Nuru Pathway</T>
               <BadgeCheck size={14} color={palette.gold} />
               <View style={{ flex: 1 }} />
-              <T variant="micro" tone="tertiary" style={{ letterSpacing: 1.2 }}>
-                {welcomeVideoSourceLabel(welcomeVideo.video_source).toUpperCase()}
-              </T>
+              <T variant="micro" tone="tertiary" style={{ letterSpacing: 1.2 }}>FEATURED</T>
             </View>
             <Pressable
               accessibilityRole="button"
@@ -246,6 +250,13 @@ export function HomeDashboardScreen(): ReactElement {
             ) : (
               <T variant="caption" tone="secondary" style={{ marginTop: 2 }}>Start here — what the journey looks like</T>
             )}
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md }}>
+              {["Intro", "Level overview", "Testimonies"].map((c) => (
+                <View key={c} style={st.featChip}>
+                  <T variant="micro" style={{ fontWeight: "600", color: palette.ink600 }}>{c}</T>
+                </View>
+              ))}
+            </View>
           </View>
         ) : null}
 
@@ -415,6 +426,26 @@ export function HomeDashboardScreen(): ReactElement {
           ) : null}
         </View>
 
+        {/* ── Reflection due today (when this lesson still needs one) ──── */}
+        {active && !rhythm.reflection ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => nav.navigate("Level", { levelId: active.level_number })}
+            style={({ pressed }) => [st.reflectBanner, pressed && { opacity: 0.92 }]}
+          >
+            <View style={st.reflectIcon}>
+              <MessageSquareText size={16} color={palette.goldLo} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <T variant="heading" style={{ fontSize: 14 }}>Reflection due today</T>
+              <T variant="micro" tone="tertiary" style={{ marginTop: 1 }} numberOfLines={1}>{active.title}</T>
+            </View>
+            <View style={st.reflectBtn}>
+              <T variant="micro" style={{ color: palette.goldGlow, fontWeight: "700" }}>Start reflection</T>
+            </View>
+          </Pressable>
+        ) : null}
+
         {/* ── Your progress ──────────────────────────────────────────── */}
         <View style={st.card}>
           <View style={{ flexDirection: "row", alignItems: "baseline" }}>
@@ -451,6 +482,29 @@ export function HomeDashboardScreen(): ReactElement {
               </T>
             </View>
           ) : null}
+        </View>
+
+        {/* ── Grow your faith ────────────────────────────────────────── */}
+        <View style={st.card}>
+          <T variant="heading" style={{ fontSize: 15, marginBottom: spacing.md }}>Grow your faith</T>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
+            {GROW.map((g) => (
+              <Pressable
+                key={g.label}
+                accessibilityRole="button"
+                onPress={() => nav.navigate(g.route)}
+                style={({ pressed }) => [st.growTile, pressed && { opacity: 0.9 }]}
+              >
+                <View style={[st.growIcon, { backgroundColor: g.tint }]}>
+                  <g.Icon size={16} color={g.fg} />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <T variant="caption" style={{ fontWeight: "700", color: palette.ink }} numberOfLines={1}>{g.label}</T>
+                  <T variant="micro" tone="tertiary" numberOfLines={1}>{g.sub}</T>
+                </View>
+              </Pressable>
+            ))}
+          </View>
         </View>
 
         {/* ── Upcoming (real calendar) ───────────────────────────────── */}
@@ -700,6 +754,19 @@ const st = {
     marginTop: spacing.md,
   },
   targetTile: { width: 28, height: 28, borderRadius: 9, backgroundColor: palette.goldTint, alignItems: "center", justifyContent: "center" },
+  featChip: { backgroundColor: palette.white, borderWidth: 1, borderColor: palette.border, borderRadius: radii.pill, paddingHorizontal: spacing.md, paddingVertical: 7 },
+  reflectBanner: {
+    flexDirection: "row", alignItems: "center", gap: spacing.md,
+    backgroundColor: palette.goldChipBg, borderWidth: 1, borderColor: palette.goldTint,
+    borderRadius: 18, padding: spacing.base,
+  },
+  reflectIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: palette.white, alignItems: "center", justifyContent: "center" },
+  reflectBtn: { backgroundColor: palette.navy, borderRadius: radii.pill, paddingHorizontal: spacing.base, paddingVertical: 9 },
+  growTile: {
+    width: "48%", flexGrow: 1, flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: palette.surface, borderRadius: 14, padding: spacing.md,
+  },
+  growIcon: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   weekChip: {
     flexDirection: "row",
     alignItems: "center",
