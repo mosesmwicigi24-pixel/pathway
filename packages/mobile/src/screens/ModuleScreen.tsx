@@ -5,7 +5,7 @@
 // module-list caches so the next module unlocks immediately.
 import { useState, type ReactElement } from "react";
 import { Pressable, ScrollView, TextInput, View, type NativeSyntheticEvent, type NativeScrollEvent } from "react-native";
-import { Check, ChevronLeft, Headphones, Pause, PenLine, Play, Video } from "lucide-react-native";
+import { Check, ChevronLeft, ChevronRight, Headphones, Pause, PenLine, Play, Video } from "lucide-react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/types";
@@ -229,15 +229,23 @@ export function ModuleScreen(): ReactElement {
 
             {/* Reflection review state (M3 over B3): the leader's decision */}
             {needsReflection && myReflection && banner ? (
-              <View style={[st.reflection, { backgroundColor: banner.bg, borderColor: "transparent" }]}>
-                <T variant="heading" style={{ color: banner.fg, fontSize: 15 }}>{banner.title}</T>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="View your reflection"
+                onPress={() => nav.navigate("Reflection", { moduleId })}
+                style={({ pressed }) => [st.reflection, { backgroundColor: banner.bg, borderColor: "transparent" }, pressed && { opacity: 0.9 }]}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                  <T variant="heading" style={{ color: banner.fg, fontSize: 15, flex: 1 }}>{banner.title}</T>
+                  <ChevronRight size={16} color={banner.fg} />
+                </View>
                 <T variant="caption" style={{ color: banner.fg, marginTop: 4, opacity: 0.9 }}>{banner.body}</T>
                 {myReflection.feedback_notes ? (
                   <T variant="body" style={{ marginTop: spacing.sm, color: palette.ink, fontStyle: "italic" }}>
                     &ldquo;{myReflection.feedback_notes}&rdquo;
                   </T>
                 ) : null}
-              </View>
+              </Pressable>
             ) : null}
 
             {/* Reflection composer: first submission, or a returned resubmit */}
