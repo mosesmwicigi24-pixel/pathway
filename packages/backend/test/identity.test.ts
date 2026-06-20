@@ -201,7 +201,7 @@ describe("identity / auth", () => {
   });
 
   // ---- Self-service register (POST /auth/register) ----
-  it("registers a new Student, mints a session, and the account can then log in", async () => {
+  it("registers a new Student, attaches the congregation, mints a session, and can log in", async () => {
     const reg = await agent()
       .post("/v1/auth/register")
       .send({ full_name: "Grace New", email: "grace@dev.local", password: "joinme12" });
@@ -209,8 +209,11 @@ describe("identity / auth", () => {
     expect(reg.body.access_token).toBeTruthy();
     expect(reg.body.refresh_token).toBeTruthy();
 
-    const { rows } = await testPool().query("SELECT role FROM users WHERE email=$1", ["grace@dev.local"]);
+    const { rows: cg } = await testPool().query("SELECT congregation_id FROM congregations ORDER BY created_at LIMIT 1");
+    const { rows } = await testPool().query("SELECT role, congregation_id FROM users WHERE email=$1", ["grace@dev.local"]);
     expect(rows[0].role).toBe("Student"); // self-signup can only create a Student (§5.8)
+    expect(rows[0].congregation_id).toBeTruthy(); // attached to a congregation (so chat/events/cell scope work)
+    expect(rows[0].congregation_id).toBe(cg[0].congregation_id); // the deployment congregation
 
     // The brand-new credential works at the login endpoint too.
     const login = await agent().post("/v1/auth/login").send({ email: "grace@dev.local", password: "joinme12" });

@@ -211,8 +211,12 @@ export class IdentityService {
       try {
         created = await one<UserAuthRow>(
           c,
-          `INSERT INTO users (full_name, email, password_hash, role)
-           VALUES ($1, $2, $3, 'Student')
+          // Attach the signup to the congregation (single-congregation deployment):
+          // the oldest congregation. Without this, self-signups land congregation_id
+          // NULL and every congregation-scoped feature (chat directory, events,
+          // cell) is empty for them.
+          `INSERT INTO users (full_name, email, password_hash, role, congregation_id)
+           VALUES ($1, $2, $3, 'Student', (SELECT congregation_id FROM congregations ORDER BY created_at LIMIT 1))
            RETURNING user_id, role, congregation_id`,
           [input.full_name, input.email, hash],
         );
