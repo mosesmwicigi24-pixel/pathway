@@ -10,6 +10,7 @@ import {
   avatarColor,
   inboxTime,
   groupKindLabel,
+  categoryTag,
   CHAT_AVATAR_COLORS,
 } from "./chatInbox";
 import type { ChatConversation, ChatInbox } from "../api/types";
@@ -21,6 +22,7 @@ function convo(over: Partial<ChatConversation>): ChatConversation {
     is_public: false,
     title: "Someone",
     topic: null,
+    category: null,
     member_count: 2,
     last_body: null,
     last_type: null,
@@ -39,7 +41,7 @@ const inbox: ChatInbox = {
     convo({ conversation_id: "g1", kind: "group", title: "Karen East cell", unread: 5, last_type: "voice", last_author: "Pr. Mwangi" }),
   ],
   discover_spaces: [
-    { conversation_id: "x1", title: "youth-ablaze", topic: "For the youth movement", member_count: 210 },
+    { conversation_id: "x1", title: "youth-ablaze", topic: "For the youth movement", category: "youth", member_count: 210 },
   ],
 };
 
@@ -77,7 +79,7 @@ describe("search", () => {
     expect(matchesConversation(c, "  ")).toBe(true); // blank matches all
   });
   it("matches discover on title/topic", () => {
-    const s = { conversation_id: "x", title: "serve-team", topic: "outreach", member_count: 1 };
+    const s = { conversation_id: "x", title: "serve-team", topic: "outreach", category: "service", member_count: 1 };
     expect(matchesDiscover(s, "serve")).toBe(true);
     expect(matchesDiscover(s, "outreach")).toBe(true);
     expect(matchesDiscover(s, "nope")).toBe(false);
@@ -123,6 +125,15 @@ describe("inboxTime", () => {
     expect(inboxTime("2026-06-16T06:30:00Z", now)).toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/);
     expect(inboxTime("2026-05-01T06:30:00Z", now)).toMatch(/May/);
     expect(inboxTime(null, now)).toBe("");
+  });
+});
+
+describe("categoryTag", () => {
+  it("uppercases a category or returns null when absent", () => {
+    expect(categoryTag("youth")).toBe("YOUTH");
+    expect(categoryTag("  marketplace ")).toBe("MARKETPLACE");
+    expect(categoryTag(null)).toBeNull();
+    expect(categoryTag("")).toBeNull();
   });
 });
 

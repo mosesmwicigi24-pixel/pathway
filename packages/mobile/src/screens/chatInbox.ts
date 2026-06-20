@@ -106,6 +106,12 @@ export function inboxTime(iso: string | null, now: number = Date.now()): string 
   return then.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+/** Normalize a space category into a short uppercase pill label, or null. */
+export function categoryTag(category: string | null | undefined): string | null {
+  const c = (category ?? "").trim();
+  return c ? c.toUpperCase() : null;
+}
+
 /** A human label for a group room's subtype, derived from its title suffix. */
 export function groupKindLabel(c: ChatConversation): string | null {
   const t = (c.title ?? "").toLowerCase();

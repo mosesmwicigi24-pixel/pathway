@@ -29,6 +29,7 @@ import {
   avatarColor,
   inboxTime,
   groupKindLabel,
+  categoryTag,
   type ChatTab,
 } from "./chatInbox";
 
@@ -246,7 +247,10 @@ function SpacesTab({
                   <Hash size={20} color="#fff" />
                 </View>
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <T variant="heading" style={{ fontSize: 16 }} numberOfLines={1}>{s.title ?? "Space"}</T>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                    <T variant="heading" style={{ flexShrink: 1, fontSize: 16 }} numberOfLines={1}>{s.title ?? "Space"}</T>
+                    <CategoryPill category={s.category} />
+                  </View>
                   <T variant="caption" tone="secondary" style={{ marginTop: 2 }} numberOfLines={2}>
                     {s.topic ?? "A public space in your congregation."}
                   </T>
@@ -371,9 +375,11 @@ function ConvoRow({
       )}
       <View style={{ flex: 1, minWidth: 0 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-          <T variant="heading" style={{ flex: 1, fontSize: 15 }} numberOfLines={1}>
+          <T variant="heading" style={{ flexShrink: 1, fontSize: 15 }} numberOfLines={1}>
             {c.title ?? "Conversation"}{subtype ? <T variant="caption" tone="tertiary"> · {subtype}</T> : null}
           </T>
+          {hash ? <CategoryPill category={c.category} /> : null}
+          <View style={{ flex: 1 }} />
           <T variant="micro" tone={c.unread > 0 ? "gold" : "tertiary"} style={c.unread > 0 ? { fontWeight: "700" } : undefined}>
             {inboxTime(c.last_at)}
           </T>
@@ -386,6 +392,18 @@ function ConvoRow({
         </View>
       </View>
     </Pressable>
+  );
+}
+
+/** A small colored category pill for a public space (e.g. YOUTH, MARKETPLACE). */
+function CategoryPill({ category }: { category: string | null }): ReactElement | null {
+  const label = categoryTag(category);
+  if (!label) return null;
+  const color = avatarColor(label);
+  return (
+    <View style={[st.tag, { backgroundColor: `${color}1A` }]}>
+      <T variant="micro" style={{ color, fontWeight: "800", letterSpacing: 0.5 }}>{label}</T>
+    </View>
   );
 }
 
@@ -435,6 +453,7 @@ const st = {
   row: { flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.base },
   rowDivider: { borderTopWidth: 1, borderTopColor: palette.border },
   badge: { minWidth: 22, height: 22, paddingHorizontal: 6, borderRadius: 11, backgroundColor: palette.gold, alignItems: "center", justifyContent: "center" },
+  tag: { paddingHorizontal: 8, height: 20, borderRadius: 6, alignItems: "center", justifyContent: "center" },
   avatarSquare: { width: 48, height: 48, borderRadius: 16, alignItems: "center", justifyContent: "center" },
   avatarRound: { width: 48, height: 48, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   discoverCard: { backgroundColor: palette.white, borderRadius: 18, borderWidth: 1, borderColor: palette.border, padding: spacing.base, marginBottom: spacing.sm, ...shadow.card },

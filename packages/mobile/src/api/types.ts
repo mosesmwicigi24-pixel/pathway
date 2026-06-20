@@ -239,6 +239,7 @@ export interface ChatConversation {
   is_public: boolean;
   title: string | null;
   topic: string | null;
+  category: string | null;
   member_count: number;
   last_body: string | null;
   last_type: string | null;
@@ -251,6 +252,7 @@ export interface DiscoverSpace {
   conversation_id: string;
   title: string | null;
   topic: string | null;
+  category: string | null;
   member_count: number;
 }
 
@@ -296,6 +298,8 @@ export interface ChatThreadDetail {
   is_public: boolean;
   title: string | null;
   topic: string | null;
+  category: string | null;
+  member_count: number;
   joined: boolean;
   messages: ChatMessage[];
 }

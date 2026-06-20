@@ -39,14 +39,14 @@ const QUICK = ["🙏", "❤️", "🔥", "🎉"];
 // Tap-to-fill suggested replies above the composer (mobile Chat make).
 const QUICK_REPLIES = ["Amen 🙏", "Praying for you 💛", "On my way 🏃", "Thank you 🙏"];
 
-/** A short subtitle under the thread title: kind + (for groups) the room type. */
+/** A short subtitle under the thread title: kind (+ room type) and member count. */
 function threadSubtitle(convo: ChatThreadDetail): string {
   if (convo.kind === "dm") return "Direct message";
-  if (convo.kind === "space") return convo.is_public ? "Public space" : "Space";
+  const members = `${convo.member_count} ${convo.member_count === 1 ? "member" : "members"}`;
+  if (convo.kind === "space") return `${convo.is_public ? "Public space" : "Space"} · ${members}`;
   const t = (convo.title ?? "").toLowerCase();
-  if (t.includes("cohort")) return "Cohort group";
-  if (t.includes("leader") || t.includes("multiplier")) return "Leaders group";
-  return "Cell group";
+  const kind = t.includes("cohort") ? "Cohort group" : t.includes("leader") || t.includes("multiplier") ? "Leaders group" : "Cell group";
+  return `${kind} · ${members}`;
 }
 
 // react-native-audio-recorder-player v4 exports a singleton instance (no `new`).
