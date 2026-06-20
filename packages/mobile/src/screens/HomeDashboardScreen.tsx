@@ -16,7 +16,9 @@ import {
   ChevronRight,
   Clock,
   Flame,
+  HandHeart,
   Heart,
+  Library,
   Megaphone,
   MessageSquareText,
   Play,
@@ -80,12 +82,15 @@ function welcomeVideoUrl(v: WelcomeVideo): string | null {
   return v.url;
 }
 
-// "Grow your faith" quick-access grid → the growth screens (D5/B9).
-const GROW: Array<{ label: string; sub: string; route: "Devotional" | "ReadingPlans" | "PrayerJournal" | "MemoryVerses"; Icon: LucideIcon; tint: string; fg: string }> = [
-  { label: "Devotional", sub: "Today's devotional", route: "Devotional", Icon: Sun, tint: palette.goldTint, fg: palette.goldLo },
-  { label: "Reading plan", sub: "Your reading plan", route: "ReadingPlans", Icon: BookMarked, tint: "#EDE9FE", fg: "#7C3AED" },
-  { label: "Prayer journal", sub: "Your prayers", route: "PrayerJournal", Icon: Heart, tint: "#FEE2E2", fg: "#DC2626" },
-  { label: "Memory verses", sub: "Practice & master", route: "MemoryVerses", Icon: Quote, tint: palette.goldTint, fg: palette.goldLo },
+// "Grow your faith" quick-access grid → the growth screens (D5/B9). Matches the
+// Figma HomeTab tools row (6 tiles + discipler).
+const GROW: Array<{ label: string; sub: string; route: "Devotional" | "ReadingPlans" | "PrayerJournal" | "MemoryVerses" | "Gifts" | "Resources"; Icon: LucideIcon; tint: string; fg: string }> = [
+  { label: "Devotional", sub: "Today's devotional", route: "Devotional", Icon: Sun, tint: "#FFF4DA", fg: palette.goldLo },
+  { label: "Reading plan", sub: "Continue your plan", route: "ReadingPlans", Icon: BookMarked, tint: "#EEF2FF", fg: "#6366F1" },
+  { label: "Prayer journal", sub: "Your prayers", route: "PrayerJournal", Icon: HandHeart, tint: "#FEE2E2", fg: "#DC2626" },
+  { label: "Memory verses", sub: "Practice & master", route: "MemoryVerses", Icon: Quote, tint: "#FFF4DA", fg: palette.goldLo },
+  { label: "Spiritual gifts", sub: "Take assessment", route: "Gifts", Icon: Sparkles, tint: "#F3E8FF", fg: "#A855F7" },
+  { label: "Resources", sub: "Books, audio, video", route: "Resources", Icon: Library, tint: "#E0F2FE", fg: "#0EA5E9" },
 ];
 
 const RHYTHM: Array<{ key: "prayer" | "word" | "reflection"; label: string }> = [
@@ -505,6 +510,21 @@ export function HomeDashboardScreen(): ReactElement {
               </Pressable>
             ))}
           </View>
+          {/* Your discipler → Mentor */}
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => nav.navigate("Mentor")}
+            style={({ pressed }) => [st.disciplerRow, pressed && { opacity: 0.9 }]}
+          >
+            <View style={st.disciplerAvatar}>
+              <T variant="micro" style={{ color: palette.white, fontWeight: "700" }}>JO</T>
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <T variant="micro" style={{ color: palette.goldChipText, fontWeight: "700", letterSpacing: 1.2 }}>YOUR DISCIPLER</T>
+              <T variant="caption" style={{ fontWeight: "700", color: palette.ink, marginTop: 1 }} numberOfLines={1}>Pastor James Otieno</T>
+            </View>
+            <ChevronRight size={16} color={palette.ink300} />
+          </Pressable>
         </View>
 
         {/* ── Upcoming (real calendar) ───────────────────────────────── */}
@@ -767,6 +787,12 @@ const st = {
     backgroundColor: palette.surface, borderRadius: 14, padding: spacing.md,
   },
   growIcon: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  disciplerRow: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border,
+    borderRadius: 14, padding: spacing.md, marginTop: spacing.sm,
+  },
+  disciplerAvatar: { width: 36, height: 36, borderRadius: 12, backgroundColor: "#16A34A", alignItems: "center", justifyContent: "center" },
   weekChip: {
     flexDirection: "row",
     alignItems: "center",
