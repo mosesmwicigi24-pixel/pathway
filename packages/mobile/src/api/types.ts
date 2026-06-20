@@ -259,6 +259,13 @@ export interface ChatInbox {
   discover_spaces: DiscoverSpace[];
 }
 
+/** A member the caller may start a DM with (GET /chat/people). */
+export interface ChatPerson {
+  user_id: string;
+  full_name: string;
+  role: string;
+}
+
 export interface ChatReaction {
   emoji: string;
   count: number;
