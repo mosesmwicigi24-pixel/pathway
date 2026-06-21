@@ -45,3 +45,18 @@ Scope approved: **P1–P5** (mobile binds, keyboard, UX, CMS authoring, backend)
 - applied: NuruAssistant + Thread composers (marginBottom), Giving payment sheet
   + MemoryVerse practice sheet (marginBottom), Quiz (footer + scroll pad +
   persistTaps), Module + Reflection (scroll pad + footer), Devotional (scroll pad).
+
+### P4 — admin-web: Content Studio CMS
+- new page `components/pages/GrowthContent.tsx` (route `/content-studio`, nav under
+  Curriculum) — tabbed authoring for Devotionals, Memory Verses, Reading Plans
+  (with day editor), Resources, and level Encouragements (level-scoped). Wires the
+  previously-orphaned `GrowthAdminApi` + the new `EncouragementsAdminApi`.
+- api/client: `EncouragementRow` + `EncouragementsAdminApi` (list/create/update/remove).
+- Closes the CMS gap: every mobile growth/Pathway content type is now editable.
+
+## Verification
+- backend: typecheck clean; encouragements vitest (3) pass; OpenAPI route-parity
+  pass; `pnpm openapi:lint` valid.
+- mobile: typecheck + eslint clean (excluding the uncommitted config.ts prod hack);
+  Release build installed on the iPhone 17 Pro Max.
+- admin-web: typecheck + eslint clean; production build OK.
