@@ -31,3 +31,17 @@ Scope approved: **P1–P5** (mobile binds, keyboard, UX, CMS authoring, backend)
   scripture_ref, emoji, is_active, sort_order).
 - new module `packages/backend/src/modules/encouragements/` — member read
   `GET /levels/:n/encouragements` + Admin CRUD under `/admin/levels/:n/encouragements`.
+
+### P1+P3 — mobile: bind hardcoded → real data
+- api: `LevelEncouragement` type, `NuruApi.levelEncouragements`, `useLevelEncouragements` hook.
+- LevelScreen: discipler card ← `useMentor`; Word-of-God + trail interludes ←
+  `useLevelEncouragements` (real, CMS-managed); removed fabricated MENTOR/
+  LEVEL_VERSE/encouragement-engine. Hero images remain decorative.
+- HomeDashboardScreen: discipler card ← `useMentor` (name + initials), no more
+  hardcoded "Pastor James Otieno / JO".
+
+### P2 — mobile: keyboard floats above inputs (every typing area preserved)
+- new `components/useKeyboardInset` hook (centralizes the Chat/Profile pattern).
+- applied: NuruAssistant + Thread composers (marginBottom), Giving payment sheet
+  + MemoryVerse practice sheet (marginBottom), Quiz (footer + scroll pad +
+  persistTaps), Module + Reflection (scroll pad + footer), Devotional (scroll pad).
