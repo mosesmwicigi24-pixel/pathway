@@ -45,7 +45,7 @@ export function PrayerWallDetailScreen(): ReactElement {
     if (!body && !voice.audioUrl) return;
     setSending(true);
     try {
-      await NuruApi.prayerWallComment(postId, { comment_id: uuidv4(), body: body || "🎤 Voice note", audio_url: voice.audioUrl, client_mutation_id: uuidv4() });
+      await NuruApi.prayerWallComment(postId, { comment_id: uuidv4(), body: body || "🎤 Voice note", audio_url: voice.audioUrl, audio_waveform: voice.audioUrl ? voice.waveform : null, client_mutation_id: uuidv4() });
       setDraft("");
       voice.reset();
       refresh();
@@ -91,7 +91,7 @@ export function PrayerWallDetailScreen(): ReactElement {
               </View>
               {data.post.title ? <T serif style={{ fontSize: 18, color: palette.ink, marginTop: spacing.md }}>{data.post.title}</T> : null}
               <T variant="bodyLg" style={{ color: palette.ink, marginTop: spacing.sm }}>{data.post.body}</T>
-              {data.post.audio_url ? <VoiceNotePlayer url={data.post.audio_url} /> : null}
+              {data.post.audio_url ? <VoiceNotePlayer url={data.post.audio_url} waveform={data.post.audio_waveform} /> : null}
 
               {/* Reaction bar */}
               <View style={st.reactBar}>
@@ -132,7 +132,7 @@ export function PrayerWallDetailScreen(): ReactElement {
                   <T variant="micro" tone="tertiary">{when(cm.created_at)}</T>
                 </View>
                 <T variant="body" style={{ color: palette.ink, marginTop: 6 }}>{cm.body}</T>
-                {cm.audio_url ? <VoiceNotePlayer url={cm.audio_url} /> : null}
+                {cm.audio_url ? <VoiceNotePlayer url={cm.audio_url} waveform={cm.audio_waveform} /> : null}
               </View>
             ))}
           </ScrollView>

@@ -103,7 +103,7 @@ export function PrayerWallScreen(): ReactElement {
             </View>
             {p.title ? <T variant="heading" style={{ marginTop: spacing.sm, color: palette.ink }}>{p.title}</T> : null}
             <T variant="body" tone="secondary" style={{ marginTop: 4 }} numberOfLines={3}>{p.body}</T>
-            {p.audio_url ? <VoiceNotePlayer url={p.audio_url} /> : null}
+            {p.audio_url ? <VoiceNotePlayer url={p.audio_url} waveform={p.audio_waveform} /> : null}
             <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.base, marginTop: spacing.md }}>
               <Pressable accessibilityRole="button" accessibilityLabel="Pray for this" onPress={() => void pray(p)} style={[st.prayBtn, p.i_prayed && st.prayBtnOn]}>
                 <T style={{ fontSize: 15 }}>🙏</T>
@@ -144,6 +144,7 @@ function ComposeSheet({ onClose, onPosted }: { onClose: () => void; onPosted: ()
         title: title.trim() || null,
         body: text || "🎤 Voice prayer",
         audio_url: voice.audioUrl,
+        audio_waveform: voice.audioUrl ? voice.waveform : null,
         client_mutation_id: uuidv4(),
       });
       onPosted();
