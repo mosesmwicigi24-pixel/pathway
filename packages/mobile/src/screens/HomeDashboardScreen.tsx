@@ -16,6 +16,7 @@ import {
   ChevronRight,
   Clock,
   Flame,
+  HandCoins,
   HandHeart,
   Heart,
   MapPin,
@@ -432,6 +433,60 @@ export function HomeDashboardScreen(): ReactElement {
           </View>
         </View>
 
+        {/* ── Prayer Wall (public requests, auto-advancing) ──────────── */}
+        {wallPosts && wallPosts.length > 0 ? (
+          <PrayerWallCarousel
+            posts={wallPosts}
+            onOpen={(postId) => nav.navigate("PrayerWallDetail", { postId })}
+            onSeeAll={() => nav.navigate("PrayerWall")}
+          />
+        ) : null}
+
+        {/* ── Reading plan + Prayer journal (moved up: before This week) ─ */}
+        <View style={{ flexDirection: "row", gap: spacing.sm }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Reading plan"
+            onPress={() => (plan ? nav.navigate("PlanDetail", { planId: plan.plan_id, title: plan.title }) : nav.navigate("ReadingPlans"))}
+            style={({ pressed }) => [st.homeMini, pressed && { opacity: 0.9 }]}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <View style={[st.homeMiniIcon, { backgroundColor: "#E0E7FF" }]}><BookOpen size={18} color="#4338CA" /></View>
+              {plan?.enrolled ? <View style={[st.homeChip, { backgroundColor: "#E0E7FF" }]}><T variant="micro" style={{ color: "#4338CA", fontWeight: "700" }}>{`${planPct}%`}</T></View> : null}
+            </View>
+            <T variant="micro" style={{ color: "#4338CA", fontWeight: "700", letterSpacing: 1.1, marginTop: spacing.sm }}>READING PLAN</T>
+            <T variant="heading" style={{ fontSize: 14, marginTop: 2 }} numberOfLines={2}>{plan?.title ?? "Read through Scripture"}</T>
+            {plan?.enrolled ? (
+              <>
+                <View style={[st.miniTrack, { marginTop: 8 }]}><View style={{ width: `${planPct}%`, height: "100%", borderRadius: 2, backgroundColor: "#6366F1" }} /></View>
+                <T variant="micro" tone="tertiary" style={{ marginTop: 6 }}>{`Day ${plan.current_day ?? planDone + 1} of ${plan.day_count}`}</T>
+              </>
+            ) : (
+              <T variant="micro" tone="tertiary" style={{ marginTop: 4 }} numberOfLines={1}>{plans && plans.length > 0 ? `${plans.length} plans to start` : "Start a guided plan"}</T>
+            )}
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Prayer journal"
+            onPress={() => nav.navigate("PrayerJournal")}
+            style={({ pressed }) => [st.homeMini, pressed && { opacity: 0.9 }]}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <View style={[st.homeMiniIcon, { backgroundColor: "#FEE2E2" }]}><HandHeart size={18} color="#B91C1C" /></View>
+              <View style={[st.homeChip, { backgroundColor: prayerCount > 0 ? "#FEE2E2" : palette.mutedBg }]}>
+                <T variant="micro" style={{ color: prayerCount > 0 ? "#B91C1C" : palette.ink600, fontWeight: "700" }}>{prayerCount > 0 ? `${answeredCount} answered` : "Private"}</T>
+              </View>
+            </View>
+            <T variant="micro" style={{ color: "#B91C1C", fontWeight: "700", letterSpacing: 1.1, marginTop: spacing.sm }}>PRAYER JOURNAL</T>
+            {latestPrayer ? (
+              <T variant="caption" tone="secondary" style={{ marginTop: 4 }} numberOfLines={2}>{latestPrayer.title ?? latestPrayer.body}</T>
+            ) : (
+              <T variant="caption" tone="secondary" style={{ marginTop: 4 }} numberOfLines={2}>Pour out your heart — private to you.</T>
+            )}
+          </Pressable>
+        </View>
+
         {/* ── This week at Nuru (real featured cell, PR #125; hidden when none) ── */}
         {featuredCell ? (
           <View style={st.card}>
@@ -507,60 +562,6 @@ export function HomeDashboardScreen(): ReactElement {
 
         {/* ── Meet your discipler (auto-advancing carousel) ──────────── */}
         {disciplers && disciplers.length > 0 ? <DisciplerCarousel disciplers={disciplers} /> : null}
-
-        {/* ── Prayer Wall (public requests, auto-advancing) ──────────── */}
-        {wallPosts && wallPosts.length > 0 ? (
-          <PrayerWallCarousel
-            posts={wallPosts}
-            onOpen={(postId) => nav.navigate("PrayerWallDetail", { postId })}
-            onSeeAll={() => nav.navigate("PrayerWall")}
-          />
-        ) : null}
-
-        {/* ── Reading plan + Prayer journal (moved from Pathway) ─────── */}
-        <View style={{ flexDirection: "row", gap: spacing.sm }}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Reading plan"
-            onPress={() => (plan ? nav.navigate("PlanDetail", { planId: plan.plan_id, title: plan.title }) : nav.navigate("ReadingPlans"))}
-            style={({ pressed }) => [st.homeMini, pressed && { opacity: 0.9 }]}
-          >
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-              <View style={[st.homeMiniIcon, { backgroundColor: "#E0E7FF" }]}><BookOpen size={18} color="#4338CA" /></View>
-              {plan?.enrolled ? <View style={[st.homeChip, { backgroundColor: "#E0E7FF" }]}><T variant="micro" style={{ color: "#4338CA", fontWeight: "700" }}>{`${planPct}%`}</T></View> : null}
-            </View>
-            <T variant="micro" style={{ color: "#4338CA", fontWeight: "700", letterSpacing: 1.1, marginTop: spacing.sm }}>READING PLAN</T>
-            <T variant="heading" style={{ fontSize: 14, marginTop: 2 }} numberOfLines={2}>{plan?.title ?? "Read through Scripture"}</T>
-            {plan?.enrolled ? (
-              <>
-                <View style={[st.miniTrack, { marginTop: 8 }]}><View style={{ width: `${planPct}%`, height: "100%", borderRadius: 2, backgroundColor: "#6366F1" }} /></View>
-                <T variant="micro" tone="tertiary" style={{ marginTop: 6 }}>{`Day ${plan.current_day ?? planDone + 1} of ${plan.day_count}`}</T>
-              </>
-            ) : (
-              <T variant="micro" tone="tertiary" style={{ marginTop: 4 }} numberOfLines={1}>{plans && plans.length > 0 ? `${plans.length} plans to start` : "Start a guided plan"}</T>
-            )}
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Prayer journal"
-            onPress={() => nav.navigate("PrayerJournal")}
-            style={({ pressed }) => [st.homeMini, pressed && { opacity: 0.9 }]}
-          >
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-              <View style={[st.homeMiniIcon, { backgroundColor: "#FEE2E2" }]}><HandHeart size={18} color="#B91C1C" /></View>
-              <View style={[st.homeChip, { backgroundColor: prayerCount > 0 ? "#FEE2E2" : palette.mutedBg }]}>
-                <T variant="micro" style={{ color: prayerCount > 0 ? "#B91C1C" : palette.ink600, fontWeight: "700" }}>{prayerCount > 0 ? `${answeredCount} answered` : "Private"}</T>
-              </View>
-            </View>
-            <T variant="micro" style={{ color: "#B91C1C", fontWeight: "700", letterSpacing: 1.1, marginTop: spacing.sm }}>PRAYER JOURNAL</T>
-            {latestPrayer ? (
-              <T variant="caption" tone="secondary" style={{ marginTop: 4 }} numberOfLines={2}>{latestPrayer.title ?? latestPrayer.body}</T>
-            ) : (
-              <T variant="caption" tone="secondary" style={{ marginTop: 4 }} numberOfLines={2}>Pour out your heart — private to you.</T>
-            )}
-          </Pressable>
-        </View>
 
         {/* ── Featured event (homepage toggle) ───────────────────────── */}
         {featuredEvent ? (
@@ -932,25 +933,23 @@ export function HomeDashboardScreen(): ReactElement {
           </View>
         ) : null}
 
-        {/* ── Your cohort ────────────────────────────────────────────── */}
-        <View style={st.card}>
-          <View style={{ flexDirection: "row", alignItems: "center" }}>
-            <View style={{ flex: 1 }}>
-              <T variant="heading" style={{ fontSize: 15 }}>Your cohort</T>
-              <T variant="micro" tone="tertiary" style={{ marginTop: 2 }}>Walking the pathway together</T>
-            </View>
-            <View style={st.cohortAvatars}>
-              <Users size={16} color={palette.navy} />
-            </View>
+        {/* ── Give — lead members to give (M-Pesa-first Give tab) ─────── */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Give"
+          onPress={() => nav.navigate("Tabs", { screen: "Give" })}
+          style={({ pressed }) => [st.giveCard, pressed && { opacity: 0.92 }]}
+        >
+          <View style={st.giveIcon}>
+            <HandCoins size={22} color="#fff" />
           </View>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => nav.navigate("Tabs", { screen: "Events" })}
-            style={({ pressed }) => [st.cohortBtn, pressed && { opacity: 0.85 }]}
-          >
-            <T variant="caption" style={{ fontWeight: "600", color: palette.navy }}>Open community ›</T>
-          </Pressable>
-        </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <T variant="micro" style={{ color: palette.goldChipText, fontWeight: "700", letterSpacing: 1.4 }}>GIVE</T>
+            <T serif style={{ fontSize: 17, color: palette.ink, marginTop: 2 }}>Sow into the work of God</T>
+            <T variant="caption" tone="secondary" style={{ marginTop: 2 }} numberOfLines={2}>Bring your tithe or offering — M-Pesa, card and more.</T>
+          </View>
+          <ChevronRight size={20} color={palette.ink400} />
+        </Pressable>
       </View>
     </ScrollView>
   );
@@ -1168,6 +1167,8 @@ const st = {
   homeMini: { flex: 1, minHeight: 132, backgroundColor: palette.white, borderRadius: 20, borderWidth: 1, borderColor: palette.border, padding: spacing.base, ...shadow.card },
   homeMiniIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   homeChip: { borderRadius: radii.pill, paddingHorizontal: 8, paddingVertical: 3 },
+  giveCard: { flexDirection: "row", alignItems: "center", gap: spacing.md, backgroundColor: palette.goldChipBg, borderRadius: 20, borderWidth: 1, borderColor: "#F0E0B8", padding: spacing.base, ...shadow.card },
+  giveIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: palette.goldLo, alignItems: "center", justifyContent: "center" },
   heroCard: { flexDirection: "row", gap: spacing.md, backgroundColor: palette.navyDeep, borderRadius: radii.card, padding: spacing.base, ...shadow.card },
   heroAccent: { width: 4, borderRadius: 2, alignSelf: "stretch" },
   heroCta: { flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start", marginTop: spacing.md, backgroundColor: palette.gold, borderRadius: radii.pill, paddingVertical: 7, paddingHorizontal: 14 },
@@ -1272,7 +1273,6 @@ const st = {
   annNewBadge: { position: "absolute", top: 10, right: 10, backgroundColor: palette.gold, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3 },
   annTile: { width: 36, height: 36, borderRadius: 12, backgroundColor: palette.tintBlue, alignItems: "center", justifyContent: "center" },
   unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: palette.gold },
-  cohortAvatars: { width: 36, height: 36, borderRadius: 12, backgroundColor: palette.tintBlue, alignItems: "center", justifyContent: "center" },
   cohortBtn: {
     marginTop: spacing.md,
     backgroundColor: palette.surface,
