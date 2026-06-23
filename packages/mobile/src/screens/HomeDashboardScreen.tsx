@@ -956,7 +956,7 @@ export function HomeDashboardScreen(): ReactElement {
 }
 
 // Upcoming — Figma month-grid + per-day events, over the real calendar.
-type CalOcc = { occurrence_id: string; title: string; start_at: string; end_at: string; location: string | null };
+type CalOcc = { occurrence_id: string; title: string; start_at: string; end_at: string; location: string | null; primary_image_url: string | null };
 function UpcomingCalendar({ occurrences, onSeeAll, onOpenEvent }: { occurrences: CalOcc[]; onSeeAll: () => void; onOpenEvent: (e: CalOcc) => void }): ReactElement {
   const today = useMemo(() => new Date(), []);
   const year = today.getFullYear();
@@ -1020,38 +1020,65 @@ function UpcomingCalendar({ occurrences, onSeeAll, onOpenEvent }: { occurrences:
           </View>
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <T variant="micro" tone="tertiary" style={{ fontWeight: "700", letterSpacing: 0.6 }}>
-            {selected === todayDate ? "TODAY" : `${monthLabel.slice(0, 3)} ${selected}`}{dayEvents.length ? ` · ${dayEvents.length}` : ""}
-          </T>
           {showNextInToday && nextOcc ? (
-            // Nothing today → surface the next gathering here, labelled with its real date.
-            <Pressable onPress={() => onOpenEvent(nextOcc)} style={[st.calEvent, { marginTop: 6 }]}>
-              <T variant="micro" style={{ color: palette.goldLo, fontWeight: "700" }}>
-                {new Date(nextOcc.start_at).toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short", year: "2-digit" })}
+            // Nothing today → label the slot with the NEXT event's real date (not
+            // "TODAY"), then list that event with its details + thumbnail.
+            <>
+              <T variant="micro" tone="tertiary" style={{ fontWeight: "700", letterSpacing: 0.6 }}>
+                {new Date(nextOcc.start_at).toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short" }).toUpperCase()}
               </T>
-              <T variant="caption" style={{ fontWeight: "700", color: palette.ink, marginTop: 1 }} numberOfLines={1}>{nextOcc.title}</T>
-              {nextOcc.location ? <T variant="micro" tone="tertiary" numberOfLines={1}>{nextOcc.location}</T> : null}
-              <T variant="micro" tone="tertiary" style={{ marginTop: 2, fontStyle: "italic" }}>Next gathering</T>
-            </Pressable>
-          ) : dayEvents.length === 0 ? (
-            <View style={st.calEmpty}>
-              <CalendarClock size={18} color={palette.ink300} />
-              <T variant="micro" tone="tertiary" style={{ marginTop: 4 }}>No events</T>
-            </View>
+              <View style={{ marginTop: 6 }}>
+                <CalEventMini
+                  ev={nextOcc}
+                  onOpen={onOpenEvent}
+                  label={new Date(nextOcc.start_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                  subtitle="Next gathering"
+                />
+              </View>
+            </>
           ) : (
-            <View style={{ gap: spacing.sm, marginTop: 6 }}>
-              {dayEvents.slice(0, 3).map((ev) => (
-                <Pressable key={ev.occurrence_id} onPress={() => onOpenEvent(ev)} style={st.calEvent}>
-                  <T variant="micro" style={{ color: palette.goldLo, fontWeight: "700" }}>{new Date(ev.start_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</T>
-                  <T variant="caption" style={{ fontWeight: "700", color: palette.ink, marginTop: 1 }} numberOfLines={1}>{ev.title}</T>
-                  {ev.location ? <T variant="micro" tone="tertiary" numberOfLines={1}>{ev.location}</T> : null}
-                </Pressable>
-              ))}
-            </View>
+            <>
+              <T variant="micro" tone="tertiary" style={{ fontWeight: "700", letterSpacing: 0.6 }}>
+                {selected === todayDate ? "TODAY" : `${monthLabel.slice(0, 3)} ${selected}`}{dayEvents.length ? ` · ${dayEvents.length}` : ""}
+              </T>
+              {dayEvents.length === 0 ? (
+                <View style={st.calEmpty}>
+                  <CalendarClock size={18} color={palette.ink300} />
+                  <T variant="micro" tone="tertiary" style={{ marginTop: 4 }}>No events</T>
+                </View>
+              ) : (
+                <View style={{ gap: spacing.sm, marginTop: 6 }}>
+                  {dayEvents.slice(0, 3).map((ev) => (
+                    <CalEventMini
+                      key={ev.occurrence_id}
+                      ev={ev}
+                      onOpen={onOpenEvent}
+                      label={new Date(ev.start_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+                    />
+                  ))}
+                </View>
+              )}
+            </>
           )}
         </View>
       </View>
     </View>
+  );
+}
+
+// One event row in the Upcoming card's right panel: thumbnail (when set) over
+// the time/date label, title, location, and an optional italic subtitle.
+function CalEventMini({ ev, onOpen, label, subtitle }: { ev: CalOcc; onOpen: (e: CalOcc) => void; label: string; subtitle?: string }): ReactElement {
+  return (
+    <Pressable onPress={() => onOpen(ev)} style={st.calEvent}>
+      {ev.primary_image_url ? (
+        <Image source={{ uri: ev.primary_image_url }} style={st.calEventThumb} resizeMode="cover" />
+      ) : null}
+      <T variant="micro" style={{ color: palette.goldLo, fontWeight: "700" }}>{label}</T>
+      <T variant="caption" style={{ fontWeight: "700", color: palette.ink, marginTop: 1 }} numberOfLines={2}>{ev.title}</T>
+      {ev.location ? <T variant="micro" tone="tertiary" numberOfLines={1}>{ev.location}</T> : null}
+      {subtitle ? <T variant="micro" tone="tertiary" style={{ marginTop: 2, fontStyle: "italic" }}>{subtitle}</T> : null}
+    </Pressable>
   );
 }
 
@@ -1212,6 +1239,7 @@ const st = {
   calDot: { position: "absolute", bottom: 3, width: 4, height: 4, borderRadius: 2 },
   calEmpty: { backgroundColor: palette.surface, borderRadius: 14, alignItems: "center", justifyContent: "center", paddingVertical: spacing.lg, marginTop: 6 },
   calEvent: { backgroundColor: palette.surface, borderRadius: 14, padding: spacing.md },
+  calEventThumb: { width: "100%", height: 72, borderRadius: 10, marginBottom: 6, backgroundColor: palette.mutedBg },
   // Your cohort
   cohortAvatar: { width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: palette.white },
   cohortStat: { width: "48%", flexGrow: 1, flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: palette.surface, borderRadius: 14, padding: spacing.md },
