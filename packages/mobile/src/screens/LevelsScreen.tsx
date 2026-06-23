@@ -278,6 +278,23 @@ export function LevelsScreen(): ReactElement {
           )}
         </PreviewCard>
 
+        {/* ── YOUR JOURNEY (the seven levels, each with a summary) ─────── */}
+        <View style={st.sectionHead}>
+          <T variant="micro" style={st.sectionLabel}>YOUR JOURNEY</T>
+          <T variant="micro" tone="tertiary">{`Level ${pathway.current_level} of ${levels.length}`}</T>
+        </View>
+        <View style={{ gap: spacing.sm }}>
+          {levels.map((lvl) => (
+            <LevelCard
+              key={lvl.level_number}
+              level={lvl}
+              currentLevel={pathway.current_level}
+              isActive={active?.level_number === lvl.level_number}
+              onPress={() => nav.navigate("Level", { levelId: lvl.level_number })}
+            />
+          ))}
+        </View>
+
         {/* ── GROW ───────────────────────────────────────────────────── */}
         <View style={st.sectionHead}>
           <T variant="micro" style={st.sectionLabel}>GROW</T>
@@ -415,23 +432,6 @@ export function LevelsScreen(): ReactElement {
             <T variant="caption" tone="secondary" style={{ marginTop: 4 }}>Books, audio and video to go deeper.</T>
           )}
         </PreviewCard>
-
-        {/* ── YOUR JOURNEY (the six levels) ──────────────────────────── */}
-        <View style={st.sectionHead}>
-          <T variant="micro" style={st.sectionLabel}>YOUR JOURNEY</T>
-          <T variant="micro" tone="tertiary">{`Level ${pathway.current_level} of ${levels.length}`}</T>
-        </View>
-        <View style={{ gap: spacing.sm }}>
-          {levels.map((lvl) => (
-            <LevelCard
-              key={lvl.level_number}
-              level={lvl}
-              currentLevel={pathway.current_level}
-              isActive={active?.level_number === lvl.level_number}
-              onPress={() => nav.navigate("Level", { levelId: lvl.level_number })}
-            />
-          ))}
-        </View>
       </View>
     </ScrollView>
   );
@@ -539,6 +539,9 @@ function LevelCard({
           {`LEVEL ${level.level_number}${level.theme ? ` · ${level.theme}` : ""}`}
         </T>
         <T variant="heading" style={{ fontSize: 15, marginTop: 1 }} numberOfLines={1}>{level.title}</T>
+        {level.description ? (
+          <T variant="caption" tone="secondary" style={{ marginTop: 4, lineHeight: 18 }} numberOfLines={2}>{level.description}</T>
+        ) : null}
         {locked ? (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 6 }}>
             <Lock size={11} color={palette.ink400} />
@@ -633,7 +636,7 @@ const st = {
   miniTrack: { height: 4, borderRadius: 2, backgroundColor: palette.track, overflow: "hidden" },
   levelCard: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: spacing.md,
     backgroundColor: palette.white,
     borderRadius: 18,
