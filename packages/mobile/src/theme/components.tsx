@@ -170,14 +170,20 @@ export function T({
   children: ReactNode;
 }): ReactNode {
   // Effective weight = variant default overridden by anything in `style`.
+  const v = typ[variant] as TextStyle;
   const flat = (StyleSheet.flatten(style) ?? {}) as TextStyle;
-  const baseWeight = (typ[variant] as TextStyle).fontWeight;
-  const face = fontFace(serif, flat.fontWeight ?? baseWeight, serif ? 600 : 400);
+  const face = fontFace(serif, flat.fontWeight ?? v.fontWeight, serif ? 600 : 400);
+  // Fraunces (serif) has taller ascenders/longer descenders than the system font,
+  // so guarantee enough line height to never clip glyphs — even where a call site
+  // set a tight explicit lineHeight for the old font.
+  const fs = (flat.fontSize ?? v.fontSize ?? 14) as number;
+  const lh = (flat.lineHeight ?? v.lineHeight) as number | undefined;
+  const serifLine = serif ? { lineHeight: Math.max(lh ?? 0, Math.ceil(fs * 1.28)) } : null;
   return (
     <Text
       numberOfLines={numberOfLines}
-      // fontFamily LAST so it wins over any family set upstream in `style`.
-      style={[typ[variant], { color: toneColor[tone] }, style, { fontFamily: face }]}
+      // serifLine + fontFamily LAST so they win over anything set upstream in `style`.
+      style={[typ[variant], { color: toneColor[tone] }, style, serifLine, { fontFamily: face }]}
     >
       {children}
     </Text>
