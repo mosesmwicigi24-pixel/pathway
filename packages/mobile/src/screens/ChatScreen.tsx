@@ -7,7 +7,7 @@
 // an undiscovered space opens its preview first.
 import { useCallback, useMemo, useState, type ReactElement } from "react";
 import { Pressable, RefreshControl, ScrollView, TextInput, View } from "react-native";
-import { CalendarClock, ChevronRight, Hash, MessageCircle, Pencil, Plus, Search, Sparkles, Users } from "lucide-react-native";
+import { CalendarClock, ChevronRight, Hash, Heart, MessageCircle, Pencil, Plus, Search, Sparkles, Users } from "lucide-react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/types";
@@ -524,6 +524,22 @@ function ConvoRow({
             <View style={st.badge}><T variant="micro" style={{ color: palette.navy, fontWeight: "800" }}>{c.unread}</T></View>
           ) : null}
         </View>
+        {((c.reaction_count ?? 0) > 0 || (c.message_count ?? 0) > 0) && (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.base, marginTop: 5 }}>
+            {(c.reaction_count ?? 0) > 0 && (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <Heart size={12} color={palette.gold} fill={palette.gold} />
+                <T variant="micro" tone="tertiary">{c.reaction_count}</T>
+              </View>
+            )}
+            {(c.message_count ?? 0) > 0 && (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <MessageCircle size={12} color={palette.ink400} />
+                <T variant="micro" tone="tertiary">{c.message_count}</T>
+              </View>
+            )}
+          </View>
+        )}
       </View>
     </Pressable>
   );
