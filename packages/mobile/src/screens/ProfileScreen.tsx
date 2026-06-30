@@ -30,6 +30,7 @@ import { clearQueryCache, invalidateQueries, errorMessage } from "../api/query";
 import { resetAnnouncementAlerts } from "../notifications/announcementAlerts";
 import { requestNotifPermission, ensureChannels, scheduleDailyReminder, cancelDailyReminder, openNotificationSettings } from "../notifications/localNotify";
 import { getVault } from "../auth/vault";
+import { getShareLocationPref, setShareLocationPref, acquireCoarseLocation } from "./coarseLocation";
 
 const CREAM = "#F6F4EE";
 const SURFACE = "#FBF8F1";
@@ -178,6 +179,16 @@ export function ProfileScreen(): ReactElement {
   const [emailOn, setEmailOn] = useState(true);
   const [smsOn, setSmsOn] = useState(false);
   const [socials, setSocials] = useState<Record<string, boolean>>({ Google: true, Facebook: false, Instagram: true, X: false, LinkedIn: false, YouTube: false });
+  // Approximate-location sharing (opt-in, default OFF; parity gap #4 Phase 2).
+  // `locationBusy` blocks re-entrancy while a fix/round-trip is in flight;
+  // `locationConsentPending` keeps the toggle visually off after a minor hits the
+  // guardian-consent gate (so we don't loop retries or flash a generic error).
+  const [shareLocation, setShareLocation] = useState(false);
+  const [locationBusy, setLocationBusy] = useState(false);
+  const [locationConsentPending, setLocationConsentPending] = useState(false);
+  useEffect(() => {
+    void getShareLocationPref().then(setShareLocation);
+  }, []);
   const [socialLinksOpen, setSocialLinksOpen] = useState(false);
   const [openBadge, setOpenBadge] = useState<Badge | null>(null);
 
@@ -262,6 +273,59 @@ export function ProfileScreen(): ReactElement {
     clearQueryCache();
     resetAnnouncementAlerts(); // next member re-seeds; don't inherit this user's seen-set
     nav.reset({ index: 0, routes: [{ name: "Login" }] });
+  }
+
+  // Toggle approximate-location sharing. ON → acquire a coarse, foreground-only
+  // position and POST it (server keeps only a coarse geohash, discards raw coords);
+  // OFF → erase it. The 403 CONSENT_REQUIRED gate for minors is handled calmly:
+  // the toggle stays off/pending, no retry loop, no generic error.
+  async function toggleShareLocation(): Promise<void> {
+    if (locationBusy) return;
+    const next = !shareLocation;
+    setLocationBusy(true);
+    try {
+      if (next) {
+        setLocationConsentPending(false);
+        const coords = await acquireCoarseLocation();
+        if (!coords) {
+          // No geolocation source available yet (see coarseLocation.ts). Persist
+          // the intent so it takes effect once a coarse fix can be captured, and
+          // tell the member plainly rather than silently doing nothing.
+          setShareLocation(true);
+          await setShareLocationPref(true);
+          Alert.alert(
+            "Location sharing on",
+            "We'll share your approximate area when your device can provide it. Approximate only — you can turn this off anytime.",
+          );
+          return;
+        }
+        await NuruApi.updateLocation(coords);
+        setShareLocation(true);
+        await setShareLocationPref(true);
+      } else {
+        await NuruApi.clearLocation();
+        setShareLocation(false);
+        setLocationConsentPending(false);
+        await setShareLocationPref(false);
+      }
+    } catch (e) {
+      const resp = (e as { response?: { status?: number; data?: { error?: { details?: { code?: string } } } } }).response;
+      const consentRequired = resp?.status === 403 && resp.data?.error?.details?.code === "LOCATION_CONSENT_REQUIRED";
+      if (consentRequired) {
+        // Calm, specific message — leave the toggle off/pending, don't retry.
+        setShareLocation(false);
+        setLocationConsentPending(true);
+        await setShareLocationPref(false);
+        Alert.alert(
+          "Needs a guardian's consent",
+          "Location sharing needs a parent or guardian's consent before it can be turned on.",
+        );
+      } else {
+        Alert.alert("Couldn't update location sharing", "Please check your connection and try again.");
+      }
+    } finally {
+      setLocationBusy(false);
+    }
   }
 
   const badges = achievements?.badges ?? [];
@@ -462,6 +526,24 @@ export function ProfileScreen(): ReactElement {
               ))}
             </View>
             <T variant="micro" tone="tertiary" style={{ marginTop: 8 }}>Adjusts text size across the whole app.</T>
+          </Section>
+
+          <Section title="PRIVACY" Icon={MapPin}>
+            <View style={[st.row, { alignItems: "flex-start" }]}>
+              <View style={st.fieldIcon}><MapPin size={16} color={palette.navy} /></View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <T variant="body" style={{ color: palette.navy, fontWeight: "600" }}>Share my approximate location</T>
+                <T variant="micro" tone="secondary" style={{ marginTop: 2, lineHeight: 16 }}>
+                  Helps us connect you with believers near you. Approximate only; you can turn this off anytime.
+                </T>
+                {locationConsentPending ? (
+                  <T variant="micro" style={{ color: GOLD_TEXT, fontWeight: "700", marginTop: 6 }}>
+                    Needs a parent or guardian's consent.
+                  </T>
+                ) : null}
+              </View>
+              <Toggle on={shareLocation} onToggle={() => void toggleShareLocation()} />
+            </View>
           </Section>
 
           <Section title="HELP & PRIVACY" Icon={LifeBuoy}>
