@@ -138,9 +138,6 @@ const METHOD_LABEL: Record<string, string> = {
 const methodLabel = (m: string | null): string =>
   m ? METHOD_LABEL[m] ?? m.charAt(0).toUpperCase() + m.slice(1) : "—";
 
-const statusTitle = (s: string): string =>
-  s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-
 const isPendingStatus = (s: string): boolean =>
   s === "requires_action" || s === "processing" || s === "pending";
 const isFailedStatus = (s: string): boolean => s === "failed" || s === "refunded";
