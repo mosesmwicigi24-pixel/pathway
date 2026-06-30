@@ -294,6 +294,10 @@ export interface MemberIntelligence {
     bands: { band: string; members: number }[];
     by_kind: { kind: string; events: number; members: number }[];
     by_hour: { hour: number; events: number }[];
+    // Additive (#3): time spent per app area, last 30 days. Older payloads omit
+    // `area_dwell`; render the "Time per app area" card only when
+    // `screen_dwell_capture === true` AND `area_dwell` is non-empty.
+    area_dwell?: { screen: string; total_ms: number; sessions: number; members: number }[];
     screen_dwell_capture: boolean; login_capture: boolean;
   };
   growth: {
@@ -313,9 +317,34 @@ export interface MemberIntelligence {
   };
 }
 
+// Proximity / suggested pairings (#4 Phase 3). Privacy-first: the endpoint
+// returns coarse cluster labels + approximate radii ONLY — never coordinates.
+export interface ProximityMember {
+  user_id: string;
+  full_name: string;
+  is_minor: boolean;
+  cell_group_id: string | null;
+}
+export interface ProximityCluster {
+  area: string;            // coarse label, e.g. "≈ -1.29, 36.82" (rounded centre)
+  member_count: number;
+  approx_radius_km: number;
+  members: ProximityMember[];
+}
+
 export const AdminApi = {
   async intelligence(): Promise<MemberIntelligence> {
     const { data } = await api.get<MemberIntelligence>("/admin/analytics/intelligence");
+    return data;
+  },
+  // Coarse proximity suggestions for human-in-the-loop cell pairing. Adults are
+  // visible to coach-tier; minors only to Admin/SuperAdmin (gated server-side).
+  // 403 → caller surfaces a "no access" state. Never returns coordinates.
+  async proximity(radiusKm?: number): Promise<{ clusters: ProximityCluster[] }> {
+    const { data } = await api.get<{ clusters: ProximityCluster[] }>(
+      "/admin/members/proximity",
+      radiusKm != null ? { params: { radius_km: radiusKm } } : undefined,
+    );
     return data;
   },
   async overview(): Promise<OverviewKpis> {
