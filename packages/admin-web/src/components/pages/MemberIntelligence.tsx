@@ -312,7 +312,7 @@ export function MemberIntelligence(): ReactElement {
               <span style={{ fontFamily: "var(--font-display)", fontSize: 34, color: NAVY_INK, lineHeight: 1 }}>{g.givers}</span>
               <span style={{ fontSize: 12, color: "var(--muted-foreground)", fontWeight: 600 }}>givers</span>
             </div>
-            <div className="flex items-center gap-2" style={{ marginTop: 14, padding: "10px 12px", background: "var(--tint-violet-bg)", borderRadius: 11, border: "1px solid var(--tint-violet-fg)2e" }}>
+            <div className="flex items-center gap-2" style={{ marginTop: "auto", padding: "10px 12px", background: "var(--tint-violet-bg)", borderRadius: 11, border: "1px solid var(--tint-violet-fg)2e" }}>
               <span style={{ width: 30, height: 30, borderRadius: 9, background: "rgba(255,255,255,0.55)", display: "grid", placeItems: "center", flexShrink: 0 }}>
                 <Repeat size={15} style={{ color: "var(--tint-violet-fg)" }} />
               </span>
@@ -368,7 +368,7 @@ export function MemberIntelligence(): ReactElement {
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.6, color: "#9ca3af", marginTop: 3 }}>LAST 30 DAYS</div>
               </div>
             </div>
-            <div className="flex items-center gap-2" style={{ marginTop: 16, padding: "10px 12px", background: "var(--tint-green-bg)", borderRadius: 11, border: "1px solid var(--tint-green-fg)2e" }}>
+            <div className="flex items-center gap-2" style={{ marginTop: "auto", padding: "10px 12px", background: "var(--tint-green-bg)", borderRadius: 11, border: "1px solid var(--tint-green-fg)2e" }}>
               <span style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--tint-green-fg)", lineHeight: 1 }}>{active7Pct}%</span>
               <span style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}>active (7d) of {k.total_members} members</span>
             </div>
@@ -412,7 +412,7 @@ export function MemberIntelligence(): ReactElement {
           <GridCell span={12}>
           <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
             <CardHeader icon={Trophy} title="Top givers" hint="by total" />
-            {g.top_givers.length === 0 ? <div style={{ padding: 16 }}><Empty text="No givers yet." /></div> : (
+            {g.top_givers.length === 0 ? <div style={{ padding: "0 20px 16px" }}><Empty text="No givers yet." /></div> : (
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: "var(--secondary)" }}>
@@ -504,7 +504,7 @@ export function MemberIntelligence(): ReactElement {
           <GridCell span={3}>
           <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
             <CardHeader icon={Grid2x2} title="App-area affinity" hint="events · members" />
-            {en.by_kind.length === 0 ? <div style={{ padding: 16 }}><Empty text="No app-area engagement recorded yet." /></div> : (
+            {en.by_kind.length === 0 ? <div style={{ padding: "0 20px 16px" }}><Empty text="No app-area engagement recorded yet." /></div> : (
               <BarList
                 padded
                 rows={[...en.by_kind].sort((a, b) => b.events - a.events).map((x, i) => ({
@@ -818,16 +818,17 @@ export function MemberIntelligence(): ReactElement {
 
 // ── building blocks ──────────────────────────────────────────────────────────
 
-const SHADOW = "0 1px 3px rgba(11,31,51,0.06), 0 1px 2px rgba(11,31,51,0.04)";
+// One soft shadow, matching the Dashboard's card chrome.
+const SHADOW = "0 6px 18px rgba(10,37,64,0.06)";
 const cardStyle = (pad: number): React.CSSProperties => ({
   background: "#fff", border: "1px solid var(--border)", borderRadius: 16, padding: pad, boxShadow: SHADOW,
 });
-const tip = { background: "#fff", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, boxShadow: SHADOW } as const;
+const tip = { background: "#fff", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, boxShadow: "0 4px 12px rgba(10,37,64,0.08)" } as const;
 
-const thBase: React.CSSProperties = { padding: "10px 16px", fontSize: 11, fontWeight: 700, letterSpacing: 0.6, color: "var(--muted-foreground)" };
+const thBase: React.CSSProperties = { padding: "10px 20px", fontSize: 11, fontWeight: 700, letterSpacing: 0.6, color: "var(--muted-foreground)", textTransform: "uppercase" };
 const thL: React.CSSProperties = { ...thBase, textAlign: "left" };
 const thR: React.CSSProperties = { ...thBase, textAlign: "right" };
-const tdBase: React.CSSProperties = { padding: "12px 16px", color: "var(--foreground)" };
+const tdBase: React.CSSProperties = { padding: "12px 20px", color: "var(--foreground)" };
 const tdL: React.CSSProperties = { ...tdBase, textAlign: "left" };
 const tdR: React.CSSProperties = { ...tdBase, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600, color: "var(--muted-foreground)" };
 
@@ -893,26 +894,26 @@ function GridCell({ span, children }: { span: Span; children: ReactNode }): Reac
 
 function Kpi({ icon: Icon, label, value, tint, small }: { icon: LucideIcon; label: string; value: number | string; tint: Tint; small?: boolean }): ReactElement {
   return (
-    <div className="rounded-2xl" style={{ background: tintBg(tint), padding: 14, border: `1px solid ${tintFg(tint)}2e` }}>
-      <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(255,255,255,0.55)", display: "grid", placeItems: "center" }}>
+    <div className="rounded-2xl flex flex-col" style={{ background: tintBg(tint), padding: "16px 16px 18px", border: `1px solid ${tintFg(tint)}2e`, height: "100%" }}>
+      <span style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(255,255,255,0.65)", display: "grid", placeItems: "center", flexShrink: 0 }}>
         <Icon size={17} style={{ color: tintFg(tint) }} />
       </span>
-      <div style={{ fontFamily: "var(--font-display)", fontSize: small ? 18 : 22, color: NAVY_INK, marginTop: 10, lineHeight: 1 }}>{value}</div>
-      <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", fontWeight: 500, marginTop: 6 }}>{label}</div>
+      <div style={{ fontFamily: "var(--font-display)", fontSize: small ? 20 : 24, color: NAVY_INK, marginTop: 11, lineHeight: 1 }}>{value}</div>
+      <div style={{ fontSize: 11.5, color: tintFg(tint), fontWeight: 600, marginTop: 6, lineHeight: 1.25 }}>{label}</div>
     </div>
   );
 }
 
 function Section({ icon: Icon, title, hint, children }: { icon: LucideIcon; title: string; hint?: string; children: ReactNode }): ReactElement {
   return (
-    <section style={cardStyle(20)}>
-      <div className="flex items-center gap-2.5 mb-4">
-        <span style={{ width: 32, height: 32, borderRadius: 10, background: "var(--tint-navy-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
-          <Icon size={16} style={{ color: "var(--tint-navy-fg)" }} />
+    <section style={cardStyle(22)}>
+      <div className="flex items-center gap-2.5 mb-5">
+        <span style={{ width: 34, height: 34, borderRadius: 10, background: "var(--tint-navy-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+          <Icon size={17} style={{ color: "var(--tint-navy-fg)" }} />
         </span>
         <div>
           <h2 style={{ fontSize: 15, fontWeight: 700, color: NAVY_INK, lineHeight: 1.2 }}>{title}</h2>
-          {hint ? <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 1 }}>{hint}</div> : null}
+          {hint ? <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 2 }}>{hint}</div> : null}
         </div>
       </div>
       {children}
@@ -920,37 +921,54 @@ function Section({ icon: Icon, title, hint, children }: { icon: LucideIcon; titl
   );
 }
 
-function CardHeader({ icon: Icon, title, hint }: { icon: LucideIcon; title: string; hint?: string }): ReactElement {
+// Uniform card header — a small tinted icon chip + title + optional right-aligned
+// caption, matching the Dashboard's card headers. Used by every card so no card
+// looks bespoke next to its row-mates.
+function ChipHeader({ icon: Icon, title, hint }: { icon: LucideIcon; title: string; hint?: string | undefined }): ReactElement {
   return (
-    <div className="flex items-center gap-1.5" style={{ padding: "16px 16px 12px" }}>
-      <Icon size={14} style={{ color: NAVY }} />
-      <h3 style={{ fontSize: 14, fontWeight: 700, color: NAVY_INK }}>{title}</h3>
-      {hint ? <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted-foreground)" }}>{hint}</span> : null}
+    <div className="flex items-center gap-2.5 mb-3.5">
+      <span style={{ width: 30, height: 30, borderRadius: 9, background: "var(--tint-navy-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+        <Icon size={15} style={{ color: "var(--tint-navy-fg)" }} />
+      </span>
+      <h3 style={{ fontSize: 13.5, fontWeight: 700, color: NAVY_INK, lineHeight: 1.2 }}>{title}</h3>
+      {hint ? <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>{hint}</span> : null}
     </div>
   );
 }
 
-// White inset SubCard (used inside Sections) with icon + title + hint header.
+// Header variant for cards that bleed content to the card edges (tables) — the
+// same tinted chip + title + caption, but with the card's own padding around it.
+function CardHeader({ icon: Icon, title, hint }: { icon: LucideIcon; title: string; hint?: string }): ReactElement {
+  return (
+    <div className="flex items-center gap-2.5" style={{ padding: "18px 20px 14px" }}>
+      <span style={{ width: 30, height: 30, borderRadius: 9, background: "var(--tint-navy-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+        <Icon size={15} style={{ color: "var(--tint-navy-fg)" }} />
+      </span>
+      <h3 style={{ fontSize: 13.5, fontWeight: 700, color: NAVY_INK, lineHeight: 1.2 }}>{title}</h3>
+      {hint ? <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>{hint}</span> : null}
+    </div>
+  );
+}
+
+// White inset SubCard (used inside Sections): a full-height flex column so short
+// cards pin their content to the top and stretch to match their row-mates. Card
+// chrome (radius, padding, the one soft shadow) matches the Dashboard exactly.
 function SubCard({ icon: Icon, title, hint, children, className }: { icon: LucideIcon; title: string; hint?: string; children: ReactNode; className?: string }): ReactElement {
   return (
-    <div className={className} style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 14, padding: 16, boxShadow: SHADOW }}>
-      <div className="flex items-center gap-1.5 mb-3">
-        <Icon size={13} style={{ color: NAVY }} />
-        <h3 style={{ fontSize: 13.5, fontWeight: 700, color: NAVY_INK }}>{title}</h3>
-        {hint ? <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--muted-foreground)" }}>{hint}</span> : null}
-      </div>
-      {children}
+    <div className={`flex flex-col ${className ?? ""}`} style={{ background: "#fff", border: "1px solid var(--border)", borderRadius: 16, padding: "18px 20px", boxShadow: SHADOW, height: "100%" }}>
+      <ChipHeader icon={Icon} title={title} hint={hint} />
+      <div className="flex flex-col" style={{ flex: 1, minHeight: 0 }}>{children}</div>
     </div>
   );
 }
 
 type BarRow = { label: string; value: number; display?: string; tag?: string; color?: string | undefined; mono?: boolean };
 function BarList({ rows, showPct, padded, emptyText }: { rows: BarRow[]; showPct?: boolean; padded?: boolean; emptyText?: string }): ReactElement {
-  if (rows.length === 0) return <div style={{ padding: padded ? "0 16px 16px" : 0 }}><Empty text={emptyText ?? "No data yet."} /></div>;
+  if (rows.length === 0) return <div style={{ padding: padded ? "0 20px 16px" : 0 }}><Empty text={emptyText ?? "No data yet."} /></div>;
   const max = Math.max(1, ...rows.map((r) => r.value));
   const total = rows.reduce((s, r) => s + r.value, 0);
   return (
-    <ul className="flex flex-col" style={{ gap: 11, padding: padded ? "4px 16px 16px" : 0 }}>
+    <ul className="flex flex-col" style={{ gap: 11, padding: padded ? "2px 20px 18px" : 0 }}>
       {rows.map((r, i) => (
         <li key={r.label + i}>
           <div className="flex items-baseline justify-between" style={{ marginBottom: 5 }}>
