@@ -208,6 +208,22 @@ export class AdminOpsService {
     const ACTIVE_DAY_BUCKETS = ["1", "2-3", "4-7", "8-15", "16+"] as const;
     const activeDaysMap = new Map(activeDaysRaw.map((r) => [String(r.bucket), Number(r.members)]));
 
+    // --- App-area dwell time (parity gap #3) -------------------------------
+    // Top areas by total time over the last 30 days. screen_dwell_capture flips
+    // true only once a dwell-aware client has posted at least one event.
+    const areaDwell = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT screen,
+              sum(duration_ms)::bigint        AS total_ms,
+              count(*)::int                   AS sessions,
+              count(DISTINCT user_id)::int    AS members
+         FROM app_screen_events
+        WHERE occurred_at >= now() - interval '30 days'
+        GROUP BY screen
+        ORDER BY total_ms DESC
+        LIMIT 10`,
+    );
+
     // --- Location (free-text only; NO geo/lat-lng) -------------------------
     const byCity = await many<Record<string, unknown>>(
       this.replica,
@@ -246,7 +262,15 @@ export class AdminOpsService {
         bands: bands.map((r) => ({ band: r.band, members: Number(r.members) })),
         by_kind: byKind.map((r) => ({ kind: r.kind, events: Number(r.events), members: Number(r.members) })),
         by_hour: byHour.map((r) => ({ hour: Number(r.hour), events: Number(r.events) })),
-        screen_dwell_capture: false, // per-screen dwell time not captured (interaction_events has no area tag)
+        // Top app areas by dwell time, last 30 days, from app_screen_events.
+        area_dwell: areaDwell.map((r) => ({
+          screen: r.screen as string,
+          total_ms: Number(r.total_ms),
+          sessions: Number(r.sessions),
+          members: Number(r.members),
+        })),
+        // Honest only once a dwell-aware client has posted at least one event.
+        screen_dwell_capture: areaDwell.length > 0,
         login_capture: false, // no exact login timestamp; active-days is the proxy used above
       },
       activity: {

@@ -24,6 +24,7 @@ import { createKeychainCipher } from "./db/keychainCipher";
 import { getSyncEngine } from "./sync/engineProvider";
 import { hydrateQueryCache } from "./api/query";
 import { startAttendanceTracking } from "./engagement/attendanceTracker";
+import { startDwellTracking } from "./engagement/dwellTracker";
 import { getConnectivity, setConnectivity } from "./net/connectivity";
 import { NetInfoConnectivity, onReconnect } from "./net/netInfoConnectivity";
 import { startSyncLifecycle } from "./sync/syncLifecycle";
@@ -98,6 +99,9 @@ export function App(): ReactElement {
     const stopNotifAlerts = startNotificationAlerts(AppState);
     // App-engagement attendance: 5 min in-app + activity → one 'attendance' signal/day.
     const stopAttendance = startAttendanceTracking();
+    // App-area dwell telemetry (#3): time-in-area, queued + flushed best-effort on
+    // background. Privacy-light (area label only, no PII); never blocks the UI.
+    const stopDwell = startDwellTracking();
 
     // Encryption-at-rest (§5.7): seal the offline store under an AES-256 key in the
     // keychain. The cipher loads async, so the store + sync are wired only once it's
@@ -131,6 +135,7 @@ export function App(): ReactElement {
       stopNotifAlerts();
       stopTaps();
       stopAttendance();
+      stopDwell();
     };
   }, []);
 
