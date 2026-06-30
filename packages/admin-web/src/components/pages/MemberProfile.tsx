@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Award, BookOpen, CalendarDays, CheckCircle2, ChevronRight, Droplets, Flag,
-  Heart, Mail, MessageSquare, ShieldAlert, Sparkles, Sunrise, Flame, X, GraduationCap,
+  Heart, Mail, MessageSquare, ShieldAlert, Sparkles, Sunrise, Flame, X, GraduationCap, Activity,
 } from "lucide-react";
 import { OpsApi, SystemApi, type MemberDetail, type Country, type Programme } from "../../api/client";
 import { errorMessage } from "../../util/error";
@@ -44,7 +44,7 @@ function initials(name: string): string {
 }
 
 function Ring({ value, color, size = 88 }: { value: number; color: string; size?: number }): ReactElement {
-  const stroke = 8;
+  const stroke = size > 64 ? 8 : 6;
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const offset = c - (value / 100) * c;
@@ -104,11 +104,13 @@ export function MemberProfile(): ReactElement {
     { label: "Last activity", value: fmtWhen(m.last_activity) },
   ];
 
+  const engScore = m.engagement.e_score != null ? `${Math.round(m.engagement.e_score)}` : "—";
   const kpis = [
-    { label: "Habits", value: `${m.metrics.habits_pct}%`, Icon: Sunrise, tint: "tint-green", cardBg: "#F3FAF5", border: "#D6ECDF", sub: `${m.metrics.active_days_30} / 30 active days` },
-    { label: "Curriculum", value: `${m.metrics.curriculum_pct}%`, Icon: BookOpen, tint: "tint-amber", cardBg: "#FDF9EF", border: "#F0E2BD", sub: `Level ${lvl.current_level}` },
-    { label: "Attendance", value: `${m.metrics.attendance_pct}%`, Icon: CalendarDays, tint: "tint-blue", cardBg: "#F4F6FB", border: "#DBE2EF", sub: `${m.metrics.attended} present days · 90d` },
-    { label: "Badges", value: String(m.badges.length), Icon: Award, tint: "tint-violet", cardBg: "#F7F3FC", border: "#E2D7F2", sub: `${m.certificates.length} certificates` },
+    { label: "Habits", value: `${m.metrics.habits_pct}%`, Icon: Sunrise, iconFg: "#16A34A", iconBg: "rgba(22,163,74,0.12)", cardBg: "#F3FAF5", border: "#D6ECDF", sub: `${m.metrics.active_days_30} / 30 days` },
+    { label: "Curriculum", value: `${m.metrics.curriculum_pct}%`, Icon: BookOpen, iconFg: "#C89B3C", iconBg: "rgba(200,155,60,0.14)", cardBg: "#FDF9EF", border: "#F0E2BD", sub: `Level ${lvl.current_level}` },
+    { label: "Attendance", value: `${m.metrics.attendance_pct}%`, Icon: CalendarDays, iconFg: "#1D4E86", iconBg: "rgba(29,78,134,0.12)", cardBg: "#F4F6FB", border: "#DBE2EF", sub: `${m.metrics.attended} · 90d` },
+    { label: "Badges", value: String(m.badges.length), Icon: Award, iconFg: "#5B2BB8", iconBg: "rgba(91,43,184,0.12)", cardBg: "#F7F3FC", border: "#E2D7F2", sub: `${m.certificates.length} certs` },
+    { label: "Engagement", value: engScore, Icon: Activity, iconFg: "#A87616", iconBg: "rgba(168,118,22,0.14)", cardBg: "#FFF6E0", border: "#F5E0A8", sub: m.engagement.band ?? "—" },
   ];
 
   const progressCards = [
@@ -170,75 +172,85 @@ export function MemberProfile(): ReactElement {
 
       {/* Body */}
       <div style={{ padding: "28px clamp(16px, 4vw, 48px) 48px" }}>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
-          {kpis.map(({ label, value, Icon, tint, cardBg, border, sub }) => (
+        {/* ONE row of 5 compact KPI tiles (Habits · Curriculum · Attendance · Badges · Engagement) */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-5">
+          {kpis.map(({ label, value, Icon, iconFg, iconBg, cardBg, border, sub }) => (
             <div key={label} className="rounded-2xl" style={{ background: cardBg, border: `1px solid ${border}`, padding: "14px 16px" }}>
-              <div className="flex items-start justify-between mb-2"><div className={`flex items-center justify-center rounded-lg ${tint}`} style={{ width: 34, height: 34 }}><Icon size={15} /></div></div>
-              <div className="nuru-eyebrow" style={{ marginBottom: 4 }}>{label}</div>
-              <div style={{ fontFamily: "var(--font-display)", color: "var(--nuru-navy)", fontSize: 26, lineHeight: 1 }}>{value}</div>
-              <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 6 }}>{sub}</div>
+              <div className="flex items-center justify-center rounded-lg mb-2" style={{ width: 32, height: 32, background: iconBg, color: iconFg }}><Icon size={15} /></div>
+              <div style={{ fontFamily: "var(--font-display)", color: "var(--nuru-navy)", fontSize: 24, lineHeight: 1 }}>{value}</div>
+              <div className="nuru-eyebrow" style={{ marginTop: 6 }}>{label}</div>
+              <div style={{ fontSize: 10.5, color: "var(--muted-foreground)", marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{sub}</div>
             </div>
           ))}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
-          {progressCards.map(({ key, title, icon: Icon, value, summary, detail, accent, bg, border }) => (
-            <div key={key} className="rounded-2xl p-5 flex items-center gap-5" style={{ background: bg, border: `1px solid ${border}` }}>
-              <div className="relative shrink-0" style={{ width: 88, height: 88 }}>
-                <Ring value={value} color={accent} />
-                <div className="absolute inset-0 flex items-center justify-center" style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--foreground)" }}>{value}%</div>
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2"><Icon size={14} style={{ color: accent }} /><span style={{ fontSize: 12, fontWeight: 700, color: "var(--foreground)", textTransform: "uppercase", letterSpacing: 0.5 }}>{title}</span></div>
-                <div style={{ fontSize: 13, color: "var(--foreground)", marginTop: 6 }}>{summary}</div>
-                <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2, marginBottom: 8 }}>{detail}</div>
-                <ThinBar value={value} color={accent} />
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          {/* Activity */}
-          <div className="rounded-2xl p-6" style={{ background: "#FDF9EF", border: "1px solid #F0E2BD" }}>
-            <div className="flex items-center justify-between mb-5"><div className="flex items-center gap-2"><MessageSquare size={16} style={{ color: "var(--nuru-gold)" }} /><span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>Recent activity</span></div></div>
-            {m.timeline.length === 0 ? <p style={{ fontSize: 13, color: "var(--muted-foreground)" }}>No recorded activity yet.</p> : (
-              <div className="relative" style={{ paddingLeft: 22 }}>
-                <div className="absolute top-1 bottom-1" style={{ left: 6, width: 2, background: "var(--border)", borderRadius: 1 }} />
-                {m.timeline.map((t, i) => {
-                  const dot = t.kind.includes("quiz") || t.kind.includes("completed") ? "#16A34A" : t.kind.includes("badge") ? "#C89B3C" : "#9CA3AF";
-                  return (
-                    <div key={i} className="relative" style={{ marginBottom: i === m.timeline.length - 1 ? 0 : 16 }}>
-                      <div className="absolute rounded-full" style={{ left: -22, top: 4, width: 12, height: 12, background: dot, border: "3px solid var(--card)", boxShadow: "0 0 0 1px var(--border)" }} />
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)", lineHeight: 1.4 }}>{t.label}</div>
-                      <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 2 }}>{t.module_title ? `${t.module_title} · ` : ""}{fmtWhen(t.occurred_at)}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Milestones */}
-          <div className="rounded-2xl p-6" style={{ background: "#F4F6FB", border: "1px solid #DBE2EF" }}>
-            <div className="flex items-center justify-between mb-5"><div className="flex items-center gap-2"><Flag size={15} style={{ color: "var(--nuru-gold)" }} /><span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>Milestones</span></div><span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{milestones.filter((mm) => mm.complete).length} of {milestones.length}</span></div>
-            {milestones.map((mm, i) => {
-              const Icon = mm.icon;
-              return (
-                <div key={mm.title} className="flex items-start gap-3 py-3" style={{ borderBottom: i < milestones.length - 1 ? "1px dashed var(--border)" : "none" }}>
-                  <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: 38, height: 38, background: mm.complete ? "#E8F6EC" : "#F3F4F6", color: mm.complete ? "#16A34A" : mm.color }}>{mm.complete ? <CheckCircle2 size={18} /> : <Icon size={18} />}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap"><span style={{ fontSize: 13, fontWeight: 700, color: "var(--foreground)" }}>{mm.title}</span>{mm.complete && <span className="rounded-full px-2 py-0.5" style={{ background: "#E8F6EC", color: "#16A34A", fontSize: 10, fontWeight: 700, letterSpacing: "0.05em" }}>COMPLETE</span>}</div>
-                    <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>{mm.date}</div>
-                    <div style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}>{mm.note}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Certificates + Badges */}
+        {/* Two-column body: left = progress + activity, right = milestones / certs / badges */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+          {/* Left column */}
           <div className="flex flex-col gap-5">
+            {/* Progress (rings) */}
+            <div className="rounded-2xl p-5" style={{ background: "#fff", border: "1px solid var(--border)", boxShadow: "0 1px 2px rgba(11,31,51,0.03)" }}>
+              <div className="flex items-center gap-2 mb-4"><Activity size={16} style={{ color: "var(--nuru-gold)" }} /><span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>Progress</span></div>
+              <div className="flex flex-col">
+                {progressCards.map(({ key, title, icon: Icon, value, summary, detail, accent }, i) => (
+                  <div key={key} className="flex items-center gap-4 py-3" style={{ borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
+                    <div className="relative shrink-0" style={{ width: 60, height: 60 }}>
+                      <Ring value={value} color={accent} size={60} />
+                      <div className="absolute inset-0 flex items-center justify-center" style={{ fontFamily: "var(--font-display)", fontSize: 15, color: "var(--foreground)" }}>{value}%</div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2"><Icon size={13} style={{ color: accent }} /><span style={{ fontSize: 11.5, fontWeight: 700, color: "var(--foreground)", textTransform: "uppercase", letterSpacing: 0.5 }}>{title}</span></div>
+                      <div style={{ fontSize: 12, color: "var(--foreground)", marginTop: 4 }}>{summary}</div>
+                      <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 1, marginBottom: 6 }}>{detail}</div>
+                      <ThinBar value={value} color={accent} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Activity */}
+            <div className="rounded-2xl p-6" style={{ background: "#FDF9EF", border: "1px solid #F0E2BD" }}>
+              <div className="flex items-center justify-between mb-5"><div className="flex items-center gap-2"><MessageSquare size={16} style={{ color: "var(--nuru-gold)" }} /><span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>Recent activity</span></div></div>
+              {m.timeline.length === 0 ? <p style={{ fontSize: 13, color: "var(--muted-foreground)" }}>No recorded activity yet.</p> : (
+                <div className="relative" style={{ paddingLeft: 22 }}>
+                  <div className="absolute top-1 bottom-1" style={{ left: 6, width: 2, background: "var(--border)", borderRadius: 1 }} />
+                  {m.timeline.map((t, i) => {
+                    const dot = t.kind.includes("quiz") || t.kind.includes("completed") ? "#16A34A" : t.kind.includes("badge") ? "#C89B3C" : "#9CA3AF";
+                    return (
+                      <div key={i} className="relative" style={{ marginBottom: i === m.timeline.length - 1 ? 0 : 16 }}>
+                        <div className="absolute rounded-full" style={{ left: -22, top: 4, width: 12, height: 12, background: dot, border: "3px solid var(--card)", boxShadow: "0 0 0 1px var(--border)" }} />
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)", lineHeight: 1.4 }}>{t.label}</div>
+                        <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 2 }}>{t.module_title ? `${t.module_title} · ` : ""}{fmtWhen(t.occurred_at)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right column: Milestones, Certificates, Badges */}
+          <div className="flex flex-col gap-5">
+            {/* Milestones */}
+            <div className="rounded-2xl p-6" style={{ background: "#F4F6FB", border: "1px solid #DBE2EF" }}>
+              <div className="flex items-center justify-between mb-5"><div className="flex items-center gap-2"><Flag size={15} style={{ color: "var(--nuru-gold)" }} /><span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>Milestones</span></div><span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{milestones.filter((mm) => mm.complete).length} of {milestones.length}</span></div>
+              {milestones.map((mm, i) => {
+                const Icon = mm.icon;
+                return (
+                  <div key={mm.title} className="flex items-start gap-3 py-3" style={{ borderBottom: i < milestones.length - 1 ? "1px dashed var(--border)" : "none" }}>
+                    <div className="rounded-lg flex items-center justify-center shrink-0" style={{ width: 38, height: 38, background: mm.complete ? "#E8F6EC" : "#F3F4F6", color: mm.complete ? "#16A34A" : mm.color }}>{mm.complete ? <CheckCircle2 size={18} /> : <Icon size={18} />}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap"><span style={{ fontSize: 13, fontWeight: 700, color: "var(--foreground)" }}>{mm.title}</span>{mm.complete && <span className="rounded-full px-2 py-0.5" style={{ background: "#E8F6EC", color: "#16A34A", fontSize: 10, fontWeight: 700, letterSpacing: "0.05em" }}>COMPLETE</span>}</div>
+                      <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>{mm.date}</div>
+                      <div style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}>{mm.note}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Certificates */}
             <div className="rounded-2xl p-6" style={{ background: "#F3FAF5", border: "1px solid #D6ECDF" }}>
               <div className="flex items-center justify-between mb-4"><div className="flex items-center gap-2"><Award size={15} style={{ color: "var(--nuru-gold)" }} /><span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>Certificates</span></div><span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{m.certificates.length} earned</span></div>
               {m.certificates.length === 0 ? <p style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>None issued yet.</p> : m.certificates.map((c, i) => (

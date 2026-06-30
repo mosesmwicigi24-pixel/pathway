@@ -38,6 +38,14 @@ and business rules (gating/scoring/money/validation) are owned by the backend + 
 `@nuru/shared`; the iPad cannot override them (it's a client). Precedence governs *how things
 look and behave on screen*, plus the brand palette.
 
+**Parity target (decided 2026-06-30): bring BACKEND + WEB PORTAL up to iPad parity.** The iPad
+is the reference; the web portal matches its design and features, and the backend provides
+every capability the iPad surfaces (closing the "coming soon" gaps). **Mobile is touched ONLY
+when (a) the database/contract changes, or (b) a new shared component genuinely needs to live
+on the member app** — e.g. capturing device model / activity / location requires the mobile
+client to *send* that data. Pure web-presentation and pure backend-aggregation work does **not**
+touch mobile.
+
 **Brand scope (decided 2026-06-30): ADMIN-ONLY for now.** The iPad's evolved palette (bright
 LED-green, luminous accents, deeper sidebar) is applied to the **web portal** so the two admin
 consoles match. The shared `tokens.ts` and the **member mobile app are left unchanged** — i.e.

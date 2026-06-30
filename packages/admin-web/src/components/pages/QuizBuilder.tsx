@@ -13,9 +13,12 @@ import {
 import { errorMessage } from "../../util/error";
 import { ModuleQuizBuilder, type QuizSettings } from "../curriculum/ModuleQuizBuilder";
 
+// Status pill palette — semantic, navy+gold brand (no off-brand blue). Draft/
+// archived read as a warm neutral ink pair (matches the iPad QuizBuilder, which
+// dropped the blue draft pill that read as off-brand to the owner).
 const statusStyle: Record<string, { bg: string; color: string }> = {
   published: { bg: "#E8F6EE", color: "#0F6B33" },
-  draft: { bg: "#EEF1F8", color: "#1F3A6B" },
+  draft: { bg: "#F1EEE7", color: "#6B5E45" },
   in_review: { bg: "#FDF5E5", color: "#8A6B1F" },
 };
 const statusLabel: Record<string, string> = { published: "Published", draft: "Draft", in_review: "In Review", archived: "Archived" };
