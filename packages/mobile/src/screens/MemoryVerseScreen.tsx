@@ -2,9 +2,9 @@
 // (useMemoryVerses) with per-member mastery; a type-from-memory practice scores
 // the attempt locally (word overlap) and posts it — the SERVER decides mastery
 // (≥90% match) and keeps the best score. Real data throughout.
-import { useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { FlatList, Pressable, TextInput, View } from "react-native";
-import { ArrowLeft, Check } from "lucide-react-native";
+import { ArrowLeft, Check, Sparkles, Trophy } from "lucide-react-native";
 import { useNavigation } from "@react-navigation/native";
 import { NuruApi } from "../api/client";
 import { palette, radii, spacing, shadow } from "../theme/tokens";
@@ -14,7 +14,13 @@ import { useMemoryVerses, useWordScore } from "../api/hooks";
 import { errorMessage, invalidateQueries, refreshQueries } from "../api/query";
 import { ErrorState } from "../components/states";
 import { SkeletonList } from "../components/Skeleton";
+import { Confetti } from "../components/Confetti";
+import { milestoneToCelebrate, nextMilestone } from "./verseMilestones";
 import type { MemoryVerseRow } from "../api/types";
+
+/** Rows fed to the list: real verses interleaved with encouragement banners
+ *  (one after every 4 cards) so the member keeps an eye on the next milestone. */
+type VerseListItem = { kind: "verse"; verse: MemoryVerseRow } | { kind: "banner"; seed: number };
 
 /** Word-overlap match the member sees while practicing; the server re-derives
  *  mastery from the posted pct, so this is presentation only. */
@@ -32,6 +38,32 @@ export function MemoryVerseScreen(): ReactElement {
   const { data: verses, isLoading, error, refetch } = useMemoryVerses();
   const { data: word } = useWordScore();
   const [practice, setPractice] = useState<MemoryVerseRow | null>(null);
+  const [celebrate, setCelebrate] = useState(0); // milestone currently being celebrated (0 = none)
+
+  const mastered = (verses ?? []).filter((v) => v.status === "mastered").length;
+
+  // Fire confetti once whenever the mastered count crosses a new milestone
+  // (1 / 10 / 25 / 50 / 75 / 100). The crossing is decided + persisted in
+  // verseMilestones so it doesn't re-fire on every render or relaunch.
+  useEffect(() => {
+    if (!verses) return;
+    let alive = true;
+    void milestoneToCelebrate(mastered).then((m) => {
+      if (alive && m) setCelebrate(m);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [verses, mastered]);
+
+  // Verses with an encouragement banner re-inserted after every 4 cards.
+  const listData: VerseListItem[] = [];
+  (verses ?? []).forEach((verse, i) => {
+    listData.push({ kind: "verse", verse });
+    if ((i + 1) % 4 === 0 && i + 1 < (verses?.length ?? 0)) {
+      listData.push({ kind: "banner", seed: Math.floor((i + 1) / 4) });
+    }
+  });
 
   return (
     <View style={st.screen}>
@@ -44,15 +76,16 @@ export function MemoryVerseScreen(): ReactElement {
       </View>
 
       <FlatList
-        data={verses ?? []}
-        keyExtractor={(v) => v.memory_verse_id}
+        data={listData}
+        keyExtractor={(it) => (it.kind === "verse" ? it.verse.memory_verse_id : `banner-${it.seed}`)}
         contentContainerStyle={{ padding: spacing.screen, paddingBottom: spacing.xxl }}
         showsVerticalScrollIndicator={false}
         initialNumToRender={8}
         windowSize={11}
         removeClippedSubviews
         ListHeaderComponent={
-          word ? (
+          <View>
+            {word ? (
             <View style={[st.card, st.scoreCard]}>
               <View style={st.scoreRing}>
                 <T serif style={{ fontSize: 26, color: palette.navyDeep }}>{word.score}</T>
@@ -68,9 +101,14 @@ export function MemoryVerseScreen(): ReactElement {
                 </View>
               </View>
             </View>
-          ) : null
+            ) : null}
+            <EncouragementBanner mastered={mastered} seed={0} header />
+          </View>
         }
-        renderItem={({ item: v }) => (
+        renderItem={({ item }) => {
+          if (item.kind === "banner") return <EncouragementBanner mastered={mastered} seed={item.seed} />;
+          const v = item.verse;
+          return (
           <View style={[st.card, { marginBottom: spacing.sm }]}>
             <View style={{ flexDirection: "row", alignItems: "center" }}>
               <T variant="heading" style={{ flex: 1, fontSize: 15, color: palette.goldLo }}>{v.reference}</T>
@@ -90,7 +128,8 @@ export function MemoryVerseScreen(): ReactElement {
               </PButton>
             </View>
           </View>
-        )}
+          );
+        }}
         ListEmptyComponent={
           isLoading ? (
             <SkeletonList count={5} />
@@ -117,6 +156,37 @@ export function MemoryVerseScreen(): ReactElement {
           }}
         />
       ) : null}
+
+      <Confetti show={celebrate > 0} count={Math.min(140, 60 + celebrate)} onDone={() => setCelebrate(0)} />
+    </View>
+  );
+}
+
+/** A gentle "keep going" reminder shown above the list and after every 4 cards.
+ *  The copy points at the member's next mastery milestone (or congratulates a full
+ *  100) and rotates by `seed` so repeated banners don't read identically. */
+function EncouragementBanner({ mastered, seed, header = false }: { mastered: number; seed: number; header?: boolean }): ReactElement {
+  const next = nextMilestone(mastered);
+  const remaining = next ? next - mastered : 0;
+  const verseWord = remaining === 1 ? "verse" : "verses";
+  const pool = next
+    ? [
+        { h: `${remaining} ${verseWord} to your next milestone`, s: `Master ${remaining} more to reach ${next}. Keep hiding His Word in your heart.` },
+        { h: "Keep the momentum going", s: `You've mastered ${mastered} so far. The ${next}-verse milestone is within reach — practice one today.` },
+        { h: "Every verse counts", s: `Just ${remaining} more ${verseWord} and you unlock the ${next} milestone. Small steps, eternal reward.` },
+      ]
+    : [{ h: "All 100 verses mastered 🎉", s: "You've hidden the full set in your heart. Revisit them to keep them sharp." }];
+  const msg = pool[seed % pool.length] ?? pool[0]!;
+  const Icon = next ? Sparkles : Trophy;
+  return (
+    <View style={[st.banner, header ? { marginBottom: spacing.base } : { marginVertical: spacing.sm }]}>
+      <View style={st.bannerIcon}>
+        <Icon size={18} color={palette.navyDeep} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <T variant="heading" style={{ fontSize: 14, color: palette.navyDeep }}>{msg.h}</T>
+        <T variant="caption" style={{ color: palette.ink600, marginTop: 2, lineHeight: 18 }}>{msg.s}</T>
+      </View>
     </View>
   );
 }
@@ -187,6 +257,8 @@ const st = {
   kicker: { letterSpacing: 1.8, textTransform: "uppercase" },
   card: { backgroundColor: palette.white, borderRadius: 16, borderWidth: 1, borderColor: palette.border, padding: spacing.base, ...shadow.card },
   masteredChip: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: palette.successBg, borderRadius: radii.pill, paddingHorizontal: 10, paddingVertical: 4 },
+  banner: { flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: palette.verseBg, borderWidth: 1, borderColor: palette.gold, borderRadius: 14, padding: spacing.base },
+  bannerIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: palette.white, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: palette.gold },
   weekChip: { backgroundColor: palette.surface, borderRadius: radii.pill, paddingHorizontal: 10, paddingVertical: 4 },
   sheetWrap: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, justifyContent: "flex-end" },
   sheetScrim: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.4)" },

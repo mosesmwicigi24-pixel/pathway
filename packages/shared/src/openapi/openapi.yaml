@@ -1855,9 +1855,16 @@ paths:
       tags: [portal]
       summary: >-
         SuperAdmin/Admin. Member Intelligence aggregate — giving behaviour (avg
-        per transaction, frequency, funds, methods, top givers), device platform
-        split, engagement bands + activity by kind/hour, curriculum + Word growth,
-        and coarse location. Prayer excluded (§5.4); uncaptured metrics flagged.
+        per transaction, frequency, funds, methods, top givers), a devices block
+        (platforms, app_versions, models: top device models as {model, members}
+        with members = distinct members per model, top 8; model_capture: true only
+        once a model-aware client has registered a non-null model, else false),
+        engagement bands + activity by kind/hour, an activity block
+        (active_trend: distinct active users per ISO week for the last 12 weeks;
+        active_days: distribution of per-user distinct active-day counts over the
+        last 30 days, the login-frequency proxy, bucketed 1 | 2-3 | 4-7 | 8-15 |
+        16+), curriculum + Word growth, and coarse location. Prayer excluded
+        (§5.4); uncaptured metrics flagged.
       responses:
         "200": { description: Intelligence aggregate }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
@@ -3373,6 +3380,7 @@ components:
       properties:
         platform: { type: string, enum: [ios, android] }
         app_version: { type: string, maxLength: 20 }
+        model: { type: string, maxLength: 80, description: "Optional device model (e.g. \"iPhone 17 Pro Max\"); trimmed, omitted by older clients." }
         push_token: { type: string, maxLength: 512 }
     MfaEnroll:
       type: object

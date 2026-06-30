@@ -200,6 +200,7 @@ export function registerIdentity(ctx: AppContext): Router {
         z.object({
           platform: z.enum(["ios", "android"]),
           app_version: z.string().max(20).optional(),
+          model: z.string().trim().max(80).optional(),
           push_token: z.string().max(512).optional(),
         }),
         req.body,

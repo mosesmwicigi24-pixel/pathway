@@ -287,6 +287,7 @@ export interface MemberIntelligence {
   devices: {
     platforms: { platform: string; members: number }[];
     app_versions: { app_version: string; members: number }[];
+    models?: { model: string; members: number }[];
     model_capture: boolean;
   };
   engagement: {
@@ -304,6 +305,11 @@ export interface MemberIntelligence {
     by_city: { city: string; members: number }[];
     by_country: { country_code: string; members: number }[];
     geo_capture: boolean;
+  };
+  // Additive (older payloads omit it — treat as optional, default empty).
+  activity?: {
+    active_trend: { week: string; active: number }[];       // 12 weeks, oldest→newest
+    active_days: { bucket: string; members: number }[];     // 5 buckets, fixed order: "1"|"2-3"|"4-7"|"8-15"|"16+"
   };
 }
 

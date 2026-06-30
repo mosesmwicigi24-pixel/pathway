@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
-import { createCongregation, createCellGroup, createUser, createEnrollment, createEvent } from "./helpers/factories.js";
+import { createCongregation, createCellGroup, createUser, createEnrollment, createEvent, addInteractionDays } from "./helpers/factories.js";
 
 let cong: string;
 let cell: string;
@@ -56,6 +56,10 @@ describe("dashboard reports", () => {
         [studentId, fund.rows[0].fund_id],
       );
     }
+    // 5 distinct recent active days for the student → lands in the '4-7' bucket
+    // and shows up across multiple weeks of the active_trend.
+    await addInteractionDays(studentId, 5);
+
     const res = await agent().get("/v1/admin/analytics/intelligence").set(auth(adminTok));
     expect(res.status).toBe(200);
     expect(res.body.kpis.total_members).toBe(1);
@@ -66,9 +70,48 @@ describe("dashboard reports", () => {
     expect(res.body.location.geo_capture).toBe(false);
     expect(Array.isArray(res.body.engagement.bands)).toBe(true);
 
+    // Activity block: 12-week trend (oldest→newest) + the 5 fixed active-day buckets.
+    expect(res.body.activity.active_trend).toHaveLength(12);
+    const weeks = res.body.activity.active_trend.map((p: { week: string }) => p.week);
+    expect([...weeks].sort()).toEqual(weeks); // ascending week-start order
+    res.body.activity.active_trend.forEach((p: { week: string; active: number }) => {
+      expect(typeof p.week).toBe("string");
+      expect(typeof p.active).toBe("number");
+    });
+    expect(res.body.activity.active_days.map((b: { bucket: string }) => b.bucket)).toEqual([
+      "1", "2-3", "4-7", "8-15", "16+",
+    ]);
+    // The one student with 5 active days falls in the '4-7' bucket.
+    const fourToSeven = res.body.activity.active_days.find((b: { bucket: string }) => b.bucket === "4-7");
+    expect(fourToSeven.members).toBe(1);
+
     // SuperAdmin also allowed; a Student is forbidden (coarse role gate).
     expect((await agent().get("/v1/admin/analytics/intelligence").set(auth(superTok))).status).toBe(200);
     expect((await agent().get("/v1/admin/analytics/intelligence").set(auth(studentTok))).status).toBe(403);
+  });
+
+  it("captured device model surfaces in analytics and flips model_capture true", async () => {
+    // Register a device WITH a model via the real /me/devices endpoint (backward
+    // compatible: model is optional). Two members on the same model so members
+    // counts distinct users, not rows.
+    const student2 = await createUser({ congregationId: cong, cellGroupId: cell, role: "Student", email: "m2@dev.local" });
+    const student2Tok = bearer({ sub: student2.user_id, role: "Student", cong });
+    const reg1 = await agent().post("/v1/me/devices").set(auth(studentTok))
+      .send({ platform: "ios", app_version: "1.2.3", model: "  iPhone 17 Pro Max  " });
+    expect(reg1.status).toBe(201);
+    const reg2 = await agent().post("/v1/me/devices").set(auth(student2Tok))
+      .send({ platform: "ios", model: "iPhone 17 Pro Max" });
+    expect(reg2.status).toBe(201);
+    // A model-less registration must not pollute the models list.
+    expect((await agent().post("/v1/me/devices").set(auth(studentTok)).send({ platform: "android" })).status).toBe(201);
+
+    const res = await agent().get("/v1/admin/analytics/intelligence").set(auth(adminTok));
+    expect(res.status).toBe(200);
+    expect(res.body.devices.model_capture).toBe(true);
+    const models = res.body.devices.models as { model: string; members: number }[];
+    const top = models.find((m) => m.model === "iPhone 17 Pro Max");
+    expect(top).toBeDefined();
+    expect(top!.members).toBe(2); // distinct members, trimmed model
   });
 
   it("engagement report returns band distribution and per-cell rows", async () => {

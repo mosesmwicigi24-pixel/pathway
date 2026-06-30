@@ -5,7 +5,7 @@
 // drag-to-reorder is dropped (no persistence model); edit/suspend/delete are real.
 import { useCallback, useEffect, useMemo, useState, type ReactElement, type CSSProperties } from "react";
 import {
-  ChevronRight, Search, Plus, ChevronDown, X, Mail, UserCog, ShieldCheck,
+  ChevronRight, Search, Plus, ChevronDown, X, Mail, Phone, UserCog, ShieldCheck,
   Globe, Languages as LanguagesIcon, Pencil, Ban, Eye, EyeOff, Lock, KeyRound, Check, Trash2,
 } from "lucide-react";
 import { SystemApi, OpsApi, uploadToCloudinary, type SystemUser, type SystemRole, type Country, type Language } from "../../api/client";
@@ -55,9 +55,6 @@ export function Users(): ReactElement {
     SystemApi.countries().then(setCountries).catch(() => {});
     SystemApi.languages().then(setLanguages).catch(() => {});
   }, [load]);
-
-  const countryByCode = useCallback((c: string | null) => countries.find((x) => x.code === c), [countries]);
-  const langByCode = useCallback((c: string | null) => languages.find((x) => x.code === c), [languages]);
 
   const filtered = useMemo(() => list.filter((u) => {
     const matchQ = !query || `${u.full_name} ${u.email ?? ""} ${u.role_keys.map(roleName).join(" ")}`.toLowerCase().includes(query.toLowerCase());
@@ -117,35 +114,34 @@ export function Users(): ReactElement {
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-2xl" style={{ border: "1px solid var(--border)", background: "var(--card)" }}>
+        <div className="overflow-hidden rounded-2xl" style={{ border: "1px solid var(--border)", background: "var(--card)", boxShadow: "0 1px 3px rgba(11,31,51,0.05)" }}>
           <div className="overflow-x-auto"><table className="w-full border-collapse">
-            <thead><tr style={{ borderBottom: "1px solid var(--border)", background: "var(--secondary)", textAlign: "left" }}>{["User", "Role", "Country", "Language", "Status", "Last active", ""].map((h) => <th key={h} className="px-5 py-3.5" style={{ fontSize: 11, fontWeight: 700, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: 0.6 }}>{h}</th>)}</tr></thead>
+            <thead><tr style={{ borderBottom: "1px solid var(--border)", background: "var(--secondary)", textAlign: "left" }}>{["User", "Email / Phone", "Roles", "Status", "Last active", ""].map((h, hi) => <th key={h || hi} className="px-4 py-2.5" style={{ fontSize: 10.5, fontWeight: 700, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: 0.6, textAlign: hi === 5 ? "right" : "left" }}>{h}</th>)}</tr></thead>
             <tbody>
               {filtered.map((u, i) => {
                 const sc = statusChip[u.account_status];
-                const country = countryByCode(u.country_code);
-                const lang = langByCode(u.locale);
+                const hasEmail = !!(u.email && u.email.length);
+                const contact = hasEmail ? u.email : (u.phone_number || "—");
                 return (
                   <tr key={u.user_id} style={{ borderTop: "1px solid var(--border)" }}>
-                    <td className="px-5 py-3.5">
+                    <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => setEditUser(u)}>
-                        <div className="flex items-center justify-center rounded-xl shrink-0" style={{ width: 40, height: 40, background: AVATAR_GRADIENTS[i % AVATAR_GRADIENTS.length], color: "#fff", fontSize: 13, fontWeight: 700 }}>{initials(u.full_name)}</div>
-                        <div><p className="hover:underline" style={{ fontSize: 13.5, fontWeight: 700, color: "var(--nuru-navy)" }}>{u.full_name}</p><p className="flex items-center gap-1" style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}><Mail size={10} /> {u.email ?? "—"}</p></div>
+                        <div className="flex items-center justify-center rounded-xl shrink-0" style={{ width: 32, height: 32, background: AVATAR_GRADIENTS[i % AVATAR_GRADIENTS.length], color: "#fff", fontSize: 12, fontWeight: 700 }}>{initials(u.full_name)}</div>
+                        <p className="hover:underline" style={{ fontSize: 13, fontWeight: 600, color: "var(--nuru-navy)", whiteSpace: "nowrap" }}>{u.full_name}</p>
                       </div>
                     </td>
-                    <td className="px-5 py-3.5"><div className="flex flex-wrap items-center gap-1">
-                      {u.role_keys.slice(0, 2).map((rk) => { const rc = roleChip[roleType(rk)]; return <span key={rk} className="inline-flex items-center rounded-full px-2.5 py-0.5" style={{ background: rc.bg, color: rc.color, fontSize: 11, fontWeight: 700 }}>{roleName(rk)}</span>; })}
-                      {u.role_keys.length > 2 && <span className="inline-flex items-center rounded-full px-2 py-0.5" style={{ background: "var(--secondary)", color: "var(--muted-foreground)", fontSize: 11, fontWeight: 700 }}>+{u.role_keys.length - 2}</span>}
-                      {u.role_keys.length === 0 && <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>—</span>}
+                    <td className="px-4 py-2.5"><span className="inline-flex items-center gap-1.5" style={{ fontSize: 12, color: "var(--muted-foreground)" }}>{hasEmail ? <Mail size={11} /> : <Phone size={11} />} {contact}</span></td>
+                    <td className="px-4 py-2.5"><div className="flex flex-wrap items-center gap-1">
+                      {u.role_keys.slice(0, 1).map((rk) => { const rc = roleChip[roleType(rk)]; return <span key={rk} className="inline-flex items-center rounded-full px-2.5 py-0.5" style={{ background: rc.bg, color: rc.color, fontSize: 10.5, fontWeight: 700, whiteSpace: "nowrap" }}>{roleName(rk)}</span>; })}
+                      {u.role_keys.length > 1 && <span className="inline-flex items-center rounded-full px-2 py-0.5" style={{ background: "var(--secondary)", color: "var(--muted-foreground)", fontSize: 10.5, fontWeight: 700 }}>+{u.role_keys.length - 1}</span>}
+                      {u.role_keys.length === 0 && <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>No role</span>}
                     </div></td>
-                    <td className="px-5 py-3.5" style={{ fontSize: 13, color: "var(--foreground)" }}><span className="inline-flex items-center gap-1.5">{country ? `${country.flag ?? ""} ${country.name}` : "—"}</span></td>
-                    <td className="px-5 py-3.5" style={{ fontSize: 13, color: "var(--foreground)" }}>{lang?.name ?? u.locale ?? "—"}</td>
-                    <td className="px-5 py-3.5"><span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5" style={{ background: sc.bg, color: sc.color, fontSize: 11, fontWeight: 700 }}>● {sc.label}</span></td>
-                    <td className="px-5 py-3.5" style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>{fmtWhen(u.last_active)}</td>
-                    <td className="px-5 py-3.5"><div className="flex items-center justify-end gap-1">
-                      <button onClick={() => setEditUser(u)} title="Edit user" className="rounded-lg p-1.5" style={{ color: "var(--muted-foreground)", background: "none", border: "none" }}><Pencil size={14} /></button>
-                      <button onClick={() => void toggleSuspend(u)} title={u.account_status === "suspended" ? "Reactivate" : "Suspend"} className="rounded-lg p-1.5" style={{ color: u.account_status === "suspended" ? "#16A34A" : "#C2410C", background: "none", border: "none" }}><Ban size={14} /></button>
-                      <button onClick={() => void remove(u)} title="Delete user" className="rounded-lg p-1.5" style={{ color: "#DC2626", background: "none", border: "none" }}><Trash2 size={14} /></button>
+                    <td className="px-4 py-2.5"><span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1" style={{ background: sc.bg, color: sc.color, fontSize: 10.5, fontWeight: 700, whiteSpace: "nowrap" }}><span style={{ width: 5, height: 5, borderRadius: 999, background: sc.color }} /> {sc.label}</span></td>
+                    <td className="px-4 py-2.5" style={{ fontSize: 12, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>{fmtWhen(u.last_active)}</td>
+                    <td className="px-4 py-2.5"><div className="flex items-center justify-end gap-1.5">
+                      <button onClick={() => setEditUser(u)} title="Edit user" className="flex items-center justify-center rounded-lg" style={{ width: 30, height: 28, color: "var(--nuru-navy)", background: "rgba(11,31,51,0.06)", border: "none", cursor: "pointer" }}><Pencil size={13} /></button>
+                      <button onClick={() => void toggleSuspend(u)} title={u.account_status === "suspended" ? "Reactivate" : "Suspend"} className="flex items-center justify-center rounded-lg" style={{ width: 30, height: 28, color: u.account_status === "suspended" ? "#16A34A" : "#C2410C", background: u.account_status === "suspended" ? "rgba(22,163,74,0.10)" : "rgba(194,65,12,0.10)", border: "none", cursor: "pointer" }}>{u.account_status === "suspended" ? <Check size={13} /> : <Ban size={13} />}</button>
+                      <button onClick={() => void remove(u)} title="Delete user" className="flex items-center justify-center rounded-lg" style={{ width: 30, height: 28, color: "#DC2626", background: "rgba(220,38,38,0.10)", border: "none", cursor: "pointer" }}><Trash2 size={13} /></button>
                     </div></td>
                   </tr>
                 );

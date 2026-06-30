@@ -11,8 +11,9 @@ import { OfflineBanner } from "./components/OfflineBanner";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { store } from "./store/store";
 import { RootNavigator } from "./navigation/RootNavigator";
-import { configureApiBase, installAuth } from "./api/client";
+import { configureApiBase, installAuth, NuruApi } from "./api/client";
 import { apiBaseUrl } from "./config";
+import { deviceRegistration } from "./util/deviceInfo";
 import { getVault, setVault } from "./auth/vault";
 import { KeychainTokenVault } from "./auth/keychainTokenVault";
 import { setLocalStore } from "./db/localStoreProvider";
@@ -69,6 +70,14 @@ export function App(): ReactElement {
         hydrateQueryCache().catch(() => undefined),
       ]);
       setBootRoute(refresh ? "Tabs" : "Login");
+      // Best-effort device registration for an already-authed session (platform +
+      // app version + device model). Optional + idempotent server-side; failures
+      // (offline, etc.) are non-fatal and never block boot. The model lets the
+      // portal/iPad break engagement down by device.
+      if (refresh) {
+        const reg = deviceRegistration();
+        if (reg) void NuruApi.registerDevice(reg).catch(() => undefined);
+      }
     })();
 
     let cancelled = false;

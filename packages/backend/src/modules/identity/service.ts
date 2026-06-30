@@ -730,14 +730,19 @@ export class IdentityService {
 
   async registerDevice(
     userId: string,
-    input: { platform: string; app_version?: string | undefined; push_token?: string | undefined },
+    input: {
+      platform: string;
+      app_version?: string | undefined;
+      model?: string | undefined;
+      push_token?: string | undefined;
+    },
   ): Promise<{ device_id: string }> {
     return tx(this.pool, async (c) => {
       const device = await one<{ device_id: string }>(
         c,
-        `INSERT INTO client_devices (user_id, platform, app_version) VALUES ($1,$2,$3)
+        `INSERT INTO client_devices (user_id, platform, app_version, model) VALUES ($1,$2,$3,$4)
          RETURNING device_id`,
-        [userId, input.platform, input.app_version ?? null],
+        [userId, input.platform, input.app_version ?? null, input.model ?? null],
       );
       if (input.push_token) {
         await c.query(

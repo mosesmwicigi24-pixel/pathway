@@ -2,6 +2,24 @@
 
 This file is loaded automatically. It encodes the decisions already made so you can build **without stopping to ask**. The human has authorized autonomous operation: make the recommended choice on every decision, add the standard dependencies a task needs, and keep going until tests pass.
 
+## Coordinated cross-surface development (DEFAULT — read first)
+
+Nuru Pathway ships on **four surfaces over one backend**: the web portal (`@nuru/admin-web`),
+the **native iPad app** (separate repo at `/Users/mwicigi/Claude/Projects/iphone`), the mobile
+member app (`@nuru/mobile`), and the backend (`@nuru/backend`). **Every dev/feature instruction
+is executed as a coordinated change across all affected surfaces in one session** — never one
+surface in isolation. Follow the playbook in **`docs/COORDINATED_DEV.md`**:
+1. **Scope** which surfaces are affected (admin → web + iPad; member → mobile; contract/types/
+   tokens/terminology → all) and state the blast radius back to the user; untouched = "N/A — reason".
+2. **Contract-first** — backend + OpenAPI (`pnpm openapi:lint`) + `@nuru/shared` before clients.
+3. **Implement** on each affected surface (the iPad app is in the other repo — edit it there).
+4. **Verify** each: monorepo `pnpm typecheck && pnpm lint && pnpm test`; iPad `xcodebuild`.
+5. **Definition of Done** (`docs/CROSS_SURFACE_DOD.md`) + update `docs/PARITY.md`.
+6. **Coordinated commits** — one ticket id, a branch per changed repo, cross-linked PRs.
+Source of truth: backend + OpenAPI (`packages/shared/src/openapi/openapi.yaml`); types from
+`@nuru/shared`; brand tokens from `packages/mobile/src/theme/tokens.ts`. See `docs/PARITY.md`
+and `CONTRACTS.md` for who consumes what.
+
 ## What this is
 
 Nuru Place Discipleship Pathway — offline-first discipleship platform. Source of truth is `nuru-place-technical-spec.pdf` (architecture §1, schema §2, API §3, infra §4, security §5). Section references in code point back to it. The build plan and status live in `docs/NEXT_STEPS.md`.

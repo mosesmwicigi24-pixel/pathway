@@ -240,6 +240,22 @@ export const NuruApi = {
     });
     return data;
   },
+  /**
+   * Register this device (platform + app version + device model + optional push
+   * token). Backend stores it for sync cursors and analytics; `model` lets the
+   * portal/iPad break engagement down by device. All fields bar platform are
+   * optional — model is omitted on iOS (core RN has no model string) and on any
+   * device where it's unavailable. Returns the server's device_id.
+   */
+  async registerDevice(input: {
+    platform: "ios" | "android";
+    app_version?: string;
+    model?: string;
+    push_token?: string;
+  }): Promise<{ device_id: string }> {
+    const { data } = await api.post<{ device_id: string }>("/me/devices", input);
+    return data;
+  },
   // ---- Curriculum / pathway (real DB reads, server-gated) ----
   async levels(): Promise<Level[]> {
     const { data } = await api.get<{ data: Level[] }>("/levels");

@@ -129,6 +129,11 @@ export class AdminOpsService {
       `SELECT COALESCE(app_version, 'unknown') AS app_version, count(DISTINCT user_id)::int AS members
          FROM client_devices GROUP BY app_version ORDER BY members DESC LIMIT 8`,
     );
+    const deviceModels = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT model, count(DISTINCT user_id)::int AS members
+         FROM client_devices WHERE model IS NOT NULL GROUP BY model ORDER BY members DESC LIMIT 8`,
+    );
 
     // --- Engagement (prayer excluded, §5.4) --------------------------------
     const bands = await many<Record<string, unknown>>(
@@ -167,6 +172,42 @@ export class AdminOpsService {
          (SELECT count(*) FROM quiz_attempts WHERE is_passed)                              AS quiz_passed`,
     );
 
+    // --- Activity (login frequency proxy from interaction_events) ----------
+    // No exact login timestamp is captured (engagement.login_capture flag);
+    // active-days is the proxy. Both cuts are pure aggregates over occurred_at.
+    const activeTrend = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT to_char(wk.week_start, 'YYYY-MM-DD') AS week,
+              count(DISTINCT ie.user_id)::int      AS active
+         FROM generate_series(0, 11) AS i
+         CROSS JOIN LATERAL (
+           SELECT (date_trunc('week', now()) - (i * interval '1 week'))::date AS week_start
+         ) wk
+         LEFT JOIN interaction_events ie
+                ON ie.occurred_at >= wk.week_start
+               AND ie.occurred_at <  wk.week_start + interval '1 week'
+        GROUP BY wk.week_start
+        ORDER BY wk.week_start`,
+    );
+    const activeDaysRaw = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT bucket, count(*)::int AS members FROM (
+         SELECT CASE WHEN d = 1 THEN '1'
+                     WHEN d BETWEEN 2 AND 3 THEN '2-3'
+                     WHEN d BETWEEN 4 AND 7 THEN '4-7'
+                     WHEN d BETWEEN 8 AND 15 THEN '8-15'
+                     ELSE '16+' END AS bucket
+           FROM (
+             SELECT user_id, count(DISTINCT date_trunc('day', occurred_at)) AS d
+               FROM interaction_events
+              WHERE occurred_at >= now() - interval '30 days'
+              GROUP BY user_id
+           ) per_user
+       ) bucketed GROUP BY bucket`,
+    );
+    const ACTIVE_DAY_BUCKETS = ["1", "2-3", "4-7", "8-15", "16+"] as const;
+    const activeDaysMap = new Map(activeDaysRaw.map((r) => [String(r.bucket), Number(r.members)]));
+
     // --- Location (free-text only; NO geo/lat-lng) -------------------------
     const byCity = await many<Record<string, unknown>>(
       this.replica,
@@ -197,7 +238,9 @@ export class AdminOpsService {
       devices: {
         platforms: platforms.map((r) => ({ platform: r.platform, members: Number(r.members) })),
         app_versions: appVersions.map((r) => ({ app_version: r.app_version, members: Number(r.members) })),
-        model_capture: false, // device model / OS / user-agent not captured yet
+        models: deviceModels.map((r) => ({ model: r.model as string, members: Number(r.members) })),
+        // Honest only once a model-aware client has registered a non-null model.
+        model_capture: deviceModels.length > 0,
       },
       engagement: {
         bands: bands.map((r) => ({ band: r.band, members: Number(r.members) })),
@@ -205,6 +248,13 @@ export class AdminOpsService {
         by_hour: byHour.map((r) => ({ hour: Number(r.hour), events: Number(r.events) })),
         screen_dwell_capture: false, // per-screen dwell time not captured (interaction_events has no area tag)
         login_capture: false, // no exact login timestamp; active-days is the proxy used above
+      },
+      activity: {
+        // Distinct active users per ISO week, oldest→newest (last 12 weeks).
+        active_trend: activeTrend.map((r) => ({ week: String(r.week), active: Number(r.active) })),
+        // "How often members use the app" — distribution of per-user distinct
+        // active-day counts over the last 30 days; all 5 buckets always present.
+        active_days: ACTIVE_DAY_BUCKETS.map((bucket) => ({ bucket, members: activeDaysMap.get(bucket) ?? 0 })),
       },
       growth: {
         by_level: byLevel.map((r) => ({ level_number: Number(r.level_number), learners: Number(r.learners), completed: Number(r.completed) })),

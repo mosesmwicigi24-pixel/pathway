@@ -220,10 +220,18 @@ export function LevelDetail(): ReactElement {
           <h1 style={{ fontFamily: "var(--font-display)", fontSize: 26, color: "#fff", lineHeight: 1.1, letterSpacing: "-0.01em" }}>Levels &amp; Modules</h1>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
-          {[{ label: "Levels", val: levels.length }, { label: "Modules", val: allModulesCount }, { label: "Published", val: publishedCount }].map((s) => (
-            <div key={s.label} style={{ textAlign: "center", padding: "4px 16px", borderRadius: 10, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.09)" }}>
-              <div style={{ fontFamily: "var(--font-display)", fontSize: 20, color: "#fff", lineHeight: 1.1 }}>{s.val}</div>
-              <div style={{ fontSize: 10, color: "rgba(232,239,245,0.45)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginTop: 1 }}>{s.label}</div>
+          {/* Compact stat tiles with brand-coloured accents (gold · green · green). */}
+          {[
+            { label: "Levels", val: levels.length, accent: "#c89b3c" },
+            { label: "Modules", val: allModulesCount, accent: "#22c55e" },
+            { label: "Published", val: publishedCount, accent: "#22c55e" },
+          ].map((s) => (
+            <div key={s.label} style={{ minWidth: 84, padding: "6px 16px", borderRadius: 10, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.09)", borderTop: `2px solid ${s.accent}` }}>
+              <div className="flex items-center gap-1.5 justify-center">
+                <span style={{ width: 6, height: 6, borderRadius: 99, background: s.accent }} />
+                <span style={{ fontFamily: "var(--font-display)", fontSize: 20, color: "#fff", lineHeight: 1.1 }}>{s.val}</span>
+              </div>
+              <div style={{ textAlign: "center", fontSize: 10, color: "rgba(232,239,245,0.45)", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginTop: 1 }}>{s.label}</div>
             </div>
           ))}
           <button onClick={() => setLevelModal({ mode: "add" })} className="flex items-center gap-2 rounded-xl px-4" style={{ height: 40, background: "var(--nuru-gold)", color: "#fff", fontSize: 13, fontWeight: 700, boxShadow: "0 6px 18px rgba(200,155,60,0.30)", border: "none", flexShrink: 0 }}><Plus size={14} /> New level</button>

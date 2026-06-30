@@ -4,6 +4,12 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  react-redux>react: 18.3.1
+  react-redux>react-dom: 18.3.1
+  react-redux>@types/react: 18.3.31
+  '@reduxjs/toolkit>@types/react': 18.3.31
+
 packageExtensionsChecksum: 454b318e74397636e85e1581427e123f
 
 patchedDependencies:
@@ -4886,8 +4892,8 @@ packages:
   react-redux@9.3.0:
     resolution: {integrity: sha512-KQopgqFo/p/fgmAs5qz6p5RWaNAzq40WAu7fJIXnQpYxFPbJYtsJPWvGeF2rOBaY/kEuV77AVsX8TsQzKm+A/g==}
     peerDependencies:
-      '@types/react': ^18.2.25 || ^19
-      react: ^18.0 || ^19
+      '@types/react': 18.3.31
+      react: 18.3.1
       redux: ^5.0.0
     peerDependenciesMeta:
       '@types/react':
