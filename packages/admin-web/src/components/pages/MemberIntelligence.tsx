@@ -32,6 +32,8 @@ const VIOLET = "#5b2bb8";
 const RED = "#dc2626";
 // Brand tint rotation for ranked bars / fund rows.
 const BRAND_TINTS = [NAVY, GOLD, TEAL, GREEN, VIOLET];
+// Active-days frequency buckets: pale → bright green = more frequent use.
+const ACTIVE_DAYS_TINTS = ["#9bd6ab", "#6ecb86", GREEN, TEAL, NAVY];
 
 // Canonical engagement-band ordering + colour for the donut.
 const BANDS: { key: string; name: string; color: string }[] = [
@@ -94,6 +96,20 @@ const hourLabel = (h: number): string => {
   if (hr === 0) return "12a";
   if (hr === 12) return "12p";
   return hr < 12 ? `${hr}a` : `${hr - 12}p`;
+};
+
+// Week start (YYYY-MM-DD) → short "D Mon" axis label.
+const weekLabel = (s: string): string => {
+  const parts = (s ?? "").split("-");
+  if (parts.length >= 3) {
+    const m = Number(parts[1]);
+    const day = Number(parts[2]);
+    if (m >= 1 && m <= 12 && day >= 1 && day <= 31) {
+      const mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1];
+      return `${day} ${mon}`;
+    }
+  }
+  return s;
 };
 
 const monthShort = (s: string): string => {
@@ -178,10 +194,22 @@ export function MemberIntelligence(): ReactElement {
   const platTotal = platformData.reduce((s, p) => s + p.value, 0);
   const active7Pct = k.total_members > 0 ? Math.round((k.active_7d / k.total_members) * 100) : 0;
 
+  // Activity (additive block — older payloads omit it; render only when present & non-empty).
+  const activeTrendData = (d.activity?.active_trend ?? []).map((t) => ({ week: weekLabel(t.week), active: t.active }));
+  const activeTrendHasData = activeTrendData.some((t) => t.active > 0);
+  const activeDaysOrder = ["1", "2-3", "4-7", "8-15", "16+"];
+  const activeDaysBy = new Map((d.activity?.active_days ?? []).map((a) => [a.bucket, a.members]));
+  const activeDaysData = activeDaysOrder.map((b, i) => ({
+    bucket: b,
+    members: activeDaysBy.get(b) ?? 0,
+    color: ACTIVE_DAYS_TINTS[i] ?? GOLD,
+  }));
+  const activeDaysHasData = (d.activity?.active_days ?? []).length > 0 && activeDaysData.some((a) => a.members > 0);
+
   const deviceComing: string[] = [];
   if (!dv.model_capture) deviceComing.push("Exact device model & OS version — coming with capture-on-login.");
   if (!en.screen_dwell_capture) deviceComing.push("Per-screen time (which areas they linger in) — coming once screen telemetry ships.");
-  if (!en.login_capture) deviceComing.push("Active-days are used as the login proxy — exact sign-in timestamps aren't captured yet.");
+  if (!en.login_capture) deviceComing.push("Exact sign-in timestamps aren't captured yet — but active-users trend and active-days frequency below are real.");
 
   return (
     <div className="flex flex-col gap-6" style={{ padding: 4 }}>
@@ -469,6 +497,56 @@ export function MemberIntelligence(): ReactElement {
             </div>
           )}
         </SubCard>
+
+        {/* Active users — last 12 weeks (REAL; from activity.active_trend) */}
+        {activeTrendHasData && (
+          <SubCard icon={TrendingUp} title="Active users — last 12 weeks" hint="distinct in-app members / week" className="mb-4">
+            <div style={{ height: 200 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={activeTrendData} margin={{ top: 8, right: 6, left: -10, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="activeTrend" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={GREEN} stopOpacity={0.28} />
+                      <stop offset="100%" stopColor={GREEN} stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} stroke="var(--border)" />
+                  <XAxis dataKey="week" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 10, fill: "#6b7280" }} interval="preserveStartEnd" minTickGap={18} />
+                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#6b7280" }} allowDecimals={false} width={34} />
+                  <Tooltip cursor={{ stroke: GREEN, strokeOpacity: 0.4 }} contentStyle={tip} />
+                  <Area type="monotone" dataKey="active" name="Active members" stroke={GREEN} strokeWidth={2.5} fill="url(#activeTrend)" dot={{ r: 3, fill: GREEN }} activeDot={{ r: 5 }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </SubCard>
+        )}
+
+        {/* How often members use the app — active days, last 30d (REAL; the login-frequency signal) */}
+        {activeDaysHasData && (
+          <SubCard icon={CalendarCheck} title="How often members use the app" hint="active days · last 30 days" className="mb-4">
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={activeDaysData} margin={{ top: 18, right: 6, left: -16, bottom: 0 }}>
+                  <CartesianGrid vertical={false} stroke="var(--border)" />
+                  <XAxis dataKey="bucket" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 11, fill: "#6b7280" }} interval={0} />
+                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#6b7280" }} allowDecimals={false} width={34} />
+                  <Tooltip cursor={{ fill: "rgba(11,31,51,0.05)" }} contentStyle={tip} />
+                  <Bar dataKey="members" radius={[5, 5, 0, 0]} maxBarSize={48}>
+                    <LabelList dataKey="members" position="top" style={{ fontSize: 10, fontWeight: 700, fill: NAVY_INK }} />
+                    {activeDaysData.map((a) => <Cell key={a.bucket} fill={a.color} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex flex-wrap gap-x-3.5 gap-y-1.5" style={{ marginTop: 10 }}>
+              {activeDaysData.map((a) => (
+                <span key={a.bucket} className="flex items-center gap-1.5" style={{ fontSize: 10.5, color: "var(--muted-foreground)" }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, background: a.color, display: "inline-block" }} /> {a.bucket} {a.bucket === "1" ? "day" : "days"}
+                </span>
+              ))}
+            </div>
+          </SubCard>
+        )}
 
         {/* Gated "coming" notes — only genuinely-missing telemetry */}
         {deviceComing.length > 0 && (
