@@ -59,14 +59,37 @@ occasionally refreshes (e.g. on app open while consent is on).
 4. A leader **reviews + approves** in the admin UI (web + iPad) to form/assign the cell. Minors
    are never auto-grouped; any change to a minor follows existing guardian/consent rules.
 
-## 8. DECISIONS NEEDED (sign-off)
-1. **Coarseness** — Option **A (geohash ~1.2 km, recommended)**, B (city/neighborhood), or C
-   (rounded coords)?
-2. **Minors** — **fully excluded (recommended)** or guardian-consent-gated (collected only with a
-   guardian's explicit consent, still never shown to peers)?
-3. **Who can see suggestions** — Admin + which leader roles (e.g. regional/national coaches)?
-4. **Match radius** — default cluster radius (e.g. **3 km**)?
-5. Confirm **suggestions only, leader-approved** (no auto-grouping) — yes?
+## 8. DECISIONS — SIGNED OFF 2026-06-30
+1. **Coarseness:** ✅ **Geohash-6 (~1.2 km).** Store a 6-char geohash; never return raw
+   geohash/coords to any client — only "near each other (≈ within X km)".
+2. **Minors:** ✅ **Guardian-consent-gated.** A minor's coarse location is collected **only after
+   a guardian grants an explicit, location-specific consent** (see §8a). Never shown to peers;
+   minors' pairing suggestions are visible **only to Admin** (not field/leader roles). Revoking
+   the guardian consent (or the member opting out) erases the stored location immediately.
+3. **Who sees suggestions:** Admin + senior leader roles (national/regional coaches) for adults;
+   **minors → Admin only**. Gated by a new `members:proximity` permission.
+4. **Match radius:** default **3 km** (configurable).
+5. **Suggestions only, leader-approved** (no auto-grouping, minors never auto-grouped): ✅ yes.
+
+### 8a. Guardian-consent-for-location (the minors path)
+- Adds a **distinct consent type** (e.g. `location_sharing`) to the existing guardian-consent
+  system — separate from general onboarding consent, separately grantable and **revocable**.
+- A minor's location ingest is **rejected** unless an active `location_sharing` guardian consent
+  exists for that member. No consent → no collection, even if the toggle is on.
+- Audit: who granted/revoked, when. Revocation triggers immediate deletion of `member_location`.
+- **Compliance flag for the owner:** collecting any minor location (even coarse, even with
+  guardian consent) carries heightened data-protection obligations (e.g. Kenya DPA / COPPA-like
+  rules). Confirm you're comfortable operating this; "fully excluded" remains a one-flag fallback
+  if you'd rather not hold minor-location data at all.
+
+## 9. Build plan (now that §8 is signed off)
+1. **Backend (no mobile, safe):** `member_location` table; opt-in ingest endpoint (rejects
+   minors lacking `location_sharing` consent); the `location_sharing` consent type + grant/revoke;
+   geohash clustering + an RBAC-gated **suggestions** endpoint (adults to coaches+, minors to
+   Admin only); migration + tests; OpenAPI. Deploy.
+2. **Mobile (needs a release):** member opt-in toggle (default off) + guardian `location_sharing`
+   consent UI; coarse foreground-only location send while consent is on.
+3. **Web + iPad (admin):** a "Suggested pairings / nearby" review-and-approve view; no raw coords.
 
 ## 9. Surfaces (once signed off)
 - **Backend:** `member_location` table + opt-in/ingest endpoint + clustering + an admin
