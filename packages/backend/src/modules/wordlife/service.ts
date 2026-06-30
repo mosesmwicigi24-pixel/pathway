@@ -8,7 +8,8 @@
 // PRIVACY: this surfaces reading / memorization / quiz only. Prayer is pastoral-
 // private (§5.4) and is intentionally NOT included in any per-member view.
 import type { Pool } from "pg";
-import { one } from "../../db/db.js";
+import { one, maybeOne } from "../../db/db.js";
+import { ApiError } from "../../http/errors.js";
 import { ScoresService } from "../scores/service.js";
 
 const TZ = "Africa/Nairobi"; // EAT day boundary, matches the rhythm engine
@@ -42,6 +43,15 @@ export class WordLifeService {
   }
 
   async memberWordLife(userId: string): Promise<MemberWordLife> {
+    // Same existence semantics as the Member Profile aggregate (memberDetail):
+    // real, non-deleted Students only — otherwise 404 (matches the documented contract).
+    const exists = await maybeOne<{ ok: number }>(
+      this.pool,
+      `SELECT 1 AS ok FROM users WHERE user_id = $1 AND role = 'Student' AND deleted_at IS NULL`,
+      [userId],
+    );
+    if (!exists) throw new ApiError("NOT_FOUND", "Member not found");
+
     const word = await this.scores.word(userId);
 
     const mem = await one<{

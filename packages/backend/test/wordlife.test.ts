@@ -53,6 +53,11 @@ describe("GET /admin/members/:id/word-life", () => {
     const res = await agent().get(`/v1/admin/members/${memberId}/word-life`).set(auth(memberTok));
     expect(res.status).toBe(403);
   });
+
+  it("404s for an unknown member id (matches memberDetail semantics)", async () => {
+    const res = await agent().get(`/v1/admin/members/00000000-0000-4000-8000-0000000000ff/word-life`).set(auth(adminTok));
+    expect(res.status).toBe(404);
+  });
 });
 
 describe("WordLifeService.insight (pure)", () => {
