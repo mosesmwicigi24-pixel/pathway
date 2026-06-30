@@ -114,6 +114,56 @@ describe("dashboard reports", () => {
     expect(top!.members).toBe(2); // distinct members, trimmed model
   });
 
+  it("app-area dwell events ingest idempotently and surface in engagement.area_dwell", async () => {
+    const student2 = await createUser({ congregationId: cong, cellGroupId: cell, role: "Student", email: "m2@dev.local" });
+    const student2Tok = bearer({ sub: student2.user_id, role: "Student", cong });
+    const cid = "11111111-1111-4111-8111-111111111111";
+    const now = new Date().toISOString();
+
+    // Two members spend time on "give"; one of student's events is a duplicate
+    // client_event_id (offline replay) and must NOT be counted twice.
+    const post1 = await agent().post("/v1/me/activity/screens").set(auth(studentTok)).send({
+      events: [
+        { screen: "give", duration_ms: 3000, occurred_at: now, client_event_id: cid },
+        { screen: "home", duration_ms: 1000, occurred_at: now, client_event_id: "22222222-2222-4222-8222-222222222222" },
+      ],
+    });
+    expect(post1.status).toBe(200);
+    expect(post1.body.accepted).toBe(2);
+
+    // Replay the same batch (same client_event_ids) → idempotent no-op.
+    const replay = await agent().post("/v1/me/activity/screens").set(auth(studentTok)).send({
+      events: [{ screen: "give", duration_ms: 3000, occurred_at: now, client_event_id: cid }],
+    });
+    expect(replay.status).toBe(200);
+    expect(replay.body.accepted).toBe(0);
+
+    // A second member also dwells on "give".
+    const post2 = await agent().post("/v1/me/activity/screens").set(auth(student2Tok)).send({
+      events: [{ screen: "give", duration_ms: 5000, occurred_at: now, client_event_id: "33333333-3333-4333-8333-333333333333" }],
+    });
+    expect(post2.body.accepted).toBe(1);
+
+    const res = await agent().get("/v1/admin/analytics/intelligence").set(auth(adminTok));
+    expect(res.status).toBe(200);
+    expect(res.body.engagement.screen_dwell_capture).toBe(true);
+    const dwell = res.body.engagement.area_dwell as { screen: string; total_ms: number; sessions: number; members: number }[];
+    const give = dwell.find((d) => d.screen === "give");
+    expect(give).toBeDefined();
+    expect(give!.total_ms).toBe(8000); // 3000 (counted once, not 6000) + 5000
+    expect(give!.sessions).toBe(2); // two distinct rows, replay excluded
+    expect(give!.members).toBe(2);
+    // "give" has the most time → ordered first.
+    expect(dwell[0].screen).toBe("give");
+  });
+
+  it("engagement.screen_dwell_capture stays false with no dwell events", async () => {
+    const res = await agent().get("/v1/admin/analytics/intelligence").set(auth(adminTok));
+    expect(res.status).toBe(200);
+    expect(res.body.engagement.screen_dwell_capture).toBe(false);
+    expect(res.body.engagement.area_dwell).toEqual([]);
+  });
+
   it("engagement report returns band distribution and per-cell rows", async () => {
     await testPool().query(
       `INSERT INTO engagement_scores (user_id, cell_group_id, h_score, c_score, a_score, e_score, band, window_end)
