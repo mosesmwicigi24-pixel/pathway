@@ -8,9 +8,9 @@ describe("portal nav model", () => {
     expect(navGroups.map((g) => g.label)).toEqual(["Portal", "Curriculum", "Operations", "System"]);
   });
 
-  it("exposes the System section (Member Intelligence, Users, Roles, Congregations, Countries, Languages)", () => {
+  it("exposes the System section (Member Intelligence, Suggested Pairings, Users, Roles, Congregations, Countries, Languages)", () => {
     const system = navGroups.find((g) => g.label === "System");
-    expect(system?.items.map((i) => i.path)).toEqual(["/intelligence", "/users", "/roles", "/congregations", "/countries", "/languages"]);
+    expect(system?.items.map((i) => i.path)).toEqual(["/intelligence", "/proximity", "/users", "/roles", "/congregations", "/countries", "/languages"]);
   });
 
   it("every nav item has a unique path", () => {

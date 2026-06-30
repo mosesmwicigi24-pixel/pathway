@@ -91,6 +91,39 @@ const platformColor = (p: string): string => {
   }
 };
 
+// Humanise a screen/route key into a friendly app-area label (reuses the
+// affinity KIND_LABEL where it overlaps; falls back to title-cased text).
+const SCREEN_LABEL: Record<string, string> = {
+  home: "Home", dashboard: "Home", feed: "Home",
+  lessons: "Lessons", lesson: "Lessons", curriculum: "Lessons", learn: "Lessons",
+  scripture: "Scripture", bible: "Scripture", verses: "Scripture", verse: "Scripture",
+  reading_plan: "Reading plans", plans: "Reading plans", plan: "Reading plans",
+  video: "Video", videos: "Video",
+  quiz: "Quizzes", quizzes: "Quizzes",
+  reflections: "Reflections", reflection: "Reflections",
+  prayer: "Prayer", habits: "Habits", habit: "Habits",
+  events: "Events", event: "Events", calendar: "Events",
+  giving: "Giving", give: "Giving",
+  chat: "Chat", messages: "Chat",
+  profile: "Profile", settings: "Settings", notifications: "Notifications",
+  cell: "My cell", cells: "My cell", community: "Community",
+};
+const screenLabel = (s: string): string => {
+  const key = (s ?? "").toLowerCase().replace(/[-/\s]+/g, "_").replace(/_screen$|^app_/g, "");
+  return SCREEN_LABEL[key] ?? KIND_LABEL[key] ?? pretty(s || "—");
+};
+
+// Milliseconds → compact human duration: "Xh Ym", "Ym", or "Zs".
+const fmtMs = (ms: number): string => {
+  const total = Math.max(0, Math.round((ms ?? 0) / 1000)); // seconds
+  if (total < 60) return `${total}s`;
+  const mins = Math.round(total / 60);
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+};
+
 const hourLabel = (h: number): string => {
   const hr = ((h % 24) + 24) % 24;
   if (hr === 0) return "12a";
@@ -210,6 +243,14 @@ export function MemberIntelligence(): ReactElement {
   // capture is live AND we actually have rows, else keep the honest "coming" note).
   const deviceModels = (dv.models ?? []).filter((m) => m.members > 0).slice(0, 8);
   const showDeviceModels = dv.model_capture && deviceModels.length > 0;
+
+  // Time per app area (#3 — additive; render only when capture is live AND rows
+  // exist, else keep the honest "per-screen time — coming" note below).
+  const areaDwell = [...(en.area_dwell ?? [])]
+    .filter((a) => a.total_ms > 0)
+    .sort((a, b) => b.total_ms - a.total_ms);
+  const showAreaDwell = en.screen_dwell_capture && areaDwell.length > 0;
+  const areaDwellTotalMs = areaDwell.reduce((s, a) => s + a.total_ms, 0);
 
   const deviceComing: string[] = [];
   if (!showDeviceModels) deviceComing.push("Exact device model & OS version — coming with capture-on-login.");
@@ -582,7 +623,7 @@ export function MemberIntelligence(): ReactElement {
 
       {/* ── 4 · App-area affinity ────────────────────────────── */}
       <Section icon={Grid2x2} title="App-area affinity" hint="Which content members engage with most">
-        <div style={{ ...cardStyle(0), overflow: "hidden" }}>
+        <div style={{ ...cardStyle(0), overflow: "hidden", marginBottom: showAreaDwell ? 16 : 0 }}>
           <CardHeader icon={Grid2x2} title="Content areas" hint="events · members" />
           {en.by_kind.length === 0 ? <div style={{ padding: 16 }}><Empty text="No app-area engagement recorded yet." /></div> : (
             <BarList
@@ -597,6 +638,61 @@ export function MemberIntelligence(): ReactElement {
             />
           )}
         </div>
+
+        {/* Time per app area (#3) — REAL; gated on screen_dwell_capture + non-empty.
+            When unavailable, the honest "per-screen time — coming" note (rendered
+            in §3 via deviceComing) stands in for it; here we show a dim inline note. */}
+        {showAreaDwell ? (
+          <div style={{ ...cardStyle(0), overflow: "hidden" }}>
+            <CardHeader icon={Clock} title="Time per app area" hint={`last 30 days · ${fmtMs(areaDwellTotalMs)} total`} />
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "var(--secondary)" }}>
+                  <th style={thL}>APP AREA</th>
+                  <th style={thR}>TIME</th>
+                  <th style={thR}>SHARE</th>
+                  <th style={thR}>SESSIONS</th>
+                  <th style={thR}>MEMBERS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {areaDwell.map((a, i) => {
+                  const share = areaDwellTotalMs > 0 ? (a.total_ms / areaDwellTotalMs) * 100 : 0;
+                  const color = BRAND_TINTS[i % BRAND_TINTS.length] ?? NAVY;
+                  return (
+                    <tr key={a.screen} style={{ borderTop: "1px solid var(--border)", background: i % 2 === 1 ? "rgba(238,240,243,0.45)" : "transparent" }}>
+                      <td style={tdL}>
+                        <span className="flex items-center gap-2.5">
+                          <span style={tintChip(color)}><Clock size={14} /></span>
+                          <span style={{ display: "inline-flex", flexDirection: "column" }}>
+                            <span style={{ fontWeight: 600, color: NAVY_INK }}>{screenLabel(a.screen)}</span>
+                            {/* thin share bar under the label */}
+                            <span style={{ marginTop: 4, height: 5, width: 120, borderRadius: 99, background: "var(--border)", overflow: "hidden", display: "inline-block" }}>
+                              <span style={{ display: "block", width: `${Math.max(4, share)}%`, height: "100%", borderRadius: 99, background: color }} />
+                            </span>
+                          </span>
+                        </span>
+                      </td>
+                      <td style={{ ...tdR, fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 14.5, color: NAVY_INK }}>{fmtMs(a.total_ms)}</td>
+                      <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{Math.round(share)}%</td>
+                      <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{a.sessions.toLocaleString()}</td>
+                      <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{a.members.toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div style={{ ...comingCard, marginTop: 16 }}>
+            <div className="flex items-start gap-2">
+              <Hourglass size={12} style={{ color: "#cbd5e1", marginTop: 2, flexShrink: 0 }} />
+              <span style={{ fontSize: 11.5, color: "#9ca3af", lineHeight: 1.45 }}>
+                Per-screen time (which areas members linger in) — coming once screen telemetry ships. Nothing here is estimated.
+              </span>
+            </div>
+          </div>
+        )}
       </Section>
 
       {/* ── 5 · Engagement & growth ──────────────────────────── */}
