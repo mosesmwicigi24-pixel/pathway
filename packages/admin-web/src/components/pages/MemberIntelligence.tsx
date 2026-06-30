@@ -299,29 +299,30 @@ export function MemberIntelligence(): ReactElement {
 
       {/* ── 1 · KPI strip (pastel tinted cards) ──────────────── */}
       <Section icon={Users} title="Overview" hint="Live membership, engagement & giving signal">
-        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
-          <Kpi icon={Users} tint="navy" label="Total members" value={k.total_members} />
-          <Kpi icon={Smartphone} tint="green" label="Active (7d)" value={k.active_7d} />
-          <Kpi icon={CalendarDays} tint="teal" label="Active (30d)" value={k.active_30d} />
-          <Kpi icon={TrendingUp} tint="gold" label="Avg engagement" value={pct1(k.avg_engagement)} />
-          <Kpi icon={Activity} tint="rose" label="Members at risk" value={k.members_at_risk} />
-          <Kpi icon={BadgeCheck} tint="green" label="Givers" value={k.givers} />
-          <Kpi icon={Repeat} tint="violet" label="Recurring givers" value={k.recurring_givers} />
-          <Kpi icon={Trophy} tint="amber" label="Certificates (mo.)" value={k.certificates_this_month} />
-        </div>
+        <Grid>
+          <GridCell span={1}><Kpi icon={Users} tint="navy" label="Total members" value={k.total_members} /></GridCell>
+          <GridCell span={1}><Kpi icon={Smartphone} tint="green" label="Active (7d)" value={k.active_7d} /></GridCell>
+          <GridCell span={1}><Kpi icon={CalendarDays} tint="teal" label="Active (30d)" value={k.active_30d} /></GridCell>
+          <GridCell span={1}><Kpi icon={TrendingUp} tint="gold" label="Avg engagement" value={pct1(k.avg_engagement)} /></GridCell>
+          <GridCell span={1}><Kpi icon={Activity} tint="rose" label="Members at risk" value={k.members_at_risk} /></GridCell>
+          <GridCell span={1}><Kpi icon={BadgeCheck} tint="green" label="Givers" value={k.givers} /></GridCell>
+          <GridCell span={1}><Kpi icon={Repeat} tint="violet" label="Recurring givers" value={k.recurring_givers} /></GridCell>
+          <GridCell span={1}><Kpi icon={Trophy} tint="amber" label="Certificates (mo.)" value={k.certificates_this_month} /></GridCell>
+        </Grid>
       </Section>
 
       {/* ── 2 · Giving intelligence ──────────────────────────── */}
       <Section icon={Gift} title="Giving intelligence" hint={`${g.gift_count} gifts · ${g.givers} givers`}>
-        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", marginBottom: 14 }}>
-          <Kpi icon={Wallet} tint="green" label="Total giving" value={money(g.total_minor, ccy)} small />
-          <Kpi icon={TrendingUp} tint="gold" label="Avg / transaction" value={money(g.avg_per_txn_minor, ccy)} small />
-          <Kpi icon={BarChart3} tint="violet" label="Median gift" value={money(g.median_minor, ccy)} small />
-          <Kpi icon={Users} tint="navy" label="Givers" value={g.givers} small />
-        </div>
+        <Grid>
+          {/* Giving KPIs — one per quarter-row */}
+          <GridCell span={1}><Kpi icon={Wallet} tint="green" label="Total giving" value={money(g.total_minor, ccy)} small /></GridCell>
+          <GridCell span={1}><Kpi icon={TrendingUp} tint="gold" label="Avg / transaction" value={money(g.avg_per_txn_minor, ccy)} small /></GridCell>
+          <GridCell span={1}><Kpi icon={BarChart3} tint="violet" label="Median gift" value={money(g.median_minor, ccy)} small /></GridCell>
+          <GridCell span={1}><Kpi icon={Users} tint="navy" label="Givers" value={g.givers} small /></GridCell>
 
-        {/* Giving frequency */}
-        <SubCard icon={BarChart3} title="Giving frequency" hint="givers by gift count" className="mb-4">
+        {/* Giving frequency — medium chart, span 2 */}
+        <GridCell span={2}>
+        <SubCard icon={BarChart3} title="Giving frequency" hint="givers by gift count">
           {freqTotal === 0 ? <Empty text="No giving recorded yet." /> : (
             <>
               <div style={{ height: 180 }}>
@@ -348,9 +349,11 @@ export function MemberIntelligence(): ReactElement {
             </>
           )}
         </SubCard>
+        </GridCell>
 
-        {/* Top givers — premium table */}
-        <div style={{ ...cardStyle(0), overflow: "hidden", marginBottom: 16 }}>
+        {/* Top givers — wide premium table, full row */}
+        <GridCell span={4}>
+        <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
           <CardHeader icon={Trophy} title="Top givers" hint="by total" />
           {g.top_givers.length === 0 ? <div style={{ padding: 16 }}><Empty text="No givers yet." /></div> : (
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -388,9 +391,11 @@ export function MemberIntelligence(): ReactElement {
             </table>
           )}
         </div>
+        </GridCell>
 
-        {/* Giving trend */}
-        <SubCard icon={TrendingUp} title="Giving trend" hint={`last 6 months · ${ccy}`} className="mb-4">
+        {/* Giving trend — wide trend, full row */}
+        <GridCell span={4}>
+        <SubCard icon={TrendingUp} title="Giving trend" hint={`last 6 months · ${ccy}`}>
           {trendData.length === 0 ? <Empty text="No giving recorded yet." /> : (
             <div style={{ height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -412,9 +417,10 @@ export function MemberIntelligence(): ReactElement {
             </div>
           )}
         </SubCard>
+        </GridCell>
 
-        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
-          {/* By fund */}
+          {/* By fund — medium, span 2 */}
+          <GridCell span={2}>
           <SubCard icon={Wallet} title="Giving by fund" hint={`all-time · ${ccy}`}>
             <BarList
               rows={[...g.by_fund].filter((f) => f.total_minor > 0).sort((a, b) => b.total_minor - a.total_minor)
@@ -429,9 +435,11 @@ export function MemberIntelligence(): ReactElement {
               emptyText="No fund giving recorded yet."
             />
           </SubCard>
+          </GridCell>
 
-          {/* By method — recurring schedules table */}
-          <div style={{ ...cardStyle(0), overflow: "hidden" }}>
+          {/* By method — recurring schedules table, span 2 */}
+          <GridCell span={2}>
+          <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
             <CardHeader icon={Repeat} title="Recurring by method" hint="active schedules" />
             {g.by_method.length === 0 ? <div style={{ padding: 16 }}><Empty text="No active recurring schedules." /></div> : (
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -457,13 +465,16 @@ export function MemberIntelligence(): ReactElement {
               </table>
             )}
           </div>
-        </div>
+          </GridCell>
+        </Grid>
       </Section>
 
       {/* ── 3 · App usage & devices ──────────────────────────── */}
       <Section icon={Smartphone} title="App usage & devices" hint="Platforms, versions & when the app is used">
-        {/* Active highlight */}
-        <div style={{ ...cardStyle(18), marginBottom: 16 }} className="flex items-center gap-4">
+        <Grid>
+        {/* Active highlight — wide stat banner, full row */}
+        <GridCell span={4}>
+        <div style={{ ...cardStyle(18) }} className="flex items-center gap-4">
           <span style={{ width: 52, height: 52, borderRadius: 14, background: "var(--tint-green-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
             <Radio size={24} style={{ color: "var(--tint-green-fg)" }} />
           </span>
@@ -485,12 +496,13 @@ export function MemberIntelligence(): ReactElement {
             <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 2 }}>of {k.total_members}</div>
           </div>
         </div>
+        </GridCell>
 
-        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", marginBottom: 16 }}>
-          {/* Platform split donut */}
+          {/* Platform split donut — compact, span 1 */}
+          <GridCell span={1}>
           <SubCard icon={PieIcon} title="Platform split" hint={`${platTotal} devices`}>
             {platTotal === 0 ? <Empty text="No platform data yet." /> : (
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4" style={{ flexWrap: "wrap" }}>
                 <Donut data={platformData} centerLabel="Devices" centerValue={platTotal} />
                 <ul className="flex flex-col gap-2" style={{ flex: 1 }}>
                   {platformData.map((p) => (
@@ -507,8 +519,10 @@ export function MemberIntelligence(): ReactElement {
               </div>
             )}
           </SubCard>
+          </GridCell>
 
-          {/* App version adoption table */}
+          {/* App version adoption — compact, span 1 */}
+          <GridCell span={1}>
           <SubCard icon={Smartphone} title="App-version adoption" hint={`top ${Math.min(dv.app_versions.length, 8)}`}>
             {dv.app_versions.length === 0 ? <Empty text="No version data yet." /> : (
               <BarList
@@ -522,11 +536,12 @@ export function MemberIntelligence(): ReactElement {
               />
             )}
           </SubCard>
-        </div>
+          </GridCell>
 
-        {/* Top device models (REAL; gated on dv.model_capture + non-empty dv.models) */}
+        {/* Top device models (REAL; gated on dv.model_capture + non-empty dv.models) — compact, span 2 */}
         {showDeviceModels && (
-          <SubCard icon={Smartphone} title="Top device models" hint={`top ${deviceModels.length} · model · members`} className="mb-4">
+          <GridCell span={2}>
+          <SubCard icon={Smartphone} title="Top device models" hint={`top ${deviceModels.length} · model · members`}>
             <BarList
               rows={deviceModels.map((m, i) => ({
                 label: m.model || "Unknown",
@@ -536,10 +551,12 @@ export function MemberIntelligence(): ReactElement {
               }))}
             />
           </SubCard>
+          </GridCell>
         )}
 
-        {/* Activity by hour */}
-        <SubCard icon={Clock} title="Activity by hour" hint={hourTotal > 0 ? `peak ${peakHour.label}` : "when the app is used"} className="mb-4">
+        {/* Activity by hour — medium chart, span 2 */}
+        <GridCell span={2}>
+        <SubCard icon={Clock} title="Activity by hour" hint={hourTotal > 0 ? `peak ${peakHour.label}` : "when the app is used"}>
           {hourTotal === 0 ? <Empty text="No in-app activity recorded yet." /> : (
             <div style={{ height: 180 }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -557,10 +574,12 @@ export function MemberIntelligence(): ReactElement {
             </div>
           )}
         </SubCard>
+        </GridCell>
 
-        {/* Active users — last 12 weeks (REAL; from activity.active_trend) */}
+        {/* Active users — last 12 weeks (REAL; from activity.active_trend) — wide trend, full row */}
         {activeTrendHasData && (
-          <SubCard icon={TrendingUp} title="Active users — last 12 weeks" hint="distinct in-app members / week" className="mb-4">
+          <GridCell span={4}>
+          <SubCard icon={TrendingUp} title="Active users — last 12 weeks" hint="distinct in-app members / week">
             <div style={{ height: 200 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={activeTrendData} margin={{ top: 8, right: 6, left: -10, bottom: 0 }}>
@@ -579,11 +598,13 @@ export function MemberIntelligence(): ReactElement {
               </ResponsiveContainer>
             </div>
           </SubCard>
+          </GridCell>
         )}
 
-        {/* How often members use the app — active days, last 30d (REAL; the login-frequency signal) */}
+        {/* How often members use the app — active days, last 30d (REAL; the login-frequency signal) — medium, span 2 */}
         {activeDaysHasData && (
-          <SubCard icon={CalendarCheck} title="How often members use the app" hint="active days · last 30 days" className="mb-4">
+          <GridCell span={2}>
+          <SubCard icon={CalendarCheck} title="How often members use the app" hint="active days · last 30 days">
             <div style={{ height: 180 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={activeDaysData} margin={{ top: 18, right: 6, left: -16, bottom: 0 }}>
@@ -606,10 +627,12 @@ export function MemberIntelligence(): ReactElement {
               ))}
             </div>
           </SubCard>
+          </GridCell>
         )}
 
-        {/* Gated "coming" notes — only genuinely-missing telemetry */}
+        {/* Gated "coming" notes — only genuinely-missing telemetry — full row */}
         {deviceComing.length > 0 && (
+          <GridCell span={4}>
           <div style={comingCard}>
             {deviceComing.map((n) => (
               <div key={n} className="flex items-start gap-2" style={{ marginBottom: 6 }}>
@@ -618,12 +641,17 @@ export function MemberIntelligence(): ReactElement {
               </div>
             ))}
           </div>
+          </GridCell>
         )}
+        </Grid>
       </Section>
 
       {/* ── 4 · App-area affinity ────────────────────────────── */}
       <Section icon={Grid2x2} title="App-area affinity" hint="Which content members engage with most">
-        <div style={{ ...cardStyle(0), overflow: "hidden", marginBottom: showAreaDwell ? 16 : 0 }}>
+        <Grid>
+        {/* Content areas — bar list, span 2 (full row when dwell table is hidden) */}
+        <GridCell span={showAreaDwell ? 2 : 4}>
+        <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
           <CardHeader icon={Grid2x2} title="Content areas" hint="events · members" />
           {en.by_kind.length === 0 ? <div style={{ padding: 16 }}><Empty text="No app-area engagement recorded yet." /></div> : (
             <BarList
@@ -638,12 +666,15 @@ export function MemberIntelligence(): ReactElement {
             />
           )}
         </div>
+        </GridCell>
 
         {/* Time per app area (#3) — REAL; gated on screen_dwell_capture + non-empty.
             When unavailable, the honest "per-screen time — coming" note (rendered
-            in §3 via deviceComing) stands in for it; here we show a dim inline note. */}
+            in §3 via deviceComing) stands in for it; here we show a dim inline note.
+            Wide table — span 2 (keeps 5 columns readable). */}
         {showAreaDwell ? (
-          <div style={{ ...cardStyle(0), overflow: "hidden" }}>
+          <GridCell span={2}>
+          <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
             <CardHeader icon={Clock} title="Time per app area" hint={`last 30 days · ${fmtMs(areaDwellTotalMs)} total`} />
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
@@ -683,8 +714,10 @@ export function MemberIntelligence(): ReactElement {
               </tbody>
             </table>
           </div>
+          </GridCell>
         ) : (
-          <div style={{ ...comingCard, marginTop: 16 }}>
+          <GridCell span={4}>
+          <div style={{ ...comingCard }}>
             <div className="flex items-start gap-2">
               <Hourglass size={12} style={{ color: "#cbd5e1", marginTop: 2, flexShrink: 0 }} />
               <span style={{ fontSize: 11.5, color: "#9ca3af", lineHeight: 1.45 }}>
@@ -692,15 +725,18 @@ export function MemberIntelligence(): ReactElement {
               </span>
             </div>
           </div>
+          </GridCell>
         )}
+        </Grid>
       </Section>
 
       {/* ── 5 · Engagement & growth ──────────────────────────── */}
       <Section icon={PieIcon} title="Engagement & growth" hint={`${bandTotal} members · ${pct1(k.avg_engagement)} avg score`}>
-        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", marginBottom: 16 }}>
-          {/* Engagement bands donut */}
+        <Grid>
+          {/* Engagement bands donut — compact, span 2 (donut + legend) */}
+          <GridCell span={2}>
           <SubCard icon={PieIcon} title="Engagement bands" hint={`${bandTotal} members`}>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4" style={{ flexWrap: "wrap" }}>
               <Donut data={bandTotal === 0 ? [{ name: "None", value: 1, color: "var(--border)" }] : bandData} centerLabel="Members" centerValue={bandTotal} />
               <ul className="flex flex-col gap-2" style={{ flex: 1 }}>
                 {bandData.map((b) => (
@@ -716,8 +752,10 @@ export function MemberIntelligence(): ReactElement {
               </ul>
             </div>
           </SubCard>
+          </GridCell>
 
-          {/* Per-level distribution */}
+          {/* Per-level distribution — medium chart, span 2 */}
+          <GridCell span={2}>
           <SubCard icon={BarChart3} title="Per-level distribution" hint="learners & completions">
             {!levelHasData ? <Empty text="No level enrolment recorded yet." /> : (
               <div style={{ height: 188 }}>
@@ -735,23 +773,23 @@ export function MemberIntelligence(): ReactElement {
               </div>
             )}
           </SubCard>
-        </div>
+          </GridCell>
 
-        {/* Word & curriculum growth tiles */}
-        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
-          <Kpi icon={BookOpen} tint="green" label="Verse learners" value={gr.verse_learners} />
-          <Kpi icon={BadgeCheck} tint="gold" label="Verses mastered" value={gr.verses_mastered} />
-          <Kpi icon={CalendarCheck} tint="navy" label="Plans completed" value={gr.plans_completed} />
-          <Kpi icon={CalendarDays} tint="teal" label="Plans active" value={gr.plans_active} />
-          <Kpi icon={HelpCircle} tint="violet" label="Quiz attempts" value={gr.quiz_attempts} />
-          <Kpi icon={CheckCircle2} tint="amber" label={`Quiz passed · ${passRate}%`} value={gr.quiz_passed} />
-        </div>
+          {/* Word & curriculum growth tiles — compact, span 1 each */}
+          <GridCell span={1}><Kpi icon={BookOpen} tint="green" label="Verse learners" value={gr.verse_learners} /></GridCell>
+          <GridCell span={1}><Kpi icon={BadgeCheck} tint="gold" label="Verses mastered" value={gr.verses_mastered} /></GridCell>
+          <GridCell span={1}><Kpi icon={CalendarCheck} tint="navy" label="Plans completed" value={gr.plans_completed} /></GridCell>
+          <GridCell span={1}><Kpi icon={CalendarDays} tint="teal" label="Plans active" value={gr.plans_active} /></GridCell>
+          <GridCell span={1}><Kpi icon={HelpCircle} tint="violet" label="Quiz attempts" value={gr.quiz_attempts} /></GridCell>
+          <GridCell span={1}><Kpi icon={CheckCircle2} tint="amber" label={`Quiz passed · ${passRate}%`} value={gr.quiz_passed} /></GridCell>
+        </Grid>
       </Section>
 
       {/* ── 6 · Location ─────────────────────────────────────── */}
       <Section icon={MapPin} title="Location" hint="Where your people are — coarse, free-text">
-        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
-          {/* By city */}
+        <Grid>
+          {/* By city — medium, span 2 */}
+          <GridCell span={2}>
           <SubCard icon={Building2} title="Members by city" hint={`top ${Math.min(loc.by_city.filter((c) => c.members > 0).length, 10)}`}>
             <BarList
               rows={[...loc.by_city].filter((c) => c.members > 0).sort((a, b) => b.members - a.members).slice(0, 10)
@@ -759,8 +797,10 @@ export function MemberIntelligence(): ReactElement {
               emptyText="No city data captured yet."
             />
           </SubCard>
+          </GridCell>
 
-          {/* By country */}
+          {/* By country — medium, span 2 */}
+          <GridCell span={2}>
           <SubCard icon={Globe} title="Members by country" hint={`top ${Math.min(loc.by_country.filter((c) => c.members > 0).length, 8)}`}>
             <BarList
               showPct
@@ -769,11 +809,12 @@ export function MemberIntelligence(): ReactElement {
               emptyText="No country data captured yet."
             />
           </SubCard>
-        </div>
+          </GridCell>
 
-        {/* Proximity coming — gated on geo_capture, no fake coordinates */}
+        {/* Proximity coming — gated on geo_capture, no fake coordinates — full row */}
         {!loc.geo_capture && (
-          <div style={{ ...cardStyle(18), marginTop: 16 }}>
+          <GridCell span={4}>
+          <div style={{ ...cardStyle(18) }}>
             <div className="flex items-center gap-2.5">
               <span style={{ width: 36, height: 36, borderRadius: 11, background: "var(--tint-violet-bg)", display: "grid", placeItems: "center" }}>
                 <Sparkles size={18} style={{ color: "var(--tint-violet-fg)" }} />
@@ -803,7 +844,9 @@ export function MemberIntelligence(): ReactElement {
               ))}
             </ul>
           </div>
+          </GridCell>
         )}
+        </Grid>
       </Section>
 
       {/* Footer */}
@@ -839,6 +882,42 @@ const comingCard: React.CSSProperties = {
 type Tint = "navy" | "green" | "gold" | "teal" | "amber" | "rose" | "violet";
 const tintBg = (t: Tint): string => (t === "teal" ? "#e2f4f1" : `var(--tint-${t}-bg)`);
 const tintFg = (t: Tint): string => (t === "teal" ? TEAL : `var(--tint-${t}-fg)`);
+
+// ── Dense dashboard grid ──────────────────────────────────────────────────────
+// A 4-column grid at xl that collapses to 2 (≤1100px) then 1 (≤640px). Each
+// child declares how many columns it spans via <GridCell span={1|2|4}>. Spans are
+// clamped to the live column count by the responsive CSS below so a span-4 card
+// never overflows a 2- or 1-column layout. One scoped <style> drives the media
+// queries (inline styles can't express them); the brand palette, fonts and card
+// shadows are untouched — this is pure layout.
+const GRID_CSS = `
+.mi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+.mi-grid > .mi-cell { min-width: 0; }
+.mi-grid > .mi-cell > * { height: 100%; box-sizing: border-box; }
+.mi-cell.mi-span-1 { grid-column: span 1; }
+.mi-cell.mi-span-2 { grid-column: span 2; }
+.mi-cell.mi-span-4 { grid-column: span 4; }
+@media (max-width: 1100px) {
+  .mi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mi-cell.mi-span-2, .mi-cell.mi-span-4 { grid-column: span 2; }
+  .mi-cell.mi-span-1 { grid-column: span 1; }
+}
+@media (max-width: 640px) {
+  .mi-grid { grid-template-columns: minmax(0, 1fr); }
+  .mi-cell.mi-span-1, .mi-cell.mi-span-2, .mi-cell.mi-span-4 { grid-column: span 1; }
+}
+`;
+function Grid({ children }: { children: ReactNode }): ReactElement {
+  return (
+    <>
+      <style>{GRID_CSS}</style>
+      <div className="mi-grid">{children}</div>
+    </>
+  );
+}
+function GridCell({ span, children }: { span: 1 | 2 | 4; children: ReactNode }): ReactElement {
+  return <div className={`mi-cell mi-span-${span}`}>{children}</div>;
+}
 
 function Kpi({ icon: Icon, label, value, tint, small }: { icon: LucideIcon; label: string; value: number | string; tint: Tint; small?: boolean }): ReactElement {
   return (
