@@ -18,6 +18,9 @@
 admin features → **web + iPad**; member features → **mobile**; shared concerns (contract,
 types, tokens, terminology) → ripple to **all**. Record the intended surface set up front
 (state it back to the user). A surface that's intentionally untouched is **"N/A — reason"**.
+**Design precedence:** when surfaces conflict on UX/presentation/feature-shape/brand, the
+**iPad wins** and the others conform (see PARITY.md §0). The **backend still wins on the
+contract/data/business-rules** — precedence is design-only.
 
 **2 · Contract-first.** If the change touches the wire contract or data shapes:
 backend (`packages/backend`) **first**, then update **OpenAPI**

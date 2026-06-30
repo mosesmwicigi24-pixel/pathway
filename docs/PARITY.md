@@ -24,6 +24,22 @@ Parity is enforced at **four levels**, not at the pixel level:
 app, and a web page *should* look different. We do **not** chase pixel parity — we chase
 contract + behavior + brand parity.
 
+### Design precedence — the iPad is the reference of record
+
+When surfaces **diverge on UX, presentation, feature shape, or brand**, the **iPad app wins**
+and the others conform to it. The iPad carries the latest, most considered design pass
+(density, color system, premium tables, Finance/Events/Chat/Intelligence redesigns), so it is
+the canonical design source. The web portal is brought up to match the iPad; brand decisions
+made on the iPad flow **back into the token source** (`tokens.ts`) and outward to every surface.
+
+**The one boundary:** precedence is about *design/UX/feature-shape*, **not** the contract.
+Levels 1–3 of "the same thing" stay **backend-authoritative** — the API contract, data models,
+and business rules (gating/scoring/money/validation) are owned by the backend + OpenAPI +
+`@nuru/shared`; the iPad cannot override them (it's a client). Precedence governs *how things
+look and behave on screen*, plus the brand palette. (Brand precedence has a ripple: evolving
+`tokens.ts` to the iPad's palette also restyles the member mobile app — keep brand consistent
+across all surfaces unless explicitly told otherwise.)
+
 ---
 
 ## 1. Sources of truth (single, canonical)
@@ -124,7 +140,7 @@ Shares with admin surfaces: the backend, `@nuru/shared`, and `tokens.ts`.
 | ~~D-05~~ | ~~Intelligence not on the canonical endpoint~~ | iPad | ~~High~~ | **DONE 2026-06-30** — iPad People Intelligence rebuilt on `/admin/analytics/intelligence`; devices/app-area/activity-by-hour/giving-frequency/location now render real data. Only the backend's own not-captured flags remain labeled: device model, screen dwell, login timestamp, geo lat/lng |
 | D-06 | No learner Module Preview | iPad | Low | Add, or mark N/A for iPad |
 | D-07 | Tokens hand-ported to Swift | iPad | Med | Generate `NuruTheme.swift` from `tokens.ts`/a `tokens.json` so brand can't fork |
-| D-08 | Recent iPad presentation pass (density, color system, Finance/Events/Chat redesigns) not on web | Web | Decide | Triage: adopt on web, or declare iPad-specific. **Presentation, not contract** — N/A is allowed |
+| D-08 | Recent iPad presentation pass (density, color system, Finance/Events/Chat/Intelligence redesigns) not on web | Web (+ mobile brand) | **Decided → port** | **iPad has precedence (see §0).** Web adopts the iPad's design as the reference of record; iPad brand decisions flow into `tokens.ts` (restyling mobile too). Work pending — scope per slice. |
 | D-09 | Terminology mix (Cohort vs Cell) at the wire | Backend | Med | Plan an additive rename; keep old paths until clients migrate |
 
 ---
