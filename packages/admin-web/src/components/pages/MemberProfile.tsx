@@ -10,6 +10,7 @@ import {
   Heart, Mail, MessageSquare, ShieldAlert, Sparkles, Sunrise, Flame, X, GraduationCap, Activity,
 } from "lucide-react";
 import { OpsApi, SystemApi, type MemberDetail, type Country, type Programme } from "../../api/client";
+import { WordLifeApi, type MemberWordLife } from "../../api/wordLife";
 import { errorMessage } from "../../util/error";
 
 const PROGRAMME_LABELS: Record<Programme, string> = {
@@ -59,11 +60,70 @@ function ThinBar({ value, color }: { value: number; color: string }): ReactEleme
   return <div style={{ height: 4, background: "#EEF0F3", borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${value}%`, height: "100%", background: color, borderRadius: 999 }} /></div>;
 }
 
+// The coaching insight gets a colour by what it's telling the leader to do.
+const INSIGHT_STYLE: Record<string, { bg: string; border: string; color: string }> = {
+  balanced: { bg: "#E8F6EC", border: "#C6E8D1", color: "#15803D" },
+  reader_not_memorizer: { bg: "#FEF6E7", border: "#F3E2B6", color: "#A87616" },
+  memorizer_not_reader: { bg: "#FEF6E7", border: "#F3E2B6", color: "#A87616" },
+  building: { bg: "#EEF2FB", border: "#D8E1F2", color: "#3556A6" },
+  dormant: { bg: "#FDECEC", border: "#F6CACA", color: "#C0392B" },
+};
+
+function WordLifeCard({ wl }: { wl: MemberWordLife }): ReactElement {
+  const ins = INSIGHT_STYLE[wl.insight.profile] ?? INSIGHT_STYLE.building!;
+  const stat = (label: string, value: string, sub?: string): ReactElement => (
+    <div key={label} style={{ padding: "12px 14px", background: "#FAFBFD", border: "1px solid var(--border)", borderRadius: 12 }}>
+      <div style={{ fontFamily: "var(--font-display)", color: "var(--nuru-navy)", fontSize: 20, lineHeight: 1 }}>{value}</div>
+      <div className="nuru-eyebrow" style={{ marginTop: 5 }}>{label}</div>
+      {sub ? <div style={{ fontSize: 10.5, color: "var(--muted-foreground)", marginTop: 2 }}>{sub}</div> : null}
+    </div>
+  );
+  return (
+    <div className="rounded-2xl p-5" style={{ background: "#fff", border: "1px solid var(--border)", boxShadow: "0 1px 2px rgba(11,31,51,0.03)" }}>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2"><BookOpen size={16} style={{ color: "var(--nuru-gold)" }} /><span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>Word &amp; Reading life</span></div>
+        <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1" style={{ background: "#FDF9EF", border: "1px solid #F0E2BD", fontSize: 11.5, fontWeight: 700, color: "#A87616" }}>
+          <Sparkles size={11} /> Word score {wl.word_score.score} · {wl.word_score.band}
+        </span>
+      </div>
+
+      {/* Coaching insight — the reader vs. practiser cue */}
+      <div className="rounded-xl px-3.5 py-3 mb-4" style={{ background: ins.bg, border: `1px solid ${ins.border}` }}>
+        <div style={{ fontSize: 13, color: ins.color, fontWeight: 600, lineHeight: 1.4 }}>{wl.insight.headline}</div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-4">
+        {stat("Mastered", String(wl.memorization.verses_mastered), `${wl.memorization.verses_learning} learning`)}
+        {stat("Avg match", `${wl.memorization.avg_match_pct}%`, "memorization depth")}
+        {stat("Word days", `${wl.rhythm.word_days_30}`, "of last 30")}
+        {stat("Plans", String(wl.reading.plans_completed + wl.reading.plans_active), `${wl.reading.plans_completed} done · ${wl.reading.days_read} days`)}
+      </div>
+
+      {/* Word-score components */}
+      <div className="flex flex-col gap-2.5">
+        {([["Consistency", wl.word_score.components.consistency ?? 0, "#16A34A"], ["Memorization", wl.word_score.components.memorization ?? 0, "#C89B3C"], ["Breadth", wl.word_score.components.breadth ?? 0, "#3556A6"]] as const).map(([label, value, color]) => (
+          <div key={label} className="flex items-center gap-3">
+            <span style={{ fontSize: 11.5, color: "var(--muted-foreground)", width: 96, flexShrink: 0 }}>{label}</span>
+            <div style={{ flex: 1 }}><ThinBar value={value} color={color} /></div>
+            <span style={{ fontSize: 11.5, color: "var(--foreground)", fontWeight: 600, width: 32, textAlign: "right" }}>{value}</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 14 }}>
+        Last practised {fmtWhen(wl.memorization.last_practiced_at)} · last in the Word {fmtWhen(wl.rhythm.last_word_at)}
+        {wl.quiz.attempts > 0 ? ` · ${wl.quiz.passed}/${wl.quiz.attempts} quizzes passed (avg ${wl.quiz.avg_score}%)` : ""}
+      </div>
+    </div>
+  );
+}
+
 export function MemberProfile(): ReactElement {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const id = params.get("id") ?? "";
   const [m, setM] = useState<MemberDetail | null>(null);
+  const [wl, setWl] = useState<MemberWordLife | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [consentOpen, setConsentOpen] = useState(false);
   const [countries, setCountries] = useState<Country[]>([]);
@@ -72,6 +132,7 @@ export function MemberProfile(): ReactElement {
   useEffect(() => {
     if (!id) { setError("No member selected."); return; }
     OpsApi.memberDetail(id).then(setM).catch((e) => setError(errorMessage(e, "Could not load member.")));
+    WordLifeApi.forMember(id).then(setWl).catch(() => setWl(null)); // best-effort; card hides if it fails
   }, [id]);
   useEffect(() => { void SystemApi.countries().then(setCountries).catch(() => {}); }, []);
 
@@ -208,6 +269,9 @@ export function MemberProfile(): ReactElement {
                 ))}
               </div>
             </div>
+
+            {/* Word & Reading life — how this member reads + practises the Word */}
+            {wl ? <WordLifeCard wl={wl} /> : null}
 
             {/* Activity */}
             <div className="rounded-2xl p-6" style={{ background: "#FDF9EF", border: "1px solid #F0E2BD" }}>
