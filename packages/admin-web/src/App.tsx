@@ -27,6 +27,7 @@ import { Badges } from "./components/pages/Badges";
 import { MemberProfile } from "./components/pages/MemberProfile";
 import { Profile } from "./components/pages/Profile";
 import { Notifications } from "./components/pages/Notifications";
+import { MemberIntelligence } from "./components/pages/MemberIntelligence";
 import { Users } from "./components/pages/Users";
 import { Roles } from "./components/pages/Roles";
 import { Congregations } from "./components/pages/Congregations";
@@ -62,6 +63,7 @@ const router = createBrowserRouter([
       { path: "finance", element: <Finance /> },
       { path: "certificates", element: <Certificates /> },
       { path: "badges", element: <Badges /> },
+      { path: "intelligence", element: <MemberIntelligence /> },
       { path: "users", element: <Users /> },
       { path: "roles", element: <Roles /> },
       { path: "congregations", element: <Congregations /> },

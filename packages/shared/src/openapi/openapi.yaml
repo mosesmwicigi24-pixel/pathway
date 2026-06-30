@@ -1850,6 +1850,17 @@ paths:
       responses:
         "200": { description: Expiring consents }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/analytics/intelligence:
+    get:
+      tags: [portal]
+      summary: >-
+        SuperAdmin/Admin. Member Intelligence aggregate — giving behaviour (avg
+        per transaction, frequency, funds, methods, top givers), device platform
+        split, engagement bands + activity by kind/hour, curriculum + Word growth,
+        and coarse location. Prayer excluded (§5.4); uncaptured metrics flagged.
+      responses:
+        "200": { description: Intelligence aggregate }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/notifications:
     get:
       tags: [portal]
