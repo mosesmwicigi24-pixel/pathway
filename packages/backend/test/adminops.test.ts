@@ -90,6 +90,30 @@ describe("dashboard reports", () => {
     expect((await agent().get("/v1/admin/analytics/intelligence").set(auth(studentTok))).status).toBe(403);
   });
 
+  it("captured device model surfaces in analytics and flips model_capture true", async () => {
+    // Register a device WITH a model via the real /me/devices endpoint (backward
+    // compatible: model is optional). Two members on the same model so members
+    // counts distinct users, not rows.
+    const student2 = await createUser({ congregationId: cong, cellGroupId: cell, role: "Student", email: "m2@dev.local" });
+    const student2Tok = bearer({ sub: student2.user_id, role: "Student", cong });
+    const reg1 = await agent().post("/v1/me/devices").set(auth(studentTok))
+      .send({ platform: "ios", app_version: "1.2.3", model: "  iPhone 17 Pro Max  " });
+    expect(reg1.status).toBe(201);
+    const reg2 = await agent().post("/v1/me/devices").set(auth(student2Tok))
+      .send({ platform: "ios", model: "iPhone 17 Pro Max" });
+    expect(reg2.status).toBe(201);
+    // A model-less registration must not pollute the models list.
+    expect((await agent().post("/v1/me/devices").set(auth(studentTok)).send({ platform: "android" })).status).toBe(201);
+
+    const res = await agent().get("/v1/admin/analytics/intelligence").set(auth(adminTok));
+    expect(res.status).toBe(200);
+    expect(res.body.devices.model_capture).toBe(true);
+    const models = res.body.devices.models as { model: string; members: number }[];
+    const top = models.find((m) => m.model === "iPhone 17 Pro Max");
+    expect(top).toBeDefined();
+    expect(top!.members).toBe(2); // distinct members, trimmed model
+  });
+
   it("engagement report returns band distribution and per-cell rows", async () => {
     await testPool().query(
       `INSERT INTO engagement_scores (user_id, cell_group_id, h_score, c_score, a_score, e_score, band, window_end)

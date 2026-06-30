@@ -129,6 +129,11 @@ export class AdminOpsService {
       `SELECT COALESCE(app_version, 'unknown') AS app_version, count(DISTINCT user_id)::int AS members
          FROM client_devices GROUP BY app_version ORDER BY members DESC LIMIT 8`,
     );
+    const deviceModels = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT model, count(DISTINCT user_id)::int AS members
+         FROM client_devices WHERE model IS NOT NULL GROUP BY model ORDER BY members DESC LIMIT 8`,
+    );
 
     // --- Engagement (prayer excluded, §5.4) --------------------------------
     const bands = await many<Record<string, unknown>>(
@@ -233,7 +238,9 @@ export class AdminOpsService {
       devices: {
         platforms: platforms.map((r) => ({ platform: r.platform, members: Number(r.members) })),
         app_versions: appVersions.map((r) => ({ app_version: r.app_version, members: Number(r.members) })),
-        model_capture: false, // device model / OS / user-agent not captured yet
+        models: deviceModels.map((r) => ({ model: r.model as string, members: Number(r.members) })),
+        // Honest only once a model-aware client has registered a non-null model.
+        model_capture: deviceModels.length > 0,
       },
       engagement: {
         bands: bands.map((r) => ({ band: r.band, members: Number(r.members) })),

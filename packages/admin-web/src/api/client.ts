@@ -287,6 +287,7 @@ export interface MemberIntelligence {
   devices: {
     platforms: { platform: string; members: number }[];
     app_versions: { app_version: string; members: number }[];
+    models?: { model: string; members: number }[];
     model_capture: boolean;
   };
   engagement: {

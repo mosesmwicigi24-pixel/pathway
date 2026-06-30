@@ -206,8 +206,13 @@ export function MemberIntelligence(): ReactElement {
   }));
   const activeDaysHasData = (d.activity?.active_days ?? []).length > 0 && activeDaysData.some((a) => a.members > 0);
 
+  // Top device models (additive — older payloads omit `models`; render only when
+  // capture is live AND we actually have rows, else keep the honest "coming" note).
+  const deviceModels = (dv.models ?? []).filter((m) => m.members > 0).slice(0, 8);
+  const showDeviceModels = dv.model_capture && deviceModels.length > 0;
+
   const deviceComing: string[] = [];
-  if (!dv.model_capture) deviceComing.push("Exact device model & OS version — coming with capture-on-login.");
+  if (!showDeviceModels) deviceComing.push("Exact device model & OS version — coming with capture-on-login.");
   if (!en.screen_dwell_capture) deviceComing.push("Per-screen time (which areas they linger in) — coming once screen telemetry ships.");
   if (!en.login_capture) deviceComing.push("Exact sign-in timestamps aren't captured yet — but active-users trend and active-days frequency below are real.");
 
@@ -477,6 +482,20 @@ export function MemberIntelligence(): ReactElement {
             )}
           </SubCard>
         </div>
+
+        {/* Top device models (REAL; gated on dv.model_capture + non-empty dv.models) */}
+        {showDeviceModels && (
+          <SubCard icon={Smartphone} title="Top device models" hint={`top ${deviceModels.length} · model · members`} className="mb-4">
+            <BarList
+              rows={deviceModels.map((m, i) => ({
+                label: m.model || "Unknown",
+                value: m.members,
+                display: `${m.members}`,
+                color: i === 0 ? GREEN : BRAND_TINTS[i % BRAND_TINTS.length],
+              }))}
+            />
+          </SubCard>
+        )}
 
         {/* Activity by hour */}
         <SubCard icon={Clock} title="Activity by hour" hint={hourTotal > 0 ? `peak ${peakHour.label}` : "when the app is used"} className="mb-4">
