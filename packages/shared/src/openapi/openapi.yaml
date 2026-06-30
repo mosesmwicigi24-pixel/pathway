@@ -1859,7 +1859,10 @@ paths:
         (platforms, app_versions, models: top device models as {model, members}
         with members = distinct members per model, top 8; model_capture: true only
         once a model-aware client has registered a non-null model, else false),
-        engagement bands + activity by kind/hour, an activity block
+        engagement bands + activity by kind/hour plus area_dwell (top app areas
+        by total dwell time over the last 30 days as {screen, total_ms, sessions,
+        members}, top 10; screen_dwell_capture: true only once a dwell-aware
+        client has posted at least one screen event, else false), an activity block
         (active_trend: distinct active users per ISO week for the last 12 weeks;
         active_days: distribution of per-user distinct active-day counts over the
         last 30 days, the login-frequency proxy, bucketed 1 | 2-3 | 4-7 | 8-15 |
@@ -2422,6 +2425,47 @@ paths:
       responses:
         "200": { description: Activity }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/activity/screens:
+    post:
+      tags: [auth]
+      summary: >-
+        Batch-submit app-area dwell events (parity gap #3). Best-effort usage
+        telemetry: the mobile/iPad client posts up to 200 per-screen dwell
+        durations for the authenticated member. Idempotent on client_event_id —
+        an offline replay of the same batch is a no-op. Malformed rows are
+        clamped/skipped server-side rather than rejected. Returns { accepted },
+        the number of newly-stored events. Feeds engagement.area_dwell.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [events]
+              properties:
+                events:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items:
+                    type: object
+                    required: [screen, duration_ms, occurred_at, client_event_id]
+                    properties:
+                      screen: { type: string, maxLength: 40 }
+                      duration_ms: { type: integer, minimum: 0, maximum: 86400000 }
+                      occurred_at: { type: string, format: date-time }
+                      client_event_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Accepted count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
 
   # --- Announcements (Contract Matrix B5) ---
   /admin/announcements:
