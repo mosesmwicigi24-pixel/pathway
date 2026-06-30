@@ -64,7 +64,7 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | Dashboard | reports/overview·engagement·attendance·consents·levels, calendar, audit | ✅ | ✅ | Parity |
 | Notifications | /admin/notifications (+:action) | ✅ | ✅ | Parity |
 | Cell Engagement | reports/engagement, /admin/cells | ✅ | ✅ | Parity |
-| Cell Detail | Web: reports/engagement + members · iPad: `/cohorts/{id}/members` | ✅ | ⚠️ | **D-01** iPad uses legacy `/cohorts` path |
+| Cell Detail | reports/engagement + members (filtered by cell_group_id) | ✅ | ✅ | ~~D-01~~ resolved — iPad now matches web's sourcing |
 | Members | /admin/members (+id, results, enrollment, graduation) | ✅ | ✅ | Parity |
 | Member Detail | /admin/members/{id} (+results) | ✅ | ✅ | Parity |
 | Reflection Queue | /admin/reflections (+decision, history) | ✅ | ✅ | Parity |
@@ -78,7 +78,7 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | Level Detail | Web: dedicated `/cms/level/:id` editor · iPad: same view as CMS | ✅ | ⚠️ | **D-02** iPad "Level Detail" == CMS view (title only) |
 | Quiz Builder | /admin/…/exam, questions | ✅ | ✅ | Parity |
 | Video Library | /admin/media (+external) | ✅ | ⚠️ | **D-03** iPad lacks the chunked video-upload pipeline (`/admin/media/videos/chunk·finalize`); external/URL only |
-| Content Studio | /admin/growth/* | ✅ | ⚠️ | **D-04** iPad lacks **Encouragements** authoring (`/admin/levels/:n/encouragements`) the web has |
+| Content Studio | /admin/growth/* + /admin/levels/:n/encouragements | ✅ | ✅ | ~~D-04~~ resolved — iPad Content Studio now has the Encouragements section |
 | **Intelligence** | Both: **`/admin/analytics/intelligence`** | ✅ | ✅ | ~~D-05~~ **RESOLVED** 2026-06-30 — iPad rebuilt on the canonical endpoint; devices/app-area/activity/location now real |
 | Users | /admin/users | ✅ | ✅ | Parity |
 | Roles & Permissions | /admin/roles (+permissions) | ✅ | ✅ | Parity |
@@ -117,10 +117,10 @@ Shares with admin surfaces: the backend, `@nuru/shared`, and `tokens.ts`.
 
 | ID | Drift | Surfaces | Severity | Action |
 |---|---|---|---|---|
-| D-01 | Cell Detail uses legacy `/cohorts/{id}/members` | iPad | Med | Repoint to the cells endpoint; finish Cohort→Cell terminology everywhere (also `/cohorts/:cell_id/members`, `/cells/:id/milestones` in backend) |
+| ~~D-01~~ | ~~Cell Detail uses legacy `/cohorts/{id}/members`~~ | iPad | ~~Med~~ | **DONE 2026-06-30** — iPad Cell Detail repointed to `/admin/reports/engagement` + `/admin/members` (filtered by `cell_group_id`), mirroring web; legacy `/cohorts` call removed. (Backend `/cohorts/:cell_id/members` + `/cells/:id/milestones` terminology cleanup still open — see D-09.) |
 | D-02 | "Level Detail" duplicates the CMS view | iPad | Low | Either make it a distinct per-level editor (match web) or drop the sidebar entry |
 | D-03 | No chunked video upload | iPad | Med | Port `/admin/media/videos/chunk·finalize` flow, or accept external-only (decide) |
-| D-04 | No Encouragements authoring | iPad | Med | Add `/admin/levels/:n/encouragements` CRUD to Content Studio |
+| ~~D-04~~ | ~~No Encouragements authoring~~ | iPad | ~~Med~~ | **DONE 2026-06-30** — per-level Encouragements section added to Content Studio (level picker + CRUD on `/admin/levels/:n/encouragements` + `/admin/encouragements/:id`) |
 | ~~D-05~~ | ~~Intelligence not on the canonical endpoint~~ | iPad | ~~High~~ | **DONE 2026-06-30** — iPad People Intelligence rebuilt on `/admin/analytics/intelligence`; devices/app-area/activity-by-hour/giving-frequency/location now render real data. Only the backend's own not-captured flags remain labeled: device model, screen dwell, login timestamp, geo lat/lng |
 | D-06 | No learner Module Preview | iPad | Low | Add, or mark N/A for iPad |
 | D-07 | Tokens hand-ported to Swift | iPad | Med | Generate `NuruTheme.swift` from `tokens.ts`/a `tokens.json` so brand can't fork |
