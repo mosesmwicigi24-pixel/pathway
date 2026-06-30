@@ -36,7 +36,7 @@ describe("RBAC roles & permission matrix", () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(11);
     const sa = res.body.data.find((r: { role_key: string }) => r.role_key === "super_admin");
-    expect(sa.permissions).toHaveLength(16 * 6); // full grid
+    expect(sa.permissions).toHaveLength(16 * 6 + 1); // full grid + members:proximity (parity gap #4)
     expect(sa.is_system).toBe(true);
     const member = res.body.data.find((r: { role_key: string }) => r.role_key === "member");
     expect(member.permissions).toHaveLength(0);

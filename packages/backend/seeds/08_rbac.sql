@@ -88,3 +88,13 @@ SELECT p.role_key, p.module_id, lc.capability
     ('mentor','members','read'),('mentor','reflections','read'),('mentor','cells','read')
   ) AS p(role_key, module_id, level) ON p.level = lc.level
 ON CONFLICT DO NOTHING;
+
+-- ── Proximity (parity gap #4) ──
+-- The distinct `members:proximity` capability gates the coarse-location pairing
+-- suggestions view. Granted to admin/coach tier; the minors-Admin-only rule is
+-- enforced in the module by coarse role, not by this grant.
+INSERT INTO rbac_role_permissions (role_key, module_id, capability)
+SELECT role_key, 'members', 'proximity'
+  FROM rbac_roles
+ WHERE role_key IN ('super_admin', 'system_admin', 'national_director', 'regional_coach')
+ON CONFLICT DO NOTHING;

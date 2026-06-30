@@ -130,11 +130,11 @@ export class OnboardingService {
       if (!(await this.isMinor(c, userId))) {
         throw new ApiError("UNPROCESSABLE", "Guardian consent only applies to minors");
       }
-      const existing = await maybeOne(c, `SELECT 1 FROM guardian_consents WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
+      const existing = await maybeOne(c, `SELECT 1 FROM guardian_consents WHERE user_id = $1 AND consent_type = 'onboarding' AND revoked_at IS NULL`, [userId]);
       if (existing) throw new ApiError("CONFLICT", "Consent already on file; revoke before recording a new one");
       await c.query(
-        `INSERT INTO guardian_consents (user_id, guardian_name, guardian_contact, relationship, consent_text_version, recorded_by)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
+        `INSERT INTO guardian_consents (user_id, guardian_name, guardian_contact, relationship, consent_text_version, recorded_by, consent_type)
+         VALUES ($1,$2,$3,$4,$5,$6,'onboarding')`,
         [userId, input.guardian_name, sealSecret(input.guardian_contact, this.env.JWT_SIGNING_KEY), input.relationship, input.consent_text_version, recordedBy],
       );
       await audit(c, recordedBy, "onboarding.consent_recorded", "users", userId, { version: input.consent_text_version });
@@ -227,7 +227,7 @@ export class OnboardingService {
     if (!profile.cell_group_id) throw new ApiError("UNPROCESSABLE", "Complete the cell selection step first");
 
     if (profile.is_minor) {
-      const consent = await maybeOne(this.pool, `SELECT 1 FROM guardian_consents WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
+      const consent = await maybeOne(this.pool, `SELECT 1 FROM guardian_consents WHERE user_id = $1 AND consent_type = 'onboarding' AND revoked_at IS NULL`, [userId]);
       if (!consent) throw new ApiError("UNPROCESSABLE", "Guardian consent is required for minors", { code: "CONSENT_REQUIRED" });
     }
 

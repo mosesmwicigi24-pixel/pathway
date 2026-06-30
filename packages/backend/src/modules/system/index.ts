@@ -325,7 +325,9 @@ export function registerSystem(ctx: AppContext): Router {
       if (!await maybeOne(c, `SELECT 1 FROM rbac_roles WHERE role_key = $1`, [key])) {
         throw new ApiError("NOT_FOUND", "Role not found");
       }
-      await c.query(`DELETE FROM rbac_role_permissions WHERE role_key = $1`, [key]);
+      // `proximity` is a system-managed capability (parity gap #4) outside the
+      // editable module×capability UI grid — preserve it across a matrix re-save.
+      await c.query(`DELETE FROM rbac_role_permissions WHERE role_key = $1 AND capability <> 'proximity'`, [key]);
       for (const p of input.permissions) {
         await c.query(`INSERT INTO rbac_role_permissions (role_key, module_id, capability) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
           [key, p.module_id, p.capability]);

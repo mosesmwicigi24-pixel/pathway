@@ -794,6 +794,23 @@ export const NuruApi = {
     return data;
   },
 
+  // ---- Approximate location (opt-in, privacy-first; parity gap #4 Phase 2) ----
+  /**
+   * Share approximate coordinates. The server stores ONLY a coarse geohash and
+   * discards the raw lat/lng. A minor without an active guardian location-sharing
+   * consent gets 403 CONSENT_REQUIRED (details.code = LOCATION_CONSENT_REQUIRED) —
+   * the caller surfaces that calmly rather than as a generic error.
+   */
+  async updateLocation(body: { lat: number; lng: number }): Promise<{ ok: true }> {
+    const { data } = await api.post<{ ok: true }>("/me/location", body);
+    return data;
+  },
+  /** Opt out — erase the stored coarse location immediately. */
+  async clearLocation(): Promise<{ ok: true }> {
+    const { data } = await api.delete<{ ok: true }>("/me/location");
+    return data;
+  },
+
   // ---- App-area dwell telemetry (parity gap #3; best-effort, idempotent) ----
   // Batch-submit how long the member spent in each app area. No PII — just the
   // coarse area label + duration. Idempotent on client_event_id, so retries of a

@@ -45,6 +45,8 @@ import { registerChat } from "../modules/chat/index.js";
 import { registerAssistant } from "../modules/assistant/index.js";
 import { registerSystem } from "../modules/system/index.js";
 import { registerEncouragements } from "../modules/encouragements/index.js";
+import { registerProximity } from "../modules/proximity/index.js";
+import { registerActivity } from "../modules/activity/index.js";
 
 export function createApp(ctx: AppContext): Express {
   const app = express();
@@ -148,6 +150,10 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerCalendar(ctx));
   v1.use(registerOnboarding(ctx));
   v1.use(registerGamification(ctx));
+  // Mounted before adminops so the static /admin/members/proximity and
+  // /admin/members/:id/location-consent routes win over adminops' /admin/members/:id.
+  v1.use(registerProximity(ctx));
+  v1.use(registerActivity(ctx));
   v1.use(registerAdminOps(ctx));
   v1.use(registerAnnouncements(ctx));
   v1.use(registerGrowth(ctx));
