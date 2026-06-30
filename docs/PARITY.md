@@ -36,9 +36,13 @@ made on the iPad flow **back into the token source** (`tokens.ts`) and outward t
 Levels 1–3 of "the same thing" stay **backend-authoritative** — the API contract, data models,
 and business rules (gating/scoring/money/validation) are owned by the backend + OpenAPI +
 `@nuru/shared`; the iPad cannot override them (it's a client). Precedence governs *how things
-look and behave on screen*, plus the brand palette. (Brand precedence has a ripple: evolving
-`tokens.ts` to the iPad's palette also restyles the member mobile app — keep brand consistent
-across all surfaces unless explicitly told otherwise.)
+look and behave on screen*, plus the brand palette.
+
+**Brand scope (decided 2026-06-30): ADMIN-ONLY for now.** The iPad's evolved palette (bright
+LED-green, luminous accents, deeper sidebar) is applied to the **web portal** so the two admin
+consoles match. The shared `tokens.ts` and the **member mobile app are left unchanged** — i.e.
+the web's brand is updated in `admin-web` (its own CSS vars), not in `tokens.ts`. Revisit if we
+later want one brand across all four surfaces.
 
 ---
 
