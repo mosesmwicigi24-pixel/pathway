@@ -8,6 +8,7 @@ import { NavigationContainer } from "@react-navigation/native";
 import { navigationRef } from "./navigationRef.js";
 import { notifyFocus } from "../api/query.js";
 import { markActivity } from "../engagement/attendanceTracker.js";
+import { onAreaChange } from "../engagement/dwellTracker.js";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import type { RootStackParamList, TabParamList } from "./types.js";
@@ -78,6 +79,9 @@ export function RootNavigator({ initialRoute = "Login" }: { initialRoute?: "Logi
       onStateChange={() => {
         notifyFocus();
         markActivity(); // navigating counts as activity for app-engagement attendance
+        // App-area dwell telemetry (#3): the active route changed — bank the
+        // previous area's dwell and start timing the new one. Best-effort.
+        onAreaChange(navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : undefined);
       }}
     >
       <Stack.Navigator initialRouteName={initialRoute} screenOptions={{ headerShown: false }}>

@@ -794,6 +794,17 @@ export const NuruApi = {
     return data;
   },
 
+  // ---- App-area dwell telemetry (parity gap #3; best-effort, idempotent) ----
+  // Batch-submit how long the member spent in each app area. No PII — just the
+  // coarse area label + duration. Idempotent on client_event_id, so retries of a
+  // kept batch are safe no-ops. Returns the count newly stored.
+  async submitActivityScreens(
+    events: Array<{ screen: string; duration_ms: number; occurred_at: string; client_event_id: string }>,
+  ): Promise<{ accepted: number }> {
+    const { data } = await api.post<{ accepted: number }>("/me/activity/screens", { events });
+    return data;
+  },
+
   // ---- Module reflection review state (M3 over B3); null = none submitted ----
   async myReflection(moduleId: string): Promise<MyReflection | null> {
     try {
