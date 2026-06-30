@@ -22,6 +22,7 @@ tags:
   - name: giving
   - name: certificates
   - name: announcements
+  - name: proximity
   - name: system
 
 security:
@@ -355,6 +356,144 @@ paths:
       responses:
         "201": { description: Device registered }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # --- Proximity / coarse-location pairing (parity gap #4, privacy-first) ---
+  # Coarse only: the server derives a 6-char geohash (~1.2 km) and DISCARDS the raw
+  # coordinates; no geohash/coords are ever returned to a client.
+  /me/location:
+    post:
+      tags: [proximity]
+      summary: >
+        Opt in / refresh coarse location. Accepts approximate lat/lng; the server
+        stores ONLY a 6-char geohash and discards the coordinates. Minors require an
+        active guardian location_sharing consent, else 403 CONSENT_REQUIRED.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lat, lng]
+              properties:
+                lat: { type: number, minimum: -90, maximum: 90 }
+                lng: { type: number, minimum: -180, maximum: 180 }
+      responses:
+        "200":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties: { ok: { type: boolean, enum: [true] } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    delete:
+      tags: [proximity]
+      summary: Opt out — erase the member's stored coarse location immediately.
+      responses:
+        "200":
+          description: Erased
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties: { ok: { type: boolean, enum: [true] } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/members/{id}/location-consent:
+    post:
+      tags: [proximity]
+      summary: >
+        Guardian grants location_sharing consent for a minor (audited). Distinct
+        from the onboarding consent; separately revocable. Gated by members:proximity.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [guardian_name, relationship, consent_text_version]
+              properties:
+                guardian_name: { type: string, minLength: 1, maxLength: 255 }
+                relationship: { type: string, minLength: 1, maxLength: 60 }
+                consent_text_version: { type: string, minLength: 1, maxLength: 20 }
+      responses:
+        "201":
+          description: Consent recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties: { ok: { type: boolean, enum: [true] } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [proximity]
+      summary: >
+        Guardian revokes a minor's location_sharing consent (audited). Also deletes
+        the minor's stored coarse location immediately. Gated by members:proximity.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Revoked + location erased
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties: { ok: { type: boolean, enum: [true] } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/members/proximity:
+    get:
+      tags: [proximity]
+      summary: >
+        Coarse pairing suggestions — eligible opted-in members clustered by approximate
+        distance. Gated by members:proximity. Adults visible to coach tier; minors
+        only to the coarse Admin role. NEVER returns geohash or coordinates.
+      parameters:
+        - name: radius_km
+          in: query
+          required: false
+          schema: { type: number, minimum: 1, maximum: 50, default: 3 }
+      responses:
+        "200":
+          description: Clusters
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [clusters]
+                properties:
+                  clusters:
+                    type: array
+                    items:
+                      type: object
+                      required: [area, member_count, approx_radius_km, members]
+                      properties:
+                        area: { type: string, description: Coarse cluster label (no precise point) }
+                        member_count: { type: integer }
+                        approx_radius_km: { type: number }
+                        members:
+                          type: array
+                          items:
+                            type: object
+                            required: [user_id, full_name, is_minor, cell_group_id]
+                            properties:
+                              user_id: { type: string, format: uuid }
+                              full_name: { type: string }
+                              is_minor: { type: boolean }
+                              cell_group_id: { type: [string, "null"], format: uuid }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
 
   # --- Curriculum & content (§3.3) ---
   /levels:

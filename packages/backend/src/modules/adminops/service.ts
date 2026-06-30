@@ -586,6 +586,7 @@ export class AdminOpsService {
          FROM guardian_consents gc
          JOIN users u ON u.user_id = gc.user_id
         WHERE gc.revoked_at IS NULL AND u.is_minor
+          AND gc.consent_type = 'onboarding'
           AND gc.granted_at < now() - interval '11 months'
         ORDER BY gc.granted_at ASC
         LIMIT 100`,
@@ -1403,7 +1404,7 @@ export class AdminOpsService {
           this.replica,
           `SELECT guardian_name, relationship, granted_at, revoked_at, consent_text_version
              FROM guardian_consents
-            WHERE user_id = $1
+            WHERE user_id = $1 AND consent_type = 'onboarding'
             ORDER BY (revoked_at IS NULL) DESC, granted_at DESC
             LIMIT 1`,
           [userId],
