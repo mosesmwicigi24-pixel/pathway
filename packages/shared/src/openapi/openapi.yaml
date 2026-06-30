@@ -2101,6 +2101,16 @@ paths:
         "200": { description: Member results }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/members/{id}/word-life:
+    get:
+      tags: [portal]
+      summary: Admin. Member "Word & Reading life" — how this member reads and practises the Word. Reuses the server-authoritative Word score and adds memorization depth, reading cadence, a 30-day Scripture rhythm, quiz comprehension, and a coaching insight (reader vs. practiser). Prayer is pastoral-private (§5.4) and excluded.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Member Word & Reading engagement }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/members/{id}/enrollment:
     patch:
       tags: [portal]
