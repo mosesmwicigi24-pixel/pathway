@@ -79,7 +79,7 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | Quiz Builder | /admin/…/exam, questions | ✅ | ✅ | Parity |
 | Video Library | /admin/media (+external) | ✅ | ⚠️ | **D-03** iPad lacks the chunked video-upload pipeline (`/admin/media/videos/chunk·finalize`); external/URL only |
 | Content Studio | /admin/growth/* | ✅ | ⚠️ | **D-04** iPad lacks **Encouragements** authoring (`/admin/levels/:n/encouragements`) the web has |
-| **Intelligence** | Web: **`/admin/analytics/intelligence`** · iPad: piecemeal (reports + finance + members) | ✅ | ⚠️ | **D-05 (HIGH)** iPad "People Intelligence" does **not** use the dedicated endpoint — should adopt it (likely unlocks device/giving/location already) |
+| **Intelligence** | Both: **`/admin/analytics/intelligence`** | ✅ | ✅ | ~~D-05~~ **RESOLVED** 2026-06-30 — iPad rebuilt on the canonical endpoint; devices/app-area/activity/location now real |
 | Users | /admin/users | ✅ | ✅ | Parity |
 | Roles & Permissions | /admin/roles (+permissions) | ✅ | ✅ | Parity |
 | Congregations | /admin/congregations | ✅ | ✅ | Parity |
@@ -121,7 +121,7 @@ Shares with admin surfaces: the backend, `@nuru/shared`, and `tokens.ts`.
 | D-02 | "Level Detail" duplicates the CMS view | iPad | Low | Either make it a distinct per-level editor (match web) or drop the sidebar entry |
 | D-03 | No chunked video upload | iPad | Med | Port `/admin/media/videos/chunk·finalize` flow, or accept external-only (decide) |
 | D-04 | No Encouragements authoring | iPad | Med | Add `/admin/levels/:n/encouragements` CRUD to Content Studio |
-| D-05 | Intelligence not on the canonical endpoint | iPad | **High** | Switch People Intelligence to `/admin/analytics/intelligence`; reconcile with web's Member Intelligence (may already provide devices/giving/location → removes "coming soon" placeholders) |
+| ~~D-05~~ | ~~Intelligence not on the canonical endpoint~~ | iPad | ~~High~~ | **DONE 2026-06-30** — iPad People Intelligence rebuilt on `/admin/analytics/intelligence`; devices/app-area/activity-by-hour/giving-frequency/location now render real data. Only the backend's own not-captured flags remain labeled: device model, screen dwell, login timestamp, geo lat/lng |
 | D-06 | No learner Module Preview | iPad | Low | Add, or mark N/A for iPad |
 | D-07 | Tokens hand-ported to Swift | iPad | Med | Generate `NuruTheme.swift` from `tokens.ts`/a `tokens.json` so brand can't fork |
 | D-08 | Recent iPad presentation pass (density, color system, Finance/Events/Chat redesigns) not on web | Web | Decide | Triage: adopt on web, or declare iPad-specific. **Presentation, not contract** — N/A is allowed |
