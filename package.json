@@ -31,6 +31,12 @@
     "typescript-eslint": "^8.0.0"
   },
   "pnpm": {
+    "overrides": {
+      "react-redux>react": "18.3.1",
+      "react-redux>react-dom": "18.3.1",
+      "react-redux>@types/react": "18.3.31",
+      "@reduxjs/toolkit>@types/react": "18.3.31"
+    },
     "packageExtensions": {
       "@react-navigation/core": {
         "peerDependencies": {
