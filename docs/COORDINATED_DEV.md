@@ -46,6 +46,32 @@ every row ✅ or **N/A — reason**. Backward-compatible/additive API only.
 repo; push branches; the PR descriptions cross-link (same ticket) and carry the DoD checklist.
 Update [PARITY.md](./PARITY.md) in the same change.
 
+## Avoiding conflicts (two different kinds)
+
+There are two failure modes, and they need different guards:
+
+**1 · Cross-surface drift** (a surface silently falls behind) — prevented by the matrix +
+Definition of Done + linked PRs above. This is the strategic risk and it's well-controlled.
+
+**2 · Working-tree conflicts** (parallel agents stepping on each other in ONE repo) — this is
+what bit us on 2026-06-30 (an agent ran `git stash` while siblings were editing, reverting their
+work). Rules to prevent it:
+
+- **NEVER run destructive/global git in a shared working tree** during parallel work — no
+  `git stash`, `git checkout -- .`, `git reset --hard`, `git clean`. An agent that needs to
+  check a clean state must read files, not stash. (This was the sole cause of today's churn.)
+- **Non-overlapping file ownership.** Each parallel agent owns distinct files; never two agents
+  on the same file. (This worked today — the damage came only from the stash, not from overlap.)
+- **Isolate when in doubt.** For large parallel fan-outs, run agents in **git worktrees**
+  (`isolation: "worktree"`) so each has its own working copy — zero shared-tree contention.
+- **Otherwise serialize.** If isolation isn't used and files might touch, run agents
+  sequentially.
+- **Verify before commit.** After any parallel batch: `git diff --stat` (confirm each target
+  landed and nothing reverted), then `pnpm typecheck` + build as gates, then commit.
+
+No process guarantees "zero conflicts" forever, but these make working-tree conflicts rare and
+always *caught before commit* (the verify gate), while the matrix keeps the surfaces from drifting.
+
 ## How this runs in practice
 
 - Within one session I edit and build **both** repos (they're both on disk). For breadth I fan
