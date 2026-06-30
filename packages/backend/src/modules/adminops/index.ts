@@ -39,6 +39,12 @@ export function registerAdminOps(ctx: AppContext): Router {
     res.json({ data: await svc.consentsReport() });
   }));
 
+  // Member Intelligence — SuperAdmin/Admin-only analytics cockpit (sensitive
+  // financial + behavioural data; coarse role gate, not a delegable permission).
+  r.get("/admin/analytics/intelligence", auth, requireRole("Admin"), handler(async (_req, res) => {
+    res.json(await svc.memberIntelligence());
+  }));
+
   // Portal activity feed (top-bar bell + Notifications page).
   r.get("/admin/notifications", auth, perm("dashboard", "view"), handler(async (req, res) => {
     res.json({ data: await svc.notificationsFeed(requirePrincipal(req).userId) });

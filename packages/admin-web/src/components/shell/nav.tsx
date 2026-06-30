@@ -3,7 +3,7 @@
 import {
   BookOpen, LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
   TrendingUp, MessageSquare, MessagesSquare, Video, Star, HelpCircle, AlignLeft, Bell,
-  Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, type LucideIcon,
+  Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, type LucideIcon,
 } from "lucide-react";
 
 export interface NavItem { path: string; label: string; icon: LucideIcon }
@@ -44,6 +44,7 @@ export const navGroups: NavGroup[] = [
   {
     label: "System",
     items: [
+      { path: "/intelligence", label: "Member Intelligence", icon: Brain },
       { path: "/users", label: "Users", icon: UserCog },
       { path: "/roles", label: "Roles & Permissions", icon: Shield },
       { path: "/congregations", label: "Congregations", icon: Church },
@@ -74,6 +75,7 @@ export const pageTitles: Record<string, string> = {
   "/finance": "Finance",
   "/certificates": "Certificates & Badges",
   "/badges": "Badges Catalog",
+  "/intelligence": "Member Intelligence",
   "/users": "System Users",
   "/roles": "Roles & Permissions",
   "/congregations": "Congregations",

@@ -46,6 +46,31 @@ describe("dashboard reports", () => {
     expect(typeof res.body.avg_engagement).toBe("number");
   });
 
+  it("member intelligence aggregates real data and is Admin/SuperAdmin-only", async () => {
+    // A succeeded gift so the giving section has something real.
+    const fund = await testPool().query(`SELECT fund_id FROM funds LIMIT 1`);
+    if (fund.rows[0]) {
+      await testPool().query(
+        `INSERT INTO transactions (transaction_id, user_id, fund_id, amount_minor, currency, status, idempotency_key, created_at, settled_at)
+         VALUES (gen_random_uuid(), $1, $2, 50000, 'KES', 'succeeded', gen_random_uuid()::text, now(), now())`,
+        [studentId, fund.rows[0].fund_id],
+      );
+    }
+    const res = await agent().get("/v1/admin/analytics/intelligence").set(auth(adminTok));
+    expect(res.status).toBe(200);
+    expect(res.body.kpis.total_members).toBe(1);
+    expect(res.body.kpis.givers).toBe(1);
+    expect(res.body.giving.gift_count).toBe(1);
+    expect(res.body.giving.avg_per_txn_minor).toBe(50000);
+    expect(res.body.devices.model_capture).toBe(false);
+    expect(res.body.location.geo_capture).toBe(false);
+    expect(Array.isArray(res.body.engagement.bands)).toBe(true);
+
+    // SuperAdmin also allowed; a Student is forbidden (coarse role gate).
+    expect((await agent().get("/v1/admin/analytics/intelligence").set(auth(superTok))).status).toBe(200);
+    expect((await agent().get("/v1/admin/analytics/intelligence").set(auth(studentTok))).status).toBe(403);
+  });
+
   it("engagement report returns band distribution and per-cell rows", async () => {
     await testPool().query(
       `INSERT INTO engagement_scores (user_id, cell_group_id, h_score, c_score, a_score, e_score, band, window_end)

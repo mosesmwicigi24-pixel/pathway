@@ -42,6 +42,182 @@ export class AdminOpsService {
     return Object.fromEntries(Object.entries(row).map(([k, v]) => [k, Number(v)]));
   }
 
+  /**
+   * Member Intelligence — one rich aggregate for the SuperAdmin/Admin analytics
+   * cockpit. Every section is computed from authoritative tables; metrics we do
+   * NOT capture yet (device model/OS, exact login time, per-screen dwell, geo)
+   * are flagged so the UI shows honest "coming with telemetry" states rather than
+   * inventing numbers. Prayer is pastoral-private (§5.4) and intentionally excluded
+   * from every cut here.
+   */
+  async memberIntelligence(): Promise<Record<string, unknown>> {
+    const num = (r: Record<string, unknown>): Record<string, number> =>
+      Object.fromEntries(Object.entries(r).map(([k, v]) => [k, Number(v)]));
+
+    // --- KPIs ---------------------------------------------------------------
+    const kpiRow = await one<Record<string, string>>(
+      this.replica,
+      `SELECT
+         (SELECT count(*) FROM users WHERE role = 'Student' AND deleted_at IS NULL)                 AS total_members,
+         (SELECT count(DISTINCT user_id) FROM interaction_events WHERE occurred_at >= now() - interval '7 days')  AS active_7d,
+         (SELECT count(DISTINCT user_id) FROM interaction_events WHERE occurred_at >= now() - interval '30 days') AS active_30d,
+         (SELECT COALESCE(round(avg(e_score), 1), 0) FROM engagement_scores)                        AS avg_engagement,
+         (SELECT count(*) FROM engagement_scores WHERE band = 'at_risk')                            AS members_at_risk,
+         (SELECT count(*) FROM cell_groups)                                                         AS cohorts,
+         (SELECT count(DISTINCT user_id) FROM transactions WHERE status = 'succeeded')              AS givers,
+         (SELECT count(DISTINCT user_id) FROM giving_schedules WHERE status = 'active')             AS recurring_givers,
+         (SELECT count(*) FROM certificates WHERE issued_at >= date_trunc('month', now()) AND revoked_at IS NULL) AS certificates_this_month`,
+    );
+
+    // --- Giving intelligence -----------------------------------------------
+    const givingTotals = await one<Record<string, string>>(
+      this.replica,
+      `SELECT
+         COALESCE(sum(amount_minor), 0)::bigint               AS total_minor,
+         count(*)::int                                        AS gift_count,
+         COALESCE(round(avg(amount_minor)), 0)::bigint        AS avg_per_txn_minor,
+         COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY amount_minor), 0)::bigint AS median_minor,
+         COALESCE(max(currency), 'KES')                       AS currency,
+         count(DISTINCT user_id)::int                         AS givers
+         FROM transactions WHERE status = 'succeeded'`,
+    );
+    const byFund = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT f.code, COALESCE(sum(t.amount_minor) FILTER (WHERE t.status='succeeded'),0)::bigint AS total_minor,
+              count(t.transaction_id) FILTER (WHERE t.status='succeeded')::int AS count
+         FROM funds f LEFT JOIN transactions t ON t.fund_id = f.fund_id
+        GROUP BY f.code ORDER BY total_minor DESC`,
+    );
+    const byMethod = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT method, count(*)::int AS schedules, count(DISTINCT user_id)::int AS givers
+         FROM giving_schedules WHERE status = 'active' GROUP BY method ORDER BY givers DESC`,
+    );
+    const topGivers = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT t.user_id, u.full_name AS name,
+              sum(t.amount_minor)::bigint AS total_minor, count(*)::int AS gifts,
+              round(avg(t.amount_minor))::bigint AS avg_minor, max(t.created_at) AS last_at
+         FROM transactions t JOIN users u ON u.user_id = t.user_id
+        WHERE t.status = 'succeeded'
+        GROUP BY t.user_id, u.full_name ORDER BY total_minor DESC LIMIT 12`,
+    );
+    const freq = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT bucket, count(*)::int AS givers FROM (
+         SELECT user_id, CASE WHEN c = 1 THEN '1' WHEN c BETWEEN 2 AND 3 THEN '2-3'
+                              WHEN c BETWEEN 4 AND 6 THEN '4-6' ELSE '7+' END AS bucket
+           FROM (SELECT user_id, count(*) AS c FROM transactions WHERE status='succeeded' GROUP BY user_id) g
+       ) b GROUP BY bucket`,
+    );
+    const givingTrend = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT to_char(date_trunc('month', created_at), 'Mon') AS month,
+              extract(epoch FROM date_trunc('month', created_at))::bigint AS ord,
+              sum(amount_minor)::bigint AS total_minor
+         FROM transactions WHERE status='succeeded' AND created_at >= now() - interval '6 months'
+        GROUP BY 1, 2 ORDER BY ord`,
+    );
+
+    // --- Devices (platform + app version only; model/OS NOT captured) -------
+    const platforms = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT platform, count(DISTINCT user_id)::int AS members FROM client_devices GROUP BY platform ORDER BY members DESC`,
+    );
+    const appVersions = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT COALESCE(app_version, 'unknown') AS app_version, count(DISTINCT user_id)::int AS members
+         FROM client_devices GROUP BY app_version ORDER BY members DESC LIMIT 8`,
+    );
+
+    // --- Engagement (prayer excluded, §5.4) --------------------------------
+    const bands = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT band, count(*)::int AS members FROM engagement_scores GROUP BY band ORDER BY members DESC`,
+    );
+    const byKind = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT kind, count(*)::int AS events, count(DISTINCT user_id)::int AS members
+         FROM interaction_events
+        WHERE kind <> 'prayer' AND occurred_at >= now() - interval '30 days'
+        GROUP BY kind ORDER BY events DESC`,
+    );
+    const byHour = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT extract(hour FROM occurred_at)::int AS hour, count(*)::int AS events
+         FROM interaction_events WHERE kind <> 'prayer' AND occurred_at >= now() - interval '30 days'
+        GROUP BY 1 ORDER BY 1`,
+    );
+
+    // --- Growth (curriculum / Word) ----------------------------------------
+    const byLevel = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT current_level AS level_number, count(*)::int AS learners,
+              count(*) FILTER (WHERE state = 'completed')::int AS completed
+         FROM enrollments GROUP BY current_level ORDER BY current_level`,
+    );
+    const growth = await one<Record<string, string>>(
+      this.replica,
+      `SELECT
+         (SELECT count(DISTINCT user_id) FROM memory_verse_progress)                       AS verse_learners,
+         (SELECT count(*) FROM memory_verse_progress WHERE status = 'mastered')             AS verses_mastered,
+         (SELECT count(*) FROM reading_plan_progress WHERE completed_at IS NOT NULL)        AS plans_completed,
+         (SELECT count(*) FROM reading_plan_progress WHERE completed_at IS NULL)            AS plans_active,
+         (SELECT count(*) FROM quiz_attempts)                                              AS quiz_attempts,
+         (SELECT count(*) FROM quiz_attempts WHERE is_passed)                              AS quiz_passed`,
+    );
+
+    // --- Location (free-text only; NO geo/lat-lng) -------------------------
+    const byCity = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT COALESCE(NULLIF(trim(city), ''), 'Unknown') AS city, count(*)::int AS members
+         FROM users WHERE deleted_at IS NULL GROUP BY 1 ORDER BY members DESC LIMIT 10`,
+    );
+    const byCountry = await many<Record<string, unknown>>(
+      this.replica,
+      `SELECT COALESCE(NULLIF(country_code, ''), '—') AS country_code, count(*)::int AS members
+         FROM users WHERE deleted_at IS NULL GROUP BY 1 ORDER BY members DESC LIMIT 8`,
+    );
+
+    return {
+      generated_at: new Date().toISOString(),
+      kpis: num(kpiRow),
+      giving: {
+        ...num({ total_minor: givingTotals.total_minor, gift_count: givingTotals.gift_count,
+                 avg_per_txn_minor: givingTotals.avg_per_txn_minor, median_minor: givingTotals.median_minor,
+                 givers: givingTotals.givers }),
+        currency: givingTotals.currency,
+        by_fund: byFund.map((r) => ({ code: r.code, total_minor: Number(r.total_minor), count: Number(r.count) })),
+        by_method: byMethod.map((r) => ({ method: r.method, schedules: Number(r.schedules), givers: Number(r.givers) })),
+        top_givers: topGivers.map((r) => ({ user_id: r.user_id, name: r.name, total_minor: Number(r.total_minor),
+                                            gifts: Number(r.gifts), avg_minor: Number(r.avg_minor), last_at: r.last_at })),
+        frequency: freq.map((r) => ({ bucket: r.bucket, givers: Number(r.givers) })),
+        trend: givingTrend.map((r) => ({ month: r.month, total_minor: Number(r.total_minor) })),
+      },
+      devices: {
+        platforms: platforms.map((r) => ({ platform: r.platform, members: Number(r.members) })),
+        app_versions: appVersions.map((r) => ({ app_version: r.app_version, members: Number(r.members) })),
+        model_capture: false, // device model / OS / user-agent not captured yet
+      },
+      engagement: {
+        bands: bands.map((r) => ({ band: r.band, members: Number(r.members) })),
+        by_kind: byKind.map((r) => ({ kind: r.kind, events: Number(r.events), members: Number(r.members) })),
+        by_hour: byHour.map((r) => ({ hour: Number(r.hour), events: Number(r.events) })),
+        screen_dwell_capture: false, // per-screen dwell time not captured (interaction_events has no area tag)
+        login_capture: false, // no exact login timestamp; active-days is the proxy used above
+      },
+      growth: {
+        by_level: byLevel.map((r) => ({ level_number: Number(r.level_number), learners: Number(r.learners), completed: Number(r.completed) })),
+        ...num(growth),
+      },
+      location: {
+        by_city: byCity.map((r) => ({ city: r.city, members: Number(r.members) })),
+        by_country: byCountry.map((r) => ({ country_code: r.country_code, members: Number(r.members) })),
+        geo_capture: false, // no lat/lng — proximity grouping unlocks once location tagging ships
+      },
+    };
+  }
+
   /** Engagement band distribution + lowest-engagement cells (the watch list). */
   async engagementReport(): Promise<Record<string, unknown>> {
     const bands = await many<{ band: string; n: string }>(

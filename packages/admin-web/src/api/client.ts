@@ -269,7 +269,49 @@ export interface CreateCellBody {
   meeting_cadence?: number;
 }
 
+// Member Intelligence aggregate (SuperAdmin/Admin analytics cockpit).
+export interface MemberIntelligence {
+  generated_at: string;
+  kpis: {
+    total_members: number; active_7d: number; active_30d: number; avg_engagement: number;
+    members_at_risk: number; cohorts: number; givers: number; recurring_givers: number; certificates_this_month: number;
+  };
+  giving: {
+    total_minor: number; gift_count: number; avg_per_txn_minor: number; median_minor: number; givers: number; currency: string;
+    by_fund: { code: string; total_minor: number; count: number }[];
+    by_method: { method: string; schedules: number; givers: number }[];
+    top_givers: { user_id: string; name: string; total_minor: number; gifts: number; avg_minor: number; last_at: string | null }[];
+    frequency: { bucket: string; givers: number }[];
+    trend: { month: string; total_minor: number }[];
+  };
+  devices: {
+    platforms: { platform: string; members: number }[];
+    app_versions: { app_version: string; members: number }[];
+    model_capture: boolean;
+  };
+  engagement: {
+    bands: { band: string; members: number }[];
+    by_kind: { kind: string; events: number; members: number }[];
+    by_hour: { hour: number; events: number }[];
+    screen_dwell_capture: boolean; login_capture: boolean;
+  };
+  growth: {
+    by_level: { level_number: number; learners: number; completed: number }[];
+    verse_learners: number; verses_mastered: number; plans_completed: number; plans_active: number;
+    quiz_attempts: number; quiz_passed: number;
+  };
+  location: {
+    by_city: { city: string; members: number }[];
+    by_country: { country_code: string; members: number }[];
+    geo_capture: boolean;
+  };
+}
+
 export const AdminApi = {
+  async intelligence(): Promise<MemberIntelligence> {
+    const { data } = await api.get<MemberIntelligence>("/admin/analytics/intelligence");
+    return data;
+  },
   async overview(): Promise<OverviewKpis> {
     const { data } = await api.get<OverviewKpis>("/admin/reports/overview");
     return data;
