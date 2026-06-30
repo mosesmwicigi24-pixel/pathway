@@ -20,6 +20,7 @@ import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, LabelList, AreaChart, Area, Legend,
 } from "recharts";
+import { Link } from "react-router-dom";
 import { AdminApi, type MemberIntelligence as Intel } from "../../api/client";
 
 // ── Brand palette (matches index.css tokens; bright green / gold / navy only) ──
@@ -47,17 +48,6 @@ const money = (minor: number, ccy: string): string =>
   `${ccy} ${Math.round((minor ?? 0) / 100).toLocaleString()}`;
 const pct1 = (v: number): string => `${(v ?? 0).toFixed(1)}%`;
 const pretty = (s: string): string => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-
-const methodLabel = (m: string): string => {
-  switch (m.toLowerCase()) {
-    case "mpesa": return "M-Pesa";
-    case "airtel": return "Airtel";
-    case "paypal": return "PayPal";
-    case "card": case "stripe": return "Card";
-    case "bank": case "bank_transfer": return "Bank";
-    default: return m ? pretty(m) : "—";
-  }
-};
 
 const KIND_LABEL: Record<string, string> = {
   lesson_open: "Lessons", lesson_view: "Lessons",
@@ -145,15 +135,6 @@ const weekLabel = (s: string): string => {
   return s;
 };
 
-const monthShort = (s: string): string => {
-  const parts = s.split("-");
-  const m = parts.length >= 2 ? Number(parts[1]) : NaN;
-  if (m >= 1 && m <= 12) {
-    return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1] ?? s;
-  }
-  return s;
-};
-
 let regionNames: Intl.DisplayNames | null = null;
 try { regionNames = new Intl.DisplayNames(undefined, { type: "region" }); } catch { regionNames = null; }
 const countryName = (code: string): string => {
@@ -208,15 +189,14 @@ export function MemberIntelligence(): ReactElement {
   const freqColors = [NAVY, GOLD, TEAL, GREEN];
   const freqData = freqOrder.map((b, i) => ({ bucket: b, givers: freqByBucket.get(b) ?? 0, color: freqColors[i] ?? GOLD }));
   const freqTotal = freqData.reduce((s, f) => s + f.givers, 0);
+  // Note: money breakdowns (giving trend / by fund / recurring-by-method) were
+  // intentionally removed here — they live on the Finance page (no duplication).
 
   // Activity by hour 0..23, missing → 0; flag the peak.
   const hourMap = new Map(en.by_hour.map((h) => [h.hour, h.events]));
   const hourData = Array.from({ length: 24 }, (_, h) => ({ hour: h, label: hourLabel(h), events: hourMap.get(h) ?? 0 }));
   const hourTotal = hourData.reduce((s, h) => s + h.events, 0);
   const peakHour = hourData.reduce((a, b) => (b.events > a.events ? b : a), hourData[0]!);
-
-  // Giving trend (KES major units).
-  const trendData = g.trend.map((t) => ({ month: monthShort(t.month), v: Math.round(t.total_minor / 100) }));
 
   // Per-level distribution (learners + completed).
   const levelData = [...gr.by_level].sort((a, b) => a.level_number - b.level_number)
@@ -311,14 +291,16 @@ export function MemberIntelligence(): ReactElement {
         </Grid>
       </Section>
 
-      {/* ── 2 · Giving intelligence ──────────────────────────── */}
-      <Section icon={Gift} title="Giving intelligence" hint={`${g.gift_count} gifts · ${g.givers} givers`}>
+      {/* ── 2 · Giving (people-framed) ───────────────────────────
+          People & engagement signals only — who gives and how often. The
+          money breakdowns (by fund, trend, recurring-by-method, totals/medians)
+          live on the Finance page, which owns the ledger. We do NOT duplicate
+          them here; a quiet pointer below links across. */}
+      <Section icon={Gift} title="Giving" hint={`${g.givers} givers · who gives & how often`}>
         <Grid>
-          {/* Giving KPIs — one per quarter-row */}
-          <GridCell span={1}><Kpi icon={Wallet} tint="green" label="Total giving" value={money(g.total_minor, ccy)} small /></GridCell>
-          <GridCell span={1}><Kpi icon={TrendingUp} tint="gold" label="Avg / transaction" value={money(g.avg_per_txn_minor, ccy)} small /></GridCell>
-          <GridCell span={1}><Kpi icon={BarChart3} tint="violet" label="Median gift" value={money(g.median_minor, ccy)} small /></GridCell>
-          <GridCell span={1}><Kpi icon={Users} tint="navy" label="Givers" value={g.givers} small /></GridCell>
+          {/* People KPIs — givers + recurring givers (engagement, not money) */}
+          <GridCell span={1}><Kpi icon={BadgeCheck} tint="green" label="Givers" value={g.givers} small /></GridCell>
+          <GridCell span={1}><Kpi icon={Repeat} tint="violet" label="Recurring givers" value={k.recurring_givers} small /></GridCell>
 
         {/* Giving frequency — medium chart, span 2 */}
         <GridCell span={2}>
@@ -393,78 +375,23 @@ export function MemberIntelligence(): ReactElement {
         </div>
         </GridCell>
 
-        {/* Giving trend — wide trend, full row */}
-        <GridCell span={4}>
-        <SubCard icon={TrendingUp} title="Giving trend" hint={`last 6 months · ${ccy}`}>
-          {trendData.length === 0 ? <Empty text="No giving recorded yet." /> : (
-            <div style={{ height: 200 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={trendData} margin={{ top: 8, right: 6, left: -10, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="giveTrend" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={GOLD} stopOpacity={0.28} />
-                      <stop offset="100%" stopColor={GOLD} stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid vertical={false} stroke="var(--border)" />
-                  <XAxis dataKey="month" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 11, fill: "#6b7280" }} />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#6b7280" }} width={40}
-                    tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : `${v}`)} />
-                  <Tooltip cursor={{ stroke: GOLD, strokeOpacity: 0.4 }} contentStyle={tip} />
-                  <Area type="monotone" dataKey="v" stroke={GOLD} strokeWidth={2.5} fill="url(#giveTrend)" dot={{ r: 3, fill: GOLD }} activeDot={{ r: 5 }} />
-                </AreaChart>
-              </ResponsiveContainer>
+          {/* Fund, channel & ledger detail lives on Finance — quiet pointer
+              (not a duplicated money breakdown). Full row. */}
+          <GridCell span={4}>
+          <Link to="/finance" style={{ textDecoration: "none" }}>
+            <div style={{ ...cardStyle(14) }} className="flex items-center gap-2.5">
+              <span style={{ width: 32, height: 32, borderRadius: 9, background: "var(--tint-gold-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                <Wallet size={15} style={{ color: "var(--tint-gold-fg)" }} />
+              </span>
+              <span style={{ fontSize: 12.5, color: "var(--muted-foreground)", lineHeight: 1.45 }}>
+                Fund, channel & ledger detail — giving by fund, monthly trend and recurring-by-method —
+                live on the <span style={{ color: NAVY, fontWeight: 600 }}>Finance</span> page.
+              </span>
+              <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 600, color: NAVY, flexShrink: 0, whiteSpace: "nowrap" }}>
+                Finance →
+              </span>
             </div>
-          )}
-        </SubCard>
-        </GridCell>
-
-          {/* By fund — medium, span 2 */}
-          <GridCell span={2}>
-          <SubCard icon={Wallet} title="Giving by fund" hint={`all-time · ${ccy}`}>
-            <BarList
-              rows={[...g.by_fund].filter((f) => f.total_minor > 0).sort((a, b) => b.total_minor - a.total_minor)
-                .map((f, i) => ({
-                  label: f.code ? pretty(f.code) : "—",
-                  value: Math.round(f.total_minor / 100),
-                  display: money(f.total_minor, ccy),
-                  tag: `${f.count}`,
-                  color: BRAND_TINTS[i % BRAND_TINTS.length],
-                }))}
-              showPct
-              emptyText="No fund giving recorded yet."
-            />
-          </SubCard>
-          </GridCell>
-
-          {/* By method — recurring schedules table, span 2 */}
-          <GridCell span={2}>
-          <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
-            <CardHeader icon={Repeat} title="Recurring by method" hint="active schedules" />
-            {g.by_method.length === 0 ? <div style={{ padding: 16 }}><Empty text="No active recurring schedules." /></div> : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: "var(--secondary)" }}>
-                    <th style={thL}>METHOD</th><th style={thR}>SCHEDULES</th><th style={thR}>GIVERS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...g.by_method].sort((a, b) => b.schedules - a.schedules).map((m, i) => (
-                    <tr key={m.method} style={{ borderTop: "1px solid var(--border)", background: i % 2 === 1 ? "rgba(238,240,243,0.45)" : "transparent" }}>
-                      <td style={tdL}>
-                        <span className="flex items-center gap-2.5">
-                          <span style={tintChip(BRAND_TINTS[i % BRAND_TINTS.length])}><Wallet size={14} /></span>
-                          <span style={{ fontWeight: 600, color: NAVY_INK }}>{methodLabel(m.method)}</span>
-                        </span>
-                      </td>
-                      <td style={{ ...tdR, fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 14.5, color: NAVY_INK }}>{m.schedules}</td>
-                      <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{m.givers}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+          </Link>
           </GridCell>
         </Grid>
       </Section>
