@@ -144,7 +144,8 @@ Shares with admin surfaces: the backend, `@nuru/shared`, and `tokens.ts`.
 | ~~D-05~~ | ~~Intelligence not on the canonical endpoint~~ | iPad | ~~High~~ | **DONE 2026-06-30** — iPad People Intelligence rebuilt on `/admin/analytics/intelligence`; devices/app-area/activity-by-hour/giving-frequency/location now render real data. Only the backend's own not-captured flags remain labeled: device model, screen dwell, login timestamp, geo lat/lng |
 | D-06 | No learner Module Preview | iPad | Low | Add, or mark N/A for iPad |
 | D-07 | Tokens hand-ported to Swift | iPad | Med | Generate `NuruTheme.swift` from `tokens.ts`/a `tokens.json` so brand can't fork |
-| D-08 | Recent iPad presentation pass (density, color system, Finance/Events/Chat/Intelligence redesigns) not on web | Web (+ mobile brand) | **Decided → port** | **iPad has precedence (see §0).** Web adopts the iPad's design as the reference of record; iPad brand decisions flow into `tokens.ts` (restyling mobile too). Work pending — scope per slice. |
+| D-08 | iPad presentation pass not on web | Web | **In progress** | iPad has precedence (§0). Web palette added to `admin-web` CSS (admin-only; mobile untouched). **Ported 2026-06-30:** Dashboard, Finance, Events, Chat, Member Intelligence. Remaining web pages (Members, Cells, Curriculum, System, Reflection, Certs, Badges, Notifications) pending. |
+| ~~D-10~~ | ~~admin-web `tsc` typecheck broken (851 errors)~~ | Web | ~~tooling~~ | **DONE 2026-06-30** — web-only react-redux/@reduxjs-toolkit resolved React/@types/react peers to the React 19 store copy, poisoning JSX types. Pinned their peers to React 18 via scoped `pnpm.overrides`. admin-web 851→0; mobile still 0; root `pnpm typecheck` green. |
 | D-09 | Terminology mix (Cohort vs Cell) at the wire | Backend | Med | Plan an additive rename; keep old paths until clients migrate |
 
 ---
