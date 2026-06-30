@@ -280,158 +280,302 @@ export function MemberIntelligence(): ReactElement {
       {/* ── 1 · KPI strip (pastel tinted cards) ──────────────── */}
       <Section icon={Users} title="Overview" hint="Live membership, engagement & giving signal">
         <Grid>
-          <GridCell span={1}><Kpi icon={Users} tint="navy" label="Total members" value={k.total_members} /></GridCell>
-          <GridCell span={1}><Kpi icon={Smartphone} tint="green" label="Active (7d)" value={k.active_7d} /></GridCell>
-          <GridCell span={1}><Kpi icon={CalendarDays} tint="teal" label="Active (30d)" value={k.active_30d} /></GridCell>
-          <GridCell span={1}><Kpi icon={TrendingUp} tint="gold" label="Avg engagement" value={pct1(k.avg_engagement)} /></GridCell>
-          <GridCell span={1}><Kpi icon={Activity} tint="rose" label="Members at risk" value={k.members_at_risk} /></GridCell>
-          <GridCell span={1}><Kpi icon={BadgeCheck} tint="green" label="Givers" value={k.givers} /></GridCell>
-          <GridCell span={1}><Kpi icon={Repeat} tint="violet" label="Recurring givers" value={k.recurring_givers} /></GridCell>
-          <GridCell span={1}><Kpi icon={Trophy} tint="amber" label="Certificates (mo.)" value={k.certificates_this_month} /></GridCell>
+          <GridCell span={3}><Kpi icon={Users} tint="navy" label="Total members" value={k.total_members} /></GridCell>
+          <GridCell span={3}><Kpi icon={Smartphone} tint="green" label="Active (7d)" value={k.active_7d} /></GridCell>
+          <GridCell span={3}><Kpi icon={CalendarDays} tint="teal" label="Active (30d)" value={k.active_30d} /></GridCell>
+          <GridCell span={3}><Kpi icon={TrendingUp} tint="gold" label="Avg engagement" value={pct1(k.avg_engagement)} /></GridCell>
+          <GridCell span={3}><Kpi icon={Activity} tint="rose" label="Members at risk" value={k.members_at_risk} /></GridCell>
+          <GridCell span={3}><Kpi icon={BadgeCheck} tint="green" label="Givers" value={k.givers} /></GridCell>
+          <GridCell span={3}><Kpi icon={Repeat} tint="violet" label="Recurring givers" value={k.recurring_givers} /></GridCell>
+          <GridCell span={3}><Kpi icon={Trophy} tint="amber" label="Certificates (mo.)" value={k.certificates_this_month} /></GridCell>
         </Grid>
       </Section>
 
-      {/* ── 2 · Giving (people-framed) ───────────────────────────
-          People & engagement signals only — who gives and how often. The
-          money breakdowns (by fund, trend, recurring-by-method, totals/medians)
-          live on the Finance page, which owns the ledger. We do NOT duplicate
-          them here; a quiet pointer below links across. */}
-      <Section icon={Gift} title="Giving" hint={`${g.givers} givers · who gives & how often`}>
+      {/* ── 2 · Usage, giving & devices ──────────────────────────
+          One coordinated dashboard block (matches the iPad reorg). Money
+          breakdowns (by fund, trend, recurring-by-method, totals/medians) stay
+          on the Finance page, which owns the ledger — we do NOT duplicate them;
+          a quiet "→ Finance" pointer links across. Layout flows into explicit
+          rows via the 12-column grid:
+            Row of 4  · Givers · Giving frequency · App usage & devices · How often
+            Full row  · Top givers table
+            Row of 4  · Top device models · Activity by hour · App-area affinity · Time per app area
+            Row of 3  · Platform split · App-version adoption · Active users (12 wk) */}
+      <Section icon={Gift} title="Usage, giving & devices" hint={`${g.givers} givers · who gives, how they use the app & on what`}>
         <Grid>
-          {/* People KPIs — givers + recurring givers (engagement, not money) */}
-          <GridCell span={1}><Kpi icon={BadgeCheck} tint="green" label="Givers" value={g.givers} small /></GridCell>
-          <GridCell span={1}><Kpi icon={Repeat} tint="violet" label="Recurring givers" value={k.recurring_givers} small /></GridCell>
+          {/* ── Row of 4 ── */}
 
-        {/* Giving frequency — medium chart, span 2 */}
-        <GridCell span={2}>
-        <SubCard icon={BarChart3} title="Giving frequency" hint="givers by gift count">
-          {freqTotal === 0 ? <Empty text="No giving recorded yet." /> : (
-            <>
-              <div style={{ height: 180 }}>
+          {/* Givers — folds "recurring givers" into this one card. Quarter. */}
+          <GridCell span={3}>
+          <SubCard icon={BadgeCheck} title="Givers" hint={`${g.givers} total`}>
+            <div className="flex items-baseline gap-2" style={{ marginTop: 2 }}>
+              <span style={{ fontFamily: "var(--font-display)", fontSize: 34, color: NAVY_INK, lineHeight: 1 }}>{g.givers}</span>
+              <span style={{ fontSize: 12, color: "var(--muted-foreground)", fontWeight: 600 }}>givers</span>
+            </div>
+            <div className="flex items-center gap-2" style={{ marginTop: 14, padding: "10px 12px", background: "var(--tint-violet-bg)", borderRadius: 11, border: "1px solid var(--tint-violet-fg)2e" }}>
+              <span style={{ width: 30, height: 30, borderRadius: 9, background: "rgba(255,255,255,0.55)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                <Repeat size={15} style={{ color: "var(--tint-violet-fg)" }} />
+              </span>
+              <div>
+                <div style={{ fontFamily: "var(--font-display)", fontSize: 18, color: NAVY_INK, lineHeight: 1 }}>{k.recurring_givers}</div>
+                <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 3 }}>recurring givers</div>
+              </div>
+            </div>
+          </SubCard>
+          </GridCell>
+
+          {/* Giving frequency — 1/2-3/4-6/7+ chart. Quarter. */}
+          <GridCell span={3}>
+          <SubCard icon={BarChart3} title="Giving frequency" hint="givers by gift count">
+            {freqTotal === 0 ? <Empty text="No giving recorded yet." /> : (
+              <>
+                <div style={{ height: 168 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={freqData} margin={{ top: 18, right: 6, left: -16, bottom: 0 }}>
+                      <CartesianGrid vertical={false} stroke="var(--border)" />
+                      <XAxis dataKey="bucket" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 11, fill: "#6b7280" }} interval={0} />
+                      <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#6b7280" }} allowDecimals={false} width={34} />
+                      <Tooltip cursor={{ fill: "rgba(11,31,51,0.05)" }} contentStyle={tip} />
+                      <Bar dataKey="givers" radius={[5, 5, 0, 0]} maxBarSize={40}>
+                        <LabelList dataKey="givers" position="top" style={{ fontSize: 10, fontWeight: 700, fill: NAVY_INK }} />
+                        {freqData.map((f) => <Cell key={f.bucket} fill={f.color} />)}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex flex-wrap gap-x-3.5 gap-y-1.5" style={{ marginTop: 10 }}>
+                  {freqData.map((f) => (
+                    <span key={f.bucket} className="flex items-center gap-1.5" style={{ fontSize: 10.5, color: "var(--muted-foreground)" }}>
+                      <span style={{ width: 9, height: 9, borderRadius: 3, background: f.color, display: "inline-block" }} /> {f.bucket} gifts
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
+          </SubCard>
+          </GridCell>
+
+          {/* App usage & devices — the active-in-app 7d/30d card. Quarter. */}
+          <GridCell span={3}>
+          <SubCard icon={Radio} title="App usage & devices" hint="active in app">
+            <div className="flex items-baseline gap-4" style={{ marginTop: 4 }}>
+              <div>
+                <div style={{ fontFamily: "var(--font-display)", fontSize: 30, color: NAVY_INK, lineHeight: 1 }}>{k.active_7d}</div>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.6, color: "#9ca3af", marginTop: 3 }}>LAST 7 DAYS</div>
+              </div>
+              <div>
+                <div style={{ fontFamily: "var(--font-display)", fontSize: 30, color: "var(--tint-green-fg)", lineHeight: 1 }}>{k.active_30d}</div>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.6, color: "#9ca3af", marginTop: 3 }}>LAST 30 DAYS</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2" style={{ marginTop: 16, padding: "10px 12px", background: "var(--tint-green-bg)", borderRadius: 11, border: "1px solid var(--tint-green-fg)2e" }}>
+              <span style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--tint-green-fg)", lineHeight: 1 }}>{active7Pct}%</span>
+              <span style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}>active (7d) of {k.total_members} members</span>
+            </div>
+          </SubCard>
+          </GridCell>
+
+          {/* How often members use the app — active-days distribution. Quarter. */}
+          <GridCell span={3}>
+          {activeDaysHasData ? (
+            <SubCard icon={CalendarCheck} title="How often they use the app" hint="active days · last 30d">
+              <div style={{ height: 168 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={freqData} margin={{ top: 18, right: 6, left: -16, bottom: 0 }}>
+                  <BarChart data={activeDaysData} margin={{ top: 18, right: 6, left: -16, bottom: 0 }}>
                     <CartesianGrid vertical={false} stroke="var(--border)" />
-                    <XAxis dataKey="bucket" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 11, fill: "#6b7280" }} />
+                    <XAxis dataKey="bucket" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 11, fill: "#6b7280" }} interval={0} />
                     <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#6b7280" }} allowDecimals={false} width={34} />
                     <Tooltip cursor={{ fill: "rgba(11,31,51,0.05)" }} contentStyle={tip} />
-                    <Bar dataKey="givers" radius={[5, 5, 0, 0]} maxBarSize={40}>
-                      <LabelList dataKey="givers" position="top" style={{ fontSize: 10, fontWeight: 700, fill: NAVY_INK }} />
-                      {freqData.map((f) => <Cell key={f.bucket} fill={f.color} />)}
+                    <Bar dataKey="members" radius={[5, 5, 0, 0]} maxBarSize={40}>
+                      <LabelList dataKey="members" position="top" style={{ fontSize: 10, fontWeight: 700, fill: NAVY_INK }} />
+                      {activeDaysData.map((a) => <Cell key={a.bucket} fill={a.color} />)}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              <div className="flex flex-wrap gap-x-3.5 gap-y-1.5" style={{ marginTop: 10 }}>
-                {freqData.map((f) => (
-                  <span key={f.bucket} className="flex items-center gap-1.5" style={{ fontSize: 10.5, color: "var(--muted-foreground)" }}>
-                    <span style={{ width: 9, height: 9, borderRadius: 3, background: f.color, display: "inline-block" }} /> {f.bucket} gifts
+              <div className="flex flex-wrap gap-x-3 gap-y-1.5" style={{ marginTop: 10 }}>
+                {activeDaysData.map((a) => (
+                  <span key={a.bucket} className="flex items-center gap-1.5" style={{ fontSize: 10.5, color: "var(--muted-foreground)" }}>
+                    <span style={{ width: 9, height: 9, borderRadius: 3, background: a.color, display: "inline-block" }} /> {a.bucket} {a.bucket === "1" ? "day" : "days"}
                   </span>
                 ))}
               </div>
-            </>
+            </SubCard>
+          ) : (
+            <SubCard icon={CalendarCheck} title="How often they use the app" hint="active days · last 30d">
+              <Empty text="No active-days distribution recorded yet." />
+            </SubCard>
           )}
-        </SubCard>
-        </GridCell>
-
-        {/* Top givers — wide premium table, full row */}
-        <GridCell span={4}>
-        <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
-          <CardHeader icon={Trophy} title="Top givers" hint="by total" />
-          {g.top_givers.length === 0 ? <div style={{ padding: 16 }}><Empty text="No givers yet." /></div> : (
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: "var(--secondary)" }}>
-                  <th style={{ ...thL }}>GIVER</th>
-                  <th style={thR}>GIFTS</th>
-                  <th style={thR}>TOTAL</th>
-                  <th style={thR}>AVG</th>
-                  <th style={thR}>LAST</th>
-                </tr>
-              </thead>
-              <tbody>
-                {g.top_givers.slice(0, 12).map((t, i) => {
-                  const name = t.name || "Anonymous";
-                  return (
-                    <tr key={t.user_id || name} style={{ borderTop: "1px solid var(--border)", background: i % 2 === 1 ? "rgba(238,240,243,0.45)" : "transparent" }}>
-                      <td style={{ ...tdL }}>
-                        <span className="flex items-center gap-2.5">
-                          <span style={rankBadge(i + 1)}>{i + 1}</span>
-                          <span style={monogram()}>{initials(name)}</span>
-                          <span style={{ fontWeight: 600, color: NAVY_INK }}>{name}</span>
-                        </span>
-                      </td>
-                      <td style={tdR}>{t.gifts}</td>
-                      <td style={{ ...tdR, fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 14.5, color: NAVY_INK }}>{money(t.total_minor, ccy)}</td>
-                      <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{money(t.avg_minor, ccy)}</td>
-                      <td style={{ ...tdR, color: "#9ca3af", fontWeight: 500 }}>
-                        {t.last_at ? new Date(t.last_at).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-        </GridCell>
-
-          {/* Fund, channel & ledger detail lives on Finance — quiet pointer
-              (not a duplicated money breakdown). Full row. */}
-          <GridCell span={4}>
-          <Link to="/finance" style={{ textDecoration: "none" }}>
-            <div style={{ ...cardStyle(14) }} className="flex items-center gap-2.5">
-              <span style={{ width: 32, height: 32, borderRadius: 9, background: "var(--tint-gold-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
-                <Wallet size={15} style={{ color: "var(--tint-gold-fg)" }} />
-              </span>
-              <span style={{ fontSize: 12.5, color: "var(--muted-foreground)", lineHeight: 1.45 }}>
-                Fund, channel & ledger detail — giving by fund, monthly trend and recurring-by-method —
-                live on the <span style={{ color: NAVY, fontWeight: 600 }}>Finance</span> page.
-              </span>
-              <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 600, color: NAVY, flexShrink: 0, whiteSpace: "nowrap" }}>
-                Finance →
-              </span>
-            </div>
-          </Link>
           </GridCell>
-        </Grid>
-      </Section>
 
-      {/* ── 3 · App usage & devices ──────────────────────────── */}
-      <Section icon={Smartphone} title="App usage & devices" hint="Platforms, versions & when the app is used">
-        <Grid>
-        {/* Active highlight — wide stat banner, full row */}
-        <GridCell span={4}>
-        <div style={{ ...cardStyle(18) }} className="flex items-center gap-4">
-          <span style={{ width: 52, height: 52, borderRadius: 14, background: "var(--tint-green-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
-            <Radio size={24} style={{ color: "var(--tint-green-fg)" }} />
-          </span>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" }}>Active in app</div>
-            <div className="flex items-baseline gap-5" style={{ marginTop: 2 }}>
-              <div>
-                <div style={{ fontFamily: "var(--font-display)", fontSize: 30, color: NAVY_INK, lineHeight: 1 }}>{k.active_7d}</div>
-                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.6, color: "#9ca3af", marginTop: 2 }}>LAST 7 DAYS</div>
+          {/* ── Top givers table — FULL WIDTH ── */}
+          <GridCell span={12}>
+          <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
+            <CardHeader icon={Trophy} title="Top givers" hint="by total" />
+            {g.top_givers.length === 0 ? <div style={{ padding: 16 }}><Empty text="No givers yet." /></div> : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: "var(--secondary)" }}>
+                    <th style={{ ...thL }}>GIVER</th>
+                    <th style={thR}>GIFTS</th>
+                    <th style={thR}>TOTAL</th>
+                    <th style={thR}>AVG</th>
+                    <th style={thR}>LAST</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {g.top_givers.slice(0, 12).map((t, i) => {
+                    const name = t.name || "Anonymous";
+                    return (
+                      <tr key={t.user_id || name} style={{ borderTop: "1px solid var(--border)", background: i % 2 === 1 ? "rgba(238,240,243,0.45)" : "transparent" }}>
+                        <td style={{ ...tdL }}>
+                          <span className="flex items-center gap-2.5">
+                            <span style={rankBadge(i + 1)}>{i + 1}</span>
+                            <span style={monogram()}>{initials(name)}</span>
+                            <span style={{ fontWeight: 600, color: NAVY_INK }}>{name}</span>
+                          </span>
+                        </td>
+                        <td style={tdR}>{t.gifts}</td>
+                        <td style={{ ...tdR, fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 14.5, color: NAVY_INK }}>{money(t.total_minor, ccy)}</td>
+                        <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{money(t.avg_minor, ccy)}</td>
+                        <td style={{ ...tdR, color: "#9ca3af", fontWeight: 500 }}>
+                          {t.last_at ? new Date(t.last_at).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+          </GridCell>
+
+          {/* ── Row of 4 ── */}
+
+          {/* Top device models — Quarter. (REAL; gated on dv.model_capture +
+              non-empty dv.models — else honest "coming" note.) */}
+          <GridCell span={3}>
+          {showDeviceModels ? (
+            <SubCard icon={Smartphone} title="Top device models" hint={`top ${deviceModels.length}`}>
+              <BarList
+                rows={deviceModels.map((m, i) => ({
+                  label: m.model || "Unknown",
+                  value: m.members,
+                  display: `${m.members}`,
+                  color: i === 0 ? GREEN : BRAND_TINTS[i % BRAND_TINTS.length],
+                }))}
+              />
+            </SubCard>
+          ) : (
+            <SubCard icon={Smartphone} title="Top device models" hint="coming">
+              <div style={{ ...comingCard, padding: 12 }} className="flex items-start gap-2">
+                <Hourglass size={12} style={{ color: "#cbd5e1", marginTop: 2, flexShrink: 0 }} />
+                <span style={{ fontSize: 11.5, color: "#9ca3af", lineHeight: 1.45 }}>
+                  Exact device model &amp; OS version — coming with capture-on-login. Nothing here is estimated.
+                </span>
               </div>
-              <div>
-                <div style={{ fontFamily: "var(--font-display)", fontSize: 30, color: "var(--tint-green-fg)", lineHeight: 1 }}>{k.active_30d}</div>
-                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.6, color: "#9ca3af", marginTop: 2 }}>LAST 30 DAYS</div>
+            </SubCard>
+          )}
+          </GridCell>
+
+          {/* Activity by hour — Quarter. */}
+          <GridCell span={3}>
+          <SubCard icon={Clock} title="Activity by hour" hint={hourTotal > 0 ? `peak ${peakHour.label}` : "when the app is used"}>
+            {hourTotal === 0 ? <Empty text="No in-app activity recorded yet." /> : (
+              <div style={{ height: 180 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={hourData} margin={{ top: 8, right: 6, left: -16, bottom: 0 }} barCategoryGap={1}>
+                    <CartesianGrid vertical={false} stroke="var(--border)" />
+                    <XAxis dataKey="label" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 10, fill: "#6b7280" }}
+                      ticks={["12a", "6a", "12p", "6p"]} interval={0} />
+                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#6b7280" }} allowDecimals={false} width={34} />
+                    <Tooltip cursor={{ fill: "rgba(11,31,51,0.05)" }} contentStyle={tip} />
+                    <Bar dataKey="events" radius={[2, 2, 0, 0]}>
+                      {hourData.map((h) => <Cell key={h.hour} fill={h.hour === peakHour.hour ? GREEN : GOLD} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
+            )}
+          </SubCard>
+          </GridCell>
+
+          {/* App-area affinity — the by_kind "content areas". Quarter. */}
+          <GridCell span={3}>
+          <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
+            <CardHeader icon={Grid2x2} title="App-area affinity" hint="events · members" />
+            {en.by_kind.length === 0 ? <div style={{ padding: 16 }}><Empty text="No app-area engagement recorded yet." /></div> : (
+              <BarList
+                padded
+                rows={[...en.by_kind].sort((a, b) => b.events - a.events).map((x, i) => ({
+                  label: kindLabel(x.kind),
+                  value: x.events,
+                  display: `${x.events.toLocaleString()}`,
+                  tag: `${x.members} ppl`,
+                  color: BRAND_TINTS[i % BRAND_TINTS.length],
+                }))}
+              />
+            )}
+          </div>
+          </GridCell>
+
+          {/* Time per app area (dwell) — Quarter. (REAL; gated on
+              screen_dwell_capture + non-empty — else honest "coming" note.) */}
+          <GridCell span={3}>
+          {showAreaDwell ? (
+            <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
+              <CardHeader icon={Clock} title="Time per app area" hint={`last 30d · ${fmtMs(areaDwellTotalMs)}`} />
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ background: "var(--secondary)" }}>
+                    <th style={thL}>APP AREA</th>
+                    <th style={thR}>TIME</th>
+                    <th style={thR}>SHARE</th>
+                    <th style={thR}>MEMBERS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {areaDwell.map((a, i) => {
+                    const share = areaDwellTotalMs > 0 ? (a.total_ms / areaDwellTotalMs) * 100 : 0;
+                    const color = BRAND_TINTS[i % BRAND_TINTS.length] ?? NAVY;
+                    return (
+                      <tr key={a.screen} style={{ borderTop: "1px solid var(--border)", background: i % 2 === 1 ? "rgba(238,240,243,0.45)" : "transparent" }}>
+                        <td style={tdL}>
+                          <span className="flex items-center gap-2">
+                            <span style={tintChip(color)}><Clock size={13} /></span>
+                            <span style={{ fontWeight: 600, color: NAVY_INK }}>{screenLabel(a.screen)}</span>
+                          </span>
+                        </td>
+                        <td style={{ ...tdR, fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 13.5, color: NAVY_INK }}>{fmtMs(a.total_ms)}</td>
+                        <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{Math.round(share)}%</td>
+                        <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{a.members.toLocaleString()}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          </div>
-          <div style={{ marginLeft: "auto", textAlign: "right" }}>
-            <div style={{ fontFamily: "var(--font-display)", fontSize: 24, color: "var(--tint-green-fg)", lineHeight: 1 }}>{active7Pct}%</div>
-            <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 2 }}>of {k.total_members}</div>
-          </div>
-        </div>
-        </GridCell>
+          ) : (
+            <SubCard icon={Clock} title="Time per app area" hint="coming">
+              <div style={{ ...comingCard, padding: 12 }} className="flex items-start gap-2">
+                <Hourglass size={12} style={{ color: "#cbd5e1", marginTop: 2, flexShrink: 0 }} />
+                <span style={{ fontSize: 11.5, color: "#9ca3af", lineHeight: 1.45 }}>
+                  Per-screen time (which areas members linger in) — coming once screen telemetry ships. Nothing here is estimated.
+                </span>
+              </div>
+            </SubCard>
+          )}
+          </GridCell>
 
-          {/* Platform split donut — compact, span 1 */}
-          <GridCell span={1}>
+          {/* ── Row of 3 — remaining usage cards ── */}
+
+          {/* Platform split — Third. */}
+          <GridCell span={4}>
           <SubCard icon={PieIcon} title="Platform split" hint={`${platTotal} devices`}>
             {platTotal === 0 ? <Empty text="No platform data yet." /> : (
               <div className="flex items-center gap-4" style={{ flexWrap: "wrap" }}>
                 <Donut data={platformData} centerLabel="Devices" centerValue={platTotal} />
-                <ul className="flex flex-col gap-2" style={{ flex: 1 }}>
+                <ul className="flex flex-col gap-2" style={{ flex: 1, minWidth: 140 }}>
                   {platformData.map((p) => (
                     <li key={p.name} className="flex items-center gap-2">
                       <span style={{ width: 9, height: 9, borderRadius: 99, background: p.color }} />
@@ -448,8 +592,8 @@ export function MemberIntelligence(): ReactElement {
           </SubCard>
           </GridCell>
 
-          {/* App version adoption — compact, span 1 */}
-          <GridCell span={1}>
+          {/* App-version adoption — Third. */}
+          <GridCell span={4}>
           <SubCard icon={Smartphone} title="App-version adoption" hint={`top ${Math.min(dv.app_versions.length, 8)}`}>
             {dv.app_versions.length === 0 ? <Empty text="No version data yet." /> : (
               <BarList
@@ -465,224 +609,110 @@ export function MemberIntelligence(): ReactElement {
           </SubCard>
           </GridCell>
 
-        {/* Top device models (REAL; gated on dv.model_capture + non-empty dv.models) — compact, span 2 */}
-        {showDeviceModels && (
-          <GridCell span={2}>
-          <SubCard icon={Smartphone} title="Top device models" hint={`top ${deviceModels.length} · model · members`}>
-            <BarList
-              rows={deviceModels.map((m, i) => ({
-                label: m.model || "Unknown",
-                value: m.members,
-                display: `${m.members}`,
-                color: i === 0 ? GREEN : BRAND_TINTS[i % BRAND_TINTS.length],
-              }))}
-            />
-          </SubCard>
-          </GridCell>
-        )}
-
-        {/* Activity by hour — medium chart, span 2 */}
-        <GridCell span={2}>
-        <SubCard icon={Clock} title="Activity by hour" hint={hourTotal > 0 ? `peak ${peakHour.label}` : "when the app is used"}>
-          {hourTotal === 0 ? <Empty text="No in-app activity recorded yet." /> : (
-            <div style={{ height: 180 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={hourData} margin={{ top: 8, right: 6, left: -16, bottom: 0 }} barCategoryGap={1}>
-                  <CartesianGrid vertical={false} stroke="var(--border)" />
-                  <XAxis dataKey="label" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 10, fill: "#6b7280" }}
-                    ticks={["12a", "6a", "12p", "6p"]} interval={0} />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#6b7280" }} allowDecimals={false} width={34} />
-                  <Tooltip cursor={{ fill: "rgba(11,31,51,0.05)" }} contentStyle={tip} />
-                  <Bar dataKey="events" radius={[2, 2, 0, 0]}>
-                    {hourData.map((h) => <Cell key={h.hour} fill={h.hour === peakHour.hour ? GREEN : GOLD} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </SubCard>
-        </GridCell>
-
-        {/* Active users — last 12 weeks (REAL; from activity.active_trend) — wide trend, full row */}
-        {activeTrendHasData && (
+          {/* Active users — last 12 weeks — Third. (REAL; from activity.active_trend.) */}
           <GridCell span={4}>
-          <SubCard icon={TrendingUp} title="Active users — last 12 weeks" hint="distinct in-app members / week">
-            <div style={{ height: 200 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={activeTrendData} margin={{ top: 8, right: 6, left: -10, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="activeTrend" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={GREEN} stopOpacity={0.28} />
-                      <stop offset="100%" stopColor={GREEN} stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid vertical={false} stroke="var(--border)" />
-                  <XAxis dataKey="week" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 10, fill: "#6b7280" }} interval="preserveStartEnd" minTickGap={18} />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#6b7280" }} allowDecimals={false} width={34} />
-                  <Tooltip cursor={{ stroke: GREEN, strokeOpacity: 0.4 }} contentStyle={tip} />
-                  <Area type="monotone" dataKey="active" name="Active members" stroke={GREEN} strokeWidth={2.5} fill="url(#activeTrend)" dot={{ r: 3, fill: GREEN }} activeDot={{ r: 5 }} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </SubCard>
-          </GridCell>
-        )}
-
-        {/* How often members use the app — active days, last 30d (REAL; the login-frequency signal) — medium, span 2 */}
-        {activeDaysHasData && (
-          <GridCell span={2}>
-          <SubCard icon={CalendarCheck} title="How often members use the app" hint="active days · last 30 days">
-            <div style={{ height: 180 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={activeDaysData} margin={{ top: 18, right: 6, left: -16, bottom: 0 }}>
-                  <CartesianGrid vertical={false} stroke="var(--border)" />
-                  <XAxis dataKey="bucket" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 11, fill: "#6b7280" }} interval={0} />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#6b7280" }} allowDecimals={false} width={34} />
-                  <Tooltip cursor={{ fill: "rgba(11,31,51,0.05)" }} contentStyle={tip} />
-                  <Bar dataKey="members" radius={[5, 5, 0, 0]} maxBarSize={48}>
-                    <LabelList dataKey="members" position="top" style={{ fontSize: 10, fontWeight: 700, fill: NAVY_INK }} />
-                    {activeDaysData.map((a) => <Cell key={a.bucket} fill={a.color} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex flex-wrap gap-x-3.5 gap-y-1.5" style={{ marginTop: 10 }}>
-              {activeDaysData.map((a) => (
-                <span key={a.bucket} className="flex items-center gap-1.5" style={{ fontSize: 10.5, color: "var(--muted-foreground)" }}>
-                  <span style={{ width: 9, height: 9, borderRadius: 3, background: a.color, display: "inline-block" }} /> {a.bucket} {a.bucket === "1" ? "day" : "days"}
-                </span>
-              ))}
-            </div>
-          </SubCard>
-          </GridCell>
-        )}
-
-        {/* Gated "coming" notes — only genuinely-missing telemetry — full row */}
-        {deviceComing.length > 0 && (
-          <GridCell span={4}>
-          <div style={comingCard}>
-            {deviceComing.map((n) => (
-              <div key={n} className="flex items-start gap-2" style={{ marginBottom: 6 }}>
-                <Hourglass size={12} style={{ color: "#cbd5e1", marginTop: 2, flexShrink: 0 }} />
-                <span style={{ fontSize: 11.5, color: "#9ca3af", lineHeight: 1.45 }}>{n}</span>
+          {activeTrendHasData ? (
+            <SubCard icon={TrendingUp} title="Active users — last 12 weeks" hint="distinct members / week">
+              <div style={{ height: 200 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={activeTrendData} margin={{ top: 8, right: 6, left: -10, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="activeTrend" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={GREEN} stopOpacity={0.28} />
+                        <stop offset="100%" stopColor={GREEN} stopOpacity={0.02} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid vertical={false} stroke="var(--border)" />
+                    <XAxis dataKey="week" tickLine={false} axisLine={{ stroke: "var(--border)" }} tick={{ fontSize: 10, fill: "#6b7280" }} interval="preserveStartEnd" minTickGap={18} />
+                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "#6b7280" }} allowDecimals={false} width={34} />
+                    <Tooltip cursor={{ stroke: GREEN, strokeOpacity: 0.4 }} contentStyle={tip} />
+                    <Area type="monotone" dataKey="active" name="Active members" stroke={GREEN} strokeWidth={2.5} fill="url(#activeTrend)" dot={{ r: 3, fill: GREEN }} activeDot={{ r: 5 }} />
+                  </AreaChart>
+                </ResponsiveContainer>
               </div>
-            ))}
-          </div>
-          </GridCell>
-        )}
-        </Grid>
-      </Section>
-
-      {/* ── 4 · App-area affinity ────────────────────────────── */}
-      <Section icon={Grid2x2} title="App-area affinity" hint="Which content members engage with most">
-        <Grid>
-        {/* Content areas — bar list, span 2 (full row when dwell table is hidden) */}
-        <GridCell span={showAreaDwell ? 2 : 4}>
-        <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
-          <CardHeader icon={Grid2x2} title="Content areas" hint="events · members" />
-          {en.by_kind.length === 0 ? <div style={{ padding: 16 }}><Empty text="No app-area engagement recorded yet." /></div> : (
-            <BarList
-              padded
-              rows={[...en.by_kind].sort((a, b) => b.events - a.events).map((x, i) => ({
-                label: kindLabel(x.kind),
-                value: x.events,
-                display: `${x.events.toLocaleString()}`,
-                tag: `${x.members} ppl`,
-                color: BRAND_TINTS[i % BRAND_TINTS.length],
-              }))}
-            />
+            </SubCard>
+          ) : (
+            <SubCard icon={TrendingUp} title="Active users — last 12 weeks" hint="distinct members / week">
+              <Empty text="No weekly-active trend recorded yet." />
+            </SubCard>
           )}
-        </div>
-        </GridCell>
-
-        {/* Time per app area (#3) — REAL; gated on screen_dwell_capture + non-empty.
-            When unavailable, the honest "per-screen time — coming" note (rendered
-            in §3 via deviceComing) stands in for it; here we show a dim inline note.
-            Wide table — span 2 (keeps 5 columns readable). */}
-        {showAreaDwell ? (
-          <GridCell span={2}>
-          <div style={{ ...cardStyle(0), overflow: "hidden", height: "100%" }}>
-            <CardHeader icon={Clock} title="Time per app area" hint={`last 30 days · ${fmtMs(areaDwellTotalMs)} total`} />
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: "var(--secondary)" }}>
-                  <th style={thL}>APP AREA</th>
-                  <th style={thR}>TIME</th>
-                  <th style={thR}>SHARE</th>
-                  <th style={thR}>SESSIONS</th>
-                  <th style={thR}>MEMBERS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {areaDwell.map((a, i) => {
-                  const share = areaDwellTotalMs > 0 ? (a.total_ms / areaDwellTotalMs) * 100 : 0;
-                  const color = BRAND_TINTS[i % BRAND_TINTS.length] ?? NAVY;
-                  return (
-                    <tr key={a.screen} style={{ borderTop: "1px solid var(--border)", background: i % 2 === 1 ? "rgba(238,240,243,0.45)" : "transparent" }}>
-                      <td style={tdL}>
-                        <span className="flex items-center gap-2.5">
-                          <span style={tintChip(color)}><Clock size={14} /></span>
-                          <span style={{ display: "inline-flex", flexDirection: "column" }}>
-                            <span style={{ fontWeight: 600, color: NAVY_INK }}>{screenLabel(a.screen)}</span>
-                            {/* thin share bar under the label */}
-                            <span style={{ marginTop: 4, height: 5, width: 120, borderRadius: 99, background: "var(--border)", overflow: "hidden", display: "inline-block" }}>
-                              <span style={{ display: "block", width: `${Math.max(4, share)}%`, height: "100%", borderRadius: 99, background: color }} />
-                            </span>
-                          </span>
-                        </span>
-                      </td>
-                      <td style={{ ...tdR, fontFamily: "var(--font-display)", fontWeight: 600, fontSize: 14.5, color: NAVY_INK }}>{fmtMs(a.total_ms)}</td>
-                      <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{Math.round(share)}%</td>
-                      <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{a.sessions.toLocaleString()}</td>
-                      <td style={{ ...tdR, color: "var(--muted-foreground)" }}>{a.members.toLocaleString()}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
           </GridCell>
-        ) : (
-          <GridCell span={4}>
-          <div style={{ ...comingCard }}>
-            <div className="flex items-start gap-2">
-              <Hourglass size={12} style={{ color: "#cbd5e1", marginTop: 2, flexShrink: 0 }} />
-              <span style={{ fontSize: 11.5, color: "#9ca3af", lineHeight: 1.45 }}>
-                Per-screen time (which areas members linger in) — coming once screen telemetry ships. Nothing here is estimated.
+
+          {/* Gated "coming" notes — genuinely-missing login telemetry only. Full row.
+              (Device-model & per-screen-dwell notes now live inline in their cards
+              above; this carries only the remaining login-timestamp note.) */}
+          {!en.login_capture && (
+            <GridCell span={12}>
+            <div style={comingCard}>
+              <div className="flex items-start gap-2">
+                <Hourglass size={12} style={{ color: "#cbd5e1", marginTop: 2, flexShrink: 0 }} />
+                <span style={{ fontSize: 11.5, color: "#9ca3af", lineHeight: 1.45 }}>
+                  Exact sign-in timestamps aren't captured yet — but the active-users trend and active-days frequency above are real.
+                </span>
+              </div>
+            </div>
+            </GridCell>
+          )}
+
+          {/* → Finance pointer — fund / channel / ledger detail lives there. Full row. */}
+          <GridCell span={12}>
+          <Link to="/finance" style={{ textDecoration: "none" }}>
+            <div style={{ ...cardStyle(14) }} className="flex items-center gap-2.5">
+              <span style={{ width: 32, height: 32, borderRadius: 9, background: "var(--tint-gold-bg)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                <Wallet size={15} style={{ color: "var(--tint-gold-fg)" }} />
+              </span>
+              <span style={{ fontSize: 12.5, color: "var(--muted-foreground)", lineHeight: 1.45 }}>
+                Fund, channel &amp; ledger detail — giving by fund, monthly trend and recurring-by-method —
+                live on the <span style={{ color: NAVY, fontWeight: 600 }}>Finance</span> page.
+              </span>
+              <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 600, color: NAVY, flexShrink: 0, whiteSpace: "nowrap" }}>
+                Finance →
               </span>
             </div>
-          </div>
+          </Link>
           </GridCell>
-        )}
         </Grid>
       </Section>
 
       {/* ── 5 · Engagement & growth ──────────────────────────── */}
       <Section icon={PieIcon} title="Engagement & growth" hint={`${bandTotal} members · ${pct1(k.avg_engagement)} avg score`}>
         <Grid>
-          {/* Engagement bands donut — compact, span 2 (donut + legend) */}
-          <GridCell span={2}>
+          {/* ── Row of 3 ── */}
+
+          {/* Engagement bands donut — Third. */}
+          <GridCell span={4}>
           <SubCard icon={PieIcon} title="Engagement bands" hint={`${bandTotal} members`}>
-            <div className="flex items-center gap-4" style={{ flexWrap: "wrap" }}>
+            <div className="flex items-center justify-center" style={{ minHeight: 150 }}>
               <Donut data={bandTotal === 0 ? [{ name: "None", value: 1, color: "var(--border)" }] : bandData} centerLabel="Members" centerValue={bandTotal} />
-              <ul className="flex flex-col gap-2" style={{ flex: 1 }}>
-                {bandData.map((b) => (
-                  <li key={b.name} className="flex items-center gap-2">
+            </div>
+          </SubCard>
+          </GridCell>
+
+          {/* Band breakdown — Third. (Same band data, list form.) */}
+          <GridCell span={4}>
+          <SubCard icon={BarChart3} title="Band breakdown" hint="members per band">
+            <ul className="flex flex-col gap-3" style={{ marginTop: 4 }}>
+              {bandData.map((b) => (
+                <li key={b.name}>
+                  <div className="flex items-center gap-2" style={{ marginBottom: 5 }}>
                     <span style={{ width: 9, height: 9, borderRadius: 99, background: b.color }} />
                     <span style={{ fontSize: 12.5, fontWeight: 600, color: NAVY_INK }}>{b.name}</span>
                     <span style={{ marginLeft: "auto", fontFamily: "var(--font-display)", fontSize: 15, color: NAVY_INK }}>{b.value}</span>
                     <span style={{ fontSize: 11, color: "var(--muted-foreground)", width: 38, textAlign: "right" }}>
                       {bandTotal > 0 ? Math.round((b.value / bandTotal) * 100) : 0}%
                     </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+                  </div>
+                  <div style={{ height: 7, borderRadius: 99, background: "var(--border)", overflow: "hidden" }}>
+                    <div style={{ width: `${bandTotal > 0 ? (b.value / bandTotal) * 100 : 0}%`, height: "100%", borderRadius: 99, background: b.color }} />
+                  </div>
+                </li>
+              ))}
+            </ul>
           </SubCard>
           </GridCell>
 
-          {/* Per-level distribution — medium chart, span 2 */}
-          <GridCell span={2}>
+          {/* Per-level distribution — Third. */}
+          <GridCell span={4}>
           <SubCard icon={BarChart3} title="Per-level distribution" hint="learners & completions">
             {!levelHasData ? <Empty text="No level enrolment recorded yet." /> : (
               <div style={{ height: 188 }}>
@@ -702,21 +732,21 @@ export function MemberIntelligence(): ReactElement {
           </SubCard>
           </GridCell>
 
-          {/* Word & curriculum growth tiles — compact, span 1 each */}
-          <GridCell span={1}><Kpi icon={BookOpen} tint="green" label="Verse learners" value={gr.verse_learners} /></GridCell>
-          <GridCell span={1}><Kpi icon={BadgeCheck} tint="gold" label="Verses mastered" value={gr.verses_mastered} /></GridCell>
-          <GridCell span={1}><Kpi icon={CalendarCheck} tint="navy" label="Plans completed" value={gr.plans_completed} /></GridCell>
-          <GridCell span={1}><Kpi icon={CalendarDays} tint="teal" label="Plans active" value={gr.plans_active} /></GridCell>
-          <GridCell span={1}><Kpi icon={HelpCircle} tint="violet" label="Quiz attempts" value={gr.quiz_attempts} /></GridCell>
-          <GridCell span={1}><Kpi icon={CheckCircle2} tint="amber" label={`Quiz passed · ${passRate}%`} value={gr.quiz_passed} /></GridCell>
+          {/* ── Row of 6 — growth stat tiles (sixth each) ── */}
+          <GridCell span={2}><Kpi icon={BookOpen} tint="green" label="Verse learners" value={gr.verse_learners} small /></GridCell>
+          <GridCell span={2}><Kpi icon={BadgeCheck} tint="gold" label="Verses mastered" value={gr.verses_mastered} small /></GridCell>
+          <GridCell span={2}><Kpi icon={CalendarCheck} tint="navy" label="Plans completed" value={gr.plans_completed} small /></GridCell>
+          <GridCell span={2}><Kpi icon={CalendarDays} tint="teal" label="Plans active" value={gr.plans_active} small /></GridCell>
+          <GridCell span={2}><Kpi icon={HelpCircle} tint="violet" label="Quiz attempts" value={gr.quiz_attempts} small /></GridCell>
+          <GridCell span={2}><Kpi icon={CheckCircle2} tint="amber" label={`Quiz passed · ${passRate}%`} value={gr.quiz_passed} small /></GridCell>
         </Grid>
       </Section>
 
       {/* ── 6 · Location ─────────────────────────────────────── */}
       <Section icon={MapPin} title="Location" hint="Where your people are — coarse, free-text">
         <Grid>
-          {/* By city — medium, span 2 */}
-          <GridCell span={2}>
+          {/* By city — Third. */}
+          <GridCell span={4}>
           <SubCard icon={Building2} title="Members by city" hint={`top ${Math.min(loc.by_city.filter((c) => c.members > 0).length, 10)}`}>
             <BarList
               rows={[...loc.by_city].filter((c) => c.members > 0).sort((a, b) => b.members - a.members).slice(0, 10)
@@ -726,8 +756,8 @@ export function MemberIntelligence(): ReactElement {
           </SubCard>
           </GridCell>
 
-          {/* By country — medium, span 2 */}
-          <GridCell span={2}>
+          {/* By country — Third. */}
+          <GridCell span={4}>
           <SubCard icon={Globe} title="Members by country" hint={`top ${Math.min(loc.by_country.filter((c) => c.members > 0).length, 8)}`}>
             <BarList
               showPct
@@ -738,10 +768,11 @@ export function MemberIntelligence(): ReactElement {
           </SubCard>
           </GridCell>
 
-        {/* Proximity coming — gated on geo_capture, no fake coordinates — full row */}
+        {/* Location & proximity matching — gated on geo_capture, no fake
+            coordinates — "coming soon" card. Third (completes the row of 3). */}
         {!loc.geo_capture && (
           <GridCell span={4}>
-          <div style={{ ...cardStyle(18) }}>
+          <div style={{ ...cardStyle(18), height: "100%" }}>
             <div className="flex items-center gap-2.5">
               <span style={{ width: 36, height: 36, borderRadius: 11, background: "var(--tint-violet-bg)", display: "grid", placeItems: "center" }}>
                 <Sparkles size={18} style={{ color: "var(--tint-violet-fg)" }} />
@@ -811,27 +842,41 @@ const tintBg = (t: Tint): string => (t === "teal" ? "#e2f4f1" : `var(--tint-${t}
 const tintFg = (t: Tint): string => (t === "teal" ? TEAL : `var(--tint-${t}-fg)`);
 
 // ── Dense dashboard grid ──────────────────────────────────────────────────────
-// A 4-column grid at xl that collapses to 2 (≤1100px) then 1 (≤640px). Each
-// child declares how many columns it spans via <GridCell span={1|2|4}>. Spans are
-// clamped to the live column count by the responsive CSS below so a span-4 card
-// never overflows a 2- or 1-column layout. One scoped <style> drives the media
-// queries (inline styles can't express them); the brand palette, fonts and card
-// shadows are untouched — this is pure layout.
+// A 12-column grid at xl so cards can lay out cleanly into rows of 4 (span 3),
+// rows of 3 (span 4), rows of 6 (span 2), halves (span 6) and full-width tables
+// (span 12). It collapses to 6 columns (≤1100px) then 1 (≤640px). Each child
+// declares how many of the 12 columns it spans via <GridCell span={…}>. The
+// responsive CSS below remaps spans so nothing overflows a 6- or 1-column layout
+// (e.g. a span-3 quarter becomes a span-3 = half of 6 at the mid breakpoint, a
+// span-2 sixth becomes a span-2 = third of 6, etc.). One scoped <style> drives
+// the media queries (inline styles can't express them); the brand palette, fonts
+// and card shadows are untouched — this is pure layout.
+//
+// Span vocabulary (out of 12): 12 = full · 6 = half · 4 = third (row of 3) ·
+// 3 = quarter (row of 4) · 2 = sixth (row of 6).
+type Span = 2 | 3 | 4 | 6 | 12;
 const GRID_CSS = `
-.mi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+.mi-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
 .mi-grid > .mi-cell { min-width: 0; }
 .mi-grid > .mi-cell > * { height: 100%; box-sizing: border-box; }
-.mi-cell.mi-span-1 { grid-column: span 1; }
 .mi-cell.mi-span-2 { grid-column: span 2; }
+.mi-cell.mi-span-3 { grid-column: span 3; }
 .mi-cell.mi-span-4 { grid-column: span 4; }
+.mi-cell.mi-span-6 { grid-column: span 6; }
+.mi-cell.mi-span-12 { grid-column: span 12; }
 @media (max-width: 1100px) {
-  .mi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .mi-cell.mi-span-2, .mi-cell.mi-span-4 { grid-column: span 2; }
-  .mi-cell.mi-span-1 { grid-column: span 1; }
+  /* 6-column mid layout: quarters→halves, thirds→halves, sixths→thirds */
+  .mi-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .mi-cell.mi-span-2 { grid-column: span 2; }   /* sixth → third of 6 */
+  .mi-cell.mi-span-3 { grid-column: span 3; }   /* quarter → half of 6 */
+  .mi-cell.mi-span-4 { grid-column: span 3; }   /* third → half of 6 */
+  .mi-cell.mi-span-6 { grid-column: span 6; }   /* half → full */
+  .mi-cell.mi-span-12 { grid-column: span 6; }  /* full → full */
 }
 @media (max-width: 640px) {
   .mi-grid { grid-template-columns: minmax(0, 1fr); }
-  .mi-cell.mi-span-1, .mi-cell.mi-span-2, .mi-cell.mi-span-4 { grid-column: span 1; }
+  .mi-cell.mi-span-2, .mi-cell.mi-span-3, .mi-cell.mi-span-4,
+  .mi-cell.mi-span-6, .mi-cell.mi-span-12 { grid-column: span 1; }
 }
 `;
 function Grid({ children }: { children: ReactNode }): ReactElement {
@@ -842,7 +887,7 @@ function Grid({ children }: { children: ReactNode }): ReactElement {
     </>
   );
 }
-function GridCell({ span, children }: { span: 1 | 2 | 4; children: ReactNode }): ReactElement {
+function GridCell({ span, children }: { span: Span; children: ReactNode }): ReactElement {
   return <div className={`mi-cell mi-span-${span}`}>{children}</div>;
 }
 
