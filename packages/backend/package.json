@@ -21,7 +21,8 @@
     "import:curriculum": "node scripts/import-curriculum.mjs",
     "seed:curriculum": "node scripts/seed-curriculum.mjs",
     "seed:dev-disciples": "node scripts/seed-dev-disciples.mjs",
-    "seed:mobile-demo": "node scripts/seed-mobile-demo.mjs"
+    "seed:mobile-demo": "node scripts/seed-mobile-demo.mjs",
+    "seed:home-demo": "node scripts/seed-home-demo.mjs"
   },
   "dependencies": {
     "@nuru/shared": "workspace:*",
