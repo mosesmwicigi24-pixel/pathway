@@ -277,18 +277,33 @@ export function MemberIntelligence(): ReactElement {
         </div>
       </div>
 
-      {/* ── 1 · KPI strip (pastel tinted cards) ──────────────── */}
-      <Section icon={Users} title="Overview" hint="Live membership, engagement & giving signal">
-        <Grid>
-          <GridCell span={3}><Kpi icon={Users} tint="navy" label="Total members" value={k.total_members} /></GridCell>
-          <GridCell span={3}><Kpi icon={Smartphone} tint="green" label="Active (7d)" value={k.active_7d} /></GridCell>
-          <GridCell span={3}><Kpi icon={CalendarDays} tint="teal" label="Active (30d)" value={k.active_30d} /></GridCell>
-          <GridCell span={3}><Kpi icon={TrendingUp} tint="gold" label="Avg engagement" value={pct1(k.avg_engagement)} /></GridCell>
-          <GridCell span={3}><Kpi icon={Activity} tint="rose" label="Members at risk" value={k.members_at_risk} /></GridCell>
-          <GridCell span={3}><Kpi icon={BadgeCheck} tint="green" label="Givers" value={k.givers} /></GridCell>
-          <GridCell span={3}><Kpi icon={Repeat} tint="violet" label="Recurring givers" value={k.recurring_givers} /></GridCell>
-          <GridCell span={3}><Kpi icon={Trophy} tint="amber" label="Certificates (mo.)" value={k.certificates_this_month} /></GridCell>
-        </Grid>
+      {/* ── 1 · Overview block (two coherent strips at the top of the page) ──
+          A single row of 8 KPI tiles (membership · engagement · giving · certs),
+          then a single row of 6 growth stat tiles directly beneath — same tile
+          styling so the two rows read as one overview block. Both strips use
+          dedicated equal-column grids (8-up / 6-up) that step down responsively,
+          not the 12-col dashboard grid used by the rest of the page. */}
+      <Section icon={Users} title="Overview" hint="Live membership, engagement, giving & growth signal">
+        <Strip cols={8}>
+          <Kpi icon={Users} tint="navy" label="Total members" value={k.total_members} />
+          <Kpi icon={Smartphone} tint="green" label="Active (7d)" value={k.active_7d} />
+          <Kpi icon={CalendarDays} tint="teal" label="Active (30d)" value={k.active_30d} />
+          <Kpi icon={TrendingUp} tint="gold" label="Avg engagement" value={pct1(k.avg_engagement)} />
+          <Kpi icon={Activity} tint="rose" label="Members at risk" value={k.members_at_risk} />
+          <Kpi icon={BadgeCheck} tint="green" label="Givers" value={k.givers} />
+          <Kpi icon={Repeat} tint="violet" label="Recurring givers" value={k.recurring_givers} />
+          <Kpi icon={Trophy} tint="amber" label="Certificates (mo.)" value={k.certificates_this_month} />
+        </Strip>
+        <div style={{ marginTop: 16 }}>
+          <Strip cols={6}>
+            <Kpi icon={BookOpen} tint="green" label="Verse learners" value={gr.verse_learners} small />
+            <Kpi icon={BadgeCheck} tint="gold" label="Verses mastered" value={gr.verses_mastered} small />
+            <Kpi icon={CalendarCheck} tint="navy" label="Plans completed" value={gr.plans_completed} small />
+            <Kpi icon={CalendarDays} tint="teal" label="Plans active" value={gr.plans_active} small />
+            <Kpi icon={HelpCircle} tint="violet" label="Quiz attempts" value={gr.quiz_attempts} small />
+            <Kpi icon={CheckCircle2} tint="amber" label={`Quiz passed · ${passRate}%`} value={gr.quiz_passed} small />
+          </Strip>
+        </div>
       </Section>
 
       {/* ── 2 · Usage, giving & devices ──────────────────────────
@@ -731,14 +746,6 @@ export function MemberIntelligence(): ReactElement {
             )}
           </SubCard>
           </GridCell>
-
-          {/* ── Row of 6 — growth stat tiles (sixth each) ── */}
-          <GridCell span={2}><Kpi icon={BookOpen} tint="green" label="Verse learners" value={gr.verse_learners} small /></GridCell>
-          <GridCell span={2}><Kpi icon={BadgeCheck} tint="gold" label="Verses mastered" value={gr.verses_mastered} small /></GridCell>
-          <GridCell span={2}><Kpi icon={CalendarCheck} tint="navy" label="Plans completed" value={gr.plans_completed} small /></GridCell>
-          <GridCell span={2}><Kpi icon={CalendarDays} tint="teal" label="Plans active" value={gr.plans_active} small /></GridCell>
-          <GridCell span={2}><Kpi icon={HelpCircle} tint="violet" label="Quiz attempts" value={gr.quiz_attempts} small /></GridCell>
-          <GridCell span={2}><Kpi icon={CheckCircle2} tint="amber" label={`Quiz passed · ${passRate}%`} value={gr.quiz_passed} small /></GridCell>
         </Grid>
       </Section>
 
@@ -890,6 +897,36 @@ function Grid({ children }: { children: ReactNode }): ReactElement {
 }
 function GridCell({ span, children }: { span: Span; children: ReactNode }): ReactElement {
   return <div className={`mi-cell mi-span-${span}`}>{children}</div>;
+}
+
+// ── Overview strips ───────────────────────────────────────────────────────────
+// Equal-column tile rows used only by the top-of-page Overview block: an 8-up KPI
+// row and a 6-up growth-stat row. Unlike the 12-col dashboard grid, every child
+// is one equal fraction of the row (no per-cell spans). Both step down cleanly:
+//   8-up: 8 → 4 → 2   ·   6-up: 6 → 3 → 2   (single column ≤640px)
+// Equal heights come free from grid stretch (Kpi already fills height:100%).
+const STRIP_CSS = `
+.mi-strip { display: grid; gap: 16px; align-items: stretch; }
+.mi-strip-8 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.mi-strip-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@media (max-width: 1100px) {
+  .mi-strip-8 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .mi-strip-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .mi-strip-8, .mi-strip-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 380px) {
+  .mi-strip-8, .mi-strip-6 { grid-template-columns: minmax(0, 1fr); }
+}
+`;
+function Strip({ cols, children }: { cols: 6 | 8; children: ReactNode }): ReactElement {
+  return (
+    <>
+      <style>{STRIP_CSS}</style>
+      <div className={`mi-strip mi-strip-${cols}`}>{children}</div>
+    </>
+  );
 }
 
 function Kpi({ icon: Icon, label, value, tint, small }: { icon: LucideIcon; label: string; value: number | string; tint: Tint; small?: boolean }): ReactElement {
