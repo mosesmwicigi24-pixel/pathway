@@ -134,6 +134,33 @@ try {
     await c.query("INSERT INTO rbac_user_roles (user_id, role_key) VALUES ($1,'discipler') ON CONFLICT DO NOTHING", [leader]);
   }
 
+  // ----------------------------------------------- 3b. mentorship pairing (/growth/mentor)
+  // Pair the member with Pastor Miriam as their discipler + a few meeting notes.
+  const mentorId = ID.disc1;
+  await c.query(
+    `INSERT INTO relationship_tree (multiplier_id, disciple_id, established_at)
+     VALUES ($1,$2, now() - interval '4 months')
+     ON CONFLICT (disciple_id) DO UPDATE SET multiplier_id = EXCLUDED.multiplier_id, established_at = EXCLUDED.established_at`,
+    [mentorId, me],
+  );
+  const noteIds = [0, 1, 2].map((i) => `de300000-0000-0000-0000-0000000009${i}0`);
+  await c.query("DELETE FROM mentor_notes WHERE note_id = ANY($1)", [noteIds]);
+  const notes = [
+    { topic: "Getting started on the Pathway", note: "Talked through Foundations and what a daily rhythm looks like. Ada is hungry to grow — encouraged her to keep the streak.", metDays: 90, nextDays: null },
+    { topic: "Two Roads reflection", note: "Great conversation on Psalm 1. Set a goal to memorise one verse a week and lead a prayer at cell.", metDays: 30, nextDays: null },
+    { topic: "Check-in & next steps", note: "Reviewed progress (20/30 modules!). Planning baptism class next month. Keep leaning into community.", metDays: 5, nextDays: 4 },
+  ];
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    await c.query(
+      `INSERT INTO mentor_notes (note_id, user_id, mentor_user_id, topic, note, met_at, next_meeting_at)
+       VALUES ($1,$2,$3,$4,$5, now() - ($6 || ' days')::interval, ${n.nextDays == null ? "NULL" : "now() + ($7 || ' days')::interval"})`,
+      n.nextDays == null
+        ? [noteIds[i], me, mentorId, n.topic, n.note, String(n.metDays)]
+        : [noteIds[i], me, mentorId, n.topic, n.note, String(n.metDays), String(n.nextDays)],
+    );
+  }
+
   // ---------------------------------------------------------------- 4. prayer wall (home + wall)
   const authors = [leader || me, ID.disc1, me, ID.disc2, me];
   const prayers = [
@@ -241,7 +268,7 @@ try {
 
   await c.query("COMMIT");
   console.log("✓ seeded home/discovery demo content for student1@dev.local");
-  console.log("  welcome video · featured cell · 3 disciplers · 5 prayers · 4 series (1 featured, 2 followed) · 3 announcements (1 featured) · 6 moments");
+  console.log("  welcome video · featured cell · 3 disciplers · mentor pairing + 3 notes · 5 prayers · 4 series (1 featured, 2 followed) · 3 announcements (1 featured) · 6 moments");
 } catch (e) {
   await c.query("ROLLBACK").catch(() => {});
   console.error("seed-home-demo failed:", e.message);
