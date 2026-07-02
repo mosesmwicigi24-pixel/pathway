@@ -114,6 +114,8 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | Countries | /admin/countries | ✅ | ✅ | Parity (no delete either side) |
 | Languages | /admin/languages | ✅ | ✅ | Parity |
 | My Profile | /me (+password, activity) | ✅ | ✅ | Parity |
+| **Radio Studio** | `/admin/radio/programs` (+go-live/end/rotate-key/health/comments) | ✅ | ✅ | **NEW 2026-07-02** — live broadcast console; real `StreamProvider` abstraction (fake default, cloudflare/mux/rtmp via `RADIO_STREAM_PROVIDER`+creds). Member `/radio/*` API shipped for mobile (next). Real audio playback pending a media-server provider + creds |
+| **Audio Mixer** | `/admin/radio/mixer/{scenes,jingles}` | ✅ | ✅ | **NEW 2026-07-02** — broadcaster console; scenes/jingles persist to DB (admin-only; not a member surface). Jingle audio upload uses a placeholder URL until an audio-media pipeline lands |
 | Module Preview (learner) | /admin/modules/:id (+questions) | ✅ | ❌ | **D-06** iPad has no standalone learner-preview |
 | Reset Password page | /auth/password/reset | ✅ | ❌ | Minor — iPad login only |
 
