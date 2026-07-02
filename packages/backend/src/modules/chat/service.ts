@@ -50,6 +50,11 @@ export class ChatService {
 
   static readonly CreateDm = z.object({ user_id: z.string().uuid() });
 
+  static readonly Broadcast = z.object({
+    body: z.string().min(1).max(20_000),
+    client_mutation_id: z.string().uuid().optional(),
+  });
+
   static readonly CreateSpace = z.object({
     conversation_id: z.string().uuid(),
     title: z.string().min(3).max(200),
@@ -551,29 +556,86 @@ export class ChatService {
       // The DM is filed under the initiator's congregation (or the other member's,
       // for a not-yet-onboarded staff account).
       const dmCongregation = me.congregation_id ?? other.congregation_id;
+      const conversationId = await this.ensureDm(c, userId, otherUserId, dmCongregation);
+      return { conversation_id: conversationId };
+    });
+  }
 
-      const existing = await maybeOne<{ conversation_id: string }>(
-        c,
-        `SELECT cv.conversation_id FROM chat_conversations cv
-          WHERE cv.kind = 'dm'
-            AND EXISTS (SELECT 1 FROM chat_members a WHERE a.conversation_id = cv.conversation_id AND a.user_id = $1)
-            AND EXISTS (SELECT 1 FROM chat_members b WHERE b.conversation_id = cv.conversation_id AND b.user_id = $2)
-          LIMIT 1`,
-        [userId, otherUserId],
-      );
-      if (existing) return { conversation_id: existing.conversation_id };
+  /** Find-or-create the 1:1 DM between two users — the raw ensure step shared by
+   *  createOrGetDm and broadcast. No policy checks here; callers gate first. */
+  private async ensureDm(c: Queryable, userId: string, otherUserId: string, congregationId: string | null): Promise<string> {
+    const existing = await maybeOne<{ conversation_id: string }>(
+      c,
+      `SELECT cv.conversation_id FROM chat_conversations cv
+        WHERE cv.kind = 'dm'
+          AND EXISTS (SELECT 1 FROM chat_members a WHERE a.conversation_id = cv.conversation_id AND a.user_id = $1)
+          AND EXISTS (SELECT 1 FROM chat_members b WHERE b.conversation_id = cv.conversation_id AND b.user_id = $2)
+        LIMIT 1`,
+      [userId, otherUserId],
+    );
+    if (existing) return existing.conversation_id;
 
-      const convo = await one<{ conversation_id: string }>(
-        c,
-        `INSERT INTO chat_conversations (conversation_id, kind, congregation_id, created_by)
-         VALUES (gen_random_uuid(), 'dm', $1, $2) RETURNING conversation_id`,
-        [dmCongregation, userId],
-      );
-      await c.query(
-        `INSERT INTO chat_members (conversation_id, user_id) VALUES ($1, $2), ($1, $3)`,
-        [convo.conversation_id, userId, otherUserId],
-      );
-      return { conversation_id: convo.conversation_id };
+    const convo = await one<{ conversation_id: string }>(
+      c,
+      `INSERT INTO chat_conversations (conversation_id, kind, congregation_id, created_by)
+       VALUES (gen_random_uuid(), 'dm', $1, $2) RETURNING conversation_id`,
+      [congregationId, userId],
+    );
+    await c.query(
+      `INSERT INTO chat_members (conversation_id, user_id) VALUES ($1, $2), ($1, $3)`,
+      [convo.conversation_id, userId, otherUserId],
+    );
+    return convo.conversation_id;
+  }
+
+  /** Everyone a broadcast reaches: active members of the sender's congregation,
+   *  excluding the sender, soft-deleted accounts, and minors (D-M6 — a broadcast
+   *  materializes DMs, and DMs with minors are forbidden everywhere). */
+  private async broadcastRecipients(c: Queryable, senderId: string): Promise<string[]> {
+    const me = await this.me(c, senderId);
+    if (!me.congregation_id) throw new ApiError("UNPROCESSABLE", "You need a congregation to broadcast");
+    const rows = await many<{ user_id: string }>(
+      c,
+      `SELECT user_id FROM users
+        WHERE congregation_id = $1 AND user_id <> $2 AND deleted_at IS NULL AND is_minor = FALSE
+        ORDER BY user_id`,
+      [me.congregation_id, senderId],
+    );
+    return rows.map((r) => r.user_id);
+  }
+
+  /**
+   * Staff broadcast (Instructor+ — gated at the route, §5.4): deliver ONE message
+   * to EVERY active member of the sender's congregation as an individual DM from
+   * the sender. No group room — each member replies in their own 1:1 thread,
+   * which lands back in the sender's inbox like any DM. Message ids are
+   * server-minted (gen_random_uuid — the client never chooses them); the whole
+   * fan-out is one transaction, so it lands for everyone or no one. Idempotent
+   * on client_mutation_id (§3.6): the id is stamped on the first delivered copy
+   * (the column is UNIQUE), so a replay short-circuits to a no-op.
+   */
+  async broadcast(senderId: string, input: z.infer<typeof ChatService.Broadcast>): Promise<{ sent: number; duplicate: boolean }> {
+    return tx(this.pool, async (c) => {
+      if (input.client_mutation_id) {
+        const dup = await maybeOne(c, `SELECT 1 FROM chat_messages WHERE client_mutation_id = $1`, [input.client_mutation_id]);
+        if (dup) return { sent: (await this.broadcastRecipients(c, senderId)).length, duplicate: true };
+      }
+      const recipients = await this.broadcastRecipients(c, senderId);
+      const me = await this.me(c, senderId);
+      let stampedMutationId = false;
+      for (const otherUserId of recipients) {
+        const conversationId = await this.ensureDm(c, senderId, otherUserId, me.congregation_id);
+        const msg = await one<{ message_id: string }>(
+          c,
+          `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type, client_mutation_id)
+           VALUES (gen_random_uuid(), $1, $2, $3, 'text', $4) RETURNING message_id`,
+          [conversationId, senderId, input.body, stampedMutationId ? null : input.client_mutation_id ?? null],
+        );
+        stampedMutationId = true;
+        await c.query(`UPDATE chat_conversations SET updated_at = now() WHERE conversation_id = $1`, [conversationId]);
+        await recordChange(c, "chat_messages", msg.message_id, null, "upsert");
+      }
+      return { sent: recipients.length, duplicate: false };
     });
   }
 

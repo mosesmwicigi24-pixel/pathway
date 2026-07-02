@@ -460,5 +460,85 @@ describe("inbox row counters (message_count + reaction_count)", () => {
   });
 });
 
+describe("broadcast (staff → every congregation member as an individual DM)", () => {
+  it("delivers one message to each member as a 1:1 DM from the sender; replay is a no-op; Students get 403", async () => {
+    // Fresh congregation so the count is exact: an Admin sender + 2 members
+    // (+ a minor, who must be skipped — DMs never touch minors, D-M6).
+    const cong2 = await createCongregation("Broadcast Branch");
+    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "pastor@dev.local", fullName: "Pastor Pat" });
+    const m1 = await createUser({ congregationId: cong2, email: "m1@dev.local", fullName: "Member One" });
+    const m2 = await createUser({ congregationId: cong2, email: "m2@dev.local", fullName: "Member Two" });
+    await createUser({ congregationId: cong2, email: "kid2@dev.local", fullName: "Kid Two", dateOfBirth: "2016-06-06" });
+    const senderTok = bearer({ sub: sender.user_id, role: "Admin", cong: cong2 });
+    const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
+    const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });
+
+    // A Student may not broadcast (route is Instructor+).
+    const denied = await agent().post("/v1/chat/broadcast").set(auth(m1Tok))
+      .send({ body: "hijack the pulpit", client_mutation_id: uuid(97) });
+    expect(denied.status).toBe(403);
+    expect(denied.body.error.code).toBe("FORBIDDEN_SCOPE");
+
+    const res = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
+      .send({ body: "Service moves to 10am this Sunday 🙏", client_mutation_id: uuid(98) });
+    expect(res.status).toBe(201);
+    expect(res.body.sent).toBe(2); // minor + sender excluded
+    expect(res.body.duplicate).toBe(false);
+
+    // Each member finds a personal DM from the sender with the message — and can reply in it.
+    for (const tok of [m1Tok, m2Tok]) {
+      const inbox = await agent().get("/v1/chat/conversations").set(auth(tok));
+      const dm = (inbox.body.conversations as Array<{ conversation_id: string; kind: string; title: string; last_body: string }>)
+        .find((c) => c.kind === "dm")!;
+      expect(dm).toBeDefined();
+      expect(dm.title).toBe("Pastor Pat");
+      expect(dm.last_body).toBe("Service moves to 10am this Sunday 🙏");
+      const thread = await agent().get(`/v1/chat/conversations/${dm.conversation_id}`).set(auth(tok));
+      const msgs = thread.body.messages as Array<{ body: string; author_user_id: string; message_id: string }>;
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0]!.author_user_id).toBe(sender.user_id);
+      expect(msgs[0]!.message_id).toBe(msgs[0]!.message_id.toLowerCase()); // server-minted lowercase id
+    }
+
+    // The two DMs are distinct conversations (individual threads, no group room).
+    const senderInbox = await agent().get("/v1/chat/conversations?scope=mine").set(auth(senderTok));
+    const dms = (senderInbox.body.conversations as Array<{ kind: string }>).filter((c) => c.kind === "dm");
+    expect(dms).toHaveLength(2);
+
+    // Replaying the same client_mutation_id is a no-op: no new messages anywhere.
+    const replay = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
+      .send({ body: "Service moves to 10am this Sunday 🙏", client_mutation_id: uuid(98) });
+    expect(replay.status).toBe(201);
+    expect(replay.body.duplicate).toBe(true);
+    expect(replay.body.sent).toBe(2);
+    const count = await testPool().query(
+      `SELECT count(*)::int AS n FROM chat_messages WHERE body = $1`,
+      ["Service moves to 10am this Sunday 🙏"],
+    );
+    expect(count.rows[0].n).toBe(2);
+  });
+
+  it("re-broadcasting (new client_mutation_id) reuses the existing DMs instead of creating new ones", async () => {
+    const cong2 = await createCongregation("Broadcast Branch 2");
+    const sender = await createUser({ congregationId: cong2, role: "Instructor", email: "lead@dev.local", fullName: "Lead Lee" });
+    const m1 = await createUser({ congregationId: cong2, email: "bm1@dev.local", fullName: "Bee One" });
+    const senderTok = bearer({ sub: sender.user_id, role: "Instructor", cong: cong2 });
+    const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
+
+    const first = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
+      .send({ body: "first word", client_mutation_id: uuid(95) });
+    expect(first.body).toEqual({ sent: 1, duplicate: false });
+    const second = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
+      .send({ body: "second word", client_mutation_id: uuid(96) });
+    expect(second.body).toEqual({ sent: 1, duplicate: false });
+
+    const inbox = await agent().get("/v1/chat/conversations").set(auth(m1Tok));
+    const dms = (inbox.body.conversations as Array<{ conversation_id: string; kind: string }>).filter((c) => c.kind === "dm");
+    expect(dms).toHaveLength(1); // same thread, two messages
+    const thread = await agent().get(`/v1/chat/conversations/${dms[0]!.conversation_id}`).set(auth(m1Tok));
+    expect((thread.body.messages as unknown[]).length).toBe(2);
+  });
+});
+
 // keep references used (lint)
 void aId;

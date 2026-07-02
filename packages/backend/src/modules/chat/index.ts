@@ -97,6 +97,15 @@ export function registerChat(ctx: AppContext): Router {
     res.status(201).json(await svc.createOrGetDm(p.userId, input.user_id, p.role));
   }));
 
+  // Staff broadcast (Instructor+ per requireRole — Students get 403): one message
+  // delivered to every active member of the sender's congregation as an individual
+  // DM from the sender (ensure-DM + insert, no group room). Replies come back as
+  // normal 1:1 threads. Idempotent on client_mutation_id (§3.6).
+  r.post("/chat/broadcast", auth, requireRole("Instructor"), handler(async (req, res) => {
+    const input = parseBody(ChatService.Broadcast, req.body);
+    res.status(201).json(await svc.broadcast(requirePrincipal(req).userId, input));
+  }));
+
   // Open a cell's group conversation (provisioning it on first use). Scope-checked
   // against the actor's leader_assignments (Admin/SuperAdmin pass). Backs the
   // portal Cell Engagement "Message cell" action.

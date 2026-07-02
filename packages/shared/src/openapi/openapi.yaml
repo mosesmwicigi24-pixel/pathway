@@ -3277,6 +3277,33 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /chat/broadcast:
+    post:
+      tags: [progress]
+      summary: Staff broadcast (Instructor+) — deliver ONE message to every active member of the sender's congregation as an individual DM from the sender (no group room; replies return as normal 1:1 threads). Minors excluded (D-M6). Idempotent on client_mutation_id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 20000 }
+                client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
+      responses:
+        "201":
+          description: Delivery count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sent: { type: integer, description: Number of members the message was delivered to. }
+                  duplicate: { type: boolean, description: True when a replayed client_mutation_id short-circuited. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /chat/cells/{id}/conversation:
     post:
       tags: [progress]
