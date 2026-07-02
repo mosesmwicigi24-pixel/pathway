@@ -3627,6 +3627,117 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  # --- Radio audio library (tracks) + session playlists ---
+  /admin/radio/tracks:
+    get:
+      tags: [radio]
+      summary: List audio-library tracks, newest first (optional kind filter). Gated by radio:view.
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema: { type: string, enum: [music, preaching, audio] }
+      responses:
+        "200":
+          description: Tracks
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/RadioTrack" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [radio]
+      summary: Create an audio-library track (audio_url from the audio upload). Gated by radio:create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRadioTrackBody" }
+      responses:
+        "201":
+          description: Track
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioTrack" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/radio/tracks/{id}:
+    delete:
+      tags: [radio]
+      summary: Delete a track; cascades it out of all playlists. Gated by radio:delete.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/programs/{id}/tracks:
+    get:
+      tags: [radio]
+      summary: Ordered session playlist (embedded tracks). Gated by radio:view.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Playlist items
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/RadioPlaylistItem" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [radio]
+      summary: Append a track to the playlist at the next position. Gated by radio:edit.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddPlaylistItemBody" }
+      responses:
+        "201":
+          description: Playlist item
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioPlaylistItem" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/programs/{id}/tracks/order:
+    put:
+      tags: [radio]
+      summary: Reorder the full playlist by item ids (must match the program's items). Gated by radio:edit.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReorderPlaylistBody" }
+      responses:
+        "200": { description: Reordered, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { description: Validation failed / item_ids mismatch }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/programs/{id}/tracks/{itemId}:
+    delete:
+      tags: [radio]
+      summary: Remove a playlist item; remaining positions re-normalize to 1..n. Gated by radio:edit.
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Removed, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /admin/radio/mixer/scenes:
     get:
       tags: [radio]
@@ -3913,6 +4024,7 @@ components:
         repeat: { type: [string, "null"] }
         timezone: { type: [string, "null"] }
         status: { type: string, enum: [draft, scheduled, live, ended] }
+        loop_mode: { type: string, enum: [none, loop_all, repeat_one] }
         is_live: { type: boolean }
         live_started_at: { type: [string, "null"], format: date-time }
         live_ended_at: { type: [string, "null"], format: date-time }
@@ -3950,6 +4062,7 @@ components:
         repeat: { type: [string, "null"] }
         timezone: { type: [string, "null"] }
         status: { type: string, enum: [draft, scheduled, live, ended] }
+        loop_mode: { type: string, enum: [none, loop_all, repeat_one] }
         is_live: { type: boolean }
         live_started_at: { type: [string, "null"], format: date-time }
         live_ended_at: { type: [string, "null"], format: date-time }
@@ -3960,9 +4073,53 @@ components:
         record_target: { type: [string, "null"], enum: [cloud, local, both, null] }
         peak_listeners: { type: integer }
         hls_url: { type: [string, "null"] }
+        tracks:
+          type: array
+          description: Ordered session playlist (populated on detail/now-playing reads).
+          items: { $ref: "#/components/schemas/RadioPlaylistItem" }
         created_by: { type: [string, "null"], format: uuid }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    RadioTrack:
+      type: object
+      description: A reusable audio-library asset. Members DO get audio_url.
+      required: [id, title, kind, audio_url, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        kind: { type: string, enum: [music, preaching, audio] }
+        audio_url: { type: string }
+        duration_sec: { type: [integer, "null"] }
+        size_bytes: { type: [integer, "null"] }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+    RadioPlaylistItem:
+      type: object
+      description: One ordered slot in a session playlist, embedding its track.
+      required: [id, position, track]
+      properties:
+        id: { type: string, format: uuid }
+        position: { type: integer }
+        track: { $ref: "#/components/schemas/RadioTrack" }
+    CreateRadioTrackBody:
+      type: object
+      required: [title, kind, audio_url]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 300 }
+        kind: { type: string, enum: [music, preaching, audio] }
+        audio_url: { type: string, minLength: 1, maxLength: 2000 }
+        duration_sec: { type: integer, minimum: 1 }
+        size_bytes: { type: integer, minimum: 0 }
+    AddPlaylistItemBody:
+      type: object
+      required: [track_id]
+      properties:
+        track_id: { type: string, format: uuid }
+    ReorderPlaylistBody:
+      type: object
+      required: [item_ids]
+      properties:
+        item_ids: { type: array, minItems: 1, items: { type: string, format: uuid } }
     CreateRadioProgramBody:
       type: object
       required: [title, category]
@@ -3979,6 +4136,7 @@ components:
         duration_min: { type: integer, minimum: 1, maximum: 1440 }
         repeat: { type: string, maxLength: 30 }
         timezone: { type: string, maxLength: 60 }
+        loop_mode: { type: string, enum: [none, loop_all, repeat_one] }
         audio_url: { type: string, maxLength: 2000 }
         audio_duration_sec: { type: integer, minimum: 1 }
         auto_go_live: { type: boolean }

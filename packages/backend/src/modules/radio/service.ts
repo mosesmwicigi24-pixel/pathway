@@ -25,6 +25,7 @@ export interface RadioProgramRow {
   repeat: string | null;
   timezone: string | null;
   status: "draft" | "scheduled" | "live" | "ended";
+  loop_mode: "none" | "loop_all" | "repeat_one";
   is_live: boolean;
   live_started_at: string | null;
   live_ended_at: string | null;
@@ -44,7 +45,30 @@ export interface RadioProgramRow {
 }
 
 // Public projection: strips the ingest secrets (§DTO — no stream_key/ingest_url/ingest_provider).
-export type RadioProgramPublic = Omit<RadioProgramRow, "stream_key" | "ingest_url" | "ingest_provider">;
+// Detail/now-playing reads populate `tracks` with the ordered playlist (incl. audio_url).
+export type RadioProgramPublic = Omit<RadioProgramRow, "stream_key" | "ingest_url" | "ingest_provider"> & {
+  tracks?: RadioPlaylistItem[];
+};
+
+export type RadioTrackKind = "music" | "preaching" | "audio";
+export type RadioLoopMode = "none" | "loop_all" | "repeat_one";
+
+export interface RadioTrackRow {
+  id: string;
+  title: string;
+  kind: RadioTrackKind;
+  audio_url: string;
+  duration_sec: number | null;
+  size_bytes: number | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface RadioPlaylistItem {
+  id: string;
+  position: number;
+  track: RadioTrackRow;
+}
 
 export interface RadioReactionCounts {
   heart: number;
@@ -85,7 +109,7 @@ export interface MixerJingleRow {
 
 const PROGRAM_COLUMNS = `
   id, title, description, category, speaker, location, artwork_url, tags, visibility,
-  scheduled_at, duration_min, repeat, timezone, status, is_live, live_started_at,
+  scheduled_at, duration_min, repeat, timezone, status, loop_mode, is_live, live_started_at,
   live_ended_at, audio_url, audio_duration_sec, auto_go_live, record_broadcast,
   record_target, peak_listeners, ingest_provider, ingest_url, stream_key, hls_url,
   created_by, created_at, updated_at`;
@@ -117,6 +141,7 @@ export class RadioService {
       duration_min: z.number().int().positive().max(1440).optional(),
       repeat: z.string().max(30).optional(),
       timezone: z.string().max(60).optional(),
+      loop_mode: z.enum(["none", "loop_all", "repeat_one"]).optional(),
       audio_url: z.string().max(2000).optional(),
       audio_duration_sec: z.number().int().positive().optional(),
       auto_go_live: z.boolean().optional(),
@@ -185,6 +210,34 @@ export class RadioService {
     })
     .strict();
 
+  static readonly TrackBody = z
+    .object({
+      title: z.string().min(1).max(300),
+      kind: z.enum(["music", "preaching", "audio"]),
+      audio_url: z.string().min(1).max(2000),
+      duration_sec: z.number().int().positive().optional(),
+      size_bytes: z.number().int().nonnegative().optional(),
+    })
+    .strict();
+
+  static readonly TrackListQuery = z
+    .object({
+      kind: z.enum(["music", "preaching", "audio"]).optional(),
+    })
+    .strict();
+
+  static readonly AddPlaylistItem = z
+    .object({
+      track_id: z.string().uuid(),
+    })
+    .strict();
+
+  static readonly ReorderPlaylist = z
+    .object({
+      item_ids: z.array(z.string().uuid()).min(1),
+    })
+    .strict();
+
   // --- Programs: admin ------------------------------------------------------
 
   async listAdmin(status?: string): Promise<RadioProgramRow[]> {
@@ -215,11 +268,11 @@ export class RadioService {
         c,
         `INSERT INTO radio_programs
            (title, description, category, speaker, location, artwork_url, tags, visibility,
-            scheduled_at, duration_min, repeat, timezone, status, audio_url, audio_duration_sec,
-            auto_go_live, record_broadcast, record_target, created_by)
+            scheduled_at, duration_min, repeat, timezone, status, loop_mode, audio_url,
+            audio_duration_sec, auto_go_live, record_broadcast, record_target, created_by)
          VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'{}'::text[]),COALESCE($8,'public'),
-                 $9,$10,COALESCE($11,'none'),$12,$13,$14,$15,COALESCE($16,true),
-                 COALESCE($17,false),$18,$19)
+                 $9,$10,COALESCE($11,'none'),$12,$13,COALESCE($14,'none'),$15,$16,
+                 COALESCE($17,true),COALESCE($18,false),$19,$20)
          RETURNING id`,
         [
           input.title,
@@ -235,6 +288,7 @@ export class RadioService {
           input.repeat ?? null,
           input.timezone ?? null,
           status,
+          input.loop_mode ?? null,
           input.audio_url ?? null,
           input.audio_duration_sec ?? null,
           input.auto_go_live ?? null,
@@ -277,6 +331,7 @@ export class RadioService {
     if (input.duration_min !== undefined) set("duration_min", input.duration_min);
     if (input.repeat !== undefined) set("repeat", input.repeat);
     if (input.timezone !== undefined) set("timezone", input.timezone);
+    if (input.loop_mode !== undefined) set("loop_mode", input.loop_mode);
     if (input.audio_url !== undefined) set("audio_url", input.audio_url);
     if (input.audio_duration_sec !== undefined) set("audio_duration_sec", input.audio_duration_sec);
     if (input.auto_go_live !== undefined) set("auto_go_live", input.auto_go_live);
@@ -418,14 +473,14 @@ export class RadioService {
         WHERE is_live = true AND visibility IN ('public','members')
         ORDER BY live_started_at DESC LIMIT 1`,
     );
-    if (live) return toPublic(live);
+    if (live) return this.withPlaylist(toPublic(live));
     const next = await maybeOne<RadioProgramRow>(
       this.pool,
       `SELECT ${PROGRAM_COLUMNS} FROM radio_programs
         WHERE status = 'scheduled' AND visibility IN ('public','members') AND scheduled_at >= now()
         ORDER BY scheduled_at ASC LIMIT 1`,
     );
-    return next ? toPublic(next) : null;
+    return next ? this.withPlaylist(toPublic(next)) : null;
   }
 
   async getPublic(id: string): Promise<RadioProgramPublic> {
@@ -435,7 +490,12 @@ export class RadioService {
       [id],
     );
     if (!row || row.visibility === "private") throw new ApiError("NOT_FOUND", "Program not found");
-    return toPublic(row);
+    return this.withPlaylist(toPublic(row));
+  }
+
+  /** Attach the ordered playlist (with embedded track incl. audio_url) to a public program. */
+  private async withPlaylist(program: RadioProgramPublic): Promise<RadioProgramPublic> {
+    return { ...program, tracks: await this.listPlaylist(program.id) };
   }
 
   private async assertVisible(id: string): Promise<void> {
@@ -541,6 +601,178 @@ export class RadioService {
     );
     if (!res.rowCount) throw new ApiError("NOT_FOUND", "Comment not found");
     return { ok: true };
+  }
+
+  // --- Audio library: tracks ------------------------------------------------
+
+  private static readonly TRACK_COLUMNS = `id, title, kind, audio_url, duration_sec, size_bytes::float8 AS size_bytes, created_by, created_at`;
+
+  /** Library tracks, newest first, optionally filtered by kind. */
+  async listTracks(kind?: RadioTrackKind): Promise<RadioTrackRow[]> {
+    if (kind) {
+      return many<RadioTrackRow>(
+        this.pool,
+        `SELECT ${RadioService.TRACK_COLUMNS} FROM radio_tracks WHERE kind = $1 ORDER BY created_at DESC`,
+        [kind],
+      );
+    }
+    return many<RadioTrackRow>(
+      this.pool,
+      `SELECT ${RadioService.TRACK_COLUMNS} FROM radio_tracks ORDER BY created_at DESC`,
+    );
+  }
+
+  async createTrack(
+    createdBy: string,
+    input: z.infer<typeof RadioService.TrackBody>,
+  ): Promise<RadioTrackRow> {
+    return one<RadioTrackRow>(
+      this.pool,
+      `INSERT INTO radio_tracks (title, kind, audio_url, duration_sec, size_bytes, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6)
+       RETURNING ${RadioService.TRACK_COLUMNS}`,
+      [input.title, input.kind, input.audio_url, input.duration_sec ?? null, input.size_bytes ?? null, createdBy],
+    );
+  }
+
+  /** Delete a track; cascades it out of every playlist (FK ON DELETE CASCADE). */
+  async removeTrack(id: string): Promise<{ ok: true }> {
+    const res = await this.pool.query(`DELETE FROM radio_tracks WHERE id = $1`, [id]);
+    if (!res.rowCount) throw new ApiError("NOT_FOUND", "Track not found");
+    return { ok: true };
+  }
+
+  // --- Session playlists ----------------------------------------------------
+
+  /** Ordered playlist for a program, each item embedding its track. */
+  async listPlaylist(programId: string): Promise<RadioPlaylistItem[]> {
+    const rows = await many<{
+      id: string;
+      position: number;
+      t_id: string;
+      title: string;
+      kind: RadioTrackKind;
+      audio_url: string;
+      duration_sec: number | null;
+      size_bytes: number | null;
+      created_by: string | null;
+      created_at: string;
+    }>(
+      this.pool,
+      `SELECT pt.id, pt.position,
+              t.id AS t_id, t.title, t.kind, t.audio_url, t.duration_sec,
+              t.size_bytes::float8 AS size_bytes, t.created_by, t.created_at
+         FROM radio_program_tracks pt
+         JOIN radio_tracks t ON t.id = pt.track_id
+        WHERE pt.program_id = $1
+        ORDER BY pt.position ASC`,
+      [programId],
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      position: r.position,
+      track: {
+        id: r.t_id,
+        title: r.title,
+        kind: r.kind,
+        audio_url: r.audio_url,
+        duration_sec: r.duration_sec,
+        size_bytes: r.size_bytes,
+        created_by: r.created_by,
+        created_at: r.created_at,
+      },
+    }));
+  }
+
+  /** Admin playlist read — 404s if the program is missing. */
+  async listPlaylistAdmin(programId: string): Promise<RadioPlaylistItem[]> {
+    await this.getAdmin(programId); // 404 if missing
+    return this.listPlaylist(programId);
+  }
+
+  /** Append a track at the next position (max+1). */
+  async addPlaylistItem(
+    programId: string,
+    input: z.infer<typeof RadioService.AddPlaylistItem>,
+  ): Promise<RadioPlaylistItem> {
+    await this.getAdmin(programId); // 404 if program missing
+    const track = await maybeOne<{ id: string }>(this.pool, `SELECT id FROM radio_tracks WHERE id = $1`, [
+      input.track_id,
+    ]);
+    if (!track) throw new ApiError("NOT_FOUND", "Track not found");
+    return tx(this.pool, async (c) => {
+      const next = await one<{ pos: number }>(
+        c,
+        `SELECT COALESCE(MAX(position), 0) + 1 AS pos FROM radio_program_tracks WHERE program_id = $1`,
+        [programId],
+      );
+      const inserted = await one<{ id: string; position: number }>(
+        c,
+        `INSERT INTO radio_program_tracks (program_id, track_id, position)
+           VALUES ($1,$2,$3) RETURNING id, position`,
+        [programId, input.track_id, next.pos],
+      );
+      const trackRow = await one<RadioTrackRow>(
+        c,
+        `SELECT ${RadioService.TRACK_COLUMNS} FROM radio_tracks WHERE id = $1`,
+        [input.track_id],
+      );
+      return { id: inserted.id, position: inserted.position, track: trackRow };
+    });
+  }
+
+  /** Remove a playlist item, then re-normalize remaining positions to 1..n. */
+  async removePlaylistItem(programId: string, itemId: string): Promise<{ ok: true }> {
+    await this.getAdmin(programId); // 404 if program missing
+    return tx(this.pool, async (c) => {
+      const res = await c.query(
+        `DELETE FROM radio_program_tracks WHERE id = $1 AND program_id = $2`,
+        [itemId, programId],
+      );
+      if (!res.rowCount) throw new ApiError("NOT_FOUND", "Playlist item not found");
+      await c.query(
+        `WITH ranked AS (
+           SELECT id, ROW_NUMBER() OVER (ORDER BY position ASC) AS rn
+             FROM radio_program_tracks WHERE program_id = $1
+         )
+         UPDATE radio_program_tracks pt
+            SET position = ranked.rn
+           FROM ranked WHERE pt.id = ranked.id`,
+        [programId],
+      );
+      return { ok: true };
+    });
+  }
+
+  /** Reorder the full playlist: item_ids must exactly match the program's items. */
+  async reorderPlaylist(
+    programId: string,
+    input: z.infer<typeof RadioService.ReorderPlaylist>,
+  ): Promise<{ ok: true }> {
+    await this.getAdmin(programId); // 404 if program missing
+    return tx(this.pool, async (c) => {
+      const existing = await many<{ id: string }>(
+        c,
+        `SELECT id FROM radio_program_tracks WHERE program_id = $1`,
+        [programId],
+      );
+      const existingSet = new Set(existing.map((r) => r.id));
+      const requested = new Set(input.item_ids);
+      if (
+        existingSet.size !== requested.size ||
+        input.item_ids.length !== existing.length ||
+        !input.item_ids.every((id) => existingSet.has(id))
+      ) {
+        throw new ApiError("VALIDATION_FAILED", "item_ids must match the program's playlist items exactly");
+      }
+      for (let i = 0; i < input.item_ids.length; i += 1) {
+        await c.query(
+          `UPDATE radio_program_tracks SET position = $1 WHERE id = $2 AND program_id = $3`,
+          [i + 1, input.item_ids[i], programId],
+        );
+      }
+      return { ok: true };
+    });
   }
 
   // --- Mixer scenes ---------------------------------------------------------

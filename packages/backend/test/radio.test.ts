@@ -310,6 +310,152 @@ describe("radio — audio upload validation", () => {
   });
 });
 
+describe("radio — audio library (tracks)", () => {
+  async function createTrack(overrides: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    const res = await agent()
+      .post("/v1/admin/radio/tracks")
+      .set(auth(adminTok))
+      .send({ title: "Track", kind: "audio", audio_url: "http://localhost:8080/media/t.mp3", ...overrides });
+    expect(res.status).toBe(201);
+    return res.body;
+  }
+
+  it("creates a track of each kind and lists newest-first with a kind filter", async () => {
+    await createTrack({ title: "Song", kind: "music", audio_url: "http://l/m.mp3" });
+    await createTrack({ title: "Sermon", kind: "preaching", audio_url: "http://l/p.mp3", duration_sec: 120, size_bytes: 999 });
+    await createTrack({ title: "Bed", kind: "audio", audio_url: "http://l/a.mp3" });
+
+    const all = await agent().get("/v1/admin/radio/tracks").set(auth(adminTok));
+    expect(all.status).toBe(200);
+    expect(all.body).toHaveLength(3);
+    // Newest first — last created ("Bed") leads.
+    expect(all.body[0].title).toBe("Bed");
+
+    const music = await agent().get("/v1/admin/radio/tracks?kind=music").set(auth(adminTok));
+    expect(music.body).toHaveLength(1);
+    expect(music.body[0].kind).toBe("music");
+
+    const preaching = await agent().get("/v1/admin/radio/tracks?kind=preaching").set(auth(adminTok));
+    expect(preaching.body[0].duration_sec).toBe(120);
+    expect(preaching.body[0].size_bytes).toBe(999);
+  });
+
+  it("deletes a track", async () => {
+    const t = await createTrack();
+    const del = await agent().delete(`/v1/admin/radio/tracks/${t.id}`).set(auth(adminTok));
+    expect(del.status).toBe(200);
+    expect(del.body.ok).toBe(true);
+    const list = await agent().get("/v1/admin/radio/tracks").set(auth(adminTok));
+    expect(list.body).toHaveLength(0);
+  });
+});
+
+describe("radio — session playlists + loop mode", () => {
+  async function createTrack(title: string): Promise<string> {
+    const res = await agent()
+      .post("/v1/admin/radio/tracks")
+      .set(auth(adminTok))
+      .send({ title, kind: "audio", audio_url: `http://localhost:8080/media/${title}.mp3` });
+    expect(res.status).toBe(201);
+    return res.body.id as string;
+  }
+
+  it("appends tracks then returns the ordered playlist with embedded tracks", async () => {
+    const prog = await createProgram();
+    const t1 = await createTrack("one");
+    const t2 = await createTrack("two");
+
+    const a1 = await agent().post(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok)).send({ track_id: t1 });
+    expect(a1.status).toBe(201);
+    expect(a1.body.position).toBe(1);
+    expect(a1.body.track.audio_url).toBe("http://localhost:8080/media/one.mp3");
+    const a2 = await agent().post(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok)).send({ track_id: t2 });
+    expect(a2.body.position).toBe(2);
+
+    const list = await agent().get(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok));
+    expect(list.status).toBe(200);
+    expect(list.body.map((i: { position: number }) => i.position)).toEqual([1, 2]);
+    expect(list.body.map((i: { track: { title: string } }) => i.track.title)).toEqual(["one", "two"]);
+  });
+
+  it("reorders via item_ids and re-normalizes positions when an item is deleted", async () => {
+    const prog = await createProgram();
+    const ids = [await createTrack("a"), await createTrack("b"), await createTrack("c")];
+    const itemIds: string[] = [];
+    for (const id of ids) {
+      const r = await agent().post(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok)).send({ track_id: id });
+      itemIds.push(r.body.id as string);
+    }
+
+    // Reverse the order.
+    const reordered = [itemIds[2], itemIds[1], itemIds[0]];
+    const ord = await agent()
+      .put(`/v1/admin/radio/programs/${prog.id}/tracks/order`)
+      .set(auth(adminTok))
+      .send({ item_ids: reordered });
+    expect(ord.status).toBe(200);
+
+    const list1 = await agent().get(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok));
+    expect(list1.body.map((i: { track: { title: string } }) => i.track.title)).toEqual(["c", "b", "a"]);
+
+    // Delete the middle item ("b") → positions must be contiguous 1..2.
+    const del = await agent().delete(`/v1/admin/radio/programs/${prog.id}/tracks/${itemIds[1]}`).set(auth(adminTok));
+    expect(del.status).toBe(200);
+    const list2 = await agent().get(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok));
+    expect(list2.body.map((i: { position: number }) => i.position)).toEqual([1, 2]);
+    expect(list2.body.map((i: { track: { title: string } }) => i.track.title)).toEqual(["c", "a"]);
+  });
+
+  it("rejects a reorder whose item_ids do not match the program's items (400)", async () => {
+    const prog = await createProgram();
+    const t = await createTrack("solo");
+    const r = await agent().post(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok)).send({ track_id: t });
+    const bogus = await agent()
+      .put(`/v1/admin/radio/programs/${prog.id}/tracks/order`)
+      .set(auth(adminTok))
+      .send({ item_ids: [r.body.id, "00000000-0000-0000-0000-000000000000"] });
+    expect(bogus.status).toBe(400);
+  });
+
+  it("sets loop_mode via PATCH and reflects it on GET", async () => {
+    const prog = await createProgram();
+    expect(prog.loop_mode).toBe("none");
+    const patch = await agent().patch(`/v1/admin/radio/programs/${prog.id}`).set(auth(adminTok)).send({ loop_mode: "loop_all" });
+    expect(patch.status).toBe(200);
+    expect(patch.body.loop_mode).toBe("loop_all");
+    const get = await agent().get(`/v1/admin/radio/programs/${prog.id}`).set(auth(adminTok));
+    expect(get.body.loop_mode).toBe("loop_all");
+  });
+
+  it("member GET carries loop_mode + tracks (with audio_url) and no stream_key", async () => {
+    const prog = await createProgram({ visibility: "public", loop_mode: "repeat_one" });
+    const t = await createTrack("member");
+    await agent().post(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok)).send({ track_id: t });
+
+    const member = await createUser({ congregationId: cong, role: "Student", email: "pl@dev.local" });
+    const tok = bearer({ sub: member.user_id, role: "Student", cong });
+    const res = await agent().get(`/v1/radio/programs/${prog.id}`).set(auth(tok));
+    expect(res.status).toBe(200);
+    expect(res.body.loop_mode).toBe("repeat_one");
+    expect(res.body.tracks).toHaveLength(1);
+    expect(res.body.tracks[0].track.audio_url).toBe("http://localhost:8080/media/member.mp3");
+    expect(res.body.stream_key).toBeUndefined();
+  });
+
+  it("deleting a track cascades it out of playlists", async () => {
+    const prog = await createProgram();
+    const t = await createTrack("gone");
+    await agent().post(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok)).send({ track_id: t });
+    let list = await agent().get(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok));
+    expect(list.body).toHaveLength(1);
+
+    const del = await agent().delete(`/v1/admin/radio/tracks/${t}`).set(auth(adminTok));
+    expect(del.status).toBe(200);
+    list = await agent().get(`/v1/admin/radio/programs/${prog.id}/tracks`).set(auth(adminTok));
+    expect(list.body).toHaveLength(0);
+  });
+});
+
 describe("radio — mixer scenes + jingles", () => {
   it("scene create → update → list round-trips channels", async () => {
     const create = await agent()

@@ -78,6 +78,27 @@ export type RadioVisibility = "public" | "members" | "private";
 export type RadioProgramStatus = "draft" | "scheduled" | "live" | "ended";
 export type RadioRecordTarget = "cloud" | "local" | "both";
 export type RadioReactionKind = "heart" | "amen" | "fire";
+export type RadioTrackKind = "music" | "preaching" | "audio";
+export type RadioLoopMode = "none" | "loop_all" | "repeat_one";
+
+/** A reusable audio-library asset (music/preaching/audio). Members DO get audio_url. */
+export interface RadioTrack {
+  id: UUID;
+  title: string;
+  kind: RadioTrackKind;
+  audio_url: string;
+  duration_sec: number | null;
+  size_bytes: number | null;
+  created_by: UUID | null;
+  created_at: ISODateTime;
+}
+
+/** One ordered slot in a session playlist, embedding its track. */
+export interface RadioPlaylistItem {
+  id: UUID;
+  position: number;
+  track: RadioTrack;
+}
 
 /** Admin projection — includes the ingest secrets (stream_key/ingest_url/ingest_provider). */
 export interface RadioProgram {
@@ -95,6 +116,7 @@ export interface RadioProgram {
   repeat: string | null;
   timezone: string | null;
   status: RadioProgramStatus;
+  loop_mode: RadioLoopMode;
   is_live: boolean;
   live_started_at: ISODateTime | null;
   live_ended_at: ISODateTime | null;
@@ -113,8 +135,14 @@ export interface RadioProgram {
   updated_at: ISODateTime;
 }
 
-/** Member/public projection — OMITS stream_key, ingest_url, ingest_provider. */
-export type RadioProgramPublic = Omit<RadioProgram, "stream_key" | "ingest_url" | "ingest_provider">;
+/**
+ * Member/public projection — OMITS stream_key, ingest_url, ingest_provider.
+ * The detail/now-playing reads populate `tracks` with the ordered session playlist
+ * (each item embeds its track incl. audio_url) so the player can play the session.
+ */
+export type RadioProgramPublic = Omit<RadioProgram, "stream_key" | "ingest_url" | "ingest_provider"> & {
+  tracks?: RadioPlaylistItem[];
+};
 
 export interface RadioReactionCounts {
   heart: number;
@@ -191,6 +219,7 @@ export interface CreateRadioProgramBody {
   duration_min?: number;
   repeat?: string;
   timezone?: string;
+  loop_mode?: RadioLoopMode;
   audio_url?: string;
   audio_duration_sec?: number;
   auto_go_live?: boolean;
@@ -216,6 +245,22 @@ export interface RadioReactBody {
 export interface RadioCommentBody {
   body: string;
   client_event_id: string;
+}
+
+export interface CreateRadioTrackBody {
+  title: string;
+  kind: RadioTrackKind;
+  audio_url: string;
+  duration_sec?: number;
+  size_bytes?: number;
+}
+
+export interface AddPlaylistItemBody {
+  track_id: UUID;
+}
+
+export interface ReorderPlaylistBody {
+  item_ids: UUID[];
 }
 
 export interface MixerSceneBody {

@@ -52,6 +52,19 @@ export function registerRadio(ctx: AppContext, providerOverride?: StreamProvider
     res.json(await svc.hideComment(idOf(req, "cid")));
   }));
 
+  // ===== Admin — Audio library (tracks) (static, before program param routes) =
+  r.get("/admin/radio/tracks", auth, perm("radio", "view"), handler(async (req, res) => {
+    const { kind } = parseBody(RadioService.TrackListQuery, req.query);
+    res.json(await svc.listTracks(kind));
+  }));
+  r.post("/admin/radio/tracks", auth, perm("radio", "create"), handler(async (req, res) => {
+    const input = parseBody(RadioService.TrackBody, req.body);
+    res.status(201).json(await svc.createTrack(requirePrincipal(req).userId, input));
+  }));
+  r.delete("/admin/radio/tracks/:id", auth, perm("radio", "delete"), handler(async (req, res) => {
+    res.json(await svc.removeTrack(idOf(req)));
+  }));
+
   // ===== Admin — Programs ===================================================
   r.get("/admin/radio/programs", auth, perm("radio", "view"), handler(async (req, res) => {
     const { status } = parseBody(RadioService.ListQuery, req.query);
@@ -77,6 +90,22 @@ export function registerRadio(ctx: AppContext, providerOverride?: StreamProvider
   }));
   r.get("/admin/radio/programs/:id/comments", auth, perm("radio", "view"), handler(async (req, res) => {
     res.json(await svc.listCommentsAdmin(idOf(req)));
+  }));
+
+  // Session playlist (static suffix, before the bare /:id).
+  r.get("/admin/radio/programs/:id/tracks", auth, perm("radio", "view"), handler(async (req, res) => {
+    res.json(await svc.listPlaylistAdmin(idOf(req)));
+  }));
+  r.post("/admin/radio/programs/:id/tracks", auth, perm("radio", "edit"), handler(async (req, res) => {
+    const input = parseBody(RadioService.AddPlaylistItem, req.body);
+    res.status(201).json(await svc.addPlaylistItem(idOf(req), input));
+  }));
+  r.put("/admin/radio/programs/:id/tracks/order", auth, perm("radio", "edit"), handler(async (req, res) => {
+    const input = parseBody(RadioService.ReorderPlaylist, req.body);
+    res.json(await svc.reorderPlaylist(idOf(req), input));
+  }));
+  r.delete("/admin/radio/programs/:id/tracks/:itemId", auth, perm("radio", "edit"), handler(async (req, res) => {
+    res.json(await svc.removePlaylistItem(idOf(req), idOf(req, "itemId")));
   }));
 
   r.get("/admin/radio/programs/:id", auth, perm("radio", "view"), handler(async (req, res) => {
