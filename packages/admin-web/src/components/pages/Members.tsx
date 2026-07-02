@@ -229,13 +229,16 @@ export function Members(): ReactElement {
               <thead>
                 <tr style={{ background: "var(--input-background)", borderBottom: "1px solid var(--border)" }}>
                   {[
-                    { h: "Member", w: undefined, align: "left" as const },
-                    { h: "Cell", w: 150, align: "left" as const },
-                    { h: "Start", w: 96, align: "left" as const },
-                    { h: "Progress", w: 170, align: "left" as const },
-                    { h: "Last active", w: 96, align: "left" as const },
-                    { h: "Status", w: 100, align: "center" as const },
-                    { h: "", w: 120, align: "right" as const },
+                    // Proportional widths (tableLayout: fixed) so the Member column
+                    // doesn't absorb all leftover space on wide screens and starve
+                    // the right-hand columns into congestion.
+                    { h: "Member", w: "25%", align: "left" as const },
+                    { h: "Cell", w: "14%", align: "left" as const },
+                    { h: "Start", w: "10%", align: "left" as const },
+                    { h: "Progress", w: "19%", align: "left" as const },
+                    { h: "Last active", w: "11%", align: "left" as const },
+                    { h: "Status", w: "9%", align: "center" as const },
+                    { h: "", w: "12%", align: "right" as const },
                   ].map((c, idx) => (
                     <th key={idx} style={{ width: c.w, padding: "11px 14px", textAlign: c.align, fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>{c.h}</th>
                   ))}
