@@ -117,6 +117,14 @@ export function registerAdminOps(ctx: AppContext): Router {
     res.json(await svc.memberResults(req.params.id ?? ""));
   }));
 
+  // Manual password reset: server-mints a temporary password, revokes the
+  // member's sessions, and returns the plaintext ONCE to the acting admin.
+  // Rank-guarded in the service (no resetting peers/higher roles).
+  r.post("/admin/members/:id/password-reset", auth, perm("members", "edit"), handler(async (req, res) => {
+    const p = requirePrincipal(req);
+    res.json(await svc.resetMemberPassword({ userId: p.userId, role: p.role }, req.params.id ?? ""));
+  }));
+
   // Edit member details (name, contact, gender, city, programme, country, language,
   // baptized, cell reassignment).
   r.patch("/admin/members/:id", auth, perm("members", "edit"), handler(async (req, res) => {

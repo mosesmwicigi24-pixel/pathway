@@ -2282,6 +2282,25 @@ paths:
         "200": { description: Member results }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/members/{id}/password-reset:
+    post:
+      tags: [portal]
+      summary: Admin. Manual password reset — server mints a temporary password, revokes the member's sessions, and returns the plaintext ONCE. Rank-guarded (no peers/higher roles unless SuperAdmin).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Temporary password (returned once, never stored)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [temporary_password, full_name]
+                properties:
+                  temporary_password: { type: string, example: Nuru-Xk4m-Tr8w }
+                  full_name: { type: string }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/members/{id}/enrollment:
     patch:
       tags: [portal]

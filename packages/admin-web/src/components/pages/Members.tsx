@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Search, Plus, ChevronDown, ArrowRight, Mail, UserCheck, UserPlus, Users as UsersIcon,
   ChevronRight, CheckCircle2, Flag, Download, Printer, X, GraduationCap, MoreVertical, Pencil, Check,
-  BarChart3, Award, Star, BookOpen,
+  BarChart3, Award, Star, BookOpen, KeyRound, Copy,
 } from "lucide-react";
 import {
   OpsApi, AdminApi, SystemApi, CurriculumApi,
@@ -19,6 +19,66 @@ import {
   type AdminLevel, type AdminModuleSummary, type MemberResults, type MemberResultLevel,
 } from "../../api/client";
 import { errorMessage } from "../../util/error";
+
+// Manual password reset: confirm → server mints a temporary password (revoking
+// the member's sessions) → show it ONCE with copy. It is never retrievable again.
+function ResetPasswordModal({ userId, name, onClose }: { userId: string; name: string; onClose: () => void }): ReactElement {
+  const [busy, setBusy] = useState(false);
+  const [temp, setTemp] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(): Promise<void> {
+    setBusy(true); setError(null);
+    try {
+      const r = await OpsApi.resetMemberPassword(userId);
+      setTemp(r.temporary_password);
+    } catch (e) { setError(errorMessage(e, "Could not reset the password.")); }
+    finally { setBusy(false); }
+  }
+  async function copy(): Promise<void> {
+    if (!temp) return;
+    try { await navigator.clipboard.writeText(temp); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { /* leave manual selection */ }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(11,31,51,0.55)" }} onClick={temp ? undefined : onClose}>
+      <div className="rounded-2xl overflow-hidden w-full" style={{ background: "var(--card)", maxWidth: 460, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }} onClick={(e) => e.stopPropagation()}>
+        <div className="px-6 py-5 flex items-start justify-between" style={{ borderBottom: "1px solid var(--border)" }}>
+          <div>
+            <div className="flex items-center gap-2" style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: "#0E7490" }}><KeyRound size={12} /> RESET PASSWORD</div>
+            <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--foreground)", marginTop: 2 }}>{name}</h2>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-2" style={{ background: "var(--secondary)", color: "var(--foreground)", border: "none" }}><X size={16} /></button>
+        </div>
+        <div className="px-6 py-5">
+          {temp ? (
+            <>
+              <p style={{ fontSize: 13, color: "var(--muted-foreground)" }}>Hand this to {name.split(" ")[0]} — it works immediately and they can change it in their app under Profile. <strong>It will not be shown again.</strong></p>
+              <div className="flex items-center justify-between rounded-xl mt-4 px-4 py-3" style={{ background: "var(--input-background)", border: "1px dashed var(--nuru-gold)" }}>
+                <code style={{ fontSize: 18, fontWeight: 700, letterSpacing: 0.5, color: "var(--nuru-navy)" }}>{temp}</code>
+                <button onClick={() => void copy()} className="flex items-center gap-1.5 rounded-lg px-3 py-2" style={{ background: copied ? "rgba(22,163,74,0.12)" : "var(--nuru-navy)", color: copied ? "#16A34A" : "#fff", border: "none", fontSize: 12, fontWeight: 700 }}>
+                  {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <p style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 10 }}>Their previous password no longer works and every signed-in device has been logged out.</p>
+              <button onClick={onClose} className="w-full rounded-xl mt-4 py-2.5" style={{ background: "var(--secondary)", color: "var(--foreground)", border: "1px solid var(--border)", fontSize: 13, fontWeight: 700 }}>Done</button>
+            </>
+          ) : (
+            <>
+              <p style={{ fontSize: 13, color: "var(--muted-foreground)", lineHeight: 1.55 }}>This creates a new temporary password for <strong>{name}</strong>, signs them out of every device, and invalidates their old password. Use it when a member is locked out and can't reset by themselves.</p>
+              {error ? <p style={{ fontSize: 12.5, color: "#DC2626", marginTop: 10 }}>{error}</p> : null}
+              <div className="flex gap-2 mt-5">
+                <button onClick={onClose} className="flex-1 rounded-xl py-2.5" style={{ background: "var(--secondary)", color: "var(--foreground)", border: "1px solid var(--border)", fontSize: 13, fontWeight: 700 }}>Cancel</button>
+                <button onClick={() => void run()} disabled={busy} className="flex-1 rounded-xl py-2.5" style={{ background: "var(--nuru-navy)", color: "#fff", border: "none", fontSize: 13, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>{busy ? "Resetting…" : "Reset & get password"}</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 type StatusKey = MemberStatus;
 const statusMeta: Record<StatusKey, { label: string; bg: string; fg: string; ring: string }> = {
@@ -53,6 +113,7 @@ export function Members(): ReactElement {
   const [addOpen, setAddOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [resultsId, setResultsId] = useState<string | null>(null);
+  const [pwResetFor, setPwResetFor] = useState<{ userId: string; name: string } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -243,6 +304,7 @@ export function Members(): ReactElement {
                             {menuFor === m.user_id ? (
                               <div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-1 rounded-xl z-20" style={{ background: "#fff", border: "1px solid var(--border)", boxShadow: "0 12px 32px rgba(11,31,51,0.18)", minWidth: 168, overflow: "hidden" }}>
                                 <button onClick={() => { setMenuFor(null); setEditId(m.user_id); }} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none" }}><Pencil size={14} style={{ color: "var(--nuru-gold)" }} /> Edit member</button>
+                                <button onClick={() => { setMenuFor(null); setPwResetFor({ userId: m.user_id, name: m.full_name }); }} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><KeyRound size={14} style={{ color: "#0E7490" }} /> Reset password</button>
                                 <button onClick={() => void graduate(m.user_id, !isGraduated)} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><GraduationCap size={14} style={{ color: "#7C3AED" }} /> {isGraduated ? "Un-graduate" : "Mark graduated"}</button>
                               </div>
                             ) : null}
@@ -266,6 +328,7 @@ export function Members(): ReactElement {
       {addOpen ? <AddMemberModal cells={cells} countries={countries} onClose={() => setAddOpen(false)} onCreated={async () => { setAddOpen(false); await load(); }} /> : null}
       {editId ? <EditMemberModal userId={editId} row={rows.find((r) => r.user_id === editId)} cells={cells} countries={countries} onClose={() => setEditId(null)} onSaved={async () => { setEditId(null); await load(); }} /> : null}
       {resultsId ? <MemberResultsDrawer userId={resultsId} onClose={() => setResultsId(null)} /> : null}
+      {pwResetFor ? <ResetPasswordModal userId={pwResetFor.userId} name={pwResetFor.name} onClose={() => setPwResetFor(null)} /> : null}
       {exportOpen ? <ExportModal members={filtered} countryByCode={countryByCode} onClose={() => setExportOpen(false)} /> : null}
     </div>
   );

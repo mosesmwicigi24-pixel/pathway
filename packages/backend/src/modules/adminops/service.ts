@@ -3,11 +3,12 @@
 // audit viewer. All Admin+ (audit: SuperAdmin); reads hit the replica where one
 // is configured (§1.6). Every aggregate is computed from the authoritative
 // tables — nothing here is client-supplied.
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomInt } from "node:crypto";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { many, one, maybeOne, tx, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
+import { hashPassword } from "../identity/passwords.js";
 
 export class AdminOpsService {
   constructor(
@@ -1199,6 +1200,50 @@ export class AdminOpsService {
     prayer_logged: "Logged a prayer",
     check_in: "Daily check-in",
   };
+
+  /**
+   * Manual password reset from the portal (§5.5): mints a server-generated
+   * temporary password, argon2id-hashes it into users.password_hash, clears
+   * any lockout, and revokes every refresh-token family so the old sessions
+   * die with the old credential. The plaintext is returned ONCE to the acting
+   * admin and never stored or logged. Rank guard: only a strictly higher role
+   * may reset (SuperAdmin may reset anyone, incl. other SuperAdmins).
+   */
+  async resetMemberPassword(
+    actor: { userId: string; role: string },
+    userId: string,
+  ): Promise<{ temporary_password: string; full_name: string }> {
+    const RANK: Record<string, number> = { Student: 0, Instructor: 1, Admin: 2, SuperAdmin: 3 };
+    return tx(this.pool, async (c) => {
+      const target = await maybeOne<{ full_name: string; role: string }>(
+        c,
+        `SELECT full_name, role FROM users WHERE user_id = $1 AND deleted_at IS NULL`,
+        [userId],
+      );
+      if (!target) throw new ApiError("NOT_FOUND", "Member not found");
+      const actorRank = RANK[actor.role] ?? 0;
+      if ((RANK[target.role] ?? 0) >= actorRank && actor.role !== "SuperAdmin") {
+        throw new ApiError("FORBIDDEN_SCOPE", "You cannot reset the password of a peer or higher role");
+      }
+
+      // Readable, unambiguous (no 0/O/1/l/I), ~47 bits — a hand-over credential
+      // the member is expected to change, not a long-term secret.
+      const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+      const pick = (n: number) => Array.from({ length: n }, () => alphabet[randomInt(alphabet.length)]).join("");
+      const temporary = `Nuru-${pick(4)}-${pick(4)}`;
+
+      const hash = await hashPassword(temporary);
+      await c.query(
+        `UPDATE users SET password_hash = $2, failed_login_count = 0, locked_until = NULL, updated_at = now()
+          WHERE user_id = $1`,
+        [userId, hash],
+      );
+      // Old sessions die with the old credential (§5.5).
+      await c.query(`UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
+      await audit(c, actor.userId, "member.password_reset", "users", userId, { by_role: actor.role });
+      return { temporary_password: temporary, full_name: target.full_name };
+    });
+  }
 
   /**
    * Single-member aggregate for the portal Member Profile screen. Pulls identity,

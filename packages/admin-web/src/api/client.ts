@@ -1043,6 +1043,9 @@ export const OpsApi = {
   ) => api.get<{ data: MemberRow[]; next_cursor: string | null }>("/admin/members", { params: q }).then((r) => r.data),
   memberDetail: (userId: string) => api.get<MemberDetail>(`/admin/members/${userId}`).then((r) => r.data),
   memberResults: (userId: string) => api.get<MemberResults>(`/admin/members/${userId}/results`).then((r) => r.data),
+  // Manual reset: the server mints the temporary password and returns it ONCE.
+  resetMemberPassword: (userId: string) =>
+    api.post<{ temporary_password: string; full_name: string }>(`/admin/members/${userId}/password-reset`, {}).then((r) => r.data),
   addMember: (body: {
     full_name: string;
     phone_number: string;
