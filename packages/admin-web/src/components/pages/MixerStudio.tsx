@@ -11,12 +11,16 @@
 // is polled every 5s; while connected, the mapped strips (mic1→mic, music→bed,
 // jingle→jingle) + master push debounced gains to /mixer/live/levels, applying
 // a scene also POSTs /mixer/live/scene, and firing a pad POSTs /mixer/live/jingle.
+// LIVE EQ (API-backed when connected): 3-band peaking EQ per bus (mic/bed/master;
+// 100 Hz / 1.2 kHz / 8 kHz, −12…+12 dB) POSTs /mixer/live/eq — slider drags are
+// debounced ~250ms per bus, preset chips send all 9 bands at once. EQ state is
+// client-held (the server has no getter; engine defaults to 0 dB = Flat).
 // LOCAL (client-only): the other strips, VU meters, music-bed player transport.
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
   SlidersVertical, Volume2, VolumeX, Headphones, Music, Play, Pause, SkipBack,
   SkipForward, Plus, Trash2, Loader2, Save, Sparkles, Upload, Radio, ShieldAlert,
-  type LucideIcon,
+  AudioWaveform, type LucideIcon,
 } from "lucide-react";
 import { AxiosError } from "axios";
 import {
@@ -26,6 +30,8 @@ import {
   type MixerChannel,
   type MixerSceneBody,
   type MixerLiveChannels,
+  type MixerEqBus,
+  type MixerEqBand,
 } from "../../api/client";
 
 /* ── studio palette (shared with RadioStudio) ── */
@@ -68,6 +74,43 @@ const LIVE_CHANNEL_MAP: Readonly<Partial<Record<string, MixerLiveChannels>>> = {
   music: "bed", // Music Bed
   jingle: "jingle",
 };
+
+/* ── live EQ (3-band peaking EQ per on-air bus; server applies to broadcast) ── */
+type EqState = Record<MixerEqBus, Record<MixerEqBand, number>>;
+const EQ_MIN = -12;
+const EQ_MAX = 12;
+const EQ_BUSES: ReadonlyArray<{ id: MixerEqBus; label: string; sub: string; tint: string }> = [
+  { id: "mic", label: "MIC", sub: "Host voice", tint: GOLD },
+  { id: "bed", label: "MUSIC BED", sub: "Underscore", tint: "#7BE3A3" },
+  { id: "master", label: "MASTER", sub: "Main out", tint: TEXT },
+];
+const EQ_BANDS: ReadonlyArray<{ id: MixerEqBand; label: string; freq: string }> = [
+  { id: "low", label: "LOW", freq: "100 Hz" },
+  { id: "mid", label: "MID", freq: "1.2 kHz" },
+  { id: "high", label: "HIGH", freq: "8 kHz" },
+];
+function eqState(
+  mic: [number, number, number], bed: [number, number, number], master: [number, number, number],
+): EqState {
+  return {
+    mic: { low: mic[0], mid: mic[1], high: mic[2] },
+    bed: { low: bed[0], mid: bed[1], high: bed[2] },
+    master: { low: master[0], mid: master[1], high: master[2] },
+  };
+}
+const EQ_FLAT: EqState = eqState([0, 0, 0], [0, 0, 0], [0, 0, 0]);
+// Sound presets — one tap sets all 9 bands (tone only; scenes handle levels).
+const EQ_PRESETS: ReadonlyArray<{ id: string; name: string; bands: EqState }> = [
+  { id: "flat", name: "Flat", bands: EQ_FLAT },
+  { id: "talk", name: "Talk Show", bands: eqState([-2, 2.5, 3.5], [1, -1.5, -1], [0, 0, 1]) },
+  { id: "podcast", name: "Podcast Studio", bands: eqState([1.5, 1, 2.5], [0, -2, 0], [0.5, 0, 1]) },
+  { id: "warm", name: "Warm Music", bands: eqState([0, 0, 0], [3, 0, -1], [1, 0, 0]) },
+  { id: "bright", name: "Bright Music", bands: eqState([0, 0, 0], [1, 0.5, 3], [0, 0, 1.5]) },
+];
+// +3.5 / −2.0 / 0 — signed one-decimal dB readout (unicode minus, flat shows "0").
+function fmtDb(v: number): string {
+  return v === 0 ? "0" : `${v > 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}`;
+}
 
 // The four scenes seeded on first load. Each preset tweaks channel levels.
 const SEED_SCENES: MixerSceneBody[] = [
@@ -119,6 +162,12 @@ export function MixerStudio(): ReactElement {
   const [liveErr, setLiveErr] = useState<string | null>(null);
   const levelTimers = useRef(new Map<MixerLiveChannels, ReturnType<typeof setTimeout>>());
 
+  // ── live EQ (client-held; the server has no getter — engine defaults 0 = Flat) ──
+  const [eq, setEq] = useState<EqState>(EQ_FLAT);
+  const [eqPreset, setEqPreset] = useState<string | null>("flat");
+  const eqRef = useRef<EqState>(EQ_FLAT); // latest bands for debounced POSTs (no stale closures)
+  const eqTimers = useRef(new Map<MixerEqBus, ReturnType<typeof setTimeout>>());
+
   // ── music bed player (local) ──
   const [bedIdx, setBedIdx] = useState(0);
   const [bedPlaying, setBedPlaying] = useState(false);
@@ -155,10 +204,56 @@ export function MixerStudio(): ReactElement {
     }, 250));
   }, []);
 
+  // Debounced (~250ms trailing edge, per bus) EQ push to the engine. A band
+  // drag collapses to one POST carrying just that bus's three bands; each bus
+  // has its own timer so mic/bed/master never clobber each other. Offline →
+  // purely local; values are kept and POSTed on the next change while connected.
+  const pushLiveEq = useCallback((bus: MixerEqBus) => {
+    if (!engineRef.current) return;
+    const timers = eqTimers.current;
+    const pending = timers.get(bus);
+    if (pending) clearTimeout(pending);
+    timers.set(bus, setTimeout(() => {
+      timers.delete(bus);
+      if (!engineRef.current) return; // engine dropped while debouncing
+      RadioApi.liveEq({ [bus]: { ...eqRef.current[bus] } })
+        .then(() => setLiveErr(null))
+        .catch(() => setLiveErr("The on-air engine didn't accept an EQ change."));
+    }, 250));
+  }, []);
+
+  const setEqBand = useCallback((bus: MixerEqBus, band: MixerEqBand, value: number) => {
+    const v = Math.max(EQ_MIN, Math.min(EQ_MAX, value));
+    const next: EqState = { ...eqRef.current, [bus]: { ...eqRef.current[bus], [band]: v } };
+    eqRef.current = next;
+    setEq(next);
+    setEqPreset(null); // manual moves clear the active-chip highlight
+    pushLiveEq(bus);
+  }, [pushLiveEq]);
+
+  const applyEqPreset = useCallback((preset: (typeof EQ_PRESETS)[number]) => {
+    // clone so later slider edits never mutate the preset constants
+    const next: EqState = { mic: { ...preset.bands.mic }, bed: { ...preset.bands.bed }, master: { ...preset.bands.master } };
+    eqRef.current = next;
+    setEq(next);
+    setEqPreset(preset.id);
+    // drop pending per-bus debounces so they can't overwrite the full-board POST
+    eqTimers.current.forEach((t) => clearTimeout(t));
+    eqTimers.current.clear();
+    if (!engineRef.current) return; // offline → local only
+    RadioApi.liveEq(next)
+      .then(() => setLiveErr(null))
+      .catch(() => setLiveErr(`"${preset.name}" EQ was applied locally, but the on-air engine didn't take it.`));
+  }, []);
+
   // flush pending debounce timers on unmount
   useEffect(() => {
     const timers = levelTimers.current;
-    return () => { timers.forEach((t) => clearTimeout(t)); timers.clear(); };
+    const eqT = eqTimers.current;
+    return () => {
+      timers.forEach((t) => clearTimeout(t)); timers.clear();
+      eqT.forEach((t) => clearTimeout(t)); eqT.clear();
+    };
   }, []);
 
   // ── load scenes (seed defaults if none) + jingles ──
@@ -477,6 +572,33 @@ export function MixerStudio(): ReactElement {
                   </>
                 )}
               </Panel>
+
+              {/* EQ & sound (LIVE — 3-band peaking EQ per on-air bus) */}
+              <Panel>
+                <SectionHead icon={AudioWaveform} title="EQ & sound" hint={engineConnected ? "Live — shaping the broadcast" : "Local — engine offline"} />
+
+                {/* preset chips — one tap sets all 9 bands */}
+                <div className="flex gap-2 flex-wrap">
+                  {EQ_PRESETS.map((p) => {
+                    const active = eqPreset === p.id;
+                    return (
+                      <button key={p.id} onClick={() => applyEqPreset(p)} className="mx-btn rounded-full" style={{ height: 30, padding: "0 14px", background: active ? "rgba(230,198,110,0.18)" : "rgba(255,255,255,0.04)", border: `1px solid ${active ? GOLD + "88" : PANEL_BORDER}`, color: active ? GOLD : DIM, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
+                        {p.name}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 10.5, color: DIMMER, marginTop: 7, marginBottom: 14 }}>
+                  Presets shape tone (EQ). Use Scenes for level balance.
+                </div>
+
+                {/* three bus groups side by side */}
+                <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+                  {EQ_BUSES.map((bus) => (
+                    <EqBusGroup key={bus.id} bus={bus} values={eq[bus.id]} onBand={(band, v) => setEqBand(bus.id, band, v)} />
+                  ))}
+                </div>
+              </Panel>
             </div>
 
             {/* ══════════ RIGHT — music bed + jingles ══════════ */}
@@ -609,6 +731,45 @@ function ChannelStrip({ channel, meter, dimmed, live, onLevel, onPan, onMute, on
       <div className="flex gap-1 w-full" style={{ marginTop: 6 }}>
         <button onClick={onMute} className="mx-btn flex-1 rounded-md" style={{ height: 24, fontSize: 10, fontWeight: 800, background: channel.muted ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.05)", color: channel.muted ? "#FCA5A5" : DIM, border: `1px solid ${channel.muted ? RED + "66" : PANEL_BORDER}` }}>M</button>
         <button onClick={onSolo} className="mx-btn flex-1 rounded-md" style={{ height: 24, fontSize: 10, fontWeight: 800, background: channel.solo ? "rgba(230,198,110,0.22)" : "rgba(255,255,255,0.05)", color: channel.solo ? GOLD : DIM, border: `1px solid ${channel.solo ? GOLD + "66" : PANEL_BORDER}` }}>S</button>
+      </div>
+    </div>
+  );
+}
+
+// One EQ bus group (MIC / MUSIC BED / MASTER): three compact vertical band
+// sliders styled like the console faders, each with a 0 dB centre-detent tick,
+// a signed dB readout and the band's centre frequency underneath.
+function EqBusGroup({ bus, values, onBand }: {
+  bus: { id: MixerEqBus; label: string; sub: string; tint: string };
+  values: Record<MixerEqBand, number>;
+  onBand: (band: MixerEqBand, v: number) => void;
+}): ReactElement {
+  return (
+    <div className="rounded-xl" style={{ background: `${bus.tint}0A`, border: `1px solid ${bus.tint}33`, padding: "12px 10px" }}>
+      <div className="text-center" style={{ fontSize: 11.5, fontWeight: 800, color: bus.tint, letterSpacing: "0.05em" }}>{bus.label}</div>
+      <div className="text-center" style={{ fontSize: 9.5, color: DIM, marginTop: 1, marginBottom: 10 }}>{bus.sub}</div>
+      <div className="flex justify-center gap-4">
+        {EQ_BANDS.map((band) => {
+          const v = values[band.id];
+          return (
+            <div key={band.id} className="flex flex-col items-center" style={{ width: 46 }}>
+              <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: "0.08em", color: DIM }}>{band.label}</span>
+              {/* vertical gain slider; the faint centre tick marks 0 dB */}
+              <div className="relative flex items-center justify-center" style={{ height: 104, marginTop: 6 }}>
+                <span aria-hidden style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%, -50%)", width: 20, height: 2, borderRadius: 1, background: "rgba(255,255,255,0.22)", pointerEvents: "none" }} />
+                <input
+                  type="range" min={EQ_MIN} max={EQ_MAX} step={0.5} value={v}
+                  onChange={(e) => onBand(band.id, Number(e.target.value))}
+                  className="mx-fader" style={{ height: 104, accentColor: bus.tint }}
+                  aria-label={`${bus.label} ${band.label} gain (${band.freq})`}
+                  title={`${band.freq} · ${fmtDb(v)} dB`}
+                />
+              </div>
+              <div className="mx-tnum" style={{ fontFamily: MONO, fontSize: 11, color: v === 0 ? DIM : bus.tint, marginTop: 6 }}>{fmtDb(v)}</div>
+              <div style={{ fontSize: 8, color: DIMMER, marginTop: 2 }}>{band.freq}</div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

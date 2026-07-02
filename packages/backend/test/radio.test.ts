@@ -561,6 +561,49 @@ describe("radio — LIVE MIX control (liquidsoap)", () => {
     expect(over.status).toBe(400);
   });
 
+  it("eq sets flattened <bus>_<band> dB gains on the mixer; empty/valueless bands is a 400", async () => {
+    const res = await agent()
+      .post("/v1/admin/radio/mixer/live/eq")
+      .set(auth(adminTok))
+      .send({ bands: { mic: { low: -2, high: 3.5 }, master: { mid: 1 } } });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(fakeMixer.eq).toEqual({ mic_low: -2, mic_high: 3.5, master_mid: 1 });
+
+    const empty = await agent()
+      .post("/v1/admin/radio/mixer/live/eq")
+      .set(auth(adminTok))
+      .send({ bands: {} });
+    expect(empty.status).toBe(400);
+    expect(empty.body.error.code).toBe("VALIDATION_FAILED");
+
+    // Buses present but no band values is still "no values overall" — 400 too.
+    const valueless = await agent()
+      .post("/v1/admin/radio/mixer/live/eq")
+      .set(auth(adminTok))
+      .send({ bands: { mic: {}, bed: {} } });
+    expect(valueless.status).toBe(400);
+
+    // Gains are dB −12..+12 — 30 fails validation.
+    const over = await agent()
+      .post("/v1/admin/radio/mixer/live/eq")
+      .set(auth(adminTok))
+      .send({ bands: { bed: { mid: 30 } } });
+    expect(over.status).toBe(400);
+    expect(over.body.error.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("live EQ is gated by radio:edit (a Student is 403)", async () => {
+    const student = await createUser({ congregationId: cong, role: "Student", email: "eq@dev.local" });
+    const tok = bearer({ sub: student.user_id, role: "Student", cong });
+    const res = await agent()
+      .post("/v1/admin/radio/mixer/live/eq")
+      .set(auth(tok))
+      .send({ bands: { mic: { low: -3 } } });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN_SCOPE");
+  });
+
   it("live-mix control is gated by radio:edit (a Student is 403)", async () => {
     const student = await createUser({ congregationId: cong, role: "Student", email: "mix@dev.local" });
     const tok = bearer({ sub: student.user_id, role: "Student", cong });

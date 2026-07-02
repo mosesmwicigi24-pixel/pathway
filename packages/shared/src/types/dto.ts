@@ -289,6 +289,17 @@ export interface MixerLiveLevelsBody {
   channels: Partial<Record<MixerLiveChannels, number>>;
 }
 
+/** The three live-mix buses carrying a 3-band peaking EQ. */
+export type MixerEqBus = "mic" | "bed" | "master";
+
+/** The three EQ bands per bus. */
+export type MixerEqBand = "low" | "mid" | "high";
+
+/** POST /admin/radio/mixer/live/eq — per-bus band gains in dB (−12..+12, default 0); at least one value overall. */
+export interface MixerLiveEqBody {
+  bands: Partial<Record<MixerEqBus, Partial<Record<MixerEqBand, number>>>>;
+}
+
 /** POST /admin/radio/mixer/live/scene — apply a saved mixer scene to the live mix. */
 export interface MixerLiveSceneBody {
   scene_id: UUID;

@@ -4002,6 +4002,21 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "503": { description: Live mix engine not configured or unreachable }
+  /admin/radio/mixer/live/eq:
+    post:
+      tags: [radio]
+      summary: Set live-mix 3-band EQ gains per bus (mic/bed/master × low/mid/high, dB −12..+12). Gated by radio:edit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MixerLiveEqBody" }
+      responses:
+        "200": { description: Applied, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { description: Validation failed (at least one band gain required; dB −12..+12) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "503": { description: Live mix engine not configured or unreachable }
   /admin/radio/mixer/live/jingle:
     post:
       tags: [radio]
@@ -4477,6 +4492,25 @@ components:
             bed: { type: integer, minimum: 0, maximum: 100 }
             jingle: { type: integer, minimum: 0, maximum: 100 }
             master: { type: integer, minimum: 0, maximum: 100 }
+    MixerEqBandGains:
+      type: object
+      description: One bus's 3-band peaking-EQ gains in dB (−12..+12, default 0).
+      properties:
+        low: { type: number, minimum: -12, maximum: 12 }
+        mid: { type: number, minimum: -12, maximum: 12 }
+        high: { type: number, minimum: -12, maximum: 12 }
+    MixerLiveEqBody:
+      type: object
+      required: [bands]
+      description: Per-bus 3-band EQ gains in dB. At least one band gain overall (engine keys eq_<bus>_<band>).
+      properties:
+        bands:
+          type: object
+          minProperties: 1
+          properties:
+            mic: { $ref: "#/components/schemas/MixerEqBandGains" }
+            bed: { $ref: "#/components/schemas/MixerEqBandGains" }
+            master: { $ref: "#/components/schemas/MixerEqBandGains" }
     MixerLiveJingleBody:
       type: object
       required: [jingle_id]

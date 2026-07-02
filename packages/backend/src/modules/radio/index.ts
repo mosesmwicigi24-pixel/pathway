@@ -36,6 +36,10 @@ export function registerRadio(
     const input = parseBody(RadioService.MixerLiveLevels, req.body);
     res.json(await svc.setLiveLevels(input));
   }));
+  r.post("/admin/radio/mixer/live/eq", auth, perm("radio", "edit"), handler(async (req, res) => {
+    const input = parseBody(RadioService.MixerLiveEq, req.body);
+    res.json(await svc.setLiveEq(input));
+  }));
   r.post("/admin/radio/mixer/live/jingle", auth, perm("radio", "edit"), handler(async (req, res) => {
     const { jingle_id } = parseBody(RadioService.MixerLiveJingle, req.body);
     res.json(await svc.fireLiveJingle(jingle_id));

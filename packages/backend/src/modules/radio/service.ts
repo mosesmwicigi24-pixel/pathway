@@ -124,6 +124,15 @@ function toPublic(row: RadioProgramRow): RadioProgramPublic {
   return rest;
 }
 
+// One bus's 3-band EQ gains — dB floats −12..+12 (default 0 on the engine).
+const EqBandGains = z
+  .object({
+    low: z.number().min(-12).max(12).optional(),
+    mid: z.number().min(-12).max(12).optional(),
+    high: z.number().min(-12).max(12).optional(),
+  })
+  .strict();
+
 export class RadioService {
   constructor(
     private readonly pool: Pool,
@@ -234,6 +243,27 @@ export class RadioService {
         .refine((c) => Object.values(c).some((v) => v !== undefined), {
           message: "At least one channel level is required",
         }),
+    })
+    .strict();
+
+  // LIVE EQ (liquidsoap): 3-band peaking EQ per bus, gains in dB −12..+12;
+  // at least one band gain overall (an empty/valueless body is a 400).
+  static readonly MixerLiveEq = z
+    .object({
+      bands: z
+        .object({
+          mic: EqBandGains.optional(),
+          bed: EqBandGains.optional(),
+          master: EqBandGains.optional(),
+        })
+        .strict()
+        .refine(
+          (b) =>
+            Object.values(b).some(
+              (bus) => bus && Object.values(bus).some((v) => v !== undefined),
+            ),
+          { message: "At least one EQ band gain is required" },
+        ),
     })
     .strict();
 
@@ -921,6 +951,23 @@ export class RadioService {
       if (typeof v === "number") gains[ch as MixerLiveChannel] = v;
     }
     await this.mixer.setGains(gains);
+    return { ok: true };
+  }
+
+  /**
+   * Set live 3-band EQ gains (dB −12..+12; validated at the route). Flattens the
+   * nested bus→band body to the engine's "<bus>_<band>" interactive-variable keys
+   * (e.g. { mic: { high: -2.5 } } → { mic_high: -2.5 }).
+   */
+  async setLiveEq(input: z.infer<typeof RadioService.MixerLiveEq>): Promise<{ ok: true }> {
+    const flat: Record<string, number> = {};
+    for (const [bus, bands] of Object.entries(input.bands)) {
+      if (!bands) continue;
+      for (const [band, v] of Object.entries(bands)) {
+        if (typeof v === "number") flat[`${bus}_${band}`] = v;
+      }
+    }
+    await this.mixer.setEq(flat);
     return { ok: true };
   }
 

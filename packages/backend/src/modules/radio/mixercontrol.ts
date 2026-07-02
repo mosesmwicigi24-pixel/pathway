@@ -11,6 +11,8 @@
 //     API (this interface) speaks ints 0..100 — converted here, at the edge;
 //   - `var.set mic = 0.82` → response contains "Variable mic set";
 //   - `var.get mic` → "0.82";
+//   - 3-band peaking EQ per bus (mic|bed|master × low|mid|high) as interactive
+//     dB floats −12..+12 (default 0): `var.set eq_mic_high = -2.5`;
 //   - `jingles.push /var/www/pathway-media/<file>` → queues a jingle;
 //   - every response is terminated by an "END" line; sessions end with `quit`.
 import { createConnection } from "node:net";
@@ -30,6 +32,12 @@ export interface MixerLiveStatus {
 export interface MixerControl {
   /** Set one or more channel gains. Values are ints 0..100 (converted to 0..1 on the wire). */
   setGains(gains: Partial<Record<MixerLiveChannel, number>>): Promise<void>;
+  /**
+   * Set 3-band peaking-EQ gains. Keys are "<bus>_<band>" (bus mic|bed|master,
+   * band low|mid|high — validated upstream); values are dB floats −12..+12,
+   * sent as `var.set eq_<bus>_<band> = <dB>` on the wire.
+   */
+  setEq(bands: Record<string, number>): Promise<void>;
   /** Queue a jingle by HOST-side file path (LIQUIDSOAP_MEDIA_DIR/<file>). */
   fireJingle(filePath: string): Promise<void>;
   /** Engine reachability + current gains (0..100). Never throws on a down engine. */
@@ -44,6 +52,11 @@ function clampLevel(v: number): number {
 /** API 0..100 int → liquidsoap 0..1 float literal (always with decimals, e.g. "1.00"). */
 function toWireGain(v: number): string {
   return (clampLevel(v) / 100).toFixed(2);
+}
+
+/** Clamp an EQ gain to −12..+12 dB (defensive — routes already validate). */
+function clampEqDb(v: number): number {
+  return Math.max(-12, Math.min(12, v));
 }
 
 /**
@@ -144,6 +157,20 @@ export class TelnetMixerControl implements MixerControl {
     });
   }
 
+  async setEq(bands: Record<string, number>): Promise<void> {
+    const entries = Object.entries(bands).filter(([, v]) => typeof v === "number");
+    if (entries.length === 0) return;
+    const responses = await this.exchange(
+      entries.map(([key, v]) => `var.set eq_${key} = ${clampEqDb(v).toFixed(1)}`),
+    );
+    entries.forEach(([key], i) => {
+      // Contract: a successful set responds with "Variable eq_<bus>_<band> set (…)".
+      if (!responses[i]?.includes("Variable")) {
+        throw new ApiError("UPSTREAM_UNAVAILABLE", `Live mix engine did not accept the ${key} EQ`);
+      }
+    });
+  }
+
   async fireJingle(filePath: string): Promise<void> {
     // Response is the queued request id line — any response means accepted.
     await this.exchange([`jingles.push ${filePath}`]);
@@ -176,6 +203,9 @@ export class NotConfiguredMixerControl implements MixerControl {
   async setGains(_gains: Partial<Record<MixerLiveChannel, number>>): Promise<void> {
     this.unavailable();
   }
+  async setEq(_bands: Record<string, number>): Promise<void> {
+    this.unavailable();
+  }
   async fireJingle(_filePath: string): Promise<void> {
     this.unavailable();
   }
@@ -191,11 +221,17 @@ export class NotConfiguredMixerControl implements MixerControl {
  */
 export class FakeMixerControl implements MixerControl {
   public gains: Record<string, number> = {};
+  public eq: Record<string, number> = {};
   public fired: string[] = [];
 
   async setGains(gains: Partial<Record<MixerLiveChannel, number>>): Promise<void> {
     for (const [ch, v] of Object.entries(gains)) {
       if (typeof v === "number") this.gains[ch] = clampLevel(v);
+    }
+  }
+  async setEq(bands: Record<string, number>): Promise<void> {
+    for (const [key, v] of Object.entries(bands)) {
+      if (typeof v === "number") this.eq[key] = clampEqDb(v);
     }
   }
   async fireJingle(filePath: string): Promise<void> {
@@ -206,6 +242,7 @@ export class FakeMixerControl implements MixerControl {
   }
   reset(): void {
     this.gains = {};
+    this.eq = {};
     this.fired = [];
   }
 }
