@@ -151,15 +151,35 @@ export class ChatService {
   async listPeople(userId: string, q?: string, viewerRole?: ViewerRole): Promise<{ people: unknown[] }> {
     const me = await this.me(this.pool, userId);
     const term = (q ?? "").trim();
+    // Achievement flair on every directory row — PUBLIC aggregates only (level,
+    // counts, up to 3 badge icons). Never per-badge provenance, scores, or any
+    // other private detail. Lateral joins keep it one round-trip per query.
+    const flairSelect = `,
+            COALESCE(e.current_level, 1)   AS level,
+            COALESCE(bd.badge_count, 0)    AS badge_count,
+            COALESCE(bd.badge_icons, '{}') AS badge_icons,
+            COALESCE(ce.cert_count, 0)     AS cert_count`;
+    const flairJoins = `
+           LEFT JOIN enrollments e ON e.user_id = u.user_id
+           LEFT JOIN LATERAL (
+             SELECT COUNT(*)::int AS badge_count,
+                    (ARRAY_REMOVE(ARRAY_AGG(b.icon_key ORDER BY ub.awarded_at DESC), NULL))[1:3] AS badge_icons
+               FROM user_badges ub
+               JOIN badges b ON b.badge_id = ub.badge_id
+              WHERE ub.user_id = u.user_id AND ub.revoked_at IS NULL
+           ) bd ON TRUE
+           LEFT JOIN LATERAL (
+             SELECT COUNT(*)::int AS cert_count FROM certificates ct WHERE ct.user_id = u.user_id
+           ) ce ON TRUE`;
     // Portal staff (Admin/SuperAdmin) get the GLOBAL directory — every registered
     // member is immediately reachable, across congregations — so the web portal
     // can DM anyone. Minors are still excluded everywhere (D-M6 minor-safety).
     if (isModerator(viewerRole)) {
       const people = await many(
         this.pool,
-        `SELECT u.user_id, u.full_name, u.role, u.avatar_url, c.name AS congregation
+        `SELECT u.user_id, u.full_name, u.role, u.avatar_url, c.name AS congregation${flairSelect}
            FROM users u
-           LEFT JOIN congregations c ON c.congregation_id = u.congregation_id
+           LEFT JOIN congregations c ON c.congregation_id = u.congregation_id${flairJoins}
           WHERE u.user_id <> $1
             AND u.deleted_at IS NULL
             AND u.is_minor = FALSE
@@ -177,8 +197,8 @@ export class ChatService {
       // Only real congregation members appear: a user with a NULL congregation
       // (e.g. an unattached signup) is never DM-able. `= $1` already excludes
       // NULLs; the explicit IS NOT NULL locks the guarantee.
-      `SELECT u.user_id, u.full_name, u.role, u.avatar_url
-         FROM users u
+      `SELECT u.user_id, u.full_name, u.role, u.avatar_url${flairSelect}
+         FROM users u${flairJoins}
         WHERE u.congregation_id = $1
           AND u.congregation_id IS NOT NULL
           AND u.user_id <> $2

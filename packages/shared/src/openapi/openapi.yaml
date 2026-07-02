@@ -3225,14 +3225,48 @@ paths:
   /chat/people:
     get:
       tags: [progress]
-      summary: DM directory — members I may message (same congregation, minor-safe; excludes self). Optional ?q name search.
+      summary: DM directory — members I may message (same congregation, minor-safe; excludes self). Optional ?q name search. Each row carries public achievement flair — level + counts only, never private detail.
       parameters:
         - name: q
           in: query
           required: false
           schema: { type: string, maxLength: 120 }
       responses:
-        "200": { description: People }
+        "200":
+          description: People
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [people]
+                properties:
+                  people:
+                    type: array
+                    items:
+                      type: object
+                      required: [user_id, full_name, level, badge_count, badge_icons, cert_count]
+                      properties:
+                        user_id: { type: string, format: uuid }
+                        full_name: { type: string }
+                        role: { type: string }
+                        avatar_url: { type: ["string", "null"] }
+                        congregation:
+                          type: ["string", "null"]
+                          description: Present only for portal-staff (Admin/SuperAdmin) callers — global directory rows.
+                        level:
+                          type: integer
+                          description: Pathway level (enrollments.current_level; 1 when not yet enrolled).
+                        badge_count:
+                          type: integer
+                          description: Count of unrevoked badges. Public aggregate only.
+                        badge_icons:
+                          type: array
+                          maxItems: 3
+                          items: { type: string }
+                          description: Icon strings (badges.icon_key) of the up-to-3 most recently awarded badges; empty when none carry an icon.
+                        cert_count:
+                          type: integer
+                          description: Count of issued certificates. Public aggregate only.
         "401": { $ref: "#/components/responses/Unauthorized" }
   /chat/dms:
     post:

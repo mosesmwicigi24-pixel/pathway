@@ -320,6 +320,54 @@ describe("DM directory (people)", () => {
     expect(mine.status).toBe(200);
     expect(mine.body.people).toEqual([]);
   });
+
+  it("carries public achievement flair — level, badge count + icons, cert count (aggregates only)", async () => {
+    // Give Ben (a2) real achievements: Level 3 enrollment, two badges (one with
+    // an icon), and a certificate.
+    await testPool().query(
+      `INSERT INTO enrollments (user_id, current_level) VALUES ($1, 3)
+       ON CONFLICT (user_id) DO UPDATE SET current_level = 3`,
+      [a2Id],
+    );
+    await testPool().query(
+      `INSERT INTO badges (code, name, description, icon_key, category, criteria) VALUES
+         ('t_first', 'First Steps', 'First module.', '🌱', 'journey', '{"kind":"module_count","count":1}'),
+         ('t_streak', 'Faithful',   'Seven days.',   NULL, 'consistency', '{"kind":"streak_days","days":7}')`,
+    );
+    await testPool().query(
+      `INSERT INTO user_badges (user_id, badge_id, source)
+       SELECT $1, badge_id, '{"event":"test"}'::jsonb FROM badges WHERE code IN ('t_first','t_streak')`,
+      [a2Id],
+    );
+    await testPool().query(
+      `INSERT INTO certificates (user_id, level_number, verification_code, pdf_object_key, content_hash, signature)
+       VALUES ($1, 1, 'TEST-CERT-0001', 'certs/test.pdf', 'hash', 'sig')`,
+      [a2Id],
+    );
+
+    const res = await agent().get("/v1/chat/people").set(auth(aTok));
+    expect(res.status).toBe(200);
+    type Flair = { user_id: string; level: number; badge_count: number; badge_icons: string[]; cert_count: number };
+    const people = res.body.people as Flair[];
+
+    const ben = people.find((p) => p.user_id === a2Id)!;
+    expect(ben.level).toBe(3);
+    expect(ben.badge_count).toBe(2);
+    expect(ben.badge_icons).toEqual(["🌱"]); // NULL icon_key rows dropped, count still 2
+    expect(ben.cert_count).toBe(1);
+
+    // A member with no achievements still gets safe defaults — level 1, zeros.
+    const cara = people.find((p) => p.user_id === bId)!;
+    expect(cara.level).toBe(1);
+    expect(cara.badge_count).toBe(0);
+    expect(cara.badge_icons).toEqual([]);
+    expect(cara.cert_count).toBe(0);
+
+    // Aggregates only — no private detail leaks onto a directory row.
+    expect(ben).not.toHaveProperty("badges");
+    expect(ben).not.toHaveProperty("awarded_at");
+    expect(ben).not.toHaveProperty("verification_code");
+  });
 });
 
 describe("cell conversation (portal Message cell)", () => {
