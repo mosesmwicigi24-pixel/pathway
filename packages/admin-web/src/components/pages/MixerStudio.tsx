@@ -42,6 +42,14 @@ const DIMMER = "rgba(232,238,247,0.38)";
 const MONO = "'DM Mono', monospace";
 const SERIF = "'DM Serif Display', serif";
 
+/* ── audio upload constraints (mirror the server: 70 MB, MP3/WAV/AAC/ALAC) ── */
+const AUDIO_ACCEPT = ".mp3,.wav,.m4a,.aac,audio/mpeg,audio/wav,audio/mp4,audio/aac";
+function validAudio(file: File): string | null {
+  if (file.size > 70 * 1024 * 1024) return `${file.name} is over the 70 MB limit`;
+  if (!/\.(mp3|wav|m4a|aac|alac)$/i.test(file.name)) return "Only MP3, WAV, AAC or ALAC (.m4a) audio is allowed";
+  return null;
+}
+
 // Channel palette for the default board (id must be stable — used as scene keys).
 const DEFAULT_CHANNELS: MixerChannel[] = [
   { id: "mic1", name: "Host Mic", sub: "Dynamic", color: "#E6C66E", level: 78, pan: 0, muted: false, solo: false },
@@ -258,6 +266,8 @@ export function MixerStudio(): ReactElement {
     const list = Array.from(files);
     for (let i = 0; i < list.length; i++) {
       const f = list[i]!;
+      const invalid = validAudio(f);
+      if (invalid) { setErr(invalid); continue; }
       try {
         // REAL upload — the bytes go to our /media store so the on-air engine
         // can actually play the pad (object-URL placeholders are unplayable
@@ -504,7 +514,7 @@ export function MixerStudio(): ReactElement {
                 <SectionHead icon={Headphones} title="Jingle soundboard" hint={`${jingles.length} pads`} />
                 <label className="mx-btn flex items-center justify-center gap-2 rounded-xl cursor-pointer mb-3" style={{ height: 36, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px dashed ${GOLD}44`, fontSize: 12, fontWeight: 700 }}>
                   {uploading ? <Loader2 size={14} className="mx-spin" /> : <Upload size={14} />} Upload jingle
-                  <input type="file" accept="audio/*" multiple hidden onChange={(e) => uploadJingles(e.target.files)} />
+                  <input type="file" accept={AUDIO_ACCEPT} multiple hidden onChange={(e) => uploadJingles(e.target.files)} />
                 </label>
                 {jingles.length === 0 ? (
                   <div style={{ fontSize: 11.5, color: DIMMER, textAlign: "center", padding: "12px 0" }}>No jingles yet — upload a few short stingers.</div>

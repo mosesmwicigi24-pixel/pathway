@@ -52,6 +52,14 @@ const DIMMER = "rgba(232,238,247,0.38)";
 const MONO = "'DM Mono', monospace";
 const SERIF = "'DM Serif Display', serif";
 
+/* ── audio upload constraints (mirror the server: 70 MB, MP3/WAV/AAC/ALAC) ── */
+const AUDIO_ACCEPT = ".mp3,.wav,.m4a,.aac,audio/mpeg,audio/wav,audio/mp4,audio/aac";
+function validAudio(file: File): string | null {
+  if (file.size > 70 * 1024 * 1024) return `${file.name} is over the 70 MB limit`;
+  if (!/\.(mp3|wav|m4a|aac|alac)$/i.test(file.name)) return "Only MP3, WAV, AAC or ALAC (.m4a) audio is allowed";
+  return null;
+}
+
 type Phase = "idle" | "countdown" | "live" | "paused";
 
 const CATEGORIES = ["Sermon", "Worship", "Prayer", "Bible Study", "Conference"] as const;
@@ -720,8 +728,9 @@ export function RadioStudio(): ReactElement {
 
   // Upload a broadcast audio recording (self-hosted disk) → fills form.audio_url.
   const uploadFormAudio = useCallback(async (file: File) => {
-    if (file.size > 200 * 1024 * 1024) {
-      setAudioErr("Audio is larger than 200 MB. Please choose a smaller file.");
+    const invalid = validAudio(file);
+    if (invalid) {
+      setAudioErr(invalid);
       return;
     }
     setUploadingAudio(true);
@@ -745,8 +754,9 @@ export function RadioStudio(): ReactElement {
   // Attach audio to the already-created (selected) program → PATCH + refresh.
   const attachAudio = useCallback(async (file: File) => {
     if (!selectedId) return;
-    if (file.size > 200 * 1024 * 1024) {
-      setAttachErr("Audio is larger than 200 MB. Please choose a smaller file.");
+    const invalid = validAudio(file);
+    if (invalid) {
+      setAttachErr(invalid);
       return;
     }
     setAttachingAudio(true);
@@ -918,7 +928,7 @@ export function RadioStudio(): ReactElement {
                         <label className="rs-btn flex items-center gap-1.5 rounded-lg px-2.5" style={{ height: 28, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 11, fontWeight: 700, cursor: attachingAudio ? "default" : "pointer", opacity: attachingAudio ? 0.6 : 1 }}>
                           {attachingAudio ? <Loader2 size={12} className="rs-spin" /> : <Music size={12} />}
                           {attachingAudio ? "Uploading…" : selected.audio_url ? "Replace audio" : "Attach audio"}
-                          <input type="file" accept="audio/*" disabled={attachingAudio} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachAudio(f); }} style={hiddenInput} />
+                          <input type="file" accept={AUDIO_ACCEPT} disabled={attachingAudio} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachAudio(f); }} style={hiddenInput} />
                         </label>
                         {selected.audio_url && (
                           <span className="inline-flex items-center gap-1" style={{ fontSize: 11, color: DIM }}>
@@ -945,7 +955,7 @@ export function RadioStudio(): ReactElement {
                         <label className="rs-btn flex items-center gap-1.5 rounded-lg px-2.5" style={{ height: 28, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 11, fontWeight: 700, cursor: attachingAudio ? "default" : "pointer", opacity: attachingAudio ? 0.6 : 1 }}>
                           {attachingAudio ? <Loader2 size={12} className="rs-spin" /> : <Music size={12} />}
                           {attachingAudio ? "Uploading…" : "Replace audio"}
-                          <input type="file" accept="audio/*" disabled={attachingAudio} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachAudio(f); }} style={hiddenInput} />
+                          <input type="file" accept={AUDIO_ACCEPT} disabled={attachingAudio} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachAudio(f); }} style={hiddenInput} />
                         </label>
                       )}
                       <button onClick={beginEdit} className="rs-btn flex items-center gap-1.5 rounded-lg px-2.5" style={{ height: 28, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 11, fontWeight: 700 }}>
@@ -978,7 +988,7 @@ export function RadioStudio(): ReactElement {
                       <label className="rs-btn flex items-center gap-2 rounded-xl px-3.5 shrink-0" style={{ height: 36, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12, fontWeight: 700, cursor: attachingAudio ? "default" : "pointer", opacity: attachingAudio ? 0.6 : 1 }}>
                         {attachingAudio ? <Loader2 size={14} className="rs-spin" /> : <Music size={14} />}
                         {attachingAudio ? "Uploading…" : "Attach audio"}
-                        <input type="file" accept="audio/*" disabled={attachingAudio} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachAudio(f); }} style={hiddenInput} />
+                        <input type="file" accept={AUDIO_ACCEPT} disabled={attachingAudio} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachAudio(f); }} style={hiddenInput} />
                       </label>
                     </div>
                   )}
@@ -1209,7 +1219,7 @@ export function RadioStudio(): ReactElement {
                       <label className="rs-btn flex items-center gap-2 rounded-xl px-3.5 shrink-0" style={{ height: 38, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12.5, fontWeight: 700, cursor: uploadingAudio ? "default" : "pointer", opacity: uploadingAudio ? 0.6 : 1 }}>
                         {uploadingAudio ? <Loader2 size={14} className="rs-spin" /> : <Music size={14} />}
                         {uploadingAudio ? "Uploading…" : form.audio_url ? "Replace audio" : "Upload audio"}
-                        <input type="file" accept="audio/*" disabled={uploadingAudio} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void uploadFormAudio(f); }} style={hiddenInput} />
+                        <input type="file" accept={AUDIO_ACCEPT} disabled={uploadingAudio} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void uploadFormAudio(f); }} style={hiddenInput} />
                       </label>
                       {form.audio_url ? (
                         <span className="inline-flex items-center gap-1.5 truncate" style={{ fontSize: 11.5, color: DIM, minWidth: 0 }}>
@@ -1702,7 +1712,8 @@ function AudioLibraryPanel(): ReactElement {
   }, [loadSessions]);
 
   const upload = useCallback(async (file: File) => {
-    if (file.size > 200 * 1024 * 1024) { setErr("Audio is larger than 200 MB. Please choose a smaller file."); return; }
+    const invalid = validAudio(file);
+    if (invalid) { setErr(invalid); return; }
     setUploading(true);
     setErr(null);
     try {
@@ -1758,7 +1769,7 @@ function AudioLibraryPanel(): ReactElement {
         <label className="rs-btn flex items-center justify-center gap-2 rounded-lg px-3 cursor-pointer" style={{ flex: 1, minWidth: 150, height: 34, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px dashed ${GOLD}66`, fontSize: 12, fontWeight: 700, opacity: uploading ? 0.6 : 1 }}>
           {uploading ? <Loader2 size={14} className="rs-spin" /> : <Upload size={14} />}
           {uploading ? "Uploading…" : `Upload ${KIND_META[uploadKind].label.toLowerCase()}`}
-          <input type="file" accept="audio/*" multiple={false} disabled={uploading} hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void upload(f); }} />
+          <input type="file" accept={AUDIO_ACCEPT} multiple={false} disabled={uploading} hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void upload(f); }} />
         </label>
       </div>
 
@@ -1909,7 +1920,8 @@ function SessionsPanel({ onPreview, onEdit }: { onPreview: (title: string | null
   // Attach/replace a session's broadcast audio straight from its card
   // (upload → PATCH audio_url/audio_duration_sec → refresh everywhere).
   const attachSessionAudio = useCallback(async (programId: string, file: File) => {
-    if (file.size > 200 * 1024 * 1024) { setErr("Audio is larger than 200 MB. Please choose a smaller file."); return; }
+    const invalid = validAudio(file);
+    if (invalid) { setErr(invalid); return; }
     setAttachingId(programId);
     setErr(null);
     try {
@@ -2106,7 +2118,7 @@ function SessionsPanel({ onPreview, onEdit }: { onPreview: (title: string | null
                   <label title={s.audio_url ? "Replace session audio" : "Attach session audio"} className="rs-btn flex items-center gap-1 rounded-lg px-2 py-1 shrink-0" style={{ fontSize: 10, fontWeight: 700, background: "rgba(230,198,110,0.10)", color: GOLD, border: `1px solid ${GOLD}33`, cursor: attachingId === s.id ? "default" : "pointer", opacity: attachingId === s.id ? 0.6 : 1 }}>
                     {attachingId === s.id ? <Loader2 size={11} className="rs-spin" /> : <Music size={11} />}
                     {attachingId === s.id ? "Uploading…" : s.audio_url ? "Replace audio" : "Attach audio"}
-                    <input type="file" accept="audio/*" disabled={attachingId === s.id} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachSessionAudio(s.id, f); }} style={hiddenInput} />
+                    <input type="file" accept={AUDIO_ACCEPT} disabled={attachingId === s.id} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachSessionAudio(s.id, f); }} style={hiddenInput} />
                   </label>
                   <button onClick={() => void cycleLoop(s)} title={`Loop: ${LOOP_LABEL[s.loop_mode]}`} className="rs-btn flex items-center gap-1 rounded-lg px-2 py-1 shrink-0" style={{ fontSize: 10, fontWeight: 700, background: loopOn ? "rgba(123,227,163,0.16)" : "rgba(255,255,255,0.05)", color: loopOn ? "#7BE3A3" : DIM, border: `1px solid ${loopOn ? "#7BE3A366" : PANEL_BORDER}` }}>
                     <LoopIcon size={11} /> {LOOP_LABEL[s.loop_mode]}

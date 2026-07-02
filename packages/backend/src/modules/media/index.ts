@@ -61,9 +61,19 @@ export function registerMedia(ctx: AppContext): Router {
       return next(err);
     });
 
-  // Uploaded session audio (Radio): bytes stream straight to OUR disk, same
-  // storage + cap as video. Returns a bare { url, duration_sec } (no media_assets
-  // row) — the caller stashes url/duration on the radio_program.
+  // Uploaded session audio (Radio): bytes stream straight to OUR disk. Returns a
+  // bare { url, duration_sec } (no media_assets row) — the caller stashes
+  // url/duration on the radio_program. Cap 70 MB; formats limited to MP3, WAV,
+  // AAC, and ALAC/AAC in an .m4a container (product decision 2026-07-03).
+  const AUDIO_MAX_BYTES = 70 * 1024 * 1024;
+  const AUDIO_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".alac"]);
+  const AUDIO_MIMES = new Set([
+    "audio/mpeg", "audio/mp3",                      // mp3
+    "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave", // wav
+    "audio/aac", "audio/aacp", "audio/x-aac",       // raw aac
+    "audio/mp4", "audio/x-m4a", "audio/m4a",        // m4a container (AAC/ALAC)
+    "audio/alac",
+  ]);
   const audioUpload = multer({
     storage: multer.diskStorage({
       destination: (_req, _file, cb) => cb(null, storageDir),
@@ -72,10 +82,11 @@ export function registerMedia(ctx: AppContext): Router {
         cb(null, `${randomUUID()}${ext}`);
       },
     }),
-    limits: { fileSize: ctx.env.MEDIA_MAX_UPLOAD_BYTES, files: 1 },
+    limits: { fileSize: AUDIO_MAX_BYTES, files: 1 },
     fileFilter: (_req, file, cb) => {
-      if (file.mimetype?.startsWith("audio/")) cb(null, true);
-      else cb(new ApiError("VALIDATION_FAILED", "Only audio files can be uploaded"));
+      const ext = (extname(file.originalname) || "").toLowerCase();
+      if (AUDIO_MIMES.has(file.mimetype ?? "") || AUDIO_EXTS.has(ext)) cb(null, true);
+      else cb(new ApiError("VALIDATION_FAILED", "Only MP3, WAV, AAC or ALAC (.m4a) audio can be uploaded"));
     },
   });
   const uploadAudio = (req: Request, res: Response, next: NextFunction): void =>
@@ -85,7 +96,7 @@ export function registerMedia(ctx: AppContext): Router {
         return next(
           new ApiError(
             "VALIDATION_FAILED",
-            err.code === "LIMIT_FILE_SIZE" ? "Audio exceeds the maximum upload size" : err.message,
+            err.code === "LIMIT_FILE_SIZE" ? "Audio exceeds the 70 MB upload limit" : err.message,
           ),
         );
       }
