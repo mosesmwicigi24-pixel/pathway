@@ -25,8 +25,15 @@ export const navGroups: NavGroup[] = [
       { path: "/cms", label: "CMS — Curriculum", icon: BookOpen },
       { path: "/level-detail", label: "Level Detail", icon: Layers },
       { path: "/quiz-builder", label: "Level Quiz Builder", icon: HelpCircle },
-      { path: "/video-library", label: "Video Library", icon: Video },
       { path: "/content-studio", label: "Content Studio", icon: Sparkles },
+    ],
+  },
+  {
+    label: "Media",
+    items: [
+      { path: "/video-library", label: "Video Library", icon: Video },
+      { path: "/radio", label: "Radio Studio", icon: Radio },
+      { path: "/mixer", label: "Audio Mixer", icon: SlidersVertical },
     ],
   },
   {
@@ -35,13 +42,16 @@ export const navGroups: NavGroup[] = [
       { path: "/cell-engagement", label: "Cell Engagement", icon: TrendingUp },
       { path: "/members", label: "Members", icon: Users },
       { path: "/reflection-queue", label: "Reflection Queue", icon: MessageSquare },
-      { path: "/chat", label: "Chat", icon: MessagesSquare },
       { path: "/events", label: "Events", icon: CalendarDays },
       { path: "/finance", label: "Finance", icon: Wallet },
       { path: "/certificates", label: "Certificates", icon: Award },
       { path: "/badges", label: "Badges", icon: Star },
-      { path: "/radio", label: "Radio Studio", icon: Radio },
-      { path: "/mixer", label: "Audio Mixer", icon: SlidersVertical },
+    ],
+  },
+  {
+    label: "Communication",
+    items: [
+      { path: "/chat", label: "Chat", icon: MessagesSquare },
     ],
   },
   {
@@ -49,6 +59,11 @@ export const navGroups: NavGroup[] = [
     items: [
       { path: "/intelligence", label: "Member Intelligence", icon: Brain },
       { path: "/proximity", label: "Suggested Pairings", icon: MapPin },
+    ],
+  },
+  {
+    label: "Settings",
+    items: [
       { path: "/users", label: "Users", icon: UserCog },
       { path: "/roles", label: "Roles & Permissions", icon: Shield },
       { path: "/congregations", label: "Congregations", icon: Church },

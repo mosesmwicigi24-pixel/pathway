@@ -4,13 +4,25 @@ import { describe, it, expect } from "vitest";
 import { navGroups, titleFor } from "../src/components/shell/nav";
 
 describe("portal nav model", () => {
-  it("has the four Figma-make groups in order", () => {
-    expect(navGroups.map((g) => g.label)).toEqual(["Portal", "Curriculum", "Operations", "System"]);
+  it("has the seven sidebar groups in order", () => {
+    expect(navGroups.map((g) => g.label)).toEqual(["Portal", "Curriculum", "Media", "Operations", "Communication", "System", "Settings"]);
   });
 
-  it("exposes the System section (Member Intelligence, Suggested Pairings, Users, Roles, Congregations, Countries, Languages)", () => {
+  it("exposes the Media section (Video Library, Radio Studio, Audio Mixer)", () => {
+    const media = navGroups.find((g) => g.label === "Media");
+    expect(media?.items.map((i) => i.path)).toEqual(["/video-library", "/radio", "/mixer"]);
+  });
+
+  it("exposes Communication (Chat) and Settings (Users, Roles, Congregations, Countries, Languages)", () => {
+    const comms = navGroups.find((g) => g.label === "Communication");
+    expect(comms?.items.map((i) => i.path)).toEqual(["/chat"]);
+    const settings = navGroups.find((g) => g.label === "Settings");
+    expect(settings?.items.map((i) => i.path)).toEqual(["/users", "/roles", "/congregations", "/countries", "/languages"]);
+  });
+
+  it("exposes the System section (Member Intelligence, Suggested Pairings)", () => {
     const system = navGroups.find((g) => g.label === "System");
-    expect(system?.items.map((i) => i.path)).toEqual(["/intelligence", "/proximity", "/users", "/roles", "/congregations", "/countries", "/languages"]);
+    expect(system?.items.map((i) => i.path)).toEqual(["/intelligence", "/proximity"]);
   });
 
   it("every nav item has a unique path", () => {
