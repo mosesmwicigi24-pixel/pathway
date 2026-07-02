@@ -41,7 +41,9 @@ describe("curriculum + gating (§1.9)", () => {
     l1m2 = await createModule(1, 2); // no questions → completion alone unlocks next
     l1m3 = await createModule(1, 3);
     l2m1 = await createModule(2, 1);
-    await addQuestion(l1m1, "A"); // m1 has a quiz → must be passed to unlock m2
+    // The quiz sits on m2: L1·M1 is the universal entry point and passes on
+    // completion alone, so strict quiz-gating is exercised on m2 → m3.
+    await addQuestion(l1m2, "A");
   });
 
   afterAll(async () => {
@@ -63,24 +65,23 @@ describe("curriculum + gating (§1.9)", () => {
   });
 
   it("completing a module with a quiz does NOT unlock the next until the quiz is passed", async () => {
-    const res = await progress().completeModule(userId, l1m1, null);
+    await progress().completeModule(userId, l1m1, null); // entry module opens m2
+    const res = await progress().completeModule(userId, l1m2, null);
     expect(res.is_completed).toBe(true);
-    expect(res.next_module_unlocked).toBe(false); // m1 has an unpassed quiz
-    await expect(curriculum().getModule(userId, l1m2)).rejects.toMatchObject({ code: "GATE_LOCKED" });
+    expect(res.next_module_unlocked).toBe(false); // m2 has an unpassed quiz
+    await expect(curriculum().getModule(userId, l1m3)).rejects.toMatchObject({ code: "GATE_LOCKED" });
 
-    await passQuiz(l1m1);
-    // Now m2 is reachable.
-    const m2 = (await curriculum().getModule(userId, l1m2)) as { locked: boolean };
-    expect(m2.locked).toBe(false);
-  });
-
-  it("a module with no questions unlocks the next on completion alone", async () => {
-    await progress().completeModule(userId, l1m1, null);
-    await passQuiz(l1m1);
-    const r2 = await progress().completeModule(userId, l1m2, null); // m2 has no questions
-    expect(r2.next_module_unlocked).toBe(true);
+    await passQuiz(l1m2);
+    // Now m3 is reachable.
     const m3 = (await curriculum().getModule(userId, l1m3)) as { locked: boolean };
     expect(m3.locked).toBe(false);
+  });
+
+  it("the entry module unlocks the next on completion alone (no questions on m1)", async () => {
+    const res = await progress().completeModule(userId, l1m1, null);
+    expect(res.next_module_unlocked).toBe(true);
+    const m2 = (await curriculum().getModule(userId, l1m2)) as { locked: boolean };
+    expect(m2.locked).toBe(false);
   });
 
   it("HARD LOCK: level-2 content is never unlocked for a level-1 member (§1.9)", async () => {

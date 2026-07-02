@@ -83,16 +83,20 @@ export async function loadModule(c: Queryable, moduleId: string): Promise<Module
 /**
  * SQL predicate: is a module "passed" for unlocking the next one (§1.9 Phase C)?
  * Driven by the module's `evaluation_kind`, given a module row aliased `mod`
- * (has evaluation_kind, module_id) and its COMPLETED module_progress row aliased
- * `mp` (has reflection_text, progress_id). Completion is asserted by the caller;
- * this adds the per-kind requirement:
+ * (has evaluation_kind, module_id, level_number, module_sequence_number) and its
+ * COMPLETED module_progress row aliased `mp` (has reflection_text, progress_id).
+ * Completion is asserted by the caller; this adds the per-kind requirement:
  *   none / exit_exam → nothing extra (completion alone unlocks the next)
  *   reflection       → a reflection exists and was not sent back ('returned'
  *                      re-locks until resubmitted; pending/approved/deferred pass)
  *   quiz             → a passing quiz attempt (or the module has no active questions)
+ * EXCEPTION — the universal entry point (Level 1 · Module 1) passes on completion
+ * alone: its quiz/reflection stays available (practice + score) but never blocks
+ * progression, so the first module is a frictionless way in for every member.
  */
 export function modulePassedPredicate(mod: string, mp: string): string {
-  return `(CASE ${mod}.evaluation_kind
+  return `((${mod}.level_number = 1 AND ${mod}.module_sequence_number = 1)
+    OR CASE ${mod}.evaluation_kind
       WHEN 'reflection' THEN EXISTS (
         SELECT 1 FROM module_reflections mr
          WHERE mr.progress_id = ${mp}.progress_id AND mr.state <> 'returned'
@@ -128,7 +132,7 @@ export async function isModuleUnlocked(
   const row = await maybeOne<{ unlocked: boolean }>(
     c,
     `WITH prereq AS (
-        SELECT m2.module_id, m2.evaluation_kind
+        SELECT m2.module_id, m2.evaluation_kind, m2.level_number, m2.module_sequence_number
           FROM modules m1
           JOIN modules m2
             ON m2.level_number = m1.level_number

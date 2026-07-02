@@ -50,33 +50,47 @@ describe("gating by evaluation_kind (§1.9)", () => {
     expect(await unlocked(m2)).toBe(true);
   });
 
+  // NOTE: strict per-kind fixtures sit at seq 2→3 — Level 1 · Module 1 is the
+  // universal entry point and passes on completion alone (tested below).
   it("'reflection' module needs completion + an unreturned reflection (B3 model)", async () => {
-    const m1 = await createModule(1, 1, { evaluationKind: "reflection" });
-    const m2 = await createModule(1, 2, { evaluationKind: "none" });
-    await complete(m1); // completed but no reflection
-    expect(await unlocked(m2)).toBe(false);
+    const m1 = await createModule(1, 1, { evaluationKind: "none" });
+    const m2 = await createModule(1, 2, { evaluationKind: "reflection" });
+    const m3 = await createModule(1, 3, { evaluationKind: "none" });
+    await complete(m1);
+    await complete(m2); // completed but no reflection
+    expect(await unlocked(m3)).toBe(false);
 
     // The real write path inserts a reviewable module_reflections row (pending).
     await testPool().query(
       `INSERT INTO module_reflections (progress_id, user_id, module_id, body)
        SELECT progress_id, $1, $2, 'I learned much' FROM module_progress
         WHERE enrollment_id = $3 AND module_id = $2`,
-      [userId, m1, enr],
+      [userId, m2, enr],
     );
-    expect(await unlocked(m2)).toBe(true); // pending passes
+    expect(await unlocked(m3)).toBe(true); // pending passes
 
-    await testPool().query(`UPDATE module_reflections SET state = 'returned' WHERE module_id = $1`, [m1]);
-    expect(await unlocked(m2)).toBe(false); // returned re-locks
+    await testPool().query(`UPDATE module_reflections SET state = 'returned' WHERE module_id = $1`, [m2]);
+    expect(await unlocked(m3)).toBe(false); // returned re-locks
   });
 
   it("'quiz' module still needs a passing attempt", async () => {
+    const m1 = await createModule(1, 1, { evaluationKind: "none" });
+    const m2 = await createModule(1, 2, { evaluationKind: "quiz" });
+    await addQuestion(m2, "A");
+    const m3 = await createModule(1, 3, { evaluationKind: "none" });
+    await complete(m1);
+    await complete(m2);
+    expect(await unlocked(m3)).toBe(false);
+    await passQuiz(m2);
+    expect(await unlocked(m3)).toBe(true);
+  });
+
+  it("entry module (L1·M1) passes on completion alone — its quiz never blocks the way in", async () => {
     const m1 = await createModule(1, 1, { evaluationKind: "quiz" });
     await addQuestion(m1, "A");
     const m2 = await createModule(1, 2, { evaluationKind: "none" });
-    await complete(m1);
-    expect(await unlocked(m2)).toBe(false);
-    await passQuiz(m1);
-    expect(await unlocked(m2)).toBe(true);
+    await complete(m1); // completed, quiz NOT passed
+    expect(await unlocked(m2)).toBe(true); // universal entry point
   });
 
   it("hard-lock invariant: nothing above current_level unlocks", async () => {
