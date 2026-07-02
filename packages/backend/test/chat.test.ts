@@ -518,6 +518,46 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
     expect(count.rows[0].n).toBe(2);
   });
 
+  it("an image broadcast delivers msg_type image + attachment_url (body = caption) to every DM", async () => {
+    const cong2 = await createCongregation("Broadcast Branch Img");
+    const sender = await createUser({ congregationId: cong2, role: "Instructor", email: "img-lead@dev.local", fullName: "Ivy Lead" });
+    const m1 = await createUser({ congregationId: cong2, email: "im1@dev.local", fullName: "Img One" });
+    const m2 = await createUser({ congregationId: cong2, email: "im2@dev.local", fullName: "Img Two" });
+    const senderTok = bearer({ sub: sender.user_id, role: "Instructor", cong: cong2 });
+    const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
+    const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });
+
+    const flyer = "https://res.cloudinary.com/demo/image/upload/v1/nuru/chat/flyer.jpg";
+    const res = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
+      .send({ body: "Sunday flyer 📸", msg_type: "image", attachment_url: flyer, client_mutation_id: uuid(90) });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ sent: 2, duplicate: false });
+
+    // BOTH recipients' DMs carry the image message with the caption as body.
+    for (const tok of [m1Tok, m2Tok]) {
+      const inbox = await agent().get("/v1/chat/conversations").set(auth(tok));
+      const dm = (inbox.body.conversations as Array<{ conversation_id: string; kind: string; last_type: string }>)
+        .find((c) => c.kind === "dm")!;
+      expect(dm).toBeDefined();
+      expect(dm.last_type).toBe("image");
+      const thread = await agent().get(`/v1/chat/conversations/${dm.conversation_id}`).set(auth(tok));
+      const msgs = thread.body.messages as Array<{ body: string; msg_type: string; attachment_url: string | null }>;
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0]!.msg_type).toBe("image");
+      expect(msgs[0]!.attachment_url).toBe(flyer);
+      expect(msgs[0]!.body).toBe("Sunday flyer 📸");
+    }
+
+    // Replay is still a no-op with the attachment present.
+    const replay = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
+      .send({ body: "Sunday flyer 📸", msg_type: "image", attachment_url: flyer, client_mutation_id: uuid(90) });
+    expect(replay.body).toEqual({ sent: 2, duplicate: true });
+    const count = await testPool().query(
+      `SELECT count(*)::int AS n FROM chat_messages WHERE attachment_url = $1`, [flyer],
+    );
+    expect(count.rows[0].n).toBe(2);
+  });
+
   it("re-broadcasting (new client_mutation_id) reuses the existing DMs instead of creating new ones", async () => {
     const cong2 = await createCongregation("Broadcast Branch 2");
     const sender = await createUser({ congregationId: cong2, role: "Instructor", email: "lead@dev.local", fullName: "Lead Lee" });

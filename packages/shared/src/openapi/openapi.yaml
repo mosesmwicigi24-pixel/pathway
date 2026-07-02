@@ -3280,7 +3280,7 @@ paths:
   /chat/broadcast:
     post:
       tags: [progress]
-      summary: Staff broadcast (Instructor+) — deliver ONE message to every active member of the sender's congregation as an individual DM from the sender (no group room; replies return as normal 1:1 threads). Minors excluded (D-M6). Idempotent on client_mutation_id.
+      summary: Staff broadcast (Instructor+) — deliver ONE message to every active member of the sender's congregation as an individual DM from the sender (no group room; replies return as normal 1:1 threads). Minors excluded (D-M6). Idempotent on client_mutation_id. May carry an image (msg_type=image + attachment_url uploaded via /chat/attachments/sign) — body is then the caption.
       requestBody:
         required: true
         content:
@@ -3289,7 +3289,9 @@ paths:
               type: object
               required: [body]
               properties:
-                body: { type: string, minLength: 1, maxLength: 20000 }
+                body: { type: string, minLength: 1, maxLength: 20000, description: "The message text (the caption, for an image broadcast)." }
+                msg_type: { type: string, enum: [text, image], default: text }
+                attachment_url: { type: string, format: uri, maxLength: 2000, description: Cloudinary secure_url of the uploaded image (the caption travels in body). }
                 client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
       responses:
         "201":

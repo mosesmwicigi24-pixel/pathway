@@ -51,7 +51,9 @@ export class ChatService {
   static readonly CreateDm = z.object({ user_id: z.string().uuid() });
 
   static readonly Broadcast = z.object({
-    body: z.string().min(1).max(20_000),
+    body: z.string().min(1).max(20_000), // for an image broadcast this is the caption
+    msg_type: z.enum(["text", "image"]).default("text"),
+    attachment_url: z.string().url().max(2000).optional(),
     client_mutation_id: z.string().uuid().optional(),
   });
 
@@ -612,7 +614,10 @@ export class ChatService {
    * server-minted (gen_random_uuid — the client never chooses them); the whole
    * fan-out is one transaction, so it lands for everyone or no one. Idempotent
    * on client_mutation_id (§3.6): the id is stamped on the first delivered copy
-   * (the column is UNIQUE), so a replay short-circuits to a no-op.
+   * (the column is UNIQUE), so a replay short-circuits to a no-op. May carry an
+   * image (msg_type='image' + attachment_url, same shape as sendMessage — the
+   * bytes went straight to Cloudinary via /chat/attachments/sign, §4.5); body
+   * is then the caption.
    */
   async broadcast(senderId: string, input: z.infer<typeof ChatService.Broadcast>): Promise<{ sent: number; duplicate: boolean }> {
     return tx(this.pool, async (c) => {
@@ -627,9 +632,12 @@ export class ChatService {
         const conversationId = await this.ensureDm(c, senderId, otherUserId, me.congregation_id);
         const msg = await one<{ message_id: string }>(
           c,
-          `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type, client_mutation_id)
-           VALUES (gen_random_uuid(), $1, $2, $3, 'text', $4) RETURNING message_id`,
-          [conversationId, senderId, input.body, stampedMutationId ? null : input.client_mutation_id ?? null],
+          `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type, attachment_url, client_mutation_id)
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6) RETURNING message_id`,
+          [
+            conversationId, senderId, input.body, input.msg_type,
+            input.attachment_url ?? null, stampedMutationId ? null : input.client_mutation_id ?? null,
+          ],
         );
         stampedMutationId = true;
         await c.query(`UPDATE chat_conversations SET updated_at = now() WHERE conversation_id = $1`, [conversationId]);
