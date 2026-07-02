@@ -37,8 +37,13 @@ beforeEach(async () => {
   leaderTok = bearer({ sub: leaderId, role: "Instructor", cong });
   outsiderTok = bearer({ sub: outsider.user_id, role: "Instructor", cong });
   memberTok = bearer({ sub: memberId, role: "Student", cong });
-  m1 = await createModule(1, 1, { evaluationKind: "reflection" });
-  m2 = await createModule(1, 2, { evaluationKind: "none" });
+  // The reflection module sits at seq 2: L1·M1 is the universal entry point and
+  // passes on completion alone, so reflection-gating is exercised on m1 → m2.
+  const entry = await createModule(1, 1, { evaluationKind: "none" });
+  m1 = await createModule(1, 2, { evaluationKind: "reflection" });
+  m2 = await createModule(1, 3, { evaluationKind: "none" });
+  const entryDone = await agent().post(`/v1/modules/${entry}/complete`).set(auth(memberTok)).send({});
+  if (entryDone.status !== 200) throw new Error(`entry complete failed: ${entryDone.status}`);
 });
 afterAll(async () => {
   await closeTestPool();
