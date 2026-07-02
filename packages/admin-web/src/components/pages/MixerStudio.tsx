@@ -5,9 +5,13 @@
 // REAL (API-backed): scene presets (mixer_scenes) — load, apply channel levels,
 // save the current channels as a scene; on first load with no scenes we seed the
 // four defaults (Preaching / Worship / Prayer / Interview). Jingle soundboard
-// (mixer_jingles) — load, upload (audio_url = object URL placeholder for now),
-// remove. LOCAL (client-only): channel strips + master, VU meters, music-bed
-// player transport — the live audio path is client hardware.
+// (mixer_jingles) — load, upload (bytes go to /admin/media/audio/upload so the
+// engine can play them on air), remove.
+// LIVE MIX (API-backed when the on-air engine is reachable): /mixer/live/status
+// is polled every 5s; while connected, the mapped strips (mic1→mic, music→bed,
+// jingle→jingle) + master push debounced gains to /mixer/live/levels, applying
+// a scene also POSTs /mixer/live/scene, and firing a pad POSTs /mixer/live/jingle.
+// LOCAL (client-only): the other strips, VU meters, music-bed player transport.
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
   SlidersVertical, Volume2, VolumeX, Headphones, Music, Play, Pause, SkipBack,
@@ -21,6 +25,7 @@ import {
   type MixerJingle,
   type MixerChannel,
   type MixerSceneBody,
+  type MixerLiveChannels,
 } from "../../api/client";
 
 /* ── studio palette (shared with RadioStudio) ── */
@@ -46,6 +51,15 @@ const DEFAULT_CHANNELS: MixerChannel[] = [
   { id: "jingle", name: "Jingles", sub: "SFX", color: "#C89B3C", level: 70, pan: 0, muted: false, solo: false },
   { id: "aux", name: "Aux / Video", sub: "HDMI", color: "#B794F6", level: 50, pan: 0, muted: false, solo: false },
 ];
+
+// Fixed mapping of local strips onto the on-air engine's live buses. Strips not
+// listed here (guest mic / call-in / aux) are honest "local" — client hardware
+// only, never sent to the engine. The master fader maps to the engine "master".
+const LIVE_CHANNEL_MAP: Readonly<Partial<Record<string, MixerLiveChannels>>> = {
+  mic1: "mic", // Host Mic
+  music: "bed", // Music Bed
+  jingle: "jingle",
+};
 
 // The four scenes seeded on first load. Each preset tweaks channel levels.
 const SEED_SCENES: MixerSceneBody[] = [
@@ -88,13 +102,56 @@ export function MixerStudio(): ReactElement {
   // ── jingles (API) ──
   const [jingles, setJingles] = useState<MixerJingle[]>([]);
   const [uploading, setUploading] = useState(false);
-  const objectUrls = useRef<string[]>([]);
+  const [firedJingle, setFiredJingle] = useState<string | null>(null);
+  const [jingleNote, setJingleNote] = useState<{ id: string; msg: string } | null>(null);
+
+  // ── live mix engine (API) ──
+  const [engineConnected, setEngineConnected] = useState(false);
+  const engineRef = useRef(false); // mirror for handlers/timeouts (no stale closures)
+  const [liveErr, setLiveErr] = useState<string | null>(null);
+  const levelTimers = useRef(new Map<MixerLiveChannels, ReturnType<typeof setTimeout>>());
 
   // ── music bed player (local) ──
   const [bedIdx, setBedIdx] = useState(0);
   const [bedPlaying, setBedPlaying] = useState(false);
 
   const anySolo = channels.some((c) => c.solo);
+
+  // ── engine status poll (every 5s; endpoint never errors, but be safe) ──
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      let connected = false;
+      try { connected = (await RadioApi.liveStatus()).connected; } catch { connected = false; }
+      if (!cancelled) { engineRef.current = connected; setEngineConnected(connected); }
+    };
+    void poll();
+    const t = setInterval(() => { void poll(); }, 5000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
+
+  // Debounced (~250ms trailing edge, per channel) gain push to the engine.
+  // A fader drag collapses to one POST carrying only the changed channel; each
+  // live bus has its own timer so mic/bed/jingle/master never clobber each other.
+  const pushLiveLevel = useCallback((target: MixerLiveChannels, value: number) => {
+    if (!engineRef.current) return; // offline → purely local, no calls
+    const timers = levelTimers.current;
+    const pending = timers.get(target);
+    if (pending) clearTimeout(pending);
+    timers.set(target, setTimeout(() => {
+      timers.delete(target);
+      if (!engineRef.current) return; // engine dropped while debouncing
+      RadioApi.liveLevels({ [target]: Math.max(0, Math.min(100, Math.round(value))) })
+        .then(() => setLiveErr(null))
+        .catch(() => setLiveErr("The on-air engine didn't accept a level change."));
+    }, 250));
+  }, []);
+
+  // flush pending debounce timers on unmount
+  useEffect(() => {
+    const timers = levelTimers.current;
+    return () => { timers.forEach((t) => clearTimeout(t)); timers.clear(); };
+  }, []);
 
   // ── load scenes (seed defaults if none) + jingles ──
   const load = useCallback(async () => {
@@ -140,9 +197,6 @@ export function MixerStudio(): ReactElement {
     return () => clearInterval(t);
   }, [channels, anySolo, master, masterMuted]);
 
-  // clean up object URLs on unmount
-  useEffect(() => () => { objectUrls.current.forEach((u) => URL.revokeObjectURL(u)); }, []);
-
   const setChan = (id: string, patch: Partial<MixerChannel>) =>
     setChannels((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
 
@@ -160,6 +214,12 @@ export function MixerStudio(): ReactElement {
           muted: saved.muted ?? c.muted ?? false,
         };
       }));
+    }
+    // Mirror the scene onto the on-air engine (server maps strips → live buses).
+    if (engineRef.current) {
+      RadioApi.liveScene(scene.id)
+        .then(() => setLiveErr(null))
+        .catch(() => setLiveErr(`"${scene.name}" was applied locally, but the on-air engine didn't take it.`));
     }
   };
 
@@ -198,9 +258,11 @@ export function MixerStudio(): ReactElement {
     const list = Array.from(files);
     for (let i = 0; i < list.length; i++) {
       const f = list[i]!;
-      const url = URL.createObjectURL(f);
-      objectUrls.current.push(url);
       try {
+        // REAL upload — the bytes go to our /media store so the on-air engine
+        // can actually play the pad (object-URL placeholders are unplayable
+        // server-side and make /mixer/live/jingle return 422).
+        const { url } = await RadioApi.uploadAudio(f);
         const created = await RadioApi.createJingle({
           label: f.name.replace(/\.[^.]+$/, "").slice(0, 40),
           color: JINGLE_COLORS[(jingles.length + i) % JINGLE_COLORS.length]!,
@@ -209,11 +271,29 @@ export function MixerStudio(): ReactElement {
         });
         setJingles((js) => [...js, created]);
       } catch {
-        setErr("Could not upload a jingle.");
+        setErr(`Could not upload "${f.name}".`);
       }
     }
     setUploading(false);
   }, [jingles.length]);
+
+  // Fire a pad: always flash locally; when the engine is connected, put it on
+  // air too. 422 = the stored audio_url isn't server-hosted (old placeholder).
+  const fireJingle = useCallback((j: MixerJingle) => {
+    setFiredJingle(j.id);
+    window.setTimeout(() => setFiredJingle((cur) => (cur === j.id ? null : cur)), 450);
+    setJingleNote(null);
+    if (!engineRef.current) return;
+    RadioApi.liveJingle(j.id).catch((e: unknown) => {
+      const status = e instanceof AxiosError ? e.response?.status : undefined;
+      setJingleNote({
+        id: j.id,
+        msg: status === 422
+          ? "Re-upload this jingle — it isn't stored on the server."
+          : "The on-air engine couldn't fire this jingle.",
+      });
+    });
+  }, []);
 
   const removeJingle = useCallback(async (id: string) => {
     try {
@@ -236,7 +316,9 @@ export function MixerStudio(): ReactElement {
         .mx-fader { -webkit-appearance: slider-vertical; writing-mode: vertical-lr; direction: rtl; width: 8px; }
         @keyframes mx-spin { to { transform: rotate(360deg); } }
         .mx-spin { animation: mx-spin 1s linear infinite; }
-        @media (prefers-reduced-motion: reduce) { .mx-panel, .mx-spin { animation: none !important; transition: none !important; } }
+        @keyframes mx-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.55); } 50% { box-shadow: 0 0 0 5px rgba(34,197,94,0); } }
+        .mx-pulse { animation: mx-pulse 1.6s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) { .mx-panel, .mx-spin, .mx-pulse { animation: none !important; transition: none !important; } }
       `}</style>
 
       {/* ambient glows */}
@@ -255,9 +337,23 @@ export function MixerStudio(): ReactElement {
             <div style={{ fontSize: 11, color: DIM, marginTop: 3 }}>Virtual audio mixer · Pathway Radio</div>
           </div>
         </div>
-        <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5" style={{ background: "rgba(230,198,110,0.14)", border: `1px solid ${GOLD}44`, color: GOLD, fontSize: 12, fontWeight: 700 }}>
-          <Radio size={13} /> {activeScene ? scenes?.find((s) => s.id === activeScene)?.name ?? "Custom" : "Custom"}
-        </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* on-air engine status (polled every 5s) */}
+          {engineConnected ? (
+            <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5" style={{ background: "rgba(34,197,94,0.12)", border: `1px solid ${GREEN}55`, color: "#86EFAC", fontSize: 12, fontWeight: 700 }}>
+              <span className="mx-pulse rounded-full shrink-0" style={{ width: 8, height: 8, background: GREEN }} />
+              LIVE MIX · engine connected
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5" style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${PANEL_BORDER}`, color: DIMMER, fontSize: 12, fontWeight: 700 }}>
+              <span className="rounded-full shrink-0" style={{ width: 8, height: 8, background: DIMMER }} />
+              LOCAL — mix engine offline
+            </span>
+          )}
+          <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5" style={{ background: "rgba(230,198,110,0.14)", border: `1px solid ${GOLD}44`, color: GOLD, fontSize: 12, fontWeight: 700 }}>
+            <Radio size={13} /> {activeScene ? scenes?.find((s) => s.id === activeScene)?.name ?? "Custom" : "Custom"}
+          </span>
+        </div>
       </div>
 
       <div className="relative" style={{ padding: "22px clamp(16px,4vw,40px) 44px" }}>
@@ -270,23 +366,41 @@ export function MixerStudio(): ReactElement {
               {err && (
                 <div className="rounded-xl px-3 py-2" style={{ background: "rgba(239,68,68,0.1)", border: `1px solid ${RED}44`, color: "#FCA5A5", fontSize: 12 }}>{err}</div>
               )}
+              {liveErr && (
+                <div className="rounded-xl px-3 py-2 flex items-center justify-between gap-3" style={{ background: "rgba(230,198,110,0.08)", border: `1px solid ${GOLD}44`, color: GOLD, fontSize: 12 }}>
+                  <span>{liveErr}</span>
+                  <button onClick={() => setLiveErr(null)} className="mx-btn shrink-0" style={{ background: "none", border: "none", color: GOLD, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Dismiss</button>
+                </div>
+              )}
 
               {/* Channel strips + master */}
               <Panel>
                 <SectionHead icon={SlidersVertical} title="Channel strips" hint={`${channels.length} channels`} />
                 <div className="flex gap-2.5 overflow-x-auto" style={{ paddingBottom: 6 }}>
-                  {channels.map((c, i) => (
-                    <ChannelStrip
-                      key={c.id}
-                      channel={c}
-                      meter={meters[i] ?? 0}
-                      dimmed={anySolo && !c.solo}
-                      onLevel={(v) => setChan(c.id, { level: v })}
-                      onPan={(v) => setChan(c.id, { pan: v })}
-                      onMute={() => setChan(c.id, { muted: !c.muted })}
-                      onSolo={() => setChan(c.id, { solo: !c.solo })}
-                    />
-                  ))}
+                  {channels.map((c, i) => {
+                    const liveTarget = LIVE_CHANNEL_MAP[c.id];
+                    return (
+                      <ChannelStrip
+                        key={c.id}
+                        channel={c}
+                        meter={meters[i] ?? 0}
+                        dimmed={anySolo && !c.solo}
+                        live={liveTarget != null}
+                        onLevel={(v) => {
+                          setChan(c.id, { level: v });
+                          if (liveTarget) pushLiveLevel(liveTarget, c.muted ? 0 : v);
+                        }}
+                        onPan={(v) => setChan(c.id, { pan: v })}
+                        onMute={() => {
+                          const muted = !c.muted;
+                          setChan(c.id, { muted });
+                          // mute → gain 0 on air; unmute → re-send the fader value
+                          if (liveTarget) pushLiveLevel(liveTarget, muted ? 0 : c.level ?? 0);
+                        }}
+                        onSolo={() => setChan(c.id, { solo: !c.solo })}
+                      />
+                    );
+                  })}
 
                   {/* Master strip */}
                   <div className="flex flex-col items-center rounded-2xl shrink-0" style={{ width: 92, padding: "12px 8px", background: "rgba(230,198,110,0.06)", border: `1px solid ${GOLD}33` }}>
@@ -294,10 +408,10 @@ export function MixerStudio(): ReactElement {
                     <div style={{ fontSize: 9.5, color: DIM, marginTop: 1, marginBottom: 10 }}>Main out</div>
                     <div className="flex items-end justify-center gap-2" style={{ height: 168 }}>
                       <VBar level={masterMeter} tall />
-                      <input type="range" min={0} max={100} value={master} onChange={(e) => setMaster(Number(e.target.value))} className="mx-fader" style={{ height: 168, accentColor: GOLD }} />
+                      <input type="range" min={0} max={100} value={master} onChange={(e) => { const v = Number(e.target.value); setMaster(v); pushLiveLevel("master", masterMuted ? 0 : v); }} className="mx-fader" style={{ height: 168, accentColor: GOLD }} />
                     </div>
                     <div className="mx-tnum" style={{ fontFamily: MONO, fontSize: 12, color: GOLD, marginTop: 8 }}>{master}</div>
-                    <button onClick={() => setMasterMuted((v) => !v)} className="mx-btn flex items-center justify-center gap-1 rounded-lg mt-2" style={{ width: "100%", height: 30, background: masterMuted ? "rgba(239,68,68,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${masterMuted ? RED + "66" : PANEL_BORDER}`, color: masterMuted ? "#FCA5A5" : DIM, fontSize: 11, fontWeight: 700 }}>
+                    <button onClick={() => { const muted = !masterMuted; setMasterMuted(muted); pushLiveLevel("master", muted ? 0 : master); }} className="mx-btn flex items-center justify-center gap-1 rounded-lg mt-2" style={{ width: "100%", height: 30, background: masterMuted ? "rgba(239,68,68,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${masterMuted ? RED + "66" : PANEL_BORDER}`, color: masterMuted ? "#FCA5A5" : DIM, fontSize: 11, fontWeight: 700 }}>
                       {masterMuted ? <VolumeX size={13} /> : <Volume2 size={13} />} {masterMuted ? "Muted" : "Live"}
                     </button>
                   </div>
@@ -398,14 +512,22 @@ export function MixerStudio(): ReactElement {
                   <div className="grid grid-cols-2 gap-2">
                     {jingles.map((j) => {
                       const color = j.color ?? GOLD;
+                      const fired = firedJingle === j.id;
+                      const noted = jingleNote?.id === j.id;
                       return (
-                        <div key={j.id} className="rounded-xl relative flex flex-col items-center justify-center" style={{ minHeight: 76, background: `${color}18`, border: `1px solid ${color}44`, padding: "12px 8px" }}>
-                          <button className="mx-btn flex items-center justify-center rounded-full" style={{ width: 34, height: 34, background: color, color: "#0A1120", border: "none", cursor: "pointer" }} title="Play jingle"><Play size={15} /></button>
+                        <div key={j.id} className="rounded-xl relative flex flex-col items-center justify-center" style={{ minHeight: 76, background: fired ? `${color}30` : `${color}18`, border: `1px solid ${noted ? RED + "77" : fired ? color : color + "44"}`, padding: "12px 8px", boxShadow: fired ? `0 0 18px ${color}66` : "none", transition: "background .15s, border-color .15s, box-shadow .2s" }}>
+                          <button onClick={() => fireJingle(j)} className="mx-btn flex items-center justify-center rounded-full" style={{ width: 34, height: 34, background: color, color: "#0A1120", border: "none", cursor: "pointer", transform: fired ? "scale(1.12)" : "none", transition: "transform .15s" }} title={engineConnected ? "Fire jingle on air" : "Play jingle (local)"}><Play size={15} /></button>
                           <span className="truncate w-full text-center" style={{ fontSize: 10.5, fontWeight: 700, marginTop: 6, color: TEXT }}>{j.label}</span>
                           <button onClick={() => removeJingle(j.id)} title="Remove" className="mx-btn absolute flex items-center justify-center rounded-md" style={{ top: 5, right: 5, width: 20, height: 20, background: "rgba(0,0,0,0.25)", color: TEXT, border: "none", cursor: "pointer" }}><Trash2 size={10} /></button>
                         </div>
                       );
                     })}
+                  </div>
+                )}
+                {jingleNote && (
+                  <div className="rounded-lg px-3 py-2 flex items-center justify-between gap-2" style={{ marginTop: 10, background: "rgba(239,68,68,0.08)", border: `1px solid ${RED}44`, color: "#FCA5A5", fontSize: 11 }}>
+                    <span><strong>{jingles.find((j) => j.id === jingleNote.id)?.label ?? "Jingle"}</strong> — {jingleNote.msg}</span>
+                    <button onClick={() => setJingleNote(null)} className="mx-btn shrink-0" style={{ background: "none", border: "none", color: "#FCA5A5", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}>Dismiss</button>
                   </div>
                 )}
               </Panel>
@@ -438,8 +560,8 @@ function SectionHead({ icon: Icon, title, hint }: { icon: LucideIcon; title: str
   );
 }
 
-function ChannelStrip({ channel, meter, dimmed, onLevel, onPan, onMute, onSolo }: {
-  channel: MixerChannel; meter: number; dimmed: boolean;
+function ChannelStrip({ channel, meter, dimmed, live, onLevel, onPan, onMute, onSolo }: {
+  channel: MixerChannel; meter: number; dimmed: boolean; live: boolean;
   onLevel: (v: number) => void; onPan: (v: number) => void; onMute: () => void; onSolo: () => void;
 }): ReactElement {
   const color = channel.color ?? GOLD;
@@ -452,6 +574,12 @@ function ChannelStrip({ channel, meter, dimmed, onLevel, onPan, onMute, onSolo }
         <span className="truncate" style={{ fontSize: 11.5, fontWeight: 700 }}>{channel.name}</span>
       </div>
       {channel.sub && <div className="truncate" style={{ fontSize: 9, color: DIM, marginTop: 1, maxWidth: "100%" }}>{channel.sub}</div>}
+      {/* honest badge: strips outside the live path never reach the engine */}
+      <div className="flex items-center justify-center" style={{ height: 13, marginTop: 3 }}>
+        {!live && (
+          <span style={{ fontSize: 7.5, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: DIMMER, background: "rgba(255,255,255,0.06)", border: `1px solid ${PANEL_BORDER}`, borderRadius: 99, padding: "1px 6px" }} title="Client hardware only — not sent to the on-air mix engine">local</span>
+        )}
+      </div>
 
       {/* pan */}
       <div className="w-full flex items-center gap-1" style={{ marginTop: 8 }}>

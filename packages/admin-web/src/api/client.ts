@@ -1750,6 +1750,11 @@ import type {
   RadioPlaylistItem,
   RadioLoopMode,
   CreateRadioTrackBody,
+  MixerLiveChannels,
+  MixerLiveLevelsBody,
+  MixerLiveSceneBody,
+  MixerLiveJingleBody,
+  MixerLiveStatus,
 } from "@nuru/shared";
 
 export type {
@@ -1770,6 +1775,11 @@ export type {
   RadioPlaylistItem,
   RadioLoopMode,
   CreateRadioTrackBody,
+  MixerLiveChannels,
+  MixerLiveLevelsBody,
+  MixerLiveSceneBody,
+  MixerLiveJingleBody,
+  MixerLiveStatus,
 } from "@nuru/shared";
 
 const R = "/admin/radio";
@@ -1830,6 +1840,27 @@ export const RadioApi = {
     api.post<MixerJingle>(`${R}/mixer/jingles`, body).then((r) => r.data),
   deleteJingle: (id: string) =>
     api.delete<{ ok: true }>(`${R}/mixer/jingles/${id}`).then((r) => r.data),
+
+  // LIVE mix control (on-air liquidsoap engine on the VPS) ------------------
+  // 503 UPSTREAM_UNAVAILABLE when the engine isn't configured; status never
+  // errors and is the "is the engine reachable?" poll. Gains are ints 0..100.
+  liveLevels: (channels: MixerLiveLevelsBody["channels"]) =>
+    api
+      .post<{ ok: true }>(`${R}/mixer/live/levels`, { channels } satisfies MixerLiveLevelsBody)
+      .then((r) => r.data),
+  liveScene: (sceneId: string) =>
+    api
+      .post<{ ok: true; applied: Partial<Record<MixerLiveChannels, number>> }>(
+        `${R}/mixer/live/scene`,
+        { scene_id: sceneId } satisfies MixerLiveSceneBody,
+      )
+      .then((r) => r.data),
+  // 422 = the jingle has no server-hosted audio (placeholder URL) — re-upload it.
+  liveJingle: (jingleId: string) =>
+    api
+      .post<{ ok: true }>(`${R}/mixer/live/jingle`, { jingle_id: jingleId } satisfies MixerLiveJingleBody)
+      .then((r) => r.data),
+  liveStatus: () => api.get<MixerLiveStatus>(`${R}/mixer/live/status`).then((r) => r.data),
 
   // Audio library (reusable tracks; bare arrays, no {data:[]} envelope) -----
   tracks: (kind?: RadioTrackKind) =>
