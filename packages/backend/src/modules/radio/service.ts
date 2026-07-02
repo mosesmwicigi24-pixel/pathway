@@ -7,6 +7,8 @@ import { z } from "zod";
 import { many, maybeOne, one, tx } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import type { StreamProvider, StreamHealth } from "./provider.js";
+import { NotConfiguredMixerControl } from "./mixercontrol.js";
+import type { MixerControl, MixerLiveChannel, MixerLiveStatus } from "./mixercontrol.js";
 
 // --- Row / DTO shapes -------------------------------------------------------
 
@@ -126,6 +128,11 @@ export class RadioService {
   constructor(
     private readonly pool: Pool,
     private readonly provider: StreamProvider,
+    // LIVE MIX control (liquidsoap telnet). Defaults to NotConfigured so existing
+    // service constructions keep working; index.ts injects the env-built control.
+    private readonly mixer: MixerControl = new NotConfiguredMixerControl(),
+    // HOST-side directory where /media files live (jingle pushes send host paths).
+    private readonly liquidsoapMediaDir: string = "/var/www/pathway-media",
   ) {}
 
   // --- Validation schemas (inline zod, per module convention) ---------------
@@ -212,6 +219,27 @@ export class RadioService {
       sort: z.number().int().optional(),
     })
     .strict();
+
+  // LIVE MIX (liquidsoap): gains are ints 0..100 at the API; at least one channel.
+  static readonly MixerLiveLevels = z
+    .object({
+      channels: z
+        .object({
+          mic: z.number().int().min(0).max(100).optional(),
+          bed: z.number().int().min(0).max(100).optional(),
+          jingle: z.number().int().min(0).max(100).optional(),
+          master: z.number().int().min(0).max(100).optional(),
+        })
+        .strict()
+        .refine((c) => Object.values(c).some((v) => v !== undefined), {
+          message: "At least one channel level is required",
+        }),
+    })
+    .strict();
+
+  static readonly MixerLiveJingle = z.object({ jingle_id: z.string().uuid() }).strict();
+
+  static readonly MixerLiveScene = z.object({ scene_id: z.string().uuid() }).strict();
 
   static readonly TrackBody = z
     .object({
@@ -871,5 +899,112 @@ export class RadioService {
     const res = await this.pool.query(`DELETE FROM mixer_jingles WHERE id = $1`, [id]);
     if (!res.rowCount) throw new ApiError("NOT_FOUND", "Jingle not found");
     return { ok: true };
+  }
+
+  // --- LIVE MIX control (liquidsoap) ----------------------------------------
+
+  /** Scene channel id → live-mix channel. Unmapped ids (guest/media/ambience) are ignored. */
+  private static readonly SCENE_CHANNEL_MAP: Record<string, MixerLiveChannel> = {
+    mic: "mic",
+    music: "bed",
+    jingle: "jingle",
+    master: "master",
+  };
+
+  /** Set live channel gains (0..100 ints; validated at the route). */
+  async setLiveLevels(
+    input: z.infer<typeof RadioService.MixerLiveLevels>,
+  ): Promise<{ ok: true }> {
+    // Zod optionals admit explicit undefined; strip them for the exact-optional interface.
+    const gains: Partial<Record<MixerLiveChannel, number>> = {};
+    for (const [ch, v] of Object.entries(input.channels)) {
+      if (typeof v === "number") gains[ch as MixerLiveChannel] = v;
+    }
+    await this.mixer.setGains(gains);
+    return { ok: true };
+  }
+
+  /**
+   * Fire a jingle on the live mix. The jingle's audio_url must be a server-hosted
+   * /media/ file (uploaded via the audio-upload route) — liquidsoap reads it from
+   * the HOST-side media directory, so we push `<LIQUIDSOAP_MEDIA_DIR>/<basename>`.
+   */
+  async fireLiveJingle(jingleId: string): Promise<{ ok: true }> {
+    const jingle = await maybeOne<MixerJingleRow>(
+      this.pool,
+      `SELECT id, label, color, audio_url, sort, created_by, created_at
+         FROM mixer_jingles WHERE id = $1`,
+      [jingleId],
+    );
+    if (!jingle) throw new ApiError("NOT_FOUND", "Jingle not found");
+    const pathname = serverMediaPathname(jingle.audio_url);
+    if (!pathname) {
+      throw new ApiError("UNPROCESSABLE", "Jingle has no server-hosted audio — re-upload it");
+    }
+    const basename = decodePathSegment(pathname.slice(pathname.lastIndexOf("/") + 1));
+    await this.mixer.fireJingle(`${this.liquidsoapMediaDir}/${basename}`);
+    return { ok: true };
+  }
+
+  /**
+   * Apply a saved mixer scene to the live mix. Scene channel ids map onto the
+   * live channels (mic→mic, music→bed, jingle→jingle, master→master); the rest
+   * (guest/media/ambience/…) have no live counterpart and are ignored.
+   */
+  async applyLiveScene(
+    sceneId: string,
+  ): Promise<{ ok: true; applied: Partial<Record<MixerLiveChannel, number>> }> {
+    const scene = await maybeOne<MixerSceneRow>(
+      this.pool,
+      `SELECT id, name, hint, channels, is_default, created_by, created_at, updated_at
+         FROM mixer_scenes WHERE id = $1`,
+      [sceneId],
+    );
+    if (!scene) throw new ApiError("NOT_FOUND", "Scene not found");
+    const channels = Array.isArray(scene.channels) ? scene.channels : [];
+    const applied: Partial<Record<MixerLiveChannel, number>> = {};
+    for (const raw of channels) {
+      const ch = raw as { id?: unknown; level?: unknown };
+      const target = typeof ch.id === "string" ? RadioService.SCENE_CHANNEL_MAP[ch.id] : undefined;
+      if (!target || typeof ch.level !== "number" || !Number.isFinite(ch.level)) continue;
+      applied[target] = Math.max(0, Math.min(100, Math.round(ch.level)));
+    }
+    if (Object.keys(applied).length > 0) await this.mixer.setGains(applied);
+    return { ok: true, applied };
+  }
+
+  /** Live mix engine status — never 503s: any failure reads as disconnected. */
+  async liveMixStatus(): Promise<MixerLiveStatus> {
+    try {
+      return await this.mixer.status();
+    } catch {
+      return { connected: false };
+    }
+  }
+}
+
+/**
+ * The pathname of a server-hosted media URL: http(s) with a path under /media/;
+ * anything else (null/blob:/data:/placeholder text) → null (the caller 422s).
+ */
+function serverMediaPathname(audioUrl: string | null): string | null {
+  if (!audioUrl) return null;
+  try {
+    const u = new URL(audioUrl);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (!u.pathname.startsWith("/media/")) return null;
+    if (u.pathname.endsWith("/")) return null; // no file component
+    return u.pathname;
+  } catch {
+    return null;
+  }
+}
+
+/** Percent-decode one path segment (file names on disk are stored un-encoded). */
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
   }
 }

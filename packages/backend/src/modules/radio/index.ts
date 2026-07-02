@@ -9,16 +9,44 @@ import { authenticate, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { RadioService } from "./service.js";
 import { buildStreamProvider, type StreamProvider } from "./provider.js";
+import { buildMixerControl, type MixerControl } from "./mixercontrol.js";
 
 export const radioRouter: Router = Router();
 const idOf = (req: { params: Record<string, string | undefined> }, k = "id"): string => req.params[k] ?? "";
 
-export function registerRadio(ctx: AppContext, providerOverride?: StreamProvider): Router {
+export function registerRadio(
+  ctx: AppContext,
+  providerOverride?: StreamProvider,
+  mixerOverride?: MixerControl,
+): Router {
   const provider = providerOverride ?? buildStreamProvider(ctx.env);
-  const svc = new RadioService(ctx.db.primary, provider);
+  const mixer = mixerOverride ?? buildMixerControl(ctx.env);
+  const svc = new RadioService(
+    ctx.db.primary,
+    provider,
+    mixer,
+    ctx.env.LIQUIDSOAP_MEDIA_DIR ?? "/var/www/pathway-media",
+  );
   const auth = authenticate(ctx.env);
   const perm = requirePermission(ctx.db.replica);
   const r = radioRouter;
+
+  // ===== Admin — LIVE MIX control (liquidsoap; static, before param routes) ==
+  r.post("/admin/radio/mixer/live/levels", auth, perm("radio", "edit"), handler(async (req, res) => {
+    const input = parseBody(RadioService.MixerLiveLevels, req.body);
+    res.json(await svc.setLiveLevels(input));
+  }));
+  r.post("/admin/radio/mixer/live/jingle", auth, perm("radio", "edit"), handler(async (req, res) => {
+    const { jingle_id } = parseBody(RadioService.MixerLiveJingle, req.body);
+    res.json(await svc.fireLiveJingle(jingle_id));
+  }));
+  r.post("/admin/radio/mixer/live/scene", auth, perm("radio", "edit"), handler(async (req, res) => {
+    const { scene_id } = parseBody(RadioService.MixerLiveScene, req.body);
+    res.json(await svc.applyLiveScene(scene_id));
+  }));
+  r.get("/admin/radio/mixer/live/status", auth, perm("radio", "view"), handler(async (_req, res) => {
+    res.json(await svc.liveMixStatus());
+  }));
 
   // ===== Admin — Mixer (static, before /admin/radio/programs/:id) ===========
   r.get("/admin/radio/mixer/scenes", auth, perm("radio", "view"), handler(async (_req, res) => {

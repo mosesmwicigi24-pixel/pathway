@@ -116,6 +116,15 @@ const EnvSchema = z.object({
   ICECAST_SOURCE_PASSWORD: z.string().optional(), // the global Icecast source password (secret)
   ICECAST_PUBLIC_BASE: z.string().optional(), // public base URL for LISTENERS, e.g. "https://pathway.nuruplace.org/radio" (no trailing slash)
   ICECAST_STATUS_URL: z.string().optional(), // internal Icecast status JSON for health, e.g. "http://127.0.0.1:8000/status-json.xsl"
+
+  // --- Liquidsoap LIVE MIX engine (self-hosted, VPS-local telnet control). When
+  // LIQUIDSOAP_HOST is set the real telnet control is used (the container reaches
+  // the host via the docker bridge); else the Fake (RADIO_STREAM_PROVIDER=fake) or
+  // NotConfigured. LIQUIDSOAP_MEDIA_DIR is the HOST-side directory where /media
+  // files live — jingle pushes must send host paths, not container paths. ---
+  LIQUIDSOAP_HOST: z.string().optional(),
+  LIQUIDSOAP_PORT: z.string().default("1234"),
+  LIQUIDSOAP_MEDIA_DIR: z.string().default("/var/www/pathway-media"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

@@ -278,3 +278,29 @@ export interface MixerJingleBody {
   audio_url?: string;
   sort?: number;
 }
+
+// --- LIVE MIX control (liquidsoap engine on the VPS) ---
+
+/** The four live-mix channels the engine exposes. */
+export type MixerLiveChannels = "mic" | "bed" | "jingle" | "master";
+
+/** POST /admin/radio/mixer/live/levels — gains are ints 0..100; at least one channel. */
+export interface MixerLiveLevelsBody {
+  channels: Partial<Record<MixerLiveChannels, number>>;
+}
+
+/** POST /admin/radio/mixer/live/scene — apply a saved mixer scene to the live mix. */
+export interface MixerLiveSceneBody {
+  scene_id: UUID;
+}
+
+/** POST /admin/radio/mixer/live/jingle — fire a server-hosted jingle on air. */
+export interface MixerLiveJingleBody {
+  jingle_id: UUID;
+}
+
+/** GET /admin/radio/mixer/live/status — never 503s; gains (0..100) when connected. */
+export interface MixerLiveStatus {
+  connected: boolean;
+  gains?: Record<string, number>;
+}

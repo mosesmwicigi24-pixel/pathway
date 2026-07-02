@@ -1,21 +1,41 @@
 // Radio Broadcast Studio + Virtual Audio Mixer (docs/RADIO_STUDIO_CONTRACT.md).
 // Covers: create→go-live→end lifecycle; member list respects visibility + omits
 // stream_key; idempotent react (same client_event_id twice = one row); comment
-// create + moderation hide; mixer scene create/update/list; validation failure.
+// create + moderation hide; mixer scene create/update/list; validation failure;
+// LIVE MIX control (liquidsoap) via the FakeMixerControl register override.
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
-import { agent, bearer } from "./helpers/app.js";
+import { pino } from "pino";
+import { agent, bearer, testEnv } from "./helpers/app.js";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser } from "./helpers/factories.js";
+import { registerRadio } from "../src/modules/radio/index.js";
 import { RadioService } from "../src/modules/radio/service.js";
 import {
   FakeStreamProvider,
   IcecastStreamProvider,
   buildStreamProvider,
 } from "../src/modules/radio/provider.js";
+import {
+  FakeMixerControl,
+  NotConfiguredMixerControl,
+  TelnetMixerControl,
+  buildMixerControl,
+} from "../src/modules/radio/mixercontrol.js";
 import type { Env } from "../src/config/env.js";
 import { createHash } from "node:crypto";
 
 const auth = (t: string) => ({ Authorization: t });
+
+// Register the radio routes FIRST with a FakeMixerControl override: the module
+// router is a singleton (first-registered layers win), so registering here binds
+// the live-mix routes to a mixer this file can inspect. Every later agent() app
+// mounts the same router (same pattern as payments-v2's "built FIRST" app).
+const fakeMixer = new FakeMixerControl();
+registerRadio(
+  { env: testEnv(), db: { primary: testPool(), replica: testPool() }, log: pino({ level: "silent" }) },
+  undefined,
+  fakeMixer,
+);
 
 let cong: string;
 let adminTok: string;
@@ -509,6 +529,148 @@ describe("radio — mixer scenes + jingles", () => {
     const res = await agent().post("/v1/admin/radio/mixer/scenes").set(auth(adminTok)).send({ hint: "no name" });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("VALIDATION_FAILED");
+  });
+});
+
+describe("radio — LIVE MIX control (liquidsoap)", () => {
+  beforeEach(() => {
+    fakeMixer.reset();
+  });
+
+  it("levels sets channel gains on the mixer; empty channels is a 400", async () => {
+    const res = await agent()
+      .post("/v1/admin/radio/mixer/live/levels")
+      .set(auth(adminTok))
+      .send({ channels: { mic: 82, bed: 25, master: 100 } });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(fakeMixer.gains).toEqual({ mic: 82, bed: 25, master: 100 });
+
+    const empty = await agent()
+      .post("/v1/admin/radio/mixer/live/levels")
+      .set(auth(adminTok))
+      .send({ channels: {} });
+    expect(empty.status).toBe(400);
+    expect(empty.body.error.code).toBe("VALIDATION_FAILED");
+
+    // Gains are ints 0..100 — 101 fails validation too.
+    const over = await agent()
+      .post("/v1/admin/radio/mixer/live/levels")
+      .set(auth(adminTok))
+      .send({ channels: { mic: 101 } });
+    expect(over.status).toBe(400);
+  });
+
+  it("live-mix control is gated by radio:edit (a Student is 403)", async () => {
+    const student = await createUser({ congregationId: cong, role: "Student", email: "mix@dev.local" });
+    const tok = bearer({ sub: student.user_id, role: "Student", cong });
+    const res = await agent()
+      .post("/v1/admin/radio/mixer/live/levels")
+      .set(auth(tok))
+      .send({ channels: { mic: 50 } });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN_SCOPE");
+  });
+
+  it("scene applies only the mapped channels (mic→mic, music→bed, jingle→jingle)", async () => {
+    const create = await agent()
+      .post("/v1/admin/radio/mixer/scenes")
+      .set(auth(adminTok))
+      .send({
+        name: "Worship",
+        channels: [
+          { id: "mic", name: "Mic", level: 80 },
+          { id: "music", name: "Music", level: 35 },
+          { id: "jingle", name: "Jingle", level: 60 },
+          { id: "ambience", name: "Ambience", level: 20 },
+        ],
+      });
+    expect(create.status).toBe(201);
+
+    const res = await agent()
+      .post("/v1/admin/radio/mixer/live/scene")
+      .set(auth(adminTok))
+      .send({ scene_id: create.body.id });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, applied: { mic: 80, bed: 35, jingle: 60 } });
+    // Only the mapped channels were set — ambience has no live counterpart.
+    expect(fakeMixer.gains).toEqual({ mic: 80, bed: 35, jingle: 60 });
+
+    const missing = await agent()
+      .post("/v1/admin/radio/mixer/live/scene")
+      .set(auth(adminTok))
+      .send({ scene_id: "00000000-0000-0000-0000-000000000000" });
+    expect(missing.status).toBe(404);
+  });
+
+  it("jingle push sends the HOST-side media path; non-/media/ audio is 422", async () => {
+    const good = await agent()
+      .post("/v1/admin/radio/mixer/jingles")
+      .set(auth(adminTok))
+      .send({ label: "Stinger", audio_url: "https://pathway.nuruplace.org/media/x.mp3" });
+    expect(good.status).toBe(201);
+
+    const fire = await agent()
+      .post("/v1/admin/radio/mixer/live/jingle")
+      .set(auth(adminTok))
+      .send({ jingle_id: good.body.id });
+    expect(fire.status).toBe(200);
+    expect(fire.body).toEqual({ ok: true });
+    // Host path = LIQUIDSOAP_MEDIA_DIR (default) + the /media/ basename.
+    expect(fakeMixer.fired).toEqual(["/var/www/pathway-media/x.mp3"]);
+
+    // A client-local blob: URL never reached the server — 422, re-upload needed.
+    const blob = await agent()
+      .post("/v1/admin/radio/mixer/jingles")
+      .set(auth(adminTok))
+      .send({ label: "Placeholder", audio_url: "blob:https://portal.local/51e3d9f2" });
+    const fireBlob = await agent()
+      .post("/v1/admin/radio/mixer/live/jingle")
+      .set(auth(adminTok))
+      .send({ jingle_id: blob.body.id });
+    expect(fireBlob.status).toBe(422);
+    expect(fireBlob.body.error.code).toBe("UNPROCESSABLE");
+
+    // No audio at all → 422 as well.
+    const bare = await agent()
+      .post("/v1/admin/radio/mixer/jingles")
+      .set(auth(adminTok))
+      .send({ label: "Silent" });
+    const fireBare = await agent()
+      .post("/v1/admin/radio/mixer/live/jingle")
+      .set(auth(adminTok))
+      .send({ jingle_id: bare.body.id });
+    expect(fireBare.status).toBe(422);
+
+    expect(fakeMixer.fired).toHaveLength(1); // only the good one went out
+  });
+
+  it("status reports connected + gains; a NotConfigured control reads connected:false (never 503)", async () => {
+    await fakeMixer.setGains({ mic: 50, master: 90 });
+    const res = await agent().get("/v1/admin/radio/mixer/live/status").set(auth(adminTok));
+    expect(res.status).toBe(200);
+    expect(res.body.connected).toBe(true);
+    expect(res.body.gains).toEqual({ mic: 50, master: 90 });
+
+    // NotConfigured throws UPSTREAM_UNAVAILABLE on every action, but the status
+    // path catches it — a missing engine must never 503 the status route.
+    const svc = new RadioService(testPool(), new FakeStreamProvider(), new NotConfiguredMixerControl());
+    expect(await svc.liveMixStatus()).toEqual({ connected: false });
+    await expect(svc.setLiveLevels({ channels: { mic: 10 } })).rejects.toMatchObject({
+      code: "UPSTREAM_UNAVAILABLE",
+    });
+  });
+
+  it("buildMixerControl: LIQUIDSOAP_HOST→telnet; fake provider→fake; else NotConfigured", () => {
+    expect(
+      buildMixerControl({ LIQUIDSOAP_HOST: "172.17.0.1", LIQUIDSOAP_PORT: "1234" } as unknown as Env),
+    ).toBeInstanceOf(TelnetMixerControl);
+    expect(buildMixerControl({ RADIO_STREAM_PROVIDER: "fake" } as unknown as Env)).toBeInstanceOf(
+      FakeMixerControl,
+    );
+    expect(buildMixerControl({ RADIO_STREAM_PROVIDER: "icecast" } as unknown as Env)).toBeInstanceOf(
+      NotConfiguredMixerControl,
+    );
   });
 });
 

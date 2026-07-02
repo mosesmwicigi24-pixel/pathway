@@ -3986,6 +3986,70 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  # --- LIVE MIX control (liquidsoap engine on the VPS; telnet control server) ---
+  /admin/radio/mixer/live/levels:
+    post:
+      tags: [radio]
+      summary: Set live-mix channel gains (mic/bed/jingle/master, ints 0..100). Gated by radio:edit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MixerLiveLevelsBody" }
+      responses:
+        "200": { description: Applied, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { description: Validation failed (at least one channel required) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "503": { description: Live mix engine not configured or unreachable }
+  /admin/radio/mixer/live/jingle:
+    post:
+      tags: [radio]
+      summary: Fire a jingle on the live mix (server-hosted /media/ audio only). Gated by radio:edit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MixerLiveJingleBody" }
+      responses:
+        "200": { description: Queued, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: Jingle has no server-hosted audio — re-upload it }
+        "503": { description: Live mix engine not configured or unreachable }
+  /admin/radio/mixer/live/scene:
+    post:
+      tags: [radio]
+      summary: Apply a saved mixer scene to the live mix (mic→mic, music→bed, jingle→jingle, master→master; other channels ignored). Gated by radio:edit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MixerLiveSceneBody" }
+      responses:
+        "200":
+          description: Applied
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MixerLiveSceneApplied" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { description: Live mix engine not configured or unreachable }
+  /admin/radio/mixer/live/status:
+    get:
+      tags: [radio]
+      summary: Live mix engine status — never 503s (a down engine reads connected=false). Gated by radio:view.
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MixerLiveStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+
   # --- Radio member surface (auth only; public projection, no ingest secrets) ---
   /radio/programs:
     get:
@@ -4400,6 +4464,47 @@ components:
         color: { type: string, maxLength: 40 }
         audio_url: { type: string, maxLength: 2000 }
         sort: { type: integer }
+    MixerLiveLevelsBody:
+      type: object
+      required: [channels]
+      description: Live-mix gains as ints 0..100 (converted to 0..1 on the engine wire). At least one channel.
+      properties:
+        channels:
+          type: object
+          minProperties: 1
+          properties:
+            mic: { type: integer, minimum: 0, maximum: 100 }
+            bed: { type: integer, minimum: 0, maximum: 100 }
+            jingle: { type: integer, minimum: 0, maximum: 100 }
+            master: { type: integer, minimum: 0, maximum: 100 }
+    MixerLiveJingleBody:
+      type: object
+      required: [jingle_id]
+      properties:
+        jingle_id: { type: string, format: uuid }
+    MixerLiveSceneBody:
+      type: object
+      required: [scene_id]
+      properties:
+        scene_id: { type: string, format: uuid }
+    MixerLiveSceneApplied:
+      type: object
+      required: [ok, applied]
+      properties:
+        ok: { type: boolean, enum: [true] }
+        applied:
+          type: object
+          description: The live gains that were set (scene channels mapped mic→mic, music→bed, jingle→jingle, master→master).
+          additionalProperties: { type: integer, minimum: 0, maximum: 100 }
+    MixerLiveStatus:
+      type: object
+      required: [connected]
+      properties:
+        connected: { type: boolean }
+        gains:
+          type: object
+          description: Present when connected — current gains per channel, ints 0..100.
+          additionalProperties: { type: number }
 
     # --- Auth & identity (§3.3, §5.3) ---
     OAuthExchange:

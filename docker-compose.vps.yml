@@ -11,6 +11,10 @@ services:
   api:
     ports:
       - "127.0.0.1:8090:8080"
+    # Reach host-side services (Icecast :8300, liquidsoap control :1234) from
+    # inside the container via host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Self-hosted video storage: uploaded bytes land on the host disk (served by
     # nginx at https://pathway.nuruplace.org/media/...), NOT Cloudinary.
     volumes:
@@ -26,6 +30,10 @@ services:
       ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:-}
       ICECAST_PUBLIC_BASE: ${ICECAST_PUBLIC_BASE:-}
       ICECAST_STATUS_URL: ${ICECAST_STATUS_URL:-}
+      # Live-mix engine (liquidsoap on the host) — mixer/live/* endpoints.
+      LIQUIDSOAP_HOST: ${LIQUIDSOAP_HOST:-}
+      LIQUIDSOAP_PORT: ${LIQUIDSOAP_PORT:-1234}
+      LIQUIDSOAP_MEDIA_DIR: ${LIQUIDSOAP_MEDIA_DIR:-/var/www/pathway-media}
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}
       SMTP_SECURE: ${SMTP_SECURE}
