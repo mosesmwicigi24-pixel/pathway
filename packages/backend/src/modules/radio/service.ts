@@ -395,7 +395,7 @@ export class RadioService {
   async health(id: string): Promise<StreamHealth> {
     const program = await this.getAdmin(id);
     if (!program.is_live) throw new ApiError("CONFLICT", "Program is not live");
-    return this.provider.health({ id: program.id, is_live: program.is_live, peak_listeners: program.peak_listeners });
+    return await this.provider.health({ id: program.id, is_live: program.is_live, peak_listeners: program.peak_listeners });
   }
 
   // --- Programs: member (public projection) ---------------------------------

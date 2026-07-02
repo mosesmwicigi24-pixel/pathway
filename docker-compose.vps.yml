@@ -18,6 +18,14 @@ services:
     environment:
       MEDIA_STORAGE_DIR: ${MEDIA_STORAGE_DIR:-/data/media}
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://pathway.nuruplace.org/media}
+      # Live radio via self-hosted Icecast (source-driven). Values from the VPS-only
+      # .env; provider falls back to "fake" when unset.
+      RADIO_STREAM_PROVIDER: ${RADIO_STREAM_PROVIDER:-fake}
+      ICECAST_SOURCE_HOST: ${ICECAST_SOURCE_HOST:-}
+      ICECAST_SOURCE_PORT: ${ICECAST_SOURCE_PORT:-}
+      ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:-}
+      ICECAST_PUBLIC_BASE: ${ICECAST_PUBLIC_BASE:-}
+      ICECAST_STATUS_URL: ${ICECAST_STATUS_URL:-}
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}
       SMTP_SECURE: ${SMTP_SECURE}

@@ -102,8 +102,20 @@ const EnvSchema = z.object({
 
   // --- Radio Broadcast Studio streaming provider. "fake" (default) needs no
   // secrets and is used in dev/tests; cloudflare/mux/rtmp plug in later with their
-  // own env secrets (by name only, §5.10). Unknown values fall back to "fake". ---
-  RADIO_STREAM_PROVIDER: z.enum(["fake", "cloudflare", "mux", "rtmp"]).default("fake"),
+  // own env secrets (by name only, §5.10). Unknown values fall back to "fake".
+  // "icecast" is the real self-hosted provider for live-mic broadcasting: a source
+  // client (butt/Mixxx) connects to our Icecast and members stream the mount. ---
+  RADIO_STREAM_PROVIDER: z.enum(["fake", "cloudflare", "mux", "rtmp", "icecast"]).default("fake"),
+
+  // --- Icecast live-audio provider (self-hosted). Source-driven: the stream is
+  // live when a broadcaster's source client connects; there is no server-side
+  // start/stop. Secrets by name only (§5.10). When ICECAST_SOURCE_HOST and
+  // ICECAST_PUBLIC_BASE are set, buildStreamProvider selects Icecast; else Fake. ---
+  ICECAST_SOURCE_HOST: z.string().optional(), // public host a source client connects to, e.g. "pathway.nuruplace.org"
+  ICECAST_SOURCE_PORT: z.string().optional(), // e.g. "8000" (kept as string — it's typed into butt/Mixxx verbatim)
+  ICECAST_SOURCE_PASSWORD: z.string().optional(), // the global Icecast source password (secret)
+  ICECAST_PUBLIC_BASE: z.string().optional(), // public base URL for LISTENERS, e.g. "https://pathway.nuruplace.org/radio" (no trailing slash)
+  ICECAST_STATUS_URL: z.string().optional(), // internal Icecast status JSON for health, e.g. "http://127.0.0.1:8000/status-json.xsl"
 });
 
 export type Env = z.infer<typeof EnvSchema>;

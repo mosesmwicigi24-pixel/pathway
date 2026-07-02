@@ -43,8 +43,12 @@ export interface StreamProvider {
   stop(program: ProviderProgram): void;
   /** Re-issue the secret stream key for a program. */
   rotateKey(programId: string): { streamKey: string };
-  /** Operational health for the live status bar (live programs only). */
-  health(program: ProviderProgram): StreamHealth;
+  /**
+   * Operational health for the live status bar (live programs only). May be
+   * async: real providers (e.g. Icecast) fetch status over the network. The
+   * service awaits the result, so returning either a value or a Promise works.
+   */
+  health(program: ProviderProgram): StreamHealth | Promise<StreamHealth>;
 }
 
 // Deterministic short hash so URLs/keys/health are stable per program id (test-friendly).
@@ -98,10 +102,126 @@ export class FakeStreamProvider implements StreamProvider {
   }
 }
 
+/** An all-zero / "Offline" health reading (stability 0), used when Icecast is down. */
+function offlineHealth(): StreamHealth {
+  return { cpu: 0, memory: 0, bitrate: 0, latency: 0, dropped: 0, stability: 0, listeners: 0 };
+}
+
+/**
+ * Real self-hosted Icecast provider for live-mic broadcasting.
+ *
+ * Icecast is SOURCE-DRIVEN: the stream is live the moment a broadcaster's source
+ * client (butt, Mixxx, …) connects to the mount with user "source" and the global
+ * source password; it ends when they disconnect. There is no server-side start/stop
+ * for us to call — so start()/stop() are no-ops. Per-program isolation is the mount
+ * ("/s_<8hex>.mp3"); the source password is global Icecast config, so it's not
+ * per-program-rotatable.
+ *
+ * health() reads Icecast's own status-json.xsl and maps the matching source's live
+ * numbers into StreamHealth. Icecast doesn't report cpu/memory/latency/dropped, so
+ * those are 0; `stability` is expressed on the DTO's 0-100 scale (100 = connected /
+ * "Excellent", 0 = "Offline"). Any failure fetching/parsing → an all-zero/Offline
+ * reading so a down Icecast never 500s the live-status route.
+ */
+export class IcecastStreamProvider implements StreamProvider {
+  constructor(private readonly env: Env) {}
+
+  /** Per-session mount derived from the program id: "/s_<first 8 hex of id>.mp3". */
+  private mount(programId: string): string {
+    return `/s_${hash8(programId)}.mp3`;
+  }
+
+  provision(programId: string): StreamCredentials {
+    const mount = this.mount(programId);
+    const host = this.env.ICECAST_SOURCE_HOST ?? "";
+    const port = this.env.ICECAST_SOURCE_PORT ?? "";
+    const base = this.env.ICECAST_PUBLIC_BASE ?? "";
+    return {
+      provider: "icecast",
+      // What the broadcaster types into butt/Mixxx: host, port, mount.
+      ingestUrl: `${host}:${port}${mount}`,
+      // Icecast uses a global source password + fixed user "source"; the mount is
+      // the per-session part. The password is the secret "stream key".
+      streamKey: this.env.ICECAST_SOURCE_PASSWORD ?? "",
+      // A direct MP3 stream URL playable in any audio player (named hls_url for
+      // interface compatibility; for Icecast it's the Icecast stream URL).
+      hlsUrl: `${base}${mount}`,
+    };
+  }
+
+  start(_program: ProviderProgram): void {
+    // no-op: Icecast is source-driven — the stream goes live when the broadcaster's
+    // source client connects to the mount, not on any call we make.
+  }
+
+  stop(_program: ProviderProgram): void {
+    // no-op: the stream ends when the source client disconnects; nothing to tear down.
+  }
+
+  rotateKey(_programId: string): { streamKey: string } {
+    // Icecast's source password is global (config-level, in icecast.xml), so per-program
+    // rotation isn't supported — return the currently configured password unchanged.
+    return { streamKey: this.env.ICECAST_SOURCE_PASSWORD ?? "" };
+  }
+
+  async health(program: ProviderProgram): Promise<StreamHealth> {
+    const statusUrl = this.env.ICECAST_STATUS_URL;
+    if (!statusUrl) return offlineHealth();
+    const mount = this.mount(program.id);
+    try {
+      const res = await fetch(statusUrl);
+      if (!res.ok) return offlineHealth();
+      const body = (await res.json()) as {
+        icestats?: { source?: IcecastSource | IcecastSource[] };
+      };
+      const raw = body.icestats?.source;
+      // `source` may be a single object, an array, or absent.
+      const sources: IcecastSource[] = Array.isArray(raw) ? raw : raw ? [raw] : [];
+      const match = sources.find((s) => {
+        const listenurl = typeof s.listenurl === "string" ? s.listenurl : "";
+        return listenurl.endsWith(mount);
+      });
+      if (!match) return offlineHealth();
+      const bitrate = num(match.bitrate) || num(match["ice-bitrate"]) || 0;
+      return {
+        cpu: 0,
+        memory: 0,
+        bitrate,
+        latency: 0,
+        dropped: 0,
+        stability: 100, // connected → "Excellent" (0-100 DTO scale)
+        listeners: num(match.listeners) || 0,
+      };
+    } catch {
+      // A down/unreachable Icecast must never 500 the live-status route.
+      return offlineHealth();
+    }
+  }
+}
+
+/** Shape of an Icecast status-json.xsl source entry (only the fields we read). */
+interface IcecastSource {
+  listenurl?: string;
+  listeners?: number | string;
+  bitrate?: number | string;
+  "ice-bitrate"?: number | string;
+}
+
+/** Coerce a possibly-string numeric field to a finite number (0 on failure). */
+function num(v: unknown): number {
+  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : 0;
+}
+
 /** Select the stream provider from env. Default "fake"; unknown values → fake. */
 export function buildStreamProvider(env: Env): StreamProvider {
   switch (env.RADIO_STREAM_PROVIDER) {
     // cloudflare / mux / rtmp adapters plug in here once their env secrets exist.
+    case "icecast":
+      // Real self-hosted Icecast when the required env is present; else fall back to
+      // Fake (like other real providers) so dev/tests never need an upstream.
+      if (env.ICECAST_SOURCE_HOST && env.ICECAST_PUBLIC_BASE) return new IcecastStreamProvider(env);
+      return new FakeStreamProvider();
     case "fake":
     default:
       return new FakeStreamProvider();

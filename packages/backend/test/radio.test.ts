@@ -7,7 +7,13 @@ import { agent, bearer } from "./helpers/app.js";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser } from "./helpers/factories.js";
 import { RadioService } from "../src/modules/radio/service.js";
-import { FakeStreamProvider } from "../src/modules/radio/provider.js";
+import {
+  FakeStreamProvider,
+  IcecastStreamProvider,
+  buildStreamProvider,
+} from "../src/modules/radio/provider.js";
+import type { Env } from "../src/config/env.js";
+import { createHash } from "node:crypto";
 
 const auth = (t: string) => ({ Authorization: t });
 
@@ -353,5 +359,94 @@ describe("radio — mixer scenes + jingles", () => {
     const res = await agent().post("/v1/admin/radio/mixer/scenes").set(auth(adminTok)).send({ hint: "no name" });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("VALIDATION_FAILED");
+  });
+});
+
+// --- Icecast stream provider (pure unit tests — no DB, no real Icecast) --------
+
+// A minimal fake env with the Icecast fields; cast to Env for the provider.
+function icecastEnv(overrides: Partial<Env> = {}): Env {
+  return {
+    RADIO_STREAM_PROVIDER: "icecast",
+    ICECAST_SOURCE_HOST: "pathway.nuruplace.org",
+    ICECAST_SOURCE_PORT: "8000",
+    ICECAST_SOURCE_PASSWORD: "s3cret-source-pw",
+    ICECAST_PUBLIC_BASE: "https://pathway.nuruplace.org/radio",
+    ICECAST_STATUS_URL: "http://127.0.0.1:8000/status-json.xsl",
+    ...overrides,
+  } as unknown as Env;
+}
+
+describe("radio — IcecastStreamProvider", () => {
+  const programId = "11112222-3333-4444-5555-666677778888";
+  // mount is derived from the first 8 hex of the sha256 of the program id.
+  const mount = `/s_${createHash("sha256").update(programId).digest("hex").slice(0, 8)}.mp3`;
+
+  it("provision() maps ingest/stream_key/hls_url/provider", () => {
+    const p = new IcecastStreamProvider(icecastEnv());
+    const creds = p.provision(programId);
+    expect(creds.provider).toBe("icecast");
+    expect(creds.ingestUrl).toBe(`pathway.nuruplace.org:8000${mount}`);
+    expect(creds.streamKey).toBe("s3cret-source-pw");
+    expect(creds.hlsUrl).toBe(`https://pathway.nuruplace.org/radio${mount}`);
+  });
+
+  it("start()/stop() are no-ops and rotateKey() returns the configured password", () => {
+    const p = new IcecastStreamProvider(icecastEnv());
+    expect(p.start({ id: programId })).toBeUndefined();
+    expect(p.stop({ id: programId })).toBeUndefined();
+    expect(p.rotateKey(programId)).toEqual({ streamKey: "s3cret-source-pw" });
+  });
+
+  it("buildStreamProvider returns Icecast when required env is set, Fake otherwise", () => {
+    expect(buildStreamProvider(icecastEnv())).toBeInstanceOf(IcecastStreamProvider);
+    // Missing ICECAST_PUBLIC_BASE → falls back to Fake.
+    expect(
+      buildStreamProvider(icecastEnv({ ICECAST_PUBLIC_BASE: undefined })),
+    ).toBeInstanceOf(FakeStreamProvider);
+    // Default provider is Fake.
+    expect(buildStreamProvider({ RADIO_STREAM_PROVIDER: "fake" } as unknown as Env)).toBeInstanceOf(
+      FakeStreamProvider,
+    );
+  });
+
+  it("health() parses a matching source (array) into StreamHealth", async () => {
+    const p = new IcecastStreamProvider(icecastEnv());
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          icestats: {
+            source: [
+              { listenurl: `http://127.0.0.1:8000${mount}`, listeners: 42, bitrate: 128 },
+              { listenurl: "http://127.0.0.1:8000/other.mp3", listeners: 9 },
+            ],
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+    try {
+      const h = await p.health({ id: programId });
+      expect(h.listeners).toBe(42);
+      expect(h.bitrate).toBe(128);
+      expect(h.stability).toBe(100);
+      expect(h.cpu).toBe(0);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("health() returns Offline (all-zero) when Icecast is unreachable", async () => {
+    const p = new IcecastStreamProvider(icecastEnv());
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error("connection refused");
+    }) as typeof fetch;
+    try {
+      const h = await p.health({ id: programId });
+      expect(h).toEqual({ cpu: 0, memory: 0, bitrate: 0, latency: 0, dropped: 0, stability: 0, listeners: 0 });
+    } finally {
+      globalThis.fetch = orig;
+    }
   });
 });
