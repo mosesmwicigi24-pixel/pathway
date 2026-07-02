@@ -1796,9 +1796,9 @@ export type {
 } from "@nuru/shared";
 
 // ── Live EQ (3-band peaking EQ per on-air bus) ──────────────────────────────
-// Types come from @nuru/shared (the wire contract's source of truth).
-export type { MixerEqBus, MixerEqBand, MixerLiveEqBody };
-export type MixerEqBusGains = Partial<Record<MixerEqBand, number>>;
+// Wire types re-exported above from @nuru/shared; imported here for local use.
+import type { MixerEqBand as EqBand, MixerLiveEqBody as EqBody } from "@nuru/shared";
+export type MixerEqBusGains = Partial<Record<EqBand, number>>;
 
 const R = "/admin/radio";
 export const RadioApi = {
@@ -1882,9 +1882,9 @@ export const RadioApi = {
       .then((r) => r.data),
   // 3-band peaking EQ per bus (low 100 Hz / mid 1.2 kHz / high 8 kHz). Gains are
   // dB numbers −12…+12, ≥1 value per request; 503 when the engine is offline.
-  liveEq: (bands: MixerLiveEqBody["bands"]) =>
+  liveEq: (bands: EqBody["bands"]) =>
     api
-      .post<{ ok: true }>(`${R}/mixer/live/eq`, { bands } satisfies MixerLiveEqBody)
+      .post<{ ok: true }>(`${R}/mixer/live/eq`, { bands } satisfies EqBody)
       .then((r) => r.data),
   liveStatus: () => api.get<MixerLiveStatus>(`${R}/mixer/live/status`).then((r) => r.data),
 
