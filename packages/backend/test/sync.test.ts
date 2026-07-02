@@ -11,6 +11,7 @@ import {
   createEvent,
 } from "./helpers/factories.js";
 import { SyncService } from "../src/modules/sync/service.js";
+import { ChatService } from "../src/modules/chat/service.js";
 import { eventScanToken } from "../src/modules/progress/attendance.js";
 
 const sync = () => new SyncService(testPool());
@@ -93,6 +94,45 @@ describe("sync engine (§3.6)", () => {
     });
     // Returned in applied (seq) order: complete first, then quiz.
     expect(res.results.map((r) => r.status)).toEqual(["applied", "applied"]);
+  });
+
+  it("chat send double-push is a no-op — same mutation replayed, AND a re-enqueue with a fresh mutation_id but the same client message_id (§1.7, §3.6)", async () => {
+    // Provision the cell's group room the way the app does (first inbox read).
+    await new ChatService(testPool()).listConversations(student);
+    const convo = await testPool().query(
+      "SELECT conversation_id FROM chat_conversations WHERE kind='group' LIMIT 1",
+    );
+    const conversationId = convo.rows[0].conversation_id as string;
+
+    // The iOS client mints UPPERCASE UUIDs (UUID().uuidString); casing must not
+    // defeat idempotency — Postgres normalizes uuid values on both sides.
+    const payload = {
+      conversation_id: conversationId,
+      message_id: "AAAAAAAA-0000-4000-8000-0000000000A1",
+      body: "sent exactly once",
+      msg_type: "text",
+    };
+    const mutation = { mutation_id: "AAAAAAAA-0000-4000-8000-0000000000B1", seq: 1, domain: "chat_messages", op: "create", payload };
+
+    const push1 = await sync().push(student, { mutations: [mutation] });
+    expect(push1.results[0]).toMatchObject({ status: "applied" });
+
+    // Exact replay (network re-delivery / un-acked queue flush) → duplicate.
+    const push2 = await sync().push(student, { mutations: [mutation] });
+    expect(push2.results[0]).toMatchObject({ status: "duplicate" });
+
+    // Re-enqueued under a NEW mutation_id but the same client-minted message_id
+    // (e.g. the client rebuilt its queue) → still a no-op on the message row.
+    const push3 = await sync().push(student, {
+      mutations: [{ ...mutation, mutation_id: uuid(32), seq: 2 }],
+    });
+    expect(push3.results[0]).toMatchObject({ status: "duplicate" });
+
+    const rows = await testPool().query(
+      "SELECT count(*)::int n FROM chat_messages WHERE conversation_id=$1 AND body='sent exactly once'",
+      [conversationId],
+    );
+    expect(rows.rows[0].n).toBe(1);
   });
 
   it("pull returns changed rows since the cursor, then nothing on the next pull", async () => {
