@@ -1742,6 +1742,11 @@ import type {
   MixerSceneUpdateBody,
   MixerJingle,
   MixerJingleBody,
+  RadioTrack,
+  RadioTrackKind,
+  RadioPlaylistItem,
+  RadioLoopMode,
+  CreateRadioTrackBody,
 } from "@nuru/shared";
 
 export type {
@@ -1757,6 +1762,11 @@ export type {
   MixerSceneBody,
   MixerJingle,
   MixerJingleBody,
+  RadioTrack,
+  RadioTrackKind,
+  RadioPlaylistItem,
+  RadioLoopMode,
+  CreateRadioTrackBody,
 } from "@nuru/shared";
 
 const R = "/admin/radio";
@@ -1817,6 +1827,34 @@ export const RadioApi = {
     api.post<MixerJingle>(`${R}/mixer/jingles`, body).then((r) => r.data),
   deleteJingle: (id: string) =>
     api.delete<{ ok: true }>(`${R}/mixer/jingles/${id}`).then((r) => r.data),
+
+  // Audio library (reusable tracks; bare arrays, no {data:[]} envelope) -----
+  tracks: (kind?: RadioTrackKind) =>
+    api
+      .get<RadioTrack[]>(`${R}/tracks`, { params: kind ? { kind } : {} })
+      .then((r) => r.data),
+  createTrack: (body: CreateRadioTrackBody) =>
+    api.post<RadioTrack>(`${R}/tracks`, body).then((r) => r.data),
+  deleteTrack: (id: string) =>
+    api.delete<{ ok: true }>(`${R}/tracks/${id}`).then((r) => r.data),
+
+  // Session playlist (programs) --------------------------------------------
+  playlist: (programId: string) =>
+    api.get<RadioPlaylistItem[]>(`${R}/programs/${programId}/tracks`).then((r) => r.data),
+  addToPlaylist: (programId: string, trackId: string) =>
+    api
+      .post<RadioPlaylistItem>(`${R}/programs/${programId}/tracks`, { track_id: trackId })
+      .then((r) => r.data),
+  removeFromPlaylist: (programId: string, itemId: string) =>
+    api.delete<{ ok: true }>(`${R}/programs/${programId}/tracks/${itemId}`).then((r) => r.data),
+  reorderPlaylist: (programId: string, itemIds: string[]) =>
+    api
+      .put<RadioPlaylistItem[]>(`${R}/programs/${programId}/tracks/order`, { item_ids: itemIds })
+      .then((r) => r.data),
+
+  // Session loop mode (server-authoritative) -------------------------------
+  setLoop: (programId: string, loopMode: RadioLoopMode) =>
+    api.patch<RadioProgram>(`${R}/programs/${programId}`, { loop_mode: loopMode }).then((r) => r.data),
 };
 
 // --- Default single-flight token refresh -----------------------------------

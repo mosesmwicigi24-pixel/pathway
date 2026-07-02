@@ -7,13 +7,13 @@
 // polling while live, the ingest URL + stream key (copy + rotate), and listener
 // comments. LOCAL (client-only hardware/UI): audio-source select, mic controls,
 // gain, meters, waveform, device manager, emergency controls, reactions animation.
-import { useCallback, useEffect, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
-  Activity, Bell, CalendarClock, Copy, Cpu, Disc3, Flame, Gauge, HardDrive, Headphones,
-  Heart, ImagePlus, KeyRound, Laptop, Loader2, Mic, MicOff, Music, Pause, Play, Plus,
-  QrCode, RefreshCw, Radio as RadioIcon, Send, ShieldAlert, Signal,
-  SlidersHorizontal, Smartphone, Square, Tablet, Trash2, Volume2,
-  Wifi, X, Check, type LucideIcon,
+  Activity, Bell, CalendarClock, ChevronDown, Copy, Cpu, Disc3, Flame, Gauge, HardDrive, Headphones,
+  Heart, ImagePlus, KeyRound, Laptop, ListMusic, Loader2, Mic, MicOff, Music, Pause, Play, Plus,
+  QrCode, Repeat, Repeat1, RefreshCw, Radio as RadioIcon, Send, ShieldAlert, Signal,
+  SlidersHorizontal, Smartphone, Square, Tablet, Trash2, UploadCloud, Volume2,
+  Wifi, X, Check, ArrowUp, ArrowDown, type LucideIcon,
 } from "lucide-react";
 import { AxiosError } from "axios";
 import {
@@ -25,6 +25,11 @@ import {
   type StreamHealth,
   type CreateRadioProgramBody,
   type UpdateRadioProgramBody,
+  type RadioTrack,
+  type RadioTrackKind,
+  type RadioPlaylistItem,
+  type RadioLoopMode,
+  type CreateRadioTrackBody,
 } from "../../api/client";
 
 /* ── studio palette ── */
@@ -528,6 +533,13 @@ export function RadioStudio(): ReactElement {
         ) : loadErr ? (
           <StateCard icon={ShieldAlert} title="Couldn't load broadcasts" body={loadErr} action={<GoldButton onClick={load}>Try again</GoldButton>} />
         ) : (
+          <>
+          {/* ══════════ Audio library + Sessions ══════════ */}
+          <div className="grid gap-4 sm:gap-5 grid-cols-1 lg:grid-cols-2" style={{ marginBottom: 20 }}>
+            <AudioLibraryPanel />
+            <SessionsPanel />
+          </div>
+
           <div className="grid gap-4 sm:gap-5 grid-cols-1 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
             {/* ══════════ LEFT — main studio ══════════ */}
             <div className="flex flex-col gap-5" style={{ minWidth: 0 }}>
@@ -1021,6 +1033,7 @@ export function RadioStudio(): ReactElement {
               </Panel>
             </div>
           </div>
+          </>
         )}
       </div>
 
@@ -1227,6 +1240,633 @@ function StateCard({ icon: Icon, title, body, action }: { icon: LucideIcon; titl
 function GoldButton({ children, onClick }: { children: React.ReactNode; onClick: () => void }): ReactElement {
   return (
     <button onClick={onClick} className="rs-btn rounded-xl px-5 py-2.5" style={{ background: GOLD, color: "#0A1120", fontSize: 13, fontWeight: 800 }}>{children}</button>
+  );
+}
+
+/* ═══════════════════ Audio library + Sessions ═══════════════════ */
+
+const TRACK_KINDS = ["music", "preaching", "audio"] as const;
+const KIND_LABEL: Record<RadioTrackKind, string> = { music: "Music", preaching: "Preaching", audio: "Audio" };
+// Per-kind accents: MUSIC green, PREACHING gold, AUDIO blue.
+const KIND_ACCENT: Record<RadioTrackKind, string> = { music: GREEN, preaching: GOLD, audio: "#60A5FA" };
+
+// Human-readable byte size ("31.2 MB").
+function fmtBytes(bytes: number | null | undefined): string | null {
+  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return null;
+  const units = ["B", "KB", "MB", "GB"];
+  let n = bytes;
+  let u = 0;
+  while (n >= 1024 && u < units.length - 1) { n /= 1024; u++; }
+  return `${n >= 100 || u === 0 ? Math.round(n) : n.toFixed(1)} ${units[u]}`;
+}
+
+// Read an audio file's duration client-side (best-effort) — shared with uploads.
+function probeAudioDuration(file: File): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    try {
+      const url = URL.createObjectURL(file);
+      const el = document.createElement("audio");
+      el.preload = "metadata";
+      el.onloadedmetadata = () => {
+        const d = Number.isFinite(el.duration) ? Math.round(el.duration) : undefined;
+        URL.revokeObjectURL(url);
+        resolve(d && d > 0 ? d : undefined);
+      };
+      el.onerror = () => { URL.revokeObjectURL(url); resolve(undefined); };
+      el.src = url;
+    } catch { resolve(undefined); }
+  });
+}
+
+// Filename without its extension → default track title.
+function baseName(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+const LOOP_MODES: RadioLoopMode[] = ["none", "loop_all", "repeat_one"];
+const LOOP_LABEL: Record<RadioLoopMode, string> = { none: "Off", loop_all: "Loop all", repeat_one: "Repeat one" };
+
+// A small dropdown that lets the caller pick one of the sessions (programs).
+function SessionMenu({
+  sessions, onPick, label, icon,
+}: {
+  sessions: RadioProgram[];
+  onPick: (programId: string) => void;
+  label: string;
+  icon?: ReactElement;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="rs-btn flex items-center gap-1.5 rounded-lg px-2.5"
+        style={{ height: 30, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 11.5, fontWeight: 700 }}
+      >
+        {icon} {label} <ChevronDown size={13} />
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 z-30 rounded-xl overflow-hidden"
+          style={{ top: "calc(100% + 6px)", minWidth: 200, maxHeight: 260, overflowY: "auto", background: "#131E33", border: `1px solid ${PANEL_BORDER}`, boxShadow: "0 18px 40px rgba(0,0,0,0.55)" }}
+        >
+          {sessions.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: DIMMER, padding: "10px 12px" }}>No sessions yet</div>
+          ) : (
+            sessions.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => { setOpen(false); onPick(s.id); }}
+                className="rs-btn w-full text-left flex items-center gap-2 px-3 py-2"
+                style={{ background: "none", border: "none", color: TEXT, fontSize: 12 }}
+              >
+                {s.is_live && <span className="rs-live-dot rounded-full shrink-0" style={{ width: 6, height: 6, background: RED }} />}
+                <span className="truncate">{s.title}</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Audio library panel — reusable track catalog + upload ──
+function AudioLibraryPanel(): ReactElement {
+  const [tracks, setTracks] = useState<RadioTrack[] | null>(null);
+  const [kind, setKind] = useState<RadioTrackKind>("music");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [sessions, setSessions] = useState<RadioProgram[]>([]);
+  const [note, setNote] = useState<string | null>(null);
+
+  const load = useCallback((k: RadioTrackKind) => {
+    setLoading(true);
+    setErr(null);
+    RadioApi.tracks(k)
+      .then((list) => setTracks(list))
+      .catch(() => { setTracks(null); setErr("Could not load the audio library."); })
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(kind); }, [load, kind]);
+  useEffect(() => { RadioApi.programs().then(setSessions).catch(() => setSessions([])); }, []);
+
+  const upload = useCallback(async (file: File) => {
+    if (file.size > 200 * 1024 * 1024) { setErr("Audio is larger than 200 MB. Please choose a smaller file."); return; }
+    setUploading(true);
+    setErr(null);
+    try {
+      const durationSec = await probeAudioDuration(file);
+      const res = await RadioApi.uploadAudio(file, durationSec);
+      const body: CreateRadioTrackBody = { title: baseName(file.name), kind, audio_url: res.url, size_bytes: file.size };
+      const d = res.duration_sec ?? durationSec;
+      if (d != null) body.duration_sec = d;
+      await RadioApi.createTrack(body);
+      load(kind);
+    } catch {
+      setErr("Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
+  }, [kind, load]);
+
+  const remove = useCallback(async (id: string) => {
+    try {
+      await RadioApi.deleteTrack(id);
+      setTracks((ts) => (ts ? ts.filter((t) => t.id !== id) : ts));
+    } catch {
+      setErr("Could not delete the track.");
+    }
+  }, []);
+
+  const addToSession = useCallback(async (programId: string, track: RadioTrack) => {
+    setNote(null);
+    try {
+      await RadioApi.addToPlaylist(programId, track.id);
+      const s = sessions.find((p) => p.id === programId);
+      setNote(`Added "${track.title}" to ${s?.title ?? "session"}.`);
+      window.dispatchEvent(new CustomEvent("rs:playlist-changed", { detail: { programId } }));
+      setTimeout(() => setNote((n) => (n && n.startsWith("Added") ? null : n)), 2600);
+    } catch {
+      setErr("Could not add the track to that session.");
+    }
+  }, [sessions]);
+
+  const count = tracks?.length ?? 0;
+
+  return (
+    <Panel>
+      <div className="flex items-center justify-between mb-3.5">
+        <div className="flex items-center gap-2">
+          <span style={{ fontSize: 16 }}>🎵</span>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>Audio library</span>
+        </div>
+        <span style={{ fontSize: 11, color: DIM }}>{loading ? "Loading…" : `${count} track${count === 1 ? "" : "s"}`}</span>
+      </div>
+
+      {/* Segmented control + upload */}
+      <div className="flex items-center gap-2 flex-wrap mb-3.5">
+        <div className="flex items-center rounded-xl p-0.5" style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${PANEL_BORDER}` }}>
+          {TRACK_KINDS.map((k) => {
+            const sel = k === kind;
+            return (
+              <button
+                key={k}
+                onClick={() => setKind(k)}
+                className="rs-btn rounded-lg px-3"
+                style={{ height: 30, background: sel ? "rgba(230,198,110,0.16)" : "transparent", color: sel ? GOLD : DIM, fontSize: 11.5, fontWeight: 700, border: sel ? `1px solid ${GOLD}44` : "1px solid transparent" }}
+              >
+                {KIND_LABEL[k]}
+              </button>
+            );
+          })}
+        </div>
+        <label
+          className="rs-btn flex items-center gap-2 rounded-xl px-3.5 shrink-0"
+          style={{ height: 34, background: "rgba(230,198,110,0.06)", color: GOLD, border: `1.5px dashed ${GOLD}66`, fontSize: 12, fontWeight: 700, cursor: uploading ? "default" : "pointer", opacity: uploading ? 0.6 : 1 }}
+        >
+          {uploading ? <Loader2 size={14} className="rs-spin" /> : <UploadCloud size={14} />}
+          {uploading ? "Uploading…" : "Upload music"}
+          <input
+            type="file"
+            accept="audio/*"
+            disabled={uploading}
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void upload(f); }}
+            style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", border: 0 }}
+          />
+        </label>
+      </div>
+
+      {err && <div style={{ fontSize: 11, color: "#FCA5A5", marginBottom: 8 }}>{err}</div>}
+      {note && <div style={{ fontSize: 11, color: GREEN, marginBottom: 8 }}>{note}</div>}
+
+      {/* Track rows */}
+      <div className="flex flex-col gap-2" style={{ maxHeight: 420, overflowY: "auto" }}>
+        {loading ? (
+          <div className="flex items-center gap-2" style={{ fontSize: 12, color: DIM, padding: "6px 0" }}>
+            <Loader2 size={14} className="rs-spin" /> Loading tracks…
+          </div>
+        ) : count === 0 ? (
+          <div style={{ fontSize: 12, color: DIMMER, padding: "10px 0", textAlign: "center" }}>No tracks yet — upload one above.</div>
+        ) : (
+          tracks?.map((t) => {
+            const accent = KIND_ACCENT[t.kind];
+            const dur = fmtClock(t.duration_sec);
+            const size = fmtBytes(t.size_bytes);
+            return (
+              <div key={t.id} className="flex items-center gap-3 rounded-xl px-3 py-2.5" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
+                <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 32, height: 32, background: `${accent}22`, color: accent }}>
+                  <Music size={15} />
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="flex items-center gap-2">
+                    <span className="truncate" style={{ fontSize: 12.5, fontWeight: 600 }}>{t.title}</span>
+                    <span className="rounded-full shrink-0 px-1.5 py-0.5" style={{ background: `${accent}22`, color: accent, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t.kind}</span>
+                  </div>
+                  <div className="flex items-center gap-2 rs-tnum" style={{ fontSize: 10.5, color: DIMMER, marginTop: 2, fontFamily: MONO }}>
+                    {dur && <span>{dur}</span>}
+                    {dur && size && <span>·</span>}
+                    {size && <span>{size}</span>}
+                    {!dur && !size && <span>—</span>}
+                  </div>
+                </div>
+                <SessionMenu sessions={sessions} label="Session" icon={<Plus size={13} />} onPick={(pid) => void addToSession(pid, t)} />
+                <button
+                  onClick={() => void remove(t.id)}
+                  title="Delete track"
+                  className="rs-btn flex items-center justify-center rounded-lg shrink-0"
+                  style={{ width: 30, height: 30, background: "rgba(255,255,255,0.05)", color: DIM }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+// ── Sessions panel — program playlists + loop + live preview ──
+function SessionsPanel(): ReactElement {
+  const [sessions, setSessions] = useState<RadioProgram[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [playlists, setPlaylists] = useState<Record<string, RadioPlaylistItem[]>>({});
+  const [library, setLibrary] = useState<RadioTrack[]>([]);
+
+  // Client-side live preview.
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [previewProgram, setPreviewProgram] = useState<string | null>(null);
+  const [previewIndex, setPreviewIndex] = useState(0);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setErr(null);
+    RadioApi.programs()
+      .then((list) => setSessions(list))
+      .catch(() => { setSessions(null); setErr("Could not load sessions."); })
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { RadioApi.tracks().then(setLibrary).catch(() => setLibrary([])); }, []);
+
+  const loadPlaylist = useCallback((programId: string) => {
+    RadioApi.playlist(programId)
+      .then((items) => setPlaylists((p) => ({ ...p, [programId]: items })))
+      .catch(() => {});
+  }, []);
+
+  // Load each session's playlist once loaded.
+  useEffect(() => {
+    if (!sessions) return;
+    sessions.forEach((s) => loadPlaylist(s.id));
+  }, [sessions, loadPlaylist]);
+
+  // Refresh a session's playlist when the library panel adds a track to it.
+  useEffect(() => {
+    const onChanged = (e: Event): void => {
+      const detail = (e as CustomEvent<{ programId: string }>).detail;
+      if (detail?.programId) loadPlaylist(detail.programId);
+    };
+    window.addEventListener("rs:playlist-changed", onChanged);
+    return () => window.removeEventListener("rs:playlist-changed", onChanged);
+  }, [loadPlaylist]);
+
+  const create = useCallback(async () => {
+    if (!name.trim()) return;
+    setCreating(true);
+    setErr(null);
+    try {
+      const created = await RadioApi.createProgram({ title: name.trim(), category: "Sermon" });
+      setSessions((s) => [created, ...(s ?? [])]);
+      setPlaylists((p) => ({ ...p, [created.id]: [] }));
+      setName("");
+    } catch {
+      setErr("Could not create the session.");
+    } finally {
+      setCreating(false);
+    }
+  }, [name]);
+
+  const stopPreview = useCallback(() => {
+    const el = audioRef.current;
+    if (el) { el.pause(); el.removeAttribute("src"); el.load(); }
+    setPreviewProgram(null);
+    setPreviewIndex(0);
+  }, []);
+
+  const removeSession = useCallback(async (id: string) => {
+    try {
+      await RadioApi.deleteProgram(id);
+      setSessions((s) => (s ? s.filter((p) => p.id !== id) : s));
+      if (previewProgram === id) stopPreview();
+    } catch {
+      setErr("Could not delete the session.");
+    }
+  }, [previewProgram, stopPreview]);
+
+  const cycleLoop = useCallback(async (program: RadioProgram) => {
+    const idx = LOOP_MODES.indexOf(program.loop_mode);
+    const nextMode = LOOP_MODES[(idx + 1) % LOOP_MODES.length]!;
+    // optimistic
+    setSessions((s) => (s ? s.map((p) => (p.id === program.id ? { ...p, loop_mode: nextMode } : p)) : s));
+    try {
+      const updated = await RadioApi.setLoop(program.id, nextMode);
+      setSessions((s) => (s ? s.map((p) => (p.id === updated.id ? updated : p)) : s));
+    } catch {
+      setSessions((s) => (s ? s.map((p) => (p.id === program.id ? { ...p, loop_mode: program.loop_mode } : p)) : s));
+      setErr("Could not change the loop mode.");
+    }
+  }, []);
+
+  const addTrack = useCallback(async (programId: string, trackId: string) => {
+    try {
+      await RadioApi.addToPlaylist(programId, trackId);
+      loadPlaylist(programId);
+    } catch {
+      setErr("Could not add the track.");
+    }
+  }, [loadPlaylist]);
+
+  const removeItem = useCallback(async (programId: string, itemId: string) => {
+    try {
+      await RadioApi.removeFromPlaylist(programId, itemId);
+      loadPlaylist(programId);
+    } catch {
+      setErr("Could not remove the track.");
+    }
+  }, [loadPlaylist]);
+
+  const reorder = useCallback(async (programId: string, from: number, to: number) => {
+    const items = playlists[programId];
+    if (!items || to < 0 || to >= items.length) return;
+    const next = items.slice();
+    const [moved] = next.splice(from, 1);
+    if (!moved) return;
+    next.splice(to, 0, moved);
+    setPlaylists((p) => ({ ...p, [programId]: next })); // optimistic
+    try {
+      const saved = await RadioApi.reorderPlaylist(programId, next.map((i) => i.id));
+      setPlaylists((p) => ({ ...p, [programId]: saved }));
+    } catch {
+      setPlaylists((p) => ({ ...p, [programId]: items }));
+      setErr("Could not reorder the playlist.");
+    }
+  }, [playlists]);
+
+  // ── Live preview (client-side player honoring loop_mode) ──
+  const playAt = useCallback((programId: string, index: number) => {
+    const items = playlists[programId];
+    const item = items?.[index];
+    const el = audioRef.current;
+    if (!item || !el) return;
+    setPreviewProgram(programId);
+    setPreviewIndex(index);
+    el.src = item.track.audio_url;
+    void el.play().catch(() => {});
+  }, [playlists]);
+
+  const playLive = useCallback(async (program: RadioProgram) => {
+    const items = playlists[program.id];
+    if (!items || items.length === 0) { setErr("This session has no tracks to play."); return; }
+    setErr(null);
+    // Server-authoritative go-live (best effort — preview runs regardless).
+    RadioApi.goLive(program.id)
+      .then((updated) => setSessions((s) => (s ? s.map((p) => (p.id === updated.id ? updated : p)) : s)))
+      .catch(() => {});
+    playAt(program.id, 0);
+  }, [playlists, playAt]);
+
+  // Advance on `ended`, honoring the current session's loop_mode.
+  const onEnded = useCallback(() => {
+    if (!previewProgram) return;
+    const program = sessions?.find((p) => p.id === previewProgram);
+    const items = playlists[previewProgram];
+    if (!program || !items || items.length === 0) { stopPreview(); return; }
+    const mode = program.loop_mode;
+    if (mode === "repeat_one") { playAt(previewProgram, previewIndex); return; }
+    const next = previewIndex + 1;
+    if (next < items.length) { playAt(previewProgram, next); return; }
+    if (mode === "loop_all") { playAt(previewProgram, 0); return; }
+    stopPreview();
+  }, [previewProgram, previewIndex, sessions, playlists, playAt, stopPreview]);
+
+  const count = sessions?.length ?? 0;
+  const previewItem = previewProgram ? playlists[previewProgram]?.[previewIndex] : undefined;
+
+  return (
+    <Panel>
+      {/* hidden preview element */}
+      <audio ref={audioRef} onEnded={onEnded} style={{ display: "none" }} />
+
+      <div className="flex items-center justify-between mb-3.5">
+        <div className="flex items-center gap-2">
+          <ListMusic size={15} style={{ color: GOLD }} />
+          <span style={{ fontSize: 13, fontWeight: 700 }}>Sessions</span>
+        </div>
+        <span style={{ fontSize: 11, color: DIM }}>{loading ? "Loading…" : `${count} session${count === 1 ? "" : "s"}`}</span>
+      </div>
+
+      {/* Create session */}
+      <div className="flex items-center gap-2 mb-3.5">
+        <input
+          className="rs-in"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") void create(); }}
+          placeholder="New session name…"
+          style={{ ...inputStyle, height: 36, flex: 1, minWidth: 0 }}
+        />
+        <button
+          onClick={() => void create()}
+          disabled={creating || !name.trim()}
+          className="rs-btn flex items-center gap-1.5 rounded-xl px-3.5 shrink-0"
+          style={{ height: 36, background: GOLD, color: "#0A1120", fontSize: 12.5, fontWeight: 800, opacity: creating || !name.trim() ? 0.55 : 1 }}
+        >
+          {creating ? <Loader2 size={14} className="rs-spin" /> : <Plus size={14} />} Create
+        </button>
+      </div>
+
+      {err && <div style={{ fontSize: 11, color: "#FCA5A5", marginBottom: 8 }}>{err}</div>}
+      {previewItem && (
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2 mb-3" style={{ background: "rgba(34,197,94,0.10)", border: `1px solid ${GREEN}44` }}>
+          <Play size={13} style={{ color: GREEN }} />
+          <span className="truncate" style={{ fontSize: 11.5, color: "#86EFAC" }}>Now previewing: {previewItem.track.title}</span>
+          <button onClick={stopPreview} className="rs-btn ml-auto flex items-center justify-center rounded-md shrink-0" style={{ width: 24, height: 24, background: "rgba(255,255,255,0.06)", color: DIM }}><Square size={12} /></button>
+        </div>
+      )}
+
+      {/* Session cards */}
+      <div className="flex flex-col gap-3" style={{ maxHeight: 480, overflowY: "auto" }}>
+        {loading ? (
+          <div className="flex items-center gap-2" style={{ fontSize: 12, color: DIM, padding: "6px 0" }}>
+            <Loader2 size={14} className="rs-spin" /> Loading sessions…
+          </div>
+        ) : count === 0 ? (
+          <div style={{ fontSize: 12, color: DIMMER, padding: "10px 0", textAlign: "center" }}>No sessions yet — create one above.</div>
+        ) : (
+          sessions?.map((s) => {
+            const items = playlists[s.id] ?? [];
+            const LoopIcon = s.loop_mode === "repeat_one" ? Repeat1 : Repeat;
+            const loopActive = s.loop_mode !== "none";
+            const addable = library.filter(Boolean);
+            return (
+              <div key={s.id} className="rounded-xl px-3 py-3" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div style={{ flex: 1, minWidth: 120 }}>
+                    <div className="flex items-center gap-2">
+                      {s.is_live && <span className="rs-live-dot rounded-full shrink-0" style={{ width: 7, height: 7, background: RED }} />}
+                      <span className="truncate" style={{ fontSize: 13, fontWeight: 700 }}>{s.title}</span>
+                    </div>
+                    <span style={{ fontSize: 10.5, color: DIMMER }}>{items.length} item{items.length === 1 ? "" : "s"}</span>
+                  </div>
+                  <button
+                    onClick={() => void cycleLoop(s)}
+                    title={`Loop: ${LOOP_LABEL[s.loop_mode]}`}
+                    className="rs-btn flex items-center gap-1.5 rounded-lg px-2.5 shrink-0"
+                    style={{ height: 30, background: loopActive ? "rgba(230,198,110,0.14)" : "rgba(255,255,255,0.04)", color: loopActive ? GOLD : DIM, border: `1px solid ${loopActive ? GOLD + "55" : PANEL_BORDER}`, fontSize: 11, fontWeight: 700 }}
+                  >
+                    <LoopIcon size={13} /> {LOOP_LABEL[s.loop_mode]}
+                  </button>
+                  <button
+                    onClick={() => void playLive(s)}
+                    disabled={items.length === 0}
+                    className="rs-btn flex items-center gap-1.5 rounded-lg px-3 shrink-0"
+                    style={{ height: 30, background: GOLD, color: "#0A1120", fontSize: 11.5, fontWeight: 800, opacity: items.length === 0 ? 0.5 : 1 }}
+                  >
+                    <Play size={13} /> Play live
+                  </button>
+                  <button
+                    onClick={() => void removeSession(s.id)}
+                    title="Delete session"
+                    className="rs-btn flex items-center justify-center rounded-lg shrink-0"
+                    style={{ width: 30, height: 30, background: "rgba(255,255,255,0.05)", color: DIM }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+
+                {/* Playlist items */}
+                <div className="flex flex-col gap-1.5" style={{ marginTop: 10 }}>
+                  {items.length === 0 ? (
+                    <div style={{ fontSize: 11, color: DIMMER, padding: "4px 0" }}>No tracks in this session yet.</div>
+                  ) : (
+                    items.map((it, i) => {
+                      const accent = KIND_ACCENT[it.track.kind];
+                      const playing = previewProgram === s.id && previewIndex === i;
+                      return (
+                        <div key={it.id} className="flex items-center gap-2 rounded-lg px-2.5 py-1.5" style={{ background: playing ? "rgba(34,197,94,0.10)" : "rgba(255,255,255,0.02)", border: `1px solid ${playing ? GREEN + "44" : PANEL_BORDER}` }}>
+                          <span className="rs-tnum shrink-0" style={{ fontFamily: MONO, fontSize: 11, color: DIM, width: 16, textAlign: "right" }}>{i + 1}</span>
+                          <span className="rounded-full shrink-0" style={{ width: 8, height: 8, background: accent }} />
+                          <span className="truncate" style={{ flex: 1, minWidth: 0, fontSize: 12 }}>{it.track.title}</span>
+                          <button
+                            onClick={() => void reorder(s.id, i, i - 1)}
+                            disabled={i === 0}
+                            title="Move up"
+                            className="rs-btn flex items-center justify-center rounded-md shrink-0"
+                            style={{ width: 24, height: 24, background: "rgba(255,255,255,0.05)", color: i === 0 ? DIMMER : DIM, opacity: i === 0 ? 0.4 : 1 }}
+                          >
+                            <ArrowUp size={12} />
+                          </button>
+                          <button
+                            onClick={() => void reorder(s.id, i, i + 1)}
+                            disabled={i === items.length - 1}
+                            title="Move down"
+                            className="rs-btn flex items-center justify-center rounded-md shrink-0"
+                            style={{ width: 24, height: 24, background: "rgba(255,255,255,0.05)", color: i === items.length - 1 ? DIMMER : DIM, opacity: i === items.length - 1 ? 0.4 : 1 }}
+                          >
+                            <ArrowDown size={12} />
+                          </button>
+                          <button
+                            onClick={() => void removeItem(s.id, it.id)}
+                            title="Remove from session"
+                            className="rs-btn flex items-center justify-center rounded-md shrink-0"
+                            style={{ width: 24, height: 24, background: "rgba(255,255,255,0.05)", color: DIM }}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Add track footer */}
+                <div style={{ marginTop: 10 }}>
+                  <TrackMenu tracks={addable} onPick={(trackId) => void addTrack(s.id, trackId)} />
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+// A full-width dropdown appending a library track to a session.
+function TrackMenu({ tracks, onPick }: { tracks: RadioTrack[]; onPick: (trackId: string) => void }): ReactElement {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="rs-btn w-full flex items-center justify-center gap-1.5 rounded-lg"
+        style={{ height: 32, background: "rgba(230,198,110,0.08)", color: GOLD, border: `1px dashed ${GOLD}55`, fontSize: 11.5, fontWeight: 700 }}
+      >
+        <Plus size={13} /> Add track to this session… <ChevronDown size={13} />
+      </button>
+      {open && (
+        <div
+          className="absolute left-0 right-0 z-30 rounded-xl overflow-hidden"
+          style={{ top: "calc(100% + 6px)", maxHeight: 240, overflowY: "auto", background: "#131E33", border: `1px solid ${PANEL_BORDER}`, boxShadow: "0 18px 40px rgba(0,0,0,0.55)" }}
+        >
+          {tracks.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: DIMMER, padding: "10px 12px" }}>No library tracks yet</div>
+          ) : (
+            tracks.map((t) => {
+              const accent = KIND_ACCENT[t.kind];
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => { setOpen(false); onPick(t.id); }}
+                  className="rs-btn w-full text-left flex items-center gap-2 px-3 py-2"
+                  style={{ background: "none", border: "none", color: TEXT, fontSize: 12 }}
+                >
+                  <span className="rounded-full shrink-0" style={{ width: 8, height: 8, background: accent }} />
+                  <span className="truncate">{t.title}</span>
+                  <span className="ml-auto shrink-0" style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", color: accent }}>{t.kind}</span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
