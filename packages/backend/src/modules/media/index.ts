@@ -14,6 +14,8 @@ import { ApiError } from "../../http/errors.js";
 import { MediaService } from "./service.js";
 import { VideoService } from "./video.js";
 import { buildVideoPipeline } from "./pipeline.js";
+import { buildObjectStore } from "../certificates/objectStore.js";
+import { maybeOne } from "../../db/db.js";
 
 export const mediaRouter: Router = Router();
 
@@ -163,6 +165,36 @@ export function registerMedia(ctx: AppContext): Router {
     handler(async (req, res) => {
       const { key } = parseBody(z.object({ key: z.string().min(1) }), req.query);
       res.json(media.signedUrl(key));
+    }),
+  );
+
+  // Certificate PDF download — the /certificates list emits download_url pointing
+  // here ("brokered by the media module"). The verification code is unguessable
+  // but not public: a valid session is required and the requester must own the
+  // certificate or hold an Instructor+ role.
+  const objects = ctx.objectStore ?? buildObjectStore(ctx.env);
+  r.get(
+    "/media/certificates/:code",
+    auth,
+    handler(async (req, res) => {
+      const code = String(req.params.code ?? "");
+      const cert = await maybeOne<{ user_id: string; pdf_object_key: string; level_number: number | null }>(
+        ctx.db.replica,
+        `SELECT user_id, pdf_object_key, level_number FROM certificates WHERE verification_code = $1`,
+        [code],
+      );
+      if (!cert) throw new ApiError("NOT_FOUND", "No certificate with that code");
+      const p = requirePrincipal(req);
+      const staff = p.role === "Instructor" || p.role === "Admin" || p.role === "SuperAdmin";
+      if (cert.user_id !== p.userId && !staff) {
+        throw new ApiError("FORBIDDEN_SCOPE", "Not your certificate");
+      }
+      const pdf = await objects.get(cert.pdf_object_key);
+      if (!pdf) throw new ApiError("NOT_FOUND", "Certificate PDF is not available");
+      const label = cert.level_number == null ? "full-programme" : `level-${cert.level_number}`;
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="nuru-certificate-${label}-${code}.pdf"`);
+      res.send(pdf);
     }),
   );
 

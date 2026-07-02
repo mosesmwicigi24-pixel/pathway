@@ -7,11 +7,16 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { CertificateService } from "./service.js";
+import { buildObjectStore } from "./objectStore.js";
 
 export const certificatesRouter: Router = Router();
 
 export function registerCertificates(ctx: AppContext): Router {
-  const svc = new CertificateService(ctx.db.primary, ctx.env.CERT_SIGNING_KEY ?? ctx.env.JWT_SIGNING_KEY);
+  const svc = new CertificateService(
+    ctx.db.primary,
+    ctx.env.CERT_SIGNING_KEY ?? ctx.env.JWT_SIGNING_KEY,
+    ctx.objectStore ?? buildObjectStore(ctx.env),
+  );
   const auth = authenticate(ctx.env);
   const perm = requirePermission(ctx.db.replica); // RBAC: certificates module (§5.4)
   const r = certificatesRouter;

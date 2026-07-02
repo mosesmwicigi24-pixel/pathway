@@ -5,6 +5,7 @@ import type { Logger } from "pino";
 import type { Redis } from "ioredis";
 import type { Env } from "../config/env.js";
 import type { DbPools } from "../db/pool.js";
+import type { ObjectStore } from "../modules/certificates/objectStore.js";
 
 export interface AppContext {
   env: Env;
@@ -13,4 +14,8 @@ export interface AppContext {
   // Present when REDIS_URL is configured (sessions/cache/rate-limit, §1.6). Optional
   // so tests and Redis-less dev still build a working app.
   redis?: Redis | undefined;
+  // Object storage for rendered artifacts (certificate PDFs, §4.5). Optional —
+  // modules fall back to buildObjectStore(env) (disk under MEDIA_STORAGE_DIR);
+  // tests inject an InMemoryObjectStore shared between issuer and download route.
+  objectStore?: ObjectStore | undefined;
 }

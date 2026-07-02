@@ -11,6 +11,10 @@ import { GrowthService } from "./service.js";
 import { buildAiProvider, type AiProvider } from "../assistant/provider.js";
 
 const IdParam = z.object({ id: z.string().uuid() });
+const PlanDayParams = z.object({
+  planId: z.string().uuid(),
+  dayNumber: z.coerce.number().int().min(1),
+});
 
 export const growthRouter: Router = Router();
 
@@ -61,6 +65,18 @@ export function registerGrowth(ctx: AppContext, providerOverride?: AiProvider): 
   r.delete("/me/verses/:id", auth, handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
     res.json(await svc.deleteVerse(requirePrincipal(req).userId, id));
+  }));
+
+  // ---- Plan-day reflections (iOS contract — do not rename fields) ----
+  r.post("/growth/plans/:planId/days/:dayNumber/reflection", auth, handler(async (req, res) => {
+    const { planId, dayNumber } = parseBody(PlanDayParams, req.params);
+    const input = parseBody(GrowthService.PlanDayReflection, req.body);
+    res.status(201).json(await svc.upsertPlanDayReflection(requirePrincipal(req).userId, planId, dayNumber, input));
+  }));
+
+  r.get("/growth/plans/:planId/days/:dayNumber/reflection", auth, handler(async (req, res) => {
+    const { planId, dayNumber } = parseBody(PlanDayParams, req.params);
+    res.json(await svc.getPlanDayReflection(requirePrincipal(req).userId, planId, dayNumber));
   }));
 
   return r;

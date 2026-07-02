@@ -219,6 +219,9 @@ describe("radio — comments create + moderation hide", () => {
 
     const list1 = await agent().get(`/v1/radio/programs/${prog.id}/comments`).set(auth(tok));
     expect(list1.body).toHaveLength(1);
+    // Author identity comes from the users join (name + null-safe avatar).
+    expect(list1.body[0].author_name).toBe("Test Member");
+    expect(list1.body[0].author_avatar_url).toBeNull();
 
     // Admin hides it.
     const hide = await agent().delete(`/v1/admin/radio/comments/${commentId}`).set(auth(adminTok));
@@ -231,6 +234,7 @@ describe("radio — comments create + moderation hide", () => {
     const adminList = await agent().get(`/v1/admin/radio/programs/${prog.id}/comments`).set(auth(adminTok));
     expect(adminList.body).toHaveLength(1);
     expect(adminList.body[0].hidden).toBe(true);
+    expect(adminList.body[0].author_name).toBe("Test Member"); // moderation view carries the author too
   });
 });
 

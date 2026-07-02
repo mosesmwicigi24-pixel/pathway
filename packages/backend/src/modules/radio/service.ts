@@ -84,6 +84,9 @@ export interface RadioCommentRow {
   hidden: boolean;
   client_event_id: string | null;
   created_at: string;
+  // Present on list reads (users join); create returns the bare row.
+  author_name?: string | null;
+  author_avatar_url?: string | null;
 }
 
 export interface MixerSceneRow {
@@ -549,9 +552,12 @@ export class RadioService {
     await this.assertVisible(programId);
     return many<RadioCommentRow>(
       this.pool,
-      `SELECT id, program_id, member_id, body, hidden, client_event_id, created_at
-         FROM radio_comments WHERE program_id = $1 AND hidden = false
-        ORDER BY created_at DESC`,
+      `SELECT rc.id, rc.program_id, rc.member_id, rc.body, rc.hidden, rc.client_event_id, rc.created_at,
+              u.full_name AS author_name, u.avatar_url AS author_avatar_url
+         FROM radio_comments rc
+         LEFT JOIN users u ON u.user_id = rc.member_id
+        WHERE rc.program_id = $1 AND rc.hidden = false
+        ORDER BY rc.created_at DESC`,
       [programId],
     );
   }
@@ -561,9 +567,12 @@ export class RadioService {
     await this.getAdmin(programId); // 404 if missing
     return many<RadioCommentRow>(
       this.pool,
-      `SELECT id, program_id, member_id, body, hidden, client_event_id, created_at
-         FROM radio_comments WHERE program_id = $1
-        ORDER BY created_at DESC`,
+      `SELECT rc.id, rc.program_id, rc.member_id, rc.body, rc.hidden, rc.client_event_id, rc.created_at,
+              u.full_name AS author_name, u.avatar_url AS author_avatar_url
+         FROM radio_comments rc
+         LEFT JOIN users u ON u.user_id = rc.member_id
+        WHERE rc.program_id = $1
+        ORDER BY rc.created_at DESC`,
       [programId],
     );
   }

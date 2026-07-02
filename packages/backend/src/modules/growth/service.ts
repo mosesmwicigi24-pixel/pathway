@@ -411,4 +411,69 @@ export class GrowthService {
     );
     return { data };
   }
+
+  // ---- Plan-day reflections (member journaling on a reading-plan day) ----
+
+  static readonly PlanDayReflection = z
+    .object({
+      body: z.string().min(1).max(4000),
+      client_mutation_id: z.string().min(1).max(200).optional(),
+    })
+    .strict();
+
+  private async assertPlanExists(c: Queryable, planId: string): Promise<void> {
+    const plan = await maybeOne(c, `SELECT 1 FROM reading_plans WHERE plan_id = $1`, [planId]);
+    if (!plan) throw new ApiError("NOT_FOUND", "Reading plan not found");
+  }
+
+  /** Upsert on (user, plan, day): resubmitting a day updates the body. A
+   *  client_mutation_id replay is a no-op returning the existing row (§2.1). */
+  async upsertPlanDayReflection(
+    userId: string,
+    planId: string,
+    dayNumber: number,
+    input: z.infer<typeof GrowthService.PlanDayReflection>,
+  ): Promise<Record<string, unknown>> {
+    return tx(this.pool, async (c) => {
+      if (input.client_mutation_id) {
+        const dup = await maybeOne<Record<string, unknown>>(
+          c,
+          `SELECT id, plan_id, day_number, body, created_at, updated_at
+             FROM reading_plan_day_reflections WHERE client_mutation_id = $1`,
+          [input.client_mutation_id],
+        );
+        if (dup) return dup; // idempotent replay → the already-stored row
+      }
+      await this.assertPlanExists(c, planId);
+      const row = await one<Record<string, unknown>>(
+        c,
+        `INSERT INTO reading_plan_day_reflections (user_id, plan_id, day_number, body, client_mutation_id)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id, plan_id, day_number) DO UPDATE SET
+           body = EXCLUDED.body,
+           client_mutation_id = COALESCE(EXCLUDED.client_mutation_id, reading_plan_day_reflections.client_mutation_id),
+           updated_at = now()
+         RETURNING id, plan_id, day_number, body, created_at, updated_at`,
+        [userId, planId, dayNumber, input.body, input.client_mutation_id ?? null],
+      );
+      await recordChange(c, "reading_plan_day_reflections", String(row.id), userId, "upsert");
+      return row;
+    });
+  }
+
+  async getPlanDayReflection(
+    userId: string,
+    planId: string,
+    dayNumber: number,
+  ): Promise<{ data: unknown | null }> {
+    await this.assertPlanExists(this.pool, planId);
+    const row = await maybeOne(
+      this.pool,
+      `SELECT id, plan_id, day_number, body, created_at, updated_at
+         FROM reading_plan_day_reflections
+        WHERE user_id = $1 AND plan_id = $2 AND day_number = $3`,
+      [userId, planId, dayNumber],
+    );
+    return { data: row ?? null };
+  }
 }

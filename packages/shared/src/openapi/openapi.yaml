@@ -1330,6 +1330,22 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
 
+  /media/certificates/{code}:
+    get:
+      tags: [certificates]
+      summary: Download a certificate PDF by verification code (owner or Instructor+ only).
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The rendered certificate PDF (attachment).
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # --- Video pipeline (Features v2 §V) ---
   /media/{id}/manifest:
     get:
@@ -2561,6 +2577,33 @@ paths:
       responses:
         "200": { description: Marked count }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/notification-preferences:
+    get:
+      tags: [progress]
+      summary: My notification channel toggles (defaults push+email on, sms off when never saved).
+      responses:
+        "200":
+          description: Preferences
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPreferences" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [progress]
+      summary: Save my notification channel toggles (all three required; upsert).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotificationPreferences" }
+      responses:
+        "200":
+          description: The saved preferences
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotificationPreferences" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/password:
     post:
       tags: [auth]
@@ -2820,6 +2863,53 @@ paths:
                 day_number: { type: integer, minimum: 1 }
       responses:
         "200": { description: Progress }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /growth/plans/{planId}/days/{dayNumber}/reflection:
+    get:
+      tags: [progress]
+      summary: My reflection for a reading-plan day (null when I haven't written one).
+      parameters:
+        - { name: planId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: dayNumber, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: Reflection or null
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    oneOf:
+                      - { $ref: "#/components/schemas/PlanDayReflection" }
+                      - { type: "null" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [progress]
+      summary: Write my reflection for a reading-plan day. Upsert per (user, plan, day); idempotent per client_mutation_id (§2.1).
+      parameters:
+        - { name: planId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: dayNumber, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 4000 }
+                client_mutation_id: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "201":
+          description: The saved reflection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanDayReflection" }
+        "400": { description: Validation failed }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /growth/segments/{id}/complete:
@@ -3150,7 +3240,20 @@ paths:
       tags: [progress]
       summary: My chat inbox — DMs, cell groups, joined spaces (with unread + preview) plus discoverable spaces.
       responses:
-        "200": { description: Conversations }
+        "200":
+          description: Conversations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversations, discover_spaces]
+                properties:
+                  conversations:
+                    type: array
+                    items: { $ref: "#/components/schemas/ChatConversationSummary" }
+                  discover_spaces:
+                    type: array
+                    items: { type: object }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /chat/conversations/{id}:
     get:
@@ -4208,6 +4311,8 @@ components:
         hidden: { type: boolean }
         client_event_id: { type: [string, "null"] }
         created_at: { type: string, format: date-time }
+        author_name: { type: [string, "null"], description: "Comment author's display name (users join)" }
+        author_avatar_url: { type: [string, "null"] }
     RadioCommentBody:
       type: object
       required: [body, client_event_id]
@@ -4781,4 +4886,45 @@ components:
         issued_at: { type: string, format: date-time }
         verification_code: { type: string }
         content_hash: { type: string, description: "SHA-256 over the issuance facts" }
+    NotificationPreferences:
+      type: object
+      required: [push_enabled, email_enabled, sms_enabled]
+      properties:
+        push_enabled: { type: boolean }
+        email_enabled: { type: boolean }
+        sms_enabled: { type: boolean }
+    PlanDayReflection:
+      type: object
+      required: [id, plan_id, day_number, body, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        plan_id: { type: string, format: uuid }
+        day_number: { type: integer, minimum: 1 }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ChatConversationSummary:
+      type: object
+      required: [conversation_id, kind, title]
+      properties:
+        conversation_id: { type: string, format: uuid }
+        kind: { type: string, enum: [dm, group, space] }
+        is_public: { type: boolean }
+        title: { type: [string, "null"], description: "For a DM, the peer's name" }
+        avatar_url: { type: [string, "null"] }
+        peer_user_id:
+          type: [string, "null"]
+          format: uuid
+          description: "The other member's user id when kind = dm; null otherwise"
+        topic: { type: [string, "null"] }
+        category: { type: [string, "null"] }
+        member_count: { type: integer }
+        last_body: { type: [string, "null"] }
+        last_type: { type: [string, "null"] }
+        last_at: { type: [string, "null"], format: date-time }
+        last_duration: { type: [integer, "null"] }
+        last_author: { type: [string, "null"] }
+        unread: { type: integer }
+        message_count: { type: integer }
+        reaction_count: { type: integer }
         signature: { type: string, description: "HMAC-SHA256 detached signature (§5.5 KMS stand-in)" }

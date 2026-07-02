@@ -152,6 +152,16 @@ describe("direct messages", () => {
     expect(read.body.title).toBe("Ada"); // DM titled by the other member
   });
 
+  it("inbox rows carry peer_user_id for DMs (null for group rooms)", async () => {
+    const made = await agent().post("/v1/chat/dms").set(auth(aTok)).send({ user_id: a2Id });
+    const inbox = await agent().get("/v1/chat/conversations").set(auth(aTok));
+    const rows = inbox.body.conversations as Array<{ conversation_id: string; kind: string; peer_user_id: string | null }>;
+    const dm = rows.find((c) => c.conversation_id === made.body.conversation_id)!;
+    expect(dm.peer_user_id).toBe(a2Id); // the OTHER member, not me
+    const group = rows.find((c) => c.kind === "group")!;
+    expect(group.peer_user_id).toBeNull();
+  });
+
   it("blocks DMs with a minor (D-M6)", async () => {
     const res = await agent().post("/v1/chat/dms").set(auth(aTok)).send({ user_id: minorId });
     expect(res.status).toBe(403);

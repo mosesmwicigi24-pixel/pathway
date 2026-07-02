@@ -309,6 +309,7 @@ export class ChatService {
       `SELECT cv.conversation_id, cv.kind, cv.is_public,
               CASE WHEN cv.kind = 'dm' THEN other.full_name ELSE cv.title END AS title,
               CASE WHEN cv.kind = 'dm' THEN other.avatar_url ELSE NULL END AS avatar_url,
+              CASE WHEN cv.kind = 'dm' THEN other.user_id ELSE NULL END AS peer_user_id,
               cv.topic, cv.category,
               (SELECT count(*)::int FROM chat_members m2 WHERE m2.conversation_id = cv.conversation_id) AS member_count,
               lm.body AS last_body, lm.msg_type AS last_type, lm.created_at AS last_at,

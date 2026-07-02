@@ -175,6 +175,24 @@ export function registerIdentity(ctx: AppContext): Router {
     }),
   );
 
+  // Notification channel toggles (iOS contract: push_enabled/email_enabled/sms_enabled).
+  r.get(
+    "/me/notification-preferences",
+    auth,
+    handler(async (req, res) => {
+      res.json(await svc.getNotificationPreferences(requirePrincipal(req).userId));
+    }),
+  );
+
+  r.put(
+    "/me/notification-preferences",
+    auth,
+    handler(async (req, res) => {
+      const input = parseBody(IdentityService.NotificationPreferencesSchema, req.body);
+      res.json(await svc.putNotificationPreferences(requirePrincipal(req).userId, input));
+    }),
+  );
+
   r.get(
     "/me/activity",
     auth,

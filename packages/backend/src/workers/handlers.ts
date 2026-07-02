@@ -3,7 +3,7 @@
 // media renders) register here as their modules land.
 import type { AppContext } from "../http/context.js";
 import { CertificateService } from "../modules/certificates/service.js";
-import { InMemoryObjectStore } from "../modules/certificates/objectStore.js";
+import { buildObjectStore } from "../modules/certificates/objectStore.js";
 import { EngagementService } from "../modules/engagement/service.js";
 import { NotificationService } from "../modules/notifications/service.js";
 import { MediaService } from "../modules/media/service.js";
@@ -14,12 +14,13 @@ import { GamificationService } from "../modules/gamification/service.js";
 import type { OutboxHandler } from "./outbox.js";
 
 export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler> {
-  // Cert PDFs render to an object store; swap InMemoryObjectStore → S3/Cloudinary
+  // Cert PDFs render to the shared object store (disk under MEDIA_STORAGE_DIR by
+  // default) so GET /media/certificates/{code} can serve them; swap → S3/Cloudinary
   // in production.
   const certs = new CertificateService(
     ctx.db.primary,
     ctx.env.CERT_SIGNING_KEY ?? ctx.env.JWT_SIGNING_KEY,
-    new InMemoryObjectStore(),
+    ctx.objectStore ?? buildObjectStore(ctx.env),
   );
   const engagement = new EngagementService(ctx.db.primary);
   const notifications = new NotificationService(ctx.db.primary);
