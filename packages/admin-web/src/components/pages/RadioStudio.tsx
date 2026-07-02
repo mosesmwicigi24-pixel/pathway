@@ -11,7 +11,8 @@
 // scheduled_at/repeat), and the quick broadcast settings (PATCH visibility /
 // record_broadcast). LOCAL (client-only hardware/UI): audio-source select, mic
 // controls, gain, meters, waveform, live-listener roster, device manager,
-// emergency controls, reactions drift, playlist live preview.
+// emergency controls, reactions drift, playlist live preview (with Media
+// Session lock-screen metadata/controls so audio survives screen-lock).
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
   Activity, ArrowDown, ArrowUp, Bell, CalendarClock, Check, Copy, Cpu, Disc3, Flame, Gauge,
@@ -216,6 +217,58 @@ function probeAudioDuration(file: File): Promise<number | undefined> {
       el.src = url;
     } catch { resolve(undefined); }
   });
+}
+
+// ── Media Session (lock-screen / media-key) integration ──
+// Registers now-playing metadata + transport handlers so browser audio keeps
+// playing when the screen locks on iPad/mobile Safari and can be controlled
+// from the lock screen / media keys. No-op where the API is unsupported.
+// Note: nothing in this page listens to `visibilitychange` — audio must keep
+// playing when the tab is backgrounded or the screen locks.
+function setMediaSession(
+  audio: HTMLAudioElement,
+  title: string,
+  artist: string,
+  artworkUrl?: string | null,
+  skip?: { next?: () => void; prev?: () => void },
+): void {
+  if (!("mediaSession" in navigator)) return;
+  const ms = navigator.mediaSession;
+  try {
+    ms.metadata = new MediaMetadata({
+      title,
+      artist,
+      album: "Nuru Radio",
+      artwork: artworkUrl ? [{ src: artworkUrl, sizes: "512x512" }] : [],
+    });
+    ms.setActionHandler("play", () => { void audio.play().catch(() => {}); });
+    ms.setActionHandler("pause", () => { audio.pause(); });
+    ms.setActionHandler("nexttrack", skip?.next ?? null);
+    ms.setActionHandler("previoustrack", skip?.prev ?? null);
+    ms.playbackState = "playing";
+  } catch {
+    // Some browsers throw on unrecognized actions — metadata is best-effort.
+  }
+}
+
+// Mirror the element's play/pause state onto the lock-screen controls.
+function setMediaPlaybackState(state: "none" | "paused" | "playing"): void {
+  if (!("mediaSession" in navigator)) return;
+  try { navigator.mediaSession.playbackState = state; } catch { /* best-effort */ }
+}
+
+// Drop metadata + handlers when playback fully stops (preview stopped).
+function clearMediaSession(): void {
+  if (!("mediaSession" in navigator)) return;
+  const ms = navigator.mediaSession;
+  try {
+    ms.metadata = null;
+    ms.playbackState = "none";
+    ms.setActionHandler("play", null);
+    ms.setActionHandler("pause", null);
+    ms.setActionHandler("nexttrack", null);
+    ms.setActionHandler("previoustrack", null);
+  } catch { /* best-effort */ }
 }
 
 const VIS_LABELS = { public: "Public", members: "Members Only", private: "Private" } as const;
@@ -854,7 +907,14 @@ export function RadioStudio(): ReactElement {
                         <Music size={13} style={{ color: GOLD }} /> Session audio
                         {fmtClock(selected.audio_duration_sec) && <span style={{ color: DIMMER }}>· {fmtClock(selected.audio_duration_sec)}</span>}
                       </div>
-                      <audio controls src={selected.audio_url} style={{ width: "100%", height: 36 }} />
+                      <audio
+                        controls
+                        playsInline
+                        src={selected.audio_url}
+                        onPlay={(e) => setMediaSession(e.currentTarget, selected.title, selected.speaker ?? "Nuru Radio", selected.artwork_url)}
+                        onPause={() => setMediaPlaybackState("paused")}
+                        style={{ width: "100%", height: 36 }}
+                      />
                     </div>
                   ) : (
                     <div className="flex items-center gap-3 flex-wrap rounded-xl px-3 py-3 mb-3" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
@@ -1747,6 +1807,7 @@ function SessionsPanel({ onPreview }: { onPreview: (title: string | null) => voi
   const stopPreview = useCallback(() => {
     const el = audioRef.current;
     if (el) { el.pause(); el.removeAttribute("src"); el.load(); }
+    clearMediaSession();
     setPreviewProgram(null);
     setPreviewIndex(0);
     onPreview(null);
@@ -1853,6 +1914,22 @@ function SessionsPanel({ onPreview }: { onPreview: (title: string | null) => voi
     stopPreview();
   }, [previewProgram, previewIndex, sessions, playlists, playAt, stopPreview]);
 
+  // Lock-screen metadata + next/prev transport for the active preview track
+  // (Media Session API) so playback survives screen-lock on iPad/mobile Safari.
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!previewProgram || !el) return;
+    const items = playlists[previewProgram];
+    const item = items?.[previewIndex];
+    if (!items || !item) return;
+    const program = sessions?.find((p) => p.id === previewProgram);
+    const n = items.length;
+    setMediaSession(el, item.track.title, program?.title ?? "Nuru Radio", program?.artwork_url, {
+      next: () => playAt(previewProgram, (previewIndex + 1) % n),
+      prev: () => playAt(previewProgram, (previewIndex - 1 + n) % n),
+    });
+  }, [previewProgram, previewIndex, playlists, sessions, playAt]);
+
   const count = sessions?.length ?? 0;
   const airing = sessions?.find((s) => s.is_live) ?? null;
   const previewItem = previewProgram ? playlists[previewProgram]?.[previewIndex] : undefined;
@@ -1860,7 +1937,14 @@ function SessionsPanel({ onPreview }: { onPreview: (title: string | null) => voi
   return (
     <Panel>
       {/* hidden preview element */}
-      <audio ref={audioRef} onEnded={onEnded} style={{ display: "none" }} />
+      <audio
+        ref={audioRef}
+        onEnded={onEnded}
+        playsInline
+        onPlay={() => setMediaPlaybackState("playing")}
+        onPause={() => setMediaPlaybackState(audioRef.current?.src ? "paused" : "none")}
+        style={{ display: "none" }}
+      />
 
       <SectionHead icon={ListMusic} title="Sessions" hint={loading ? "Loading…" : airing ? `On air: ${airing.title}` : `${count} session${count === 1 ? "" : "s"}`} />
 
