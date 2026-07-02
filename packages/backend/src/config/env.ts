@@ -99,6 +99,11 @@ const EnvSchema = z.object({
   MEDIA_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(524_288_000), // 500 MB
   CAL_MATERIALIZE_HORIZON_DAYS: z.coerce.number().int().positive().default(35),
   CAL_MAX_INSTANCES: z.coerce.number().int().positive().default(500),
+
+  // --- Radio Broadcast Studio streaming provider. "fake" (default) needs no
+  // secrets and is used in dev/tests; cloudflare/mux/rtmp plug in later with their
+  // own env secrets (by name only, §5.10). Unknown values fall back to "fake". ---
+  RADIO_STREAM_PROVIDER: z.enum(["fake", "cloudflare", "mux", "rtmp"]).default("fake"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

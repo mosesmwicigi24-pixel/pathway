@@ -23,6 +23,7 @@ tags:
   - name: certificates
   - name: announcements
   - name: proximity
+  - name: radio
   - name: system
 
 security:
@@ -3409,6 +3410,357 @@ paths:
               schema: { $ref: "#/components/schemas/SyncPushResponse" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  # --- Radio Broadcast Studio + Virtual Audio Mixer (docs/RADIO_STUDIO_CONTRACT.md) ---
+  # Admin surface (/admin/radio/*, RBAC radio:*) returns RadioProgram WITH ingest
+  # secrets; the member surface (/radio/*, auth) returns RadioProgramPublic, which
+  # OMITS stream_key/ingest_url/ingest_provider. Private programs are never member-visible.
+  /admin/radio/programs:
+    get:
+      tags: [radio]
+      summary: List all programs (admin). Includes ingest secrets. Gated by radio:view.
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [draft, scheduled, live, ended] } }
+      responses:
+        "200":
+          description: Programs
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/RadioProgram" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [radio]
+      summary: Create a program; provisions ingest credentials. Gated by radio:create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRadioProgramBody" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioProgram" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/radio/programs/{id}:
+    get:
+      tags: [radio]
+      summary: Get a program (admin, incl. secrets). Gated by radio:view.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Program
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioProgram" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [radio]
+      summary: Update a program. Gated by radio:edit.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateRadioProgramBody" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioProgram" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [radio]
+      summary: Delete a program. Gated by radio:delete.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/programs/{id}/go-live:
+    post:
+      tags: [radio]
+      summary: Go live — status=live, is_live=true; provider.start. Gated by radio:edit.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Now live
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioProgram" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/programs/{id}/end:
+    post:
+      tags: [radio]
+      summary: End — status=ended, is_live=false; provider.stop. Gated by radio:edit.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Ended
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioProgram" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/programs/{id}/rotate-key:
+    post:
+      tags: [radio]
+      summary: Rotate the secret stream key. Gated by radio:edit.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: New stream key
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stream_key]
+                properties: { stream_key: { type: string } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/programs/{id}/health:
+    get:
+      tags: [radio]
+      summary: Live stream health (live programs only). Gated by radio:view.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Health
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StreamHealth" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/radio/programs/{id}/comments:
+    get:
+      tags: [radio]
+      summary: All comments incl. hidden (moderation). Gated by radio:view.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Comments
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/RadioComment" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/comments/{cid}:
+    delete:
+      tags: [radio]
+      summary: Hide a comment (moderation). Gated by radio:edit.
+      parameters: [{ name: cid, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Hidden, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/mixer/scenes:
+    get:
+      tags: [radio]
+      summary: List mixer scene presets. Gated by radio:view.
+      responses:
+        "200":
+          description: Scenes
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/MixerScene" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [radio]
+      summary: Create a mixer scene. Gated by radio:create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MixerSceneBody" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MixerScene" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/radio/mixer/scenes/{id}:
+    patch:
+      tags: [radio]
+      summary: Update a mixer scene. Gated by radio:edit.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MixerSceneBody" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MixerScene" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [radio]
+      summary: Delete a mixer scene. Gated by radio:delete.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/mixer/jingles:
+    get:
+      tags: [radio]
+      summary: List jingle soundboard entries. Gated by radio:view.
+      responses:
+        "200":
+          description: Jingles
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/MixerJingle" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [radio]
+      summary: Create a jingle. Gated by radio:create.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MixerJingleBody" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MixerJingle" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/radio/mixer/jingles/{id}:
+    delete:
+      tags: [radio]
+      summary: Delete a jingle. Gated by radio:delete.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # --- Radio member surface (auth only; public projection, no ingest secrets) ---
+  /radio/programs:
+    get:
+      tags: [radio]
+      summary: Visible programs (public always; members if authed; never private).
+      responses:
+        "200":
+          description: Programs
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/RadioProgramPublic" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /radio/now-playing:
+    get:
+      tags: [radio]
+      summary: Current live program, or the next scheduled one (null if none). No stream_key.
+      responses:
+        "200":
+          description: Now playing (or null)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/RadioProgramPublic" }
+                  - { type: "null" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /radio/programs/{id}:
+    get:
+      tags: [radio]
+      summary: Program public view (hls_url yes, stream_key NO). 404 for private.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Program (public projection)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioProgramPublic" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /radio/programs/{id}/react:
+    post:
+      tags: [radio]
+      summary: React (heart|amen|fire). Idempotent per client_event_id (§2.1/§3.6).
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RadioReactBody" }
+      responses:
+        "200":
+          description: Reaction counts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [counts]
+                properties: { counts: { $ref: "#/components/schemas/RadioReactionCounts" } }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /radio/programs/{id}/comments:
+    get:
+      tags: [radio]
+      summary: Non-hidden comments, newest first.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Comments
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/RadioComment" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [radio]
+      summary: Post a comment. Idempotent per client_event_id (§2.1/§3.6).
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RadioCommentBody" }
+      responses:
+        "201":
+          description: Comment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadioComment" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -3478,6 +3830,193 @@ components:
             message: { type: string }
             request_id: { type: string }
             details: { type: object, additionalProperties: true }
+
+    Ok:
+      type: object
+      required: [ok]
+      properties: { ok: { type: boolean, enum: [true] } }
+
+    # --- Radio Broadcast Studio + Virtual Audio Mixer ---
+    RadioProgram:
+      type: object
+      required:
+        [id, title, category, tags, visibility, status, is_live, record_broadcast,
+         peak_listeners, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: [string, "null"] }
+        category: { type: string, enum: [Sermon, Worship, Prayer, "Bible Study", Conference] }
+        speaker: { type: [string, "null"] }
+        location: { type: [string, "null"] }
+        artwork_url: { type: [string, "null"] }
+        tags: { type: array, items: { type: string } }
+        visibility: { type: string, enum: [public, members, private] }
+        scheduled_at: { type: [string, "null"], format: date-time }
+        duration_min: { type: [integer, "null"] }
+        repeat: { type: [string, "null"] }
+        timezone: { type: [string, "null"] }
+        status: { type: string, enum: [draft, scheduled, live, ended] }
+        is_live: { type: boolean }
+        live_started_at: { type: [string, "null"], format: date-time }
+        live_ended_at: { type: [string, "null"], format: date-time }
+        record_broadcast: { type: boolean }
+        record_target: { type: [string, "null"], enum: [cloud, local, both, null] }
+        peak_listeners: { type: integer }
+        ingest_provider: { type: [string, "null"] }
+        ingest_url: { type: [string, "null"] }
+        stream_key: { type: [string, "null"], description: "SECRET — admin surface only, never returned to members" }
+        hls_url: { type: [string, "null"] }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RadioProgramPublic:
+      type: object
+      description: Member/public projection — OMITS stream_key, ingest_url, ingest_provider.
+      required:
+        [id, title, category, tags, visibility, status, is_live, record_broadcast,
+         peak_listeners, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: [string, "null"] }
+        category: { type: string, enum: [Sermon, Worship, Prayer, "Bible Study", Conference] }
+        speaker: { type: [string, "null"] }
+        location: { type: [string, "null"] }
+        artwork_url: { type: [string, "null"] }
+        tags: { type: array, items: { type: string } }
+        visibility: { type: string, enum: [public, members, private] }
+        scheduled_at: { type: [string, "null"], format: date-time }
+        duration_min: { type: [integer, "null"] }
+        repeat: { type: [string, "null"] }
+        timezone: { type: [string, "null"] }
+        status: { type: string, enum: [draft, scheduled, live, ended] }
+        is_live: { type: boolean }
+        live_started_at: { type: [string, "null"], format: date-time }
+        live_ended_at: { type: [string, "null"], format: date-time }
+        record_broadcast: { type: boolean }
+        record_target: { type: [string, "null"], enum: [cloud, local, both, null] }
+        peak_listeners: { type: integer }
+        hls_url: { type: [string, "null"] }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateRadioProgramBody:
+      type: object
+      required: [title, category]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 300 }
+        description: { type: string, maxLength: 4000 }
+        category: { type: string, enum: [Sermon, Worship, Prayer, "Bible Study", Conference] }
+        speaker: { type: string, maxLength: 200 }
+        location: { type: string, maxLength: 200 }
+        artwork_url: { type: string, maxLength: 2000 }
+        tags: { type: array, items: { type: string, maxLength: 60 }, maxItems: 30 }
+        visibility: { type: string, enum: [public, members, private] }
+        scheduled_at: { type: string, format: date-time }
+        duration_min: { type: integer, minimum: 1, maximum: 1440 }
+        repeat: { type: string, maxLength: 30 }
+        timezone: { type: string, maxLength: 60 }
+        record_broadcast: { type: boolean }
+        record_target: { type: string, enum: [cloud, local, both] }
+    UpdateRadioProgramBody:
+      allOf:
+        - { $ref: "#/components/schemas/CreateRadioProgramBody" }
+        - type: object
+          properties:
+            status: { type: string, enum: [draft, scheduled, live, ended] }
+    RadioReactionCounts:
+      type: object
+      required: [heart, amen, fire]
+      properties:
+        heart: { type: integer }
+        amen: { type: integer }
+        fire: { type: integer }
+    RadioReactBody:
+      type: object
+      required: [kind, client_event_id]
+      properties:
+        kind: { type: string, enum: [heart, amen, fire] }
+        client_event_id: { type: string, minLength: 1, maxLength: 200 }
+    RadioComment:
+      type: object
+      required: [id, program_id, member_id, body, hidden, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        program_id: { type: string, format: uuid }
+        member_id: { type: string, format: uuid }
+        body: { type: string }
+        hidden: { type: boolean }
+        client_event_id: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+    RadioCommentBody:
+      type: object
+      required: [body, client_event_id]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 2000 }
+        client_event_id: { type: string, minLength: 1, maxLength: 200 }
+    StreamHealth:
+      type: object
+      required: [cpu, memory, bitrate, latency, dropped, stability, listeners]
+      properties:
+        cpu: { type: number }
+        memory: { type: number }
+        bitrate: { type: number }
+        latency: { type: number }
+        dropped: { type: number }
+        stability: { type: number }
+        listeners: { type: number }
+    MixerChannel:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        sub: { type: string }
+        color: { type: string }
+        level: { type: number }
+        pan: { type: number }
+        muted: { type: boolean }
+        solo: { type: boolean }
+    MixerScene:
+      type: object
+      required: [id, name, channels, is_default, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        hint: { type: [string, "null"] }
+        channels: { type: array, items: { $ref: "#/components/schemas/MixerChannel" } }
+        is_default: { type: boolean }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    MixerSceneBody:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        hint: { type: string, maxLength: 300 }
+        channels: { type: array, items: { $ref: "#/components/schemas/MixerChannel" }, maxItems: 64 }
+        is_default: { type: boolean }
+    MixerJingle:
+      type: object
+      required: [id, label, sort, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string }
+        color: { type: [string, "null"] }
+        audio_url: { type: [string, "null"] }
+        sort: { type: integer }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+    MixerJingleBody:
+      type: object
+      required: [label]
+      properties:
+        label: { type: string, minLength: 1, maxLength: 120 }
+        color: { type: string, maxLength: 40 }
+        audio_url: { type: string, maxLength: 2000 }
+        sort: { type: integer }
 
     # --- Auth & identity (§3.3, §5.3) ---
     OAuthExchange:

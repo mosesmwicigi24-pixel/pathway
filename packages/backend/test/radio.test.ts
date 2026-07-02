@@ -1,0 +1,279 @@
+// Radio Broadcast Studio + Virtual Audio Mixer (docs/RADIO_STUDIO_CONTRACT.md).
+// Covers: create→go-live→end lifecycle; member list respects visibility + omits
+// stream_key; idempotent react (same client_event_id twice = one row); comment
+// create + moderation hide; mixer scene create/update/list; validation failure.
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { agent, bearer } from "./helpers/app.js";
+import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
+import { createCongregation, createUser } from "./helpers/factories.js";
+
+const auth = (t: string) => ({ Authorization: t });
+
+let cong: string;
+let adminTok: string;
+
+async function makeAdminTok(email: string): Promise<string> {
+  const admin = await createUser({ congregationId: cong, role: "Admin", email });
+  return bearer({ sub: admin.user_id, role: "Admin", cong });
+}
+
+async function createProgram(overrides: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  const res = await agent()
+    .post("/v1/admin/radio/programs")
+    .set(auth(adminTok))
+    .send({ title: "Sunday Sermon", category: "Sermon", ...overrides });
+  expect(res.status).toBe(201);
+  return res.body;
+}
+
+beforeEach(async () => {
+  await resetDb();
+  cong = await createCongregation();
+  adminTok = await makeAdminTok("admin@dev.local");
+});
+afterAll(async () => {
+  await closeTestPool();
+});
+
+describe("radio — program lifecycle (create → go-live → end)", () => {
+  it("create provisions ingest credentials and returns the admin program", async () => {
+    const prog = await createProgram();
+    expect(prog.id).toBeTruthy();
+    expect(prog.status).toBe("draft");
+    expect(prog.is_live).toBe(false);
+    // Provider provisioned creds on create.
+    expect(prog.ingest_provider).toBe("fake");
+    expect(prog.ingest_url).toBe("rtmp://ingest.local/live");
+    expect(typeof prog.stream_key).toBe("string");
+    expect(prog.hls_url).toBe(`https://stream.local/hls/${prog.id}.m3u8`);
+  });
+
+  it("scheduled_at at create sets status=scheduled", async () => {
+    const prog = await createProgram({ scheduled_at: new Date(Date.now() + 3_600_000).toISOString() });
+    expect(prog.status).toBe("scheduled");
+  });
+
+  it("go-live sets live, end sets ended; health only while live", async () => {
+    const prog = await createProgram();
+    const id = prog.id as string;
+
+    const live = await agent().post(`/v1/admin/radio/programs/${id}/go-live`).set(auth(adminTok));
+    expect(live.status).toBe(200);
+    expect(live.body.status).toBe("live");
+    expect(live.body.is_live).toBe(true);
+    expect(live.body.live_started_at).toBeTruthy();
+
+    const health = await agent().get(`/v1/admin/radio/programs/${id}/health`).set(auth(adminTok));
+    expect(health.status).toBe(200);
+    expect(typeof health.body.bitrate).toBe("number");
+    expect(typeof health.body.listeners).toBe("number");
+
+    const end = await agent().post(`/v1/admin/radio/programs/${id}/end`).set(auth(adminTok));
+    expect(end.status).toBe(200);
+    expect(end.body.status).toBe("ended");
+    expect(end.body.is_live).toBe(false);
+    expect(end.body.live_ended_at).toBeTruthy();
+
+    // Health 409s once the program is no longer live.
+    const health2 = await agent().get(`/v1/admin/radio/programs/${id}/health`).set(auth(adminTok));
+    expect(health2.status).toBe(409);
+  });
+
+  it("rotate-key issues a new stream key", async () => {
+    const prog = await createProgram();
+    const before = prog.stream_key as string;
+    const rot = await agent().post(`/v1/admin/radio/programs/${prog.id}/rotate-key`).set(auth(adminTok));
+    expect(rot.status).toBe(200);
+    expect(typeof rot.body.stream_key).toBe("string");
+    expect(rot.body.stream_key).not.toBe(before);
+    const after = await agent().get(`/v1/admin/radio/programs/${prog.id}`).set(auth(adminTok));
+    expect(after.body.stream_key).toBe(rot.body.stream_key);
+  });
+
+  it("rejects invalid create body (validation)", async () => {
+    const res = await agent()
+      .post("/v1/admin/radio/programs")
+      .set(auth(adminTok))
+      .send({ title: "", category: "NotACategory" });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_FAILED");
+  });
+
+  it("requires the radio permission (a Student is 403)", async () => {
+    const student = await createUser({ congregationId: cong, role: "Student", email: "stu@dev.local" });
+    const tok = bearer({ sub: student.user_id, role: "Student", cong });
+    const res = await agent().post("/v1/admin/radio/programs").set(auth(tok)).send({ title: "x", category: "Sermon" });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN_SCOPE");
+  });
+});
+
+describe("radio — member surface respects visibility + omits secrets", () => {
+  it("member list returns public+members programs, never private, and never stream_key", async () => {
+    const pub = await createProgram({ title: "Public", visibility: "public" });
+    await createProgram({ title: "MembersOnly", visibility: "members" });
+    await createProgram({ title: "Private", visibility: "private" });
+    // Publish them off draft so they surface on the member list.
+    for (const t of ["Public", "MembersOnly", "Private"]) {
+      await testPool().query(`UPDATE radio_programs SET status = 'scheduled' WHERE title = $1`, [t]);
+    }
+
+    const member = await createUser({ congregationId: cong, role: "Student", email: "mem@dev.local" });
+    const tok = bearer({ sub: member.user_id, role: "Student", cong });
+    const res = await agent().get("/v1/radio/programs").set(auth(tok));
+    expect(res.status).toBe(200);
+    const titles = (res.body as { title: string }[]).map((p) => p.title).sort();
+    expect(titles).toEqual(["MembersOnly", "Public"]);
+    // No ingest secrets ever leak to members.
+    const raw = JSON.stringify(res.body);
+    expect(raw).not.toMatch(/stream_key/);
+    expect(raw).not.toMatch(/ingest_url/);
+    expect(raw).not.toMatch(/ingest_provider/);
+    void pub;
+  });
+
+  it("member GET of a private program 404s; a public one omits stream_key", async () => {
+    const priv = await createProgram({ visibility: "private" });
+    const pub = await createProgram({ visibility: "public" });
+    const member = await createUser({ congregationId: cong, role: "Student", email: "mem2@dev.local" });
+    const tok = bearer({ sub: member.user_id, role: "Student", cong });
+
+    const p404 = await agent().get(`/v1/radio/programs/${priv.id}`).set(auth(tok));
+    expect(p404.status).toBe(404);
+
+    const ok = await agent().get(`/v1/radio/programs/${pub.id}`).set(auth(tok));
+    expect(ok.status).toBe(200);
+    expect(ok.body.hls_url).toBeTruthy();
+    expect(ok.body.stream_key).toBeUndefined();
+    expect(ok.body.ingest_url).toBeUndefined();
+  });
+
+  it("now-playing returns the live program (no stream_key)", async () => {
+    const prog = await createProgram({ visibility: "public" });
+    await agent().post(`/v1/admin/radio/programs/${prog.id}/go-live`).set(auth(adminTok));
+    const member = await createUser({ congregationId: cong, role: "Student", email: "mem3@dev.local" });
+    const tok = bearer({ sub: member.user_id, role: "Student", cong });
+    const res = await agent().get("/v1/radio/now-playing").set(auth(tok));
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(prog.id);
+    expect(res.body.is_live).toBe(true);
+    expect(res.body.stream_key).toBeUndefined();
+  });
+});
+
+describe("radio — reactions are idempotent per client_event_id", () => {
+  it("the same client_event_id twice inserts one row and returns the same counts", async () => {
+    const prog = await createProgram({ visibility: "public" });
+    const member = await createUser({ congregationId: cong, role: "Student", email: "r@dev.local" });
+    const tok = bearer({ sub: member.user_id, role: "Student", cong });
+
+    const first = await agent()
+      .post(`/v1/radio/programs/${prog.id}/react`)
+      .set(auth(tok))
+      .send({ kind: "amen", client_event_id: "evt-1" });
+    expect(first.status).toBe(200);
+    expect(first.body.counts.amen).toBe(1);
+
+    const replay = await agent()
+      .post(`/v1/radio/programs/${prog.id}/react`)
+      .set(auth(tok))
+      .send({ kind: "amen", client_event_id: "evt-1" });
+    expect(replay.status).toBe(200);
+    expect(replay.body.counts.amen).toBe(1); // no double-count
+
+    const { rows } = await testPool().query(`SELECT COUNT(*)::int AS n FROM radio_reactions WHERE program_id = $1`, [
+      prog.id,
+    ]);
+    expect(rows[0].n).toBe(1);
+  });
+});
+
+describe("radio — comments create + moderation hide", () => {
+  it("member posts a comment (idempotent), admin hides it, member no longer sees it", async () => {
+    const prog = await createProgram({ visibility: "public" });
+    const member = await createUser({ congregationId: cong, role: "Student", email: "c@dev.local" });
+    const tok = bearer({ sub: member.user_id, role: "Student", cong });
+
+    const c1 = await agent()
+      .post(`/v1/radio/programs/${prog.id}/comments`)
+      .set(auth(tok))
+      .send({ body: "Amen!", client_event_id: "c-1" });
+    expect(c1.status).toBe(201);
+    const commentId = c1.body.id as string;
+
+    // Replay returns the same row, no duplicate.
+    const c1b = await agent()
+      .post(`/v1/radio/programs/${prog.id}/comments`)
+      .set(auth(tok))
+      .send({ body: "Amen!", client_event_id: "c-1" });
+    expect(c1b.status).toBe(201);
+    expect(c1b.body.id).toBe(commentId);
+
+    const list1 = await agent().get(`/v1/radio/programs/${prog.id}/comments`).set(auth(tok));
+    expect(list1.body).toHaveLength(1);
+
+    // Admin hides it.
+    const hide = await agent().delete(`/v1/admin/radio/comments/${commentId}`).set(auth(adminTok));
+    expect(hide.status).toBe(200);
+
+    const list2 = await agent().get(`/v1/radio/programs/${prog.id}/comments`).set(auth(tok));
+    expect(list2.body).toHaveLength(0);
+
+    // Admin moderation view still shows the hidden comment.
+    const adminList = await agent().get(`/v1/admin/radio/programs/${prog.id}/comments`).set(auth(adminTok));
+    expect(adminList.body).toHaveLength(1);
+    expect(adminList.body[0].hidden).toBe(true);
+  });
+});
+
+describe("radio — mixer scenes + jingles", () => {
+  it("scene create → update → list round-trips channels", async () => {
+    const create = await agent()
+      .post("/v1/admin/radio/mixer/scenes")
+      .set(auth(adminTok))
+      .send({
+        name: "Preaching",
+        hint: "Voice-forward",
+        channels: [{ id: "mic1", name: "Mic 1", level: 0.8, pan: 0, muted: false, solo: false }],
+      });
+    expect(create.status).toBe(201);
+    expect(create.body.name).toBe("Preaching");
+    expect(create.body.channels).toHaveLength(1);
+    const id = create.body.id as string;
+
+    const upd = await agent()
+      .patch(`/v1/admin/radio/mixer/scenes/${id}`)
+      .set(auth(adminTok))
+      .send({ hint: "Updated", channels: [{ id: "mic1", name: "Mic 1", level: 0.5 }] });
+    expect(upd.status).toBe(200);
+    expect(upd.body.hint).toBe("Updated");
+    expect(upd.body.channels[0].level).toBe(0.5);
+
+    const list = await agent().get("/v1/admin/radio/mixer/scenes").set(auth(adminTok));
+    expect(list.status).toBe(200);
+    expect(list.body).toHaveLength(1);
+  });
+
+  it("jingle create + list + delete", async () => {
+    const create = await agent()
+      .post("/v1/admin/radio/mixer/jingles")
+      .set(auth(adminTok))
+      .send({ label: "Intro", color: "#E6C66E", sort: 1 });
+    expect(create.status).toBe(201);
+    const id = create.body.id as string;
+
+    const list = await agent().get("/v1/admin/radio/mixer/jingles").set(auth(adminTok));
+    expect(list.body).toHaveLength(1);
+
+    const del = await agent().delete(`/v1/admin/radio/mixer/jingles/${id}`).set(auth(adminTok));
+    expect(del.status).toBe(200);
+    const list2 = await agent().get("/v1/admin/radio/mixer/jingles").set(auth(adminTok));
+    expect(list2.body).toHaveLength(0);
+  });
+
+  it("rejects an invalid scene body (validation)", async () => {
+    const res = await agent().post("/v1/admin/radio/mixer/scenes").set(auth(adminTok)).send({ hint: "no name" });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_FAILED");
+  });
+});

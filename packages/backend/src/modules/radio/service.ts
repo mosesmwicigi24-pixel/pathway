@@ -1,0 +1,572 @@
+// Radio Broadcast Studio + Virtual Audio Mixer service (docs/RADIO_STUDIO_CONTRACT.md).
+// Server-authoritative program lifecycle + member interactions. The provider owns
+// ingest credentials; the module owns the DB and the public/admin projection split:
+// the admin surface sees stream_key/ingest_*; the member surface NEVER does.
+import type { Pool } from "pg";
+import { z } from "zod";
+import { many, maybeOne, one, tx } from "../../db/db.js";
+import { ApiError } from "../../http/errors.js";
+import type { StreamProvider, StreamHealth } from "./provider.js";
+
+// --- Row / DTO shapes -------------------------------------------------------
+
+export interface RadioProgramRow {
+  id: string;
+  title: string;
+  description: string | null;
+  category: string;
+  speaker: string | null;
+  location: string | null;
+  artwork_url: string | null;
+  tags: string[];
+  visibility: "public" | "members" | "private";
+  scheduled_at: string | null;
+  duration_min: number | null;
+  repeat: string | null;
+  timezone: string | null;
+  status: "draft" | "scheduled" | "live" | "ended";
+  is_live: boolean;
+  live_started_at: string | null;
+  live_ended_at: string | null;
+  record_broadcast: boolean;
+  record_target: "cloud" | "local" | "both" | null;
+  peak_listeners: number;
+  ingest_provider: string | null;
+  ingest_url: string | null;
+  stream_key: string | null;
+  hls_url: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Public projection: strips the ingest secrets (§DTO — no stream_key/ingest_url/ingest_provider).
+export type RadioProgramPublic = Omit<RadioProgramRow, "stream_key" | "ingest_url" | "ingest_provider">;
+
+export interface RadioReactionCounts {
+  heart: number;
+  amen: number;
+  fire: number;
+}
+
+export interface RadioCommentRow {
+  id: string;
+  program_id: string;
+  member_id: string;
+  body: string;
+  hidden: boolean;
+  client_event_id: string | null;
+  created_at: string;
+}
+
+export interface MixerSceneRow {
+  id: string;
+  name: string;
+  hint: string | null;
+  channels: unknown[];
+  is_default: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MixerJingleRow {
+  id: string;
+  label: string;
+  color: string | null;
+  audio_url: string | null;
+  sort: number;
+  created_by: string | null;
+  created_at: string;
+}
+
+const PROGRAM_COLUMNS = `
+  id, title, description, category, speaker, location, artwork_url, tags, visibility,
+  scheduled_at, duration_min, repeat, timezone, status, is_live, live_started_at,
+  live_ended_at, record_broadcast, record_target, peak_listeners, ingest_provider,
+  ingest_url, stream_key, hls_url, created_by, created_at, updated_at`;
+
+function toPublic(row: RadioProgramRow): RadioProgramPublic {
+  const { stream_key: _sk, ingest_url: _iu, ingest_provider: _ip, ...rest } = row;
+  return rest;
+}
+
+export class RadioService {
+  constructor(
+    private readonly pool: Pool,
+    private readonly provider: StreamProvider,
+  ) {}
+
+  // --- Validation schemas (inline zod, per module convention) ---------------
+
+  static readonly CreateProgram = z
+    .object({
+      title: z.string().min(1).max(300),
+      description: z.string().max(4000).optional(),
+      category: z.enum(["Sermon", "Worship", "Prayer", "Bible Study", "Conference"]),
+      speaker: z.string().max(200).optional(),
+      location: z.string().max(200).optional(),
+      artwork_url: z.string().max(2000).optional(),
+      tags: z.array(z.string().max(60)).max(30).optional(),
+      visibility: z.enum(["public", "members", "private"]).optional(),
+      scheduled_at: z.string().datetime().optional(),
+      duration_min: z.number().int().positive().max(1440).optional(),
+      repeat: z.string().max(30).optional(),
+      timezone: z.string().max(60).optional(),
+      record_broadcast: z.boolean().optional(),
+      record_target: z.enum(["cloud", "local", "both"]).optional(),
+    })
+    .strict();
+
+  static readonly UpdateProgram = RadioService.CreateProgram.partial().extend({
+    status: z.enum(["draft", "scheduled", "live", "ended"]).optional(),
+  });
+
+  static readonly ListQuery = z
+    .object({
+      status: z.enum(["draft", "scheduled", "live", "ended"]).optional(),
+    })
+    .strict();
+
+  static readonly React = z
+    .object({
+      kind: z.enum(["heart", "amen", "fire"]),
+      client_event_id: z.string().min(1).max(200),
+    })
+    .strict();
+
+  static readonly Comment = z
+    .object({
+      body: z.string().min(1).max(2000),
+      client_event_id: z.string().min(1).max(200),
+    })
+    .strict();
+
+  static readonly SceneBody = z
+    .object({
+      name: z.string().min(1).max(120),
+      hint: z.string().max(300).optional(),
+      channels: z
+        .array(
+          z
+            .object({
+              id: z.string().min(1).max(60),
+              name: z.string().min(1).max(120),
+              sub: z.string().max(120).optional(),
+              color: z.string().max(40).optional(),
+              level: z.number().optional(),
+              pan: z.number().optional(),
+              muted: z.boolean().optional(),
+              solo: z.boolean().optional(),
+            })
+            .strict(),
+        )
+        .max(64)
+        .optional(),
+      is_default: z.boolean().optional(),
+    })
+    .strict();
+
+  static readonly SceneUpdate = RadioService.SceneBody.partial();
+
+  static readonly JingleBody = z
+    .object({
+      label: z.string().min(1).max(120),
+      color: z.string().max(40).optional(),
+      audio_url: z.string().max(2000).optional(),
+      sort: z.number().int().optional(),
+    })
+    .strict();
+
+  // --- Programs: admin ------------------------------------------------------
+
+  async listAdmin(status?: string): Promise<RadioProgramRow[]> {
+    if (status) {
+      return many<RadioProgramRow>(
+        this.pool,
+        `SELECT ${PROGRAM_COLUMNS} FROM radio_programs WHERE status = $1 ORDER BY created_at DESC`,
+        [status],
+      );
+    }
+    return many<RadioProgramRow>(
+      this.pool,
+      `SELECT ${PROGRAM_COLUMNS} FROM radio_programs ORDER BY created_at DESC`,
+    );
+  }
+
+  async getAdmin(id: string): Promise<RadioProgramRow> {
+    return one<RadioProgramRow>(this.pool, `SELECT ${PROGRAM_COLUMNS} FROM radio_programs WHERE id = $1`, [id]);
+  }
+
+  async create(
+    createdBy: string,
+    input: z.infer<typeof RadioService.CreateProgram>,
+  ): Promise<RadioProgramRow> {
+    return tx(this.pool, async (c) => {
+      const status = input.scheduled_at ? "scheduled" : "draft";
+      const inserted = await one<{ id: string }>(
+        c,
+        `INSERT INTO radio_programs
+           (title, description, category, speaker, location, artwork_url, tags, visibility,
+            scheduled_at, duration_min, repeat, timezone, status, record_broadcast, record_target, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'{}'::text[]),COALESCE($8,'public'),
+                 $9,$10,COALESCE($11,'none'),$12,$13,COALESCE($14,false),$15,$16)
+         RETURNING id`,
+        [
+          input.title,
+          input.description ?? null,
+          input.category,
+          input.speaker ?? null,
+          input.location ?? null,
+          input.artwork_url ?? null,
+          input.tags ?? null,
+          input.visibility ?? null,
+          input.scheduled_at ?? null,
+          input.duration_min ?? null,
+          input.repeat ?? null,
+          input.timezone ?? null,
+          status,
+          input.record_broadcast ?? null,
+          input.record_target ?? null,
+          createdBy,
+        ],
+      );
+      // Provision ingest credentials for the new program.
+      const creds = this.provider.provision(inserted.id);
+      await c.query(
+        `UPDATE radio_programs
+            SET ingest_provider = $2, ingest_url = $3, stream_key = $4, hls_url = $5, updated_at = now()
+          WHERE id = $1`,
+        [inserted.id, creds.provider, creds.ingestUrl, creds.streamKey, creds.hlsUrl],
+      );
+      return one<RadioProgramRow>(c, `SELECT ${PROGRAM_COLUMNS} FROM radio_programs WHERE id = $1`, [inserted.id]);
+    });
+  }
+
+  async update(
+    id: string,
+    input: z.infer<typeof RadioService.UpdateProgram>,
+  ): Promise<RadioProgramRow> {
+    const sets: string[] = [];
+    const params: unknown[] = [id];
+    const set = (col: string, val: unknown): void => {
+      params.push(val);
+      sets.push(`${col} = $${params.length}`);
+    };
+    if (input.title !== undefined) set("title", input.title);
+    if (input.description !== undefined) set("description", input.description);
+    if (input.category !== undefined) set("category", input.category);
+    if (input.speaker !== undefined) set("speaker", input.speaker);
+    if (input.location !== undefined) set("location", input.location);
+    if (input.artwork_url !== undefined) set("artwork_url", input.artwork_url);
+    if (input.tags !== undefined) set("tags", input.tags);
+    if (input.visibility !== undefined) set("visibility", input.visibility);
+    if (input.scheduled_at !== undefined) set("scheduled_at", input.scheduled_at);
+    if (input.duration_min !== undefined) set("duration_min", input.duration_min);
+    if (input.repeat !== undefined) set("repeat", input.repeat);
+    if (input.timezone !== undefined) set("timezone", input.timezone);
+    if (input.status !== undefined) set("status", input.status);
+    if (input.record_broadcast !== undefined) set("record_broadcast", input.record_broadcast);
+    if (input.record_target !== undefined) set("record_target", input.record_target);
+    if (sets.length === 0) return this.getAdmin(id);
+    sets.push(`updated_at = now()`);
+    return one<RadioProgramRow>(
+      this.pool,
+      `UPDATE radio_programs SET ${sets.join(", ")} WHERE id = $1 RETURNING ${PROGRAM_COLUMNS}`,
+      params,
+    );
+  }
+
+  async remove(id: string): Promise<{ ok: true }> {
+    const res = await this.pool.query(`DELETE FROM radio_programs WHERE id = $1`, [id]);
+    if (!res.rowCount) throw new ApiError("NOT_FOUND", "Program not found");
+    return { ok: true };
+  }
+
+  async goLive(id: string): Promise<RadioProgramRow> {
+    return tx(this.pool, async (c) => {
+      const program = await one<RadioProgramRow>(
+        c,
+        `SELECT ${PROGRAM_COLUMNS} FROM radio_programs WHERE id = $1`,
+        [id],
+      );
+      this.provider.start({ id: program.id, is_live: program.is_live, peak_listeners: program.peak_listeners });
+      return one<RadioProgramRow>(
+        c,
+        `UPDATE radio_programs
+            SET status = 'live', is_live = true, live_started_at = now(),
+                live_ended_at = NULL, updated_at = now()
+          WHERE id = $1 RETURNING ${PROGRAM_COLUMNS}`,
+        [id],
+      );
+    });
+  }
+
+  async end(id: string): Promise<RadioProgramRow> {
+    return tx(this.pool, async (c) => {
+      const program = await one<RadioProgramRow>(
+        c,
+        `SELECT ${PROGRAM_COLUMNS} FROM radio_programs WHERE id = $1`,
+        [id],
+      );
+      this.provider.stop({ id: program.id, is_live: program.is_live, peak_listeners: program.peak_listeners });
+      return one<RadioProgramRow>(
+        c,
+        `UPDATE radio_programs
+            SET status = 'ended', is_live = false, live_ended_at = now(), updated_at = now()
+          WHERE id = $1 RETURNING ${PROGRAM_COLUMNS}`,
+        [id],
+      );
+    });
+  }
+
+  async rotateKey(id: string): Promise<{ stream_key: string }> {
+    await this.getAdmin(id); // 404 if missing
+    const { streamKey } = this.provider.rotateKey(id);
+    await this.pool.query(`UPDATE radio_programs SET stream_key = $2, updated_at = now() WHERE id = $1`, [
+      id,
+      streamKey,
+    ]);
+    return { stream_key: streamKey };
+  }
+
+  async health(id: string): Promise<StreamHealth> {
+    const program = await this.getAdmin(id);
+    if (!program.is_live) throw new ApiError("CONFLICT", "Program is not live");
+    return this.provider.health({ id: program.id, is_live: program.is_live, peak_listeners: program.peak_listeners });
+  }
+
+  // --- Programs: member (public projection) ---------------------------------
+
+  /** Visible programs: public always; members-only requires an authed member; never private. */
+  async listPublic(): Promise<RadioProgramPublic[]> {
+    const rows = await many<RadioProgramRow>(
+      this.pool,
+      `SELECT ${PROGRAM_COLUMNS} FROM radio_programs
+        WHERE visibility IN ('public','members') AND status <> 'draft'
+        ORDER BY is_live DESC, COALESCE(scheduled_at, created_at) DESC`,
+    );
+    return rows.map(toPublic);
+  }
+
+  async nowPlaying(): Promise<RadioProgramPublic | null> {
+    const live = await maybeOne<RadioProgramRow>(
+      this.pool,
+      `SELECT ${PROGRAM_COLUMNS} FROM radio_programs
+        WHERE is_live = true AND visibility IN ('public','members')
+        ORDER BY live_started_at DESC LIMIT 1`,
+    );
+    if (live) return toPublic(live);
+    const next = await maybeOne<RadioProgramRow>(
+      this.pool,
+      `SELECT ${PROGRAM_COLUMNS} FROM radio_programs
+        WHERE status = 'scheduled' AND visibility IN ('public','members') AND scheduled_at >= now()
+        ORDER BY scheduled_at ASC LIMIT 1`,
+    );
+    return next ? toPublic(next) : null;
+  }
+
+  async getPublic(id: string): Promise<RadioProgramPublic> {
+    const row = await maybeOne<RadioProgramRow>(
+      this.pool,
+      `SELECT ${PROGRAM_COLUMNS} FROM radio_programs WHERE id = $1`,
+      [id],
+    );
+    if (!row || row.visibility === "private") throw new ApiError("NOT_FOUND", "Program not found");
+    return toPublic(row);
+  }
+
+  private async assertVisible(id: string): Promise<void> {
+    const row = await maybeOne<{ visibility: string }>(
+      this.pool,
+      `SELECT visibility FROM radio_programs WHERE id = $1`,
+      [id],
+    );
+    if (!row || row.visibility === "private") throw new ApiError("NOT_FOUND", "Program not found");
+  }
+
+  // --- Reactions ------------------------------------------------------------
+
+  private async reactionCounts(programId: string): Promise<RadioReactionCounts> {
+    const rows = await many<{ kind: string; n: string }>(
+      this.pool,
+      `SELECT kind, COUNT(*)::text AS n FROM radio_reactions WHERE program_id = $1 GROUP BY kind`,
+      [programId],
+    );
+    const counts: RadioReactionCounts = { heart: 0, amen: 0, fire: 0 };
+    for (const r of rows) {
+      if (r.kind === "heart" || r.kind === "amen" || r.kind === "fire") counts[r.kind] = Number(r.n);
+    }
+    return counts;
+  }
+
+  /** Idempotent per client_event_id (§2.1/§3.6): a replay is a no-op returning the same counts. */
+  async react(
+    programId: string,
+    memberId: string,
+    input: z.infer<typeof RadioService.React>,
+  ): Promise<{ counts: RadioReactionCounts }> {
+    await this.assertVisible(programId);
+    await this.pool.query(
+      `INSERT INTO radio_reactions (program_id, member_id, kind, client_event_id)
+         VALUES ($1,$2,$3,$4)
+       ON CONFLICT (client_event_id) DO NOTHING`,
+      [programId, memberId, input.kind, input.client_event_id],
+    );
+    return { counts: await this.reactionCounts(programId) };
+  }
+
+  async reactionCountsPublic(programId: string): Promise<RadioReactionCounts> {
+    return this.reactionCounts(programId);
+  }
+
+  // --- Comments -------------------------------------------------------------
+
+  /** Non-hidden comments, newest first (member view). */
+  async listComments(programId: string): Promise<RadioCommentRow[]> {
+    await this.assertVisible(programId);
+    return many<RadioCommentRow>(
+      this.pool,
+      `SELECT id, program_id, member_id, body, hidden, client_event_id, created_at
+         FROM radio_comments WHERE program_id = $1 AND hidden = false
+        ORDER BY created_at DESC`,
+      [programId],
+    );
+  }
+
+  /** All comments incl. hidden (admin moderation view). */
+  async listCommentsAdmin(programId: string): Promise<RadioCommentRow[]> {
+    await this.getAdmin(programId); // 404 if missing
+    return many<RadioCommentRow>(
+      this.pool,
+      `SELECT id, program_id, member_id, body, hidden, client_event_id, created_at
+         FROM radio_comments WHERE program_id = $1
+        ORDER BY created_at DESC`,
+      [programId],
+    );
+  }
+
+  /** Idempotent per client_event_id: a replay returns the already-stored comment. */
+  async addComment(
+    programId: string,
+    memberId: string,
+    input: z.infer<typeof RadioService.Comment>,
+  ): Promise<RadioCommentRow> {
+    await this.assertVisible(programId);
+    return tx(this.pool, async (c) => {
+      const existing = await maybeOne<RadioCommentRow>(
+        c,
+        `SELECT id, program_id, member_id, body, hidden, client_event_id, created_at
+           FROM radio_comments WHERE client_event_id = $1`,
+        [input.client_event_id],
+      );
+      if (existing) return existing;
+      return one<RadioCommentRow>(
+        c,
+        `INSERT INTO radio_comments (program_id, member_id, body, client_event_id)
+           VALUES ($1,$2,$3,$4)
+         RETURNING id, program_id, member_id, body, hidden, client_event_id, created_at`,
+        [programId, memberId, input.body, input.client_event_id],
+      );
+    });
+  }
+
+  /** Moderation: hide a comment. */
+  async hideComment(commentId: string): Promise<{ ok: true }> {
+    const res = await this.pool.query(
+      `UPDATE radio_comments SET hidden = true WHERE id = $1`,
+      [commentId],
+    );
+    if (!res.rowCount) throw new ApiError("NOT_FOUND", "Comment not found");
+    return { ok: true };
+  }
+
+  // --- Mixer scenes ---------------------------------------------------------
+
+  async listScenes(): Promise<MixerSceneRow[]> {
+    return many<MixerSceneRow>(
+      this.pool,
+      `SELECT id, name, hint, channels, is_default, created_by, created_at, updated_at
+         FROM mixer_scenes ORDER BY is_default DESC, name ASC`,
+    );
+  }
+
+  async createScene(
+    createdBy: string,
+    input: z.infer<typeof RadioService.SceneBody>,
+  ): Promise<MixerSceneRow> {
+    return one<MixerSceneRow>(
+      this.pool,
+      `INSERT INTO mixer_scenes (name, hint, channels, is_default, created_by)
+         VALUES ($1,$2,COALESCE($3,'[]'::jsonb),COALESCE($4,false),$5)
+       RETURNING id, name, hint, channels, is_default, created_by, created_at, updated_at`,
+      [input.name, input.hint ?? null, JSON.stringify(input.channels ?? []), input.is_default ?? null, createdBy],
+    );
+  }
+
+  async updateScene(
+    id: string,
+    input: z.infer<typeof RadioService.SceneUpdate>,
+  ): Promise<MixerSceneRow> {
+    const sets: string[] = [];
+    const params: unknown[] = [id];
+    const set = (col: string, val: unknown): void => {
+      params.push(val);
+      sets.push(`${col} = $${params.length}`);
+    };
+    if (input.name !== undefined) set("name", input.name);
+    if (input.hint !== undefined) set("hint", input.hint);
+    if (input.channels !== undefined) set("channels", JSON.stringify(input.channels));
+    if (input.is_default !== undefined) set("is_default", input.is_default);
+    if (sets.length === 0) {
+      return one<MixerSceneRow>(
+        this.pool,
+        `SELECT id, name, hint, channels, is_default, created_by, created_at, updated_at
+           FROM mixer_scenes WHERE id = $1`,
+        [id],
+      );
+    }
+    sets.push(`updated_at = now()`);
+    return one<MixerSceneRow>(
+      this.pool,
+      `UPDATE mixer_scenes SET ${sets.join(", ")} WHERE id = $1
+       RETURNING id, name, hint, channels, is_default, created_by, created_at, updated_at`,
+      params,
+    );
+  }
+
+  async removeScene(id: string): Promise<{ ok: true }> {
+    const res = await this.pool.query(`DELETE FROM mixer_scenes WHERE id = $1`, [id]);
+    if (!res.rowCount) throw new ApiError("NOT_FOUND", "Scene not found");
+    return { ok: true };
+  }
+
+  // --- Mixer jingles --------------------------------------------------------
+
+  async listJingles(): Promise<MixerJingleRow[]> {
+    return many<MixerJingleRow>(
+      this.pool,
+      `SELECT id, label, color, audio_url, sort, created_by, created_at
+         FROM mixer_jingles ORDER BY sort ASC, created_at ASC`,
+    );
+  }
+
+  async createJingle(
+    createdBy: string,
+    input: z.infer<typeof RadioService.JingleBody>,
+  ): Promise<MixerJingleRow> {
+    return one<MixerJingleRow>(
+      this.pool,
+      `INSERT INTO mixer_jingles (label, color, audio_url, sort, created_by)
+         VALUES ($1,$2,$3,COALESCE($4,0),$5)
+       RETURNING id, label, color, audio_url, sort, created_by, created_at`,
+      [input.label, input.color ?? null, input.audio_url ?? null, input.sort ?? null, createdBy],
+    );
+  }
+
+  async removeJingle(id: string): Promise<{ ok: true }> {
+    const res = await this.pool.query(`DELETE FROM mixer_jingles WHERE id = $1`, [id]);
+    if (!res.rowCount) throw new ApiError("NOT_FOUND", "Jingle not found");
+    return { ok: true };
+  }
+}
