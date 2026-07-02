@@ -1736,6 +1736,7 @@ import type {
   CreateRadioProgramBody,
   UpdateRadioProgramBody,
   RadioProgramStatus,
+  AudioUploadResult,
   MixerScene,
   MixerSceneBody,
   MixerSceneUpdateBody,
@@ -1750,6 +1751,7 @@ export type {
   CreateRadioProgramBody,
   UpdateRadioProgramBody,
   RadioProgramStatus,
+  AudioUploadResult,
   MixerChannel,
   MixerScene,
   MixerSceneBody,
@@ -1773,6 +1775,18 @@ export const RadioApi = {
     api.patch<RadioProgram>(`${R}/programs/${id}`, body).then((r) => r.data),
   deleteProgram: (id: string) =>
     api.delete<{ ok: true }>(`${R}/programs/${id}`).then((r) => r.data),
+
+  // Uploaded session audio (self-hosted disk; mirrors the video upload) -----
+  // Bytes go to our own /media store; returns { url, duration_sec }. The axios
+  // instance injects the admin JWT and sets multipart from the FormData body.
+  uploadAudio: (file: File, durationSec?: number): Promise<AudioUploadResult> => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    if (durationSec != null && Number.isFinite(durationSec)) {
+      form.append("duration_sec", String(Math.round(durationSec)));
+    }
+    return api.post<AudioUploadResult>("/admin/media/audio/upload", form).then((r) => r.data);
+  },
 
   // Broadcast lifecycle (server-authoritative) -----------------------------
   goLive: (id: string) => api.post<RadioProgram>(`${R}/programs/${id}/go-live`).then((r) => r.data),

@@ -9,8 +9,8 @@
 // gain, meters, waveform, device manager, emergency controls, reactions animation.
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import {
-  Activity, Bell, Copy, Cpu, Disc3, Flame, Gauge, HardDrive, Headphones,
-  Heart, ImagePlus, KeyRound, Laptop, Loader2, Mic, MicOff, Pause, Play, Plus,
+  Activity, Bell, CalendarClock, Copy, Cpu, Disc3, Flame, Gauge, HardDrive, Headphones,
+  Heart, ImagePlus, KeyRound, Laptop, Loader2, Mic, MicOff, Music, Pause, Play, Plus,
   QrCode, RefreshCw, Radio as RadioIcon, Send, ShieldAlert, Signal,
   SlidersHorizontal, Smartphone, Square, Tablet, Trash2, Volume2,
   Wifi, X, Check, type LucideIcon,
@@ -24,6 +24,7 @@ import {
   type RadioComment,
   type StreamHealth,
   type CreateRadioProgramBody,
+  type UpdateRadioProgramBody,
 } from "../../api/client";
 
 /* ── studio palette ── */
@@ -60,6 +61,27 @@ function fmtDuration(s: number): string {
   const m = Math.floor((s % 3600) / 60).toString().padStart(2, "0");
   const sec = Math.floor(s % 60).toString().padStart(2, "0");
   return `${h}:${m}:${sec}`;
+}
+
+// Short human label for a scheduled_at ISO string (falls back gracefully).
+function fmtSchedule(iso: string | null | undefined): string {
+  if (!iso) return "Not scheduled";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Not scheduled";
+  return d.toLocaleString(undefined, {
+    weekday: "short", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit",
+  });
+}
+
+// mm:ss (or h:mm:ss) label for an audio duration in seconds.
+function fmtClock(sec: number | null | undefined): string | null {
+  if (sec == null || !Number.isFinite(sec) || sec <= 0) return null;
+  const s = Math.round(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = (s % 60).toString().padStart(2, "0");
+  return h > 0 ? `${h}:${m.toString().padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
 // A comment's author label — the admin projection only carries member_id, so we
@@ -109,17 +131,24 @@ export function RadioStudio(): ReactElement {
     title: string; description: string; category: Category; speaker: string;
     location: string; tags: string; artwork_url: string; visibility: VisKey;
     scheduled_at: string; duration_min: string; repeat: string; timezone: string;
-    record_broadcast: boolean; record_target: "cloud" | "local" | "both";
+    audio_url: string; audio_duration_sec: number | null; auto_go_live: boolean;
+    audio_filename: string; record_broadcast: boolean; record_target: "cloud" | "local" | "both";
   }>({
     title: "", description: "", category: "Sermon", speaker: "", location: "",
     tags: "", artwork_url: "", visibility: "public", scheduled_at: "",
     duration_min: "", repeat: "none", timezone: "Africa/Nairobi",
+    audio_url: "", audio_duration_sec: null, auto_go_live: true, audio_filename: "",
     record_broadcast: true, record_target: "both",
   });
   const [creating, setCreating] = useState(false);
   const [formErr, setFormErr] = useState<string | null>(null);
   const [uploadingArtwork, setUploadingArtwork] = useState(false);
   const [artworkErr, setArtworkErr] = useState<string | null>(null);
+  const [uploadingAudio, setUploadingAudio] = useState(false);
+  const [audioErr, setAudioErr] = useState<string | null>(null);
+  // Attach audio to an already-created (selected) program.
+  const [attachingAudio, setAttachingAudio] = useState(false);
+  const [attachErr, setAttachErr] = useState<string | null>(null);
 
   const selected = programs?.find((p) => p.id === selectedId) ?? null;
   const live = phase === "live";
@@ -334,11 +363,14 @@ export function RadioStudio(): ReactElement {
     if (form.scheduled_at) body.scheduled_at = new Date(form.scheduled_at).toISOString();
     const dur = Number(form.duration_min);
     if (form.duration_min && Number.isFinite(dur)) body.duration_min = dur;
+    if (form.audio_url.trim()) body.audio_url = form.audio_url.trim();
+    if (form.audio_duration_sec != null) body.audio_duration_sec = form.audio_duration_sec;
+    body.auto_go_live = form.auto_go_live;
     try {
       const created = await RadioApi.createProgram(body);
       setPrograms((ps) => [created, ...(ps ?? [])]);
       setSelectedId(created.id);
-      setForm((f) => ({ ...f, title: "", description: "", speaker: "", location: "", tags: "", artwork_url: "", scheduled_at: "", duration_min: "" }));
+      setForm((f) => ({ ...f, title: "", description: "", speaker: "", location: "", tags: "", artwork_url: "", scheduled_at: "", duration_min: "", audio_url: "", audio_duration_sec: null, audio_filename: "" }));
     } catch {
       setFormErr("Could not create the broadcast. Please try again.");
     } finally {
@@ -364,6 +396,71 @@ export function RadioStudio(): ReactElement {
       setUploadingArtwork(false);
     }
   }, []);
+
+  // Read an audio file's duration client-side (best-effort) for the upload hint.
+  const probeDuration = (file: File): Promise<number | undefined> =>
+    new Promise((resolve) => {
+      try {
+        const url = URL.createObjectURL(file);
+        const el = document.createElement("audio");
+        el.preload = "metadata";
+        el.onloadedmetadata = () => {
+          const d = Number.isFinite(el.duration) ? Math.round(el.duration) : undefined;
+          URL.revokeObjectURL(url);
+          resolve(d && d > 0 ? d : undefined);
+        };
+        el.onerror = () => { URL.revokeObjectURL(url); resolve(undefined); };
+        el.src = url;
+      } catch { resolve(undefined); }
+    });
+
+  // Upload a broadcast audio recording (self-hosted disk) → fills form.audio_url.
+  const uploadAudio = useCallback(async (file: File) => {
+    if (file.size > 200 * 1024 * 1024) {
+      setAudioErr("Audio is larger than 200 MB. Please choose a smaller file.");
+      return;
+    }
+    setUploadingAudio(true);
+    setAudioErr(null);
+    try {
+      const durationSec = await probeDuration(file);
+      const res = await RadioApi.uploadAudio(file, durationSec);
+      setForm((f) => ({
+        ...f,
+        audio_url: res.url,
+        audio_duration_sec: res.duration_sec ?? durationSec ?? null,
+        audio_filename: file.name,
+      }));
+    } catch {
+      setAudioErr("Audio upload failed. Please try again.");
+    } finally {
+      setUploadingAudio(false);
+    }
+  }, []);
+
+  // Attach audio to the already-created (selected) program → PATCH + refresh.
+  const attachAudio = useCallback(async (file: File) => {
+    if (!selectedId) return;
+    if (file.size > 200 * 1024 * 1024) {
+      setAttachErr("Audio is larger than 200 MB. Please choose a smaller file.");
+      return;
+    }
+    setAttachingAudio(true);
+    setAttachErr(null);
+    try {
+      const durationSec = await probeDuration(file);
+      const res = await RadioApi.uploadAudio(file, durationSec);
+      const body: UpdateRadioProgramBody = { audio_url: res.url };
+      const d = res.duration_sec ?? durationSec;
+      if (d != null) body.audio_duration_sec = d;
+      const updated = await RadioApi.updateProgram(selectedId, body);
+      setPrograms((ps) => (ps ? ps.map((p) => (p.id === updated.id ? updated : p)) : ps));
+    } catch {
+      setAttachErr("Could not attach audio. Please try again.");
+    } finally {
+      setAttachingAudio(false);
+    }
+  }, [selectedId]);
 
   // Local-only host comment (not persisted — admins can't post as a member).
   const [localSay, setLocalSay] = useState<{ id: string; text: string }[]>([]);
@@ -482,6 +579,66 @@ export function RadioStudio(): ReactElement {
                 )}
               </Panel>
 
+              {/* Session audio + schedule + auto-air (selected program) */}
+              {selected && (
+                <Panel>
+                  <SectionHead
+                    icon={Music}
+                    title="Session audio & schedule"
+                    hint={selected.audio_url ? (fmtClock(selected.audio_duration_sec) ?? "Attached") : "No audio"}
+                  />
+
+                  {selected.audio_url ? (
+                    <div className="rounded-xl px-3 py-3 mb-3" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
+                      <div className="flex items-center gap-2 mb-2" style={{ fontSize: 11.5, color: DIM, fontWeight: 600 }}>
+                        <Music size={13} style={{ color: GOLD }} /> Session audio
+                        {fmtClock(selected.audio_duration_sec) && <span style={{ color: DIMMER }}>· {fmtClock(selected.audio_duration_sec)}</span>}
+                      </div>
+                      <audio controls src={selected.audio_url} style={{ width: "100%", height: 36 }} />
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-3 flex-wrap rounded-xl px-3 py-3 mb-3" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
+                      <div style={{ flex: 1, minWidth: 160 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>No audio attached</div>
+                        <div style={{ fontSize: 11, color: DIM, marginTop: 2 }}>Attach a recording to broadcast when this session goes live.</div>
+                      </div>
+                      <label className="rs-btn flex items-center gap-2 rounded-xl px-3.5 shrink-0" style={{ height: 36, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12, fontWeight: 700, cursor: attachingAudio ? "default" : "pointer", opacity: attachingAudio ? 0.6 : 1 }}>
+                        {attachingAudio ? <Loader2 size={14} className="rs-spin" /> : <Music size={14} />}
+                        {attachingAudio ? "Uploading…" : "Attach audio"}
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          disabled={attachingAudio}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            e.target.value = "";
+                            if (file) void attachAudio(file);
+                          }}
+                          style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", border: 0 }}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  {attachErr && <div style={{ fontSize: 11, color: "#FCA5A5", marginBottom: 8 }}>{attachErr}</div>}
+
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="inline-flex items-center gap-2" style={{ fontSize: 12, color: DIM }}>
+                      <CalendarClock size={14} style={{ color: GOLD }} />
+                      <span>{fmtSchedule(selected.scheduled_at)}</span>
+                    </div>
+                    <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1" style={{ fontSize: 11, fontWeight: 700, background: selected.auto_go_live ? "rgba(34,197,94,0.14)" : "rgba(255,255,255,0.06)", border: `1px solid ${selected.auto_go_live ? GREEN + "55" : PANEL_BORDER}`, color: selected.auto_go_live ? "#86EFAC" : DIM }}>
+                      <span className="rounded-full" style={{ width: 7, height: 7, background: selected.auto_go_live ? GREEN : DIMMER }} />
+                      Auto-air: {selected.auto_go_live ? "On" : "Off"}
+                    </span>
+                  </div>
+                  {selected.scheduled_at && selected.auto_go_live && !selected.is_live && (
+                    <div style={{ fontSize: 11, color: DIM, marginTop: 8, lineHeight: 1.45 }}>
+                      Airs automatically at {fmtSchedule(selected.scheduled_at)}.
+                    </div>
+                  )}
+                </Panel>
+              )}
+
               {/* Live status bar (only while live/paused) */}
               {(live || phase === "paused") && selected && (
                 <Panel style={{ borderColor: `${RED}44`, background: "linear-gradient(180deg, rgba(239,68,68,0.08), rgba(15,24,41,0.9))" }}>
@@ -498,6 +655,9 @@ export function RadioStudio(): ReactElement {
               {selected && (
                 <Panel>
                   <SectionHead icon={KeyRound} title="Ingest & stream key" hint="Broadcaster only — keep secret" />
+                  <div style={{ fontSize: 11, color: DIM, marginTop: -8, marginBottom: 12, lineHeight: 1.45 }}>
+                    Live-mic streaming (advanced) — not needed for uploaded-audio sessions.
+                  </div>
                   <div className="flex flex-col gap-2">
                     <CredRow label="Ingest URL" value={selected.ingest_url ?? "—"} onCopy={selected.ingest_url ? () => copy("Ingest URL", selected.ingest_url!) : undefined} copied={copied === "Ingest URL"} />
                     <CredRow label="Stream key" value={rotatedKey ?? selected.stream_key ?? "—"} secret onCopy={(rotatedKey ?? selected.stream_key) ? () => copy("Stream key", (rotatedKey ?? selected.stream_key)!) : undefined} copied={copied === "Stream key"} />
@@ -525,12 +685,12 @@ export function RadioStudio(): ReactElement {
 
               {/* Broadcast controls */}
               <Panel>
-                <SectionHead icon={RadioIcon} title="Broadcast controls" hint={selected ? "One tap to go live" : "Select a program first"} />
+                <SectionHead icon={RadioIcon} title="Broadcast controls" hint={selected ? "Manual override — take live now" : "Select a program first"} />
                 {actionErr && <div style={{ fontSize: 11.5, color: "#FCA5A5", marginBottom: 10, textAlign: "center" }}>{actionErr}</div>}
                 <div className="flex items-center justify-center gap-3 flex-wrap" style={{ padding: "6px 0 2px" }}>
                   {!live && phase !== "paused" ? (
                     <button onClick={() => setConfirmOpen(true)} disabled={phase === "countdown" || !selected || busy} className="rs-btn flex items-center gap-2.5 rounded-2xl px-8" style={{ height: 60, background: `linear-gradient(135deg, ${RED}, #B91C1C)`, color: "#fff", fontSize: 17, fontWeight: 800, boxShadow: "0 14px 34px -12px rgba(239,68,68,0.7)", opacity: !selected || busy ? 0.5 : 1 }}>
-                      <span className="rounded-full" style={{ width: 12, height: 12, background: "#fff" }} /> Start Broadcast
+                      <span className="rounded-full" style={{ width: 12, height: 12, background: "#fff" }} /> Take live now
                     </button>
                   ) : (
                     <>
@@ -664,7 +824,49 @@ export function RadioStudio(): ReactElement {
                     </div>
                     {artworkErr && <span style={{ fontSize: 11, color: "#FCA5A5", marginTop: 6 }}>{artworkErr}</span>}
                   </Field>
-                  <Field label="Schedule (optional)">
+
+                  {/* Audio recording (uploaded broadcast audio; optional) */}
+                  <Field label="Audio recording" full>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <label className="rs-btn flex items-center gap-2 rounded-xl px-3.5 shrink-0" style={{ height: 38, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12.5, fontWeight: 700, cursor: uploadingAudio ? "default" : "pointer", opacity: uploadingAudio ? 0.6 : 1 }}>
+                        {uploadingAudio ? <Loader2 size={14} className="rs-spin" /> : <Music size={14} />}
+                        {uploadingAudio ? "Uploading…" : form.audio_url ? "Replace audio" : "Upload audio"}
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          disabled={uploadingAudio}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            e.target.value = "";
+                            if (file) void uploadAudio(file);
+                          }}
+                          style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", border: 0 }}
+                        />
+                      </label>
+                      {form.audio_url ? (
+                        <span className="inline-flex items-center gap-1.5 truncate" style={{ fontSize: 11.5, color: DIM, minWidth: 0 }}>
+                          <Check size={13} style={{ color: GREEN }} />
+                          <span className="truncate">{form.audio_filename || "Audio attached"}</span>
+                          {fmtClock(form.audio_duration_sec) && <span style={{ color: DIMMER }}>· {fmtClock(form.audio_duration_sec)}</span>}
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 11, color: DIMMER }}>Optional — plays when the session goes live.</span>
+                      )}
+                    </div>
+                    {form.audio_url && (
+                      <audio controls src={form.audio_url} style={{ width: "100%", marginTop: 8, height: 34 }} />
+                    )}
+                    {audioErr && <span style={{ fontSize: 11, color: "#FCA5A5", marginTop: 6 }}>{audioErr}</span>}
+                  </Field>
+
+                  {/* ── Schedule ── */}
+                  <div style={{ gridColumn: "1 / -1", marginTop: 4 }}>
+                    <div className="flex items-center gap-2" style={{ marginBottom: 2 }}>
+                      <CalendarClock size={14} style={{ color: GOLD }} />
+                      <span style={{ fontSize: 12, fontWeight: 700 }}>Schedule</span>
+                    </div>
+                  </div>
+                  <Field label="Scheduled at (optional)">
                     <input type="datetime-local" value={form.scheduled_at} onChange={(e) => setForm((f) => ({ ...f, scheduled_at: e.target.value }))} style={inputStyle} />
                   </Field>
                   <Field label="Duration (min)">
@@ -678,6 +880,21 @@ export function RadioStudio(): ReactElement {
                   <Field label="Timezone">
                     <input className="rs-in" value={form.timezone} onChange={(e) => setForm((f) => ({ ...f, timezone: e.target.value }))} placeholder="Africa/Nairobi" style={inputStyle} />
                   </Field>
+
+                  {/* Auto-air toggle (auto_go_live) */}
+                  <div style={{ gridColumn: "1 / -1", marginTop: 2 }}>
+                    <div className="flex items-start gap-2.5 rounded-xl px-3 py-2.5" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
+                      <button type="button" onClick={() => setForm((f) => ({ ...f, auto_go_live: !f.auto_go_live }))} className="shrink-0" aria-pressed={form.auto_go_live} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, marginTop: 1 }}>
+                        <span className="rounded-full block shrink-0" style={{ width: 40, height: 22, background: form.auto_go_live ? GOLD_DEEP : "rgba(255,255,255,0.14)", padding: 3, transition: "background .15s" }}>
+                          <span className="block rounded-full" style={{ width: 16, height: 16, background: "#fff", transform: form.auto_go_live ? "translateX(18px)" : "translateX(0)", transition: "transform .15s" }} />
+                        </span>
+                      </button>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, color: form.auto_go_live ? GOLD : TEXT }}>Auto-air at scheduled time</div>
+                        <div style={{ fontSize: 11, color: DIM, marginTop: 2, lineHeight: 1.45 }}>When on, this session goes live automatically at the scheduled time.</div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div className="flex items-center justify-between flex-wrap gap-2" style={{ marginTop: 12 }}>
                   <div className="flex items-center gap-3 flex-wrap">
