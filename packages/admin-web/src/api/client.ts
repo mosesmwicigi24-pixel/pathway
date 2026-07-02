@@ -74,18 +74,28 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Rotate the access token once on a 401 and replay the request.
+// Rotate the access token once on a 401 and replay the request. If the session
+// is unrecoverable (no refresh handler, or the refresh itself fails), bounce to
+// the login screen instead of letting every poll spam 401s in a dead session.
 api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError) => {
     const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
-    if (error.response?.status === 401 && refreshHandler && original && !original._retry) {
+    if (error.response?.status === 401 && original && !original._retry) {
       original._retry = true;
-      const token = await refreshHandler();
-      if (token) {
-        setAccessToken(token);
-        original.headers.Authorization = `Bearer ${token}`;
-        return api(original);
+      if (refreshHandler) {
+        const token = await refreshHandler();
+        if (token) {
+          setAccessToken(token);
+          original.headers.Authorization = `Bearer ${token}`;
+          return api(original);
+        }
+      }
+      // Refresh missing or failed — the session is dead. Never redirect the
+      // login/auth calls themselves (would loop).
+      const url = original.url ?? "";
+      if (!url.includes("/auth/") && !window.location.pathname.startsWith("/login")) {
+        window.location.assign("/login");
       }
     }
     return Promise.reject(error);
@@ -1808,7 +1818,9 @@ export const RadioApi = {
     if (durationSec != null && Number.isFinite(durationSec)) {
       form.append("duration_sec", String(Math.round(durationSec)));
     }
-    return api.post<AudioUploadResult>("/admin/media/audio/upload", form).then((r) => r.data);
+    // timeout: 0 — audio files run up to 70 MB; the instance-wide 15s timeout
+    // would abort any real-world upload mid-flight.
+    return api.post<AudioUploadResult>("/admin/media/audio/upload", form, { timeout: 0 }).then((r) => r.data);
   },
 
   // Broadcast lifecycle (server-authoritative) -----------------------------
