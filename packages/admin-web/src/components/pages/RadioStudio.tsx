@@ -1,19 +1,24 @@
-// Radio Broadcast Studio (/radio) — the admin "Live Broadcast Studio", faithful
-// to the Figma make (ZMEsnrOJCXXY7rHfTBautI). Intentionally a DARK studio theme,
+// Radio Broadcast Studio (/radio) — the admin "Live Broadcast Studio", an exact
+// visual match of the Figma make (ZMEsnrOJCXXY7rHfTBautI) with the make's fake
+// state replaced by the real backend wiring. Intentionally a DARK studio theme,
 // distinct from the light portal. Wire contract: docs/RADIO_STUDIO_CONTRACT.md.
 //
-// REAL (API-backed, server-authoritative): program list + create + select, the
-// broadcast lifecycle (go-live → status=live, end → status=ended), stream health
-// polling while live, the ingest URL + stream key (copy + rotate), and listener
-// comments. LOCAL (client-only hardware/UI): audio-source select, mic controls,
-// gain, meters, waveform, device manager, emergency controls, reactions animation.
+// REAL (API-backed, server-authoritative): program list + create + edit + select,
+// the broadcast lifecycle (go-live → status=live, end → status=ended), stream
+// health polling while live, ingest URL + stream key (copy + rotate), listener
+// comments (+ hide moderation), the audio library (tracks CRUD + upload), session
+// playlists (add/remove/reorder/loop via PATCH), scheduled playout (PATCH
+// scheduled_at/repeat), and the quick broadcast settings (PATCH visibility /
+// record_broadcast). LOCAL (client-only hardware/UI): audio-source select, mic
+// controls, gain, meters, waveform, live-listener roster, device manager,
+// emergency controls, reactions drift, playlist live preview.
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
-  Activity, Bell, CalendarClock, ChevronDown, Copy, Cpu, Disc3, Flame, Gauge, HardDrive, Headphones,
-  Heart, ImagePlus, KeyRound, Laptop, ListMusic, Loader2, Mic, MicOff, Music, Pause, Play, Plus,
-  QrCode, Repeat, Repeat1, RefreshCw, Radio as RadioIcon, Send, ShieldAlert, Signal,
-  SlidersHorizontal, Smartphone, Square, Tablet, Trash2, UploadCloud, Volume2,
-  Wifi, X, Check, ArrowUp, ArrowDown, type LucideIcon,
+  Activity, ArrowDown, ArrowUp, Bell, CalendarClock, Check, Copy, Cpu, Disc3, Flame, Gauge,
+  HardDrive, Headphones, Heart, ImagePlus, KeyRound, Laptop, ListMusic, Loader2, Mic, MicOff,
+  Music, Pause, Pencil, Play, Plus, QrCode, RefreshCw, Radio as RadioIcon, Repeat, Repeat1,
+  Send, ShieldAlert, Signal, SlidersHorizontal, Smartphone, Square, Tablet, Trash2, Upload,
+  Volume2, Wifi, X, type LucideIcon,
 } from "lucide-react";
 import { AxiosError } from "axios";
 import {
@@ -32,7 +37,7 @@ import {
   type CreateRadioTrackBody,
 } from "../../api/client";
 
-/* ── studio palette ── */
+/* ── studio palette (Figma make) ── */
 const BG = "#0A1120";
 const PANEL = "linear-gradient(180deg, #131E33 0%, #0F1829 100%)";
 const PANEL_BORDER = "rgba(255,255,255,0.08)";
@@ -61,6 +66,37 @@ const AUDIO_SOURCES = [
   { key: "tablet", label: "Tablet", icon: Tablet, status: "Standby", signal: 1 },
 ] as const;
 
+/* Track-kind chrome exactly as the make: MUSIC green, PREACHING gold, AUDIO blue. */
+const KIND_META: Record<RadioTrackKind, { label: string; color: string }> = {
+  music: { label: "Music", color: "#7BE3A3" },
+  preaching: { label: "Preaching", color: "#E6C66E" },
+  audio: { label: "Audio", color: "#7FB5FF" },
+};
+const TRACK_KINDS = ["music", "preaching", "audio"] as const;
+
+const LOOP_MODES: RadioLoopMode[] = ["none", "loop_all", "repeat_one"];
+const LOOP_LABEL: Record<RadioLoopMode, string> = { none: "Loop", loop_all: "Loop all", repeat_one: "Repeat one" };
+
+const REPEAT_OPTIONS = ["none", "daily", "weekdays", "weekly"] as const;
+const REPEAT_LABEL: Record<string, string> = { none: "Once", daily: "Daily", weekdays: "Weekdays", weekly: "Weekly" };
+
+/* Client-side roster/devices — decorative studio chrome from the make. */
+type FakeListener = { id: string; name: string; initials: string; device: string; place: string };
+const SEED_LISTENERS: FakeListener[] = [
+  { id: "l1", name: "Esther Mutua", initials: "EM", device: "iPhone 15", place: "Nairobi" },
+  { id: "l2", name: "Amos Kiprono", initials: "AK", device: "Samsung A54", place: "Eldoret" },
+  { id: "l3", name: "Faith Njeri", initials: "FN", device: "Pixel 8", place: "Nakuru" },
+  { id: "l4", name: "Joseph Mwangi", initials: "JM", device: "iPhone 13", place: "Mombasa" },
+  { id: "l5", name: "Mary Wanjiku", initials: "MW", device: "Tecno Spark", place: "Kisumu" },
+  { id: "l6", name: "Daniel Otieno", initials: "DO", device: "Redmi Note 12", place: "Thika" },
+];
+const SEED_DEVICES = [
+  { name: "iPhone 16 Pro", icon: Smartphone, status: "Connected", batt: 82 },
+  { name: "MacBook Pro", icon: Laptop, status: "Connected", batt: 100 },
+  { name: "Samsung Tablet", icon: Tablet, status: "Standby", batt: 47 },
+] as const;
+
+/* ── formatting helpers ── */
 function fmtDuration(s: number): string {
   const h = Math.floor(s / 3600).toString().padStart(2, "0");
   const m = Math.floor((s % 3600) / 60).toString().padStart(2, "0");
@@ -79,6 +115,13 @@ function fmtSchedule(iso: string | null | undefined): string {
   });
 }
 
+// HH:MM chip for the scheduled-playout list.
+function fmtTimeChip(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "--:--";
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 // mm:ss (or h:mm:ss) label for an audio duration in seconds.
 function fmtClock(sec: number | null | undefined): string | null {
   if (sec == null || !Number.isFinite(sec) || sec <= 0) return null;
@@ -89,14 +132,118 @@ function fmtClock(sec: number | null | undefined): string | null {
   return h > 0 ? `${h}:${m.toString().padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
+// Human-readable byte size ("31.2 MB").
+function fmtBytes(bytes: number | null | undefined): string | null {
+  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return null;
+  const units = ["B", "KB", "MB", "GB"];
+  let n = bytes;
+  let u = 0;
+  while (n >= 1024 && u < units.length - 1) { n /= 1024; u++; }
+  return `${n >= 100 || u === 0 ? Math.round(n) : n.toFixed(1)} ${units[u]}`;
+}
+
+// ISO → value for <input type="datetime-local"> in the user's local time.
+function isoToLocalInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// "18:00" → next occurrence of that wall-clock time as an ISO instant.
+function nextOccurrenceIso(time: string): string {
+  const [h, m] = time.split(":").map(Number);
+  const d = new Date();
+  d.setHours(h ?? 0, m ?? 0, 0, 0);
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+  return d.toISOString();
+}
+
+// Filename without its extension → default track title.
+function baseName(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+// Best-effort filename from a stored audio URL (edit-mode prefill).
+function urlFileName(url: string): string {
+  try {
+    const path = new URL(url, window.location.origin).pathname;
+    const last = path.split("/").pop() ?? "";
+    return decodeURIComponent(last) || "Attached audio";
+  } catch {
+    return "Attached audio";
+  }
+}
+
+// Recording target label ("saving to Cloud + Local").
+function fmtTarget(target: RadioProgram["record_target"]): string {
+  if (target === "both") return "Cloud + Local";
+  if (target === "local") return "Local";
+  return "Cloud";
+}
+
 // A comment's author label — the admin projection only carries member_id, so we
 // show a short, stable id-tag until member-name enrichment ships server-side.
 function authorLabel(c: RadioComment): string {
   return `Listener ${c.member_id.slice(0, 6)}`;
 }
 
+function statusLabel(s: RadioProgram["status"]): string {
+  return s === "live" ? "Live" : s === "scheduled" ? "Scheduled" : s === "ended" ? "Ended" : "Draft";
+}
+function healthWord(h: StreamHealth | null): string {
+  if (!h) return "—";
+  if (h.stability > 95 && h.dropped === 0) return "Excellent";
+  if (h.stability > 85) return "Good";
+  return "Fair";
+}
+
+// Read an audio file's duration client-side (best-effort) for upload hints.
+function probeAudioDuration(file: File): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    try {
+      const url = URL.createObjectURL(file);
+      const el = document.createElement("audio");
+      el.preload = "metadata";
+      el.onloadedmetadata = () => {
+        const d = Number.isFinite(el.duration) ? Math.round(el.duration) : undefined;
+        URL.revokeObjectURL(url);
+        resolve(d && d > 0 ? d : undefined);
+      };
+      el.onerror = () => { URL.revokeObjectURL(url); resolve(undefined); };
+      el.src = url;
+    } catch { resolve(undefined); }
+  });
+}
+
 const VIS_LABELS = { public: "Public", members: "Members Only", private: "Private" } as const;
 type VisKey = keyof typeof VIS_LABELS;
+/* Figma pill order: Public · Private · Members Only. */
+const VIS_ORDER: VisKey[] = ["public", "private", "members"];
+
+const hiddenInput: React.CSSProperties = {
+  position: "absolute", width: 1, height: 1, padding: 0, margin: -1,
+  overflow: "hidden", clip: "rect(0 0 0 0)", border: 0,
+};
+
+type BroadcastFormState = {
+  title: string; description: string; category: Category; speaker: string;
+  location: string; tags: string; artwork_url: string; visibility: VisKey;
+  scheduled_at: string; duration_min: string; repeat: string; timezone: string;
+  audio_url: string; audio_duration_sec: number | null; auto_go_live: boolean;
+  audio_filename: string; record_broadcast: boolean; record_target: "cloud" | "local" | "both";
+};
+function blankForm(): BroadcastFormState {
+  return {
+    title: "", description: "", category: "Sermon", speaker: "", location: "",
+    tags: "", artwork_url: "", visibility: "public", scheduled_at: "",
+    duration_min: "", repeat: "none", timezone: "Africa/Nairobi",
+    audio_url: "", audio_duration_sec: null, auto_go_live: true, audio_filename: "",
+    record_broadcast: true, record_target: "both",
+  };
+}
 
 export function RadioStudio(): ReactElement {
   // ── server state ──
@@ -130,30 +277,28 @@ export function RadioStudio(): ReactElement {
   const [connectOpen, setConnectOpen] = useState(false);
   const [reactions, setReactions] = useState({ heart: 328, amen: 512, fire: 174 });
   const [draft, setDraft] = useState("");
+  const [previewTitle, setPreviewTitle] = useState<string | null>(null);
 
-  // ── broadcast form (creates a real program) ──
-  const [form, setForm] = useState<{
-    title: string; description: string; category: Category; speaker: string;
-    location: string; tags: string; artwork_url: string; visibility: VisKey;
-    scheduled_at: string; duration_min: string; repeat: string; timezone: string;
-    audio_url: string; audio_duration_sec: number | null; auto_go_live: boolean;
-    audio_filename: string; record_broadcast: boolean; record_target: "cloud" | "local" | "both";
-  }>({
-    title: "", description: "", category: "Sermon", speaker: "", location: "",
-    tags: "", artwork_url: "", visibility: "public", scheduled_at: "",
-    duration_min: "", repeat: "none", timezone: "Africa/Nairobi",
-    audio_url: "", audio_duration_sec: null, auto_go_live: true, audio_filename: "",
-    record_broadcast: true, record_target: "both",
-  });
+  // ── broadcast form (creates a real program; edit mode PATCHes it) ──
+  const [form, setForm] = useState<BroadcastFormState>(blankForm());
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [formErr, setFormErr] = useState<string | null>(null);
   const [uploadingArtwork, setUploadingArtwork] = useState(false);
   const [artworkErr, setArtworkErr] = useState<string | null>(null);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [audioErr, setAudioErr] = useState<string | null>(null);
-  // Attach audio to an already-created (selected) program.
+  const formRef = useRef<HTMLDivElement>(null);
+  // Attach audio / artwork to an already-created (selected) program.
   const [attachingAudio, setAttachingAudio] = useState(false);
   const [attachErr, setAttachErr] = useState<string | null>(null);
+  const [cardArtBusy, setCardArtBusy] = useState(false);
+
+  // ── scheduled playout form (PATCHes scheduled_at/repeat on a program) ──
+  const [schSession, setSchSession] = useState("");
+  const [schTime, setSchTime] = useState("18:00");
+  const [schRepeat, setSchRepeat] = useState("none");
+  const [scheduling, setScheduling] = useState(false);
 
   const selected = programs?.find((p) => p.id === selectedId) ?? null;
   const live = phase === "live";
@@ -187,6 +332,24 @@ export function RadioStudio(): ReactElement {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // Silent refresh (no loading flash) — used when the Sessions panel mutates programs.
+  const refresh = useCallback(() => {
+    RadioApi.programs()
+      .then((list) => {
+        setPrograms(list);
+        setSelectedId((cur) => {
+          if (cur && list.some((p) => p.id === cur)) return cur;
+          return list.find((p) => p.is_live)?.id ?? list[0]?.id ?? null;
+        });
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    const h = (): void => refresh();
+    window.addEventListener("rs:programs-changed", h);
+    return () => window.removeEventListener("rs:programs-changed", h);
+  }, [refresh]);
+
   // ── mirror the selected program's live state into the phase machine ──
   useEffect(() => {
     if (!selected) { setPhase("idle"); return; }
@@ -216,7 +379,7 @@ export function RadioStudio(): ReactElement {
   useEffect(() => {
     if (phase !== "live" || !selectedId) { setHealth(null); return; }
     let alive = true;
-    const poll = () => {
+    const poll = (): void => {
       RadioApi.health(selectedId)
         .then((h) => { if (alive) setHealth(h); })
         .catch((e: unknown) => {
@@ -276,7 +439,7 @@ export function RadioStudio(): ReactElement {
   }, [phase]);
 
   // ── go-live countdown → real go-live call ──
-  const beginCountdown = () => { setConfirmOpen(false); setPhase("countdown"); setCount(3); };
+  const beginCountdown = (): void => { setConfirmOpen(false); setPhase("countdown"); setCount(3); };
 
   const goLiveNow = useCallback(async () => {
     if (!selectedId) { setPhase("idle"); return; }
@@ -346,10 +509,20 @@ export function RadioStudio(): ReactElement {
     }).catch(() => {});
   }, []);
 
-  const submitForm = useCallback(async () => {
-    if (!form.title.trim()) { setFormErr("A title is required."); return; }
-    setCreating(true);
-    setFormErr(null);
+  // Quick PATCH on the selected program (visibility pills, record toggle, artwork).
+  const quickPatch = useCallback(async (body: UpdateRadioProgramBody) => {
+    if (!selectedId) return;
+    setActionErr(null);
+    try {
+      const updated = await RadioApi.updateProgram(selectedId, body);
+      setPrograms((ps) => (ps ? ps.map((p) => (p.id === updated.id ? updated : p)) : ps));
+    } catch {
+      setActionErr("Could not update the broadcast settings.");
+    }
+  }, [selectedId]);
+
+  // ── broadcast form: shared body builder + create/save ──
+  const buildBody = useCallback((): CreateRadioProgramBody => {
     const body: CreateRadioProgramBody = {
       title: form.title.trim(),
       category: form.category,
@@ -371,17 +544,67 @@ export function RadioStudio(): ReactElement {
     if (form.audio_url.trim()) body.audio_url = form.audio_url.trim();
     if (form.audio_duration_sec != null) body.audio_duration_sec = form.audio_duration_sec;
     body.auto_go_live = form.auto_go_live;
+    return body;
+  }, [form]);
+
+  const submitForm = useCallback(async () => {
+    if (!form.title.trim()) { setFormErr("A title is required."); return; }
+    setCreating(true);
+    setFormErr(null);
+    const body = buildBody();
     try {
-      const created = await RadioApi.createProgram(body);
-      setPrograms((ps) => [created, ...(ps ?? [])]);
-      setSelectedId(created.id);
-      setForm((f) => ({ ...f, title: "", description: "", speaker: "", location: "", tags: "", artwork_url: "", scheduled_at: "", duration_min: "", audio_url: "", audio_duration_sec: null, audio_filename: "" }));
+      if (editingId) {
+        const updated = await RadioApi.updateProgram(editingId, body);
+        setPrograms((ps) => (ps ? ps.map((p) => (p.id === updated.id ? updated : p)) : ps));
+        setEditingId(null);
+      } else {
+        const created = await RadioApi.createProgram(body);
+        setPrograms((ps) => [created, ...(ps ?? [])]);
+        setSelectedId(created.id);
+      }
+      setForm(blankForm());
     } catch {
-      setFormErr("Could not create the broadcast. Please try again.");
+      setFormErr(editingId ? "Could not save the session. Please try again." : "Could not create the broadcast. Please try again.");
     } finally {
       setCreating(false);
     }
-  }, [form]);
+  }, [form, buildBody, editingId]);
+
+  // Prefill the form with the selected session and switch it into edit mode.
+  const beginEdit = useCallback(() => {
+    if (!selected) return;
+    setFormErr(null);
+    setArtworkErr(null);
+    setAudioErr(null);
+    setEditingId(selected.id);
+    setForm({
+      title: selected.title,
+      description: selected.description ?? "",
+      category: selected.category,
+      speaker: selected.speaker ?? "",
+      location: selected.location ?? "",
+      tags: selected.tags.join(", "),
+      artwork_url: selected.artwork_url ?? "",
+      visibility: selected.visibility,
+      scheduled_at: isoToLocalInput(selected.scheduled_at),
+      duration_min: selected.duration_min != null ? String(selected.duration_min) : "",
+      repeat: selected.repeat ?? "none",
+      timezone: selected.timezone ?? "Africa/Nairobi",
+      audio_url: selected.audio_url ?? "",
+      audio_duration_sec: selected.audio_duration_sec,
+      audio_filename: selected.audio_url ? urlFileName(selected.audio_url) : "",
+      auto_go_live: selected.auto_go_live,
+      record_broadcast: selected.record_broadcast,
+      record_target: selected.record_target ?? "both",
+    });
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selected]);
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null);
+    setForm(blankForm());
+    setFormErr(null);
+  }, []);
 
   // Upload an artwork image (bytes go direct to Cloudinary) → fills artwork_url.
   const uploadArtwork = useCallback(async (file: File) => {
@@ -402,25 +625,23 @@ export function RadioStudio(): ReactElement {
     }
   }, []);
 
-  // Read an audio file's duration client-side (best-effort) for the upload hint.
-  const probeDuration = (file: File): Promise<number | undefined> =>
-    new Promise((resolve) => {
-      try {
-        const url = URL.createObjectURL(file);
-        const el = document.createElement("audio");
-        el.preload = "metadata";
-        el.onloadedmetadata = () => {
-          const d = Number.isFinite(el.duration) ? Math.round(el.duration) : undefined;
-          URL.revokeObjectURL(url);
-          resolve(d && d > 0 ? d : undefined);
-        };
-        el.onerror = () => { URL.revokeObjectURL(url); resolve(undefined); };
-        el.src = url;
-      } catch { resolve(undefined); }
-    });
+  // Replace the SELECTED program's artwork straight from the broadcast card.
+  const uploadCardArtwork = useCallback(async (file: File) => {
+    if (!selectedId || file.size > 10 * 1024 * 1024) return;
+    setCardArtBusy(true);
+    try {
+      const sign = await OpsApi.signAdminImage("announcements");
+      const { secure_url } = await uploadToCloudinary(sign, file);
+      await quickPatch({ artwork_url: secure_url });
+    } catch {
+      setActionErr("Could not update the artwork.");
+    } finally {
+      setCardArtBusy(false);
+    }
+  }, [selectedId, quickPatch]);
 
   // Upload a broadcast audio recording (self-hosted disk) → fills form.audio_url.
-  const uploadAudio = useCallback(async (file: File) => {
+  const uploadFormAudio = useCallback(async (file: File) => {
     if (file.size > 200 * 1024 * 1024) {
       setAudioErr("Audio is larger than 200 MB. Please choose a smaller file.");
       return;
@@ -428,7 +649,7 @@ export function RadioStudio(): ReactElement {
     setUploadingAudio(true);
     setAudioErr(null);
     try {
-      const durationSec = await probeDuration(file);
+      const durationSec = await probeAudioDuration(file);
       const res = await RadioApi.uploadAudio(file, durationSec);
       setForm((f) => ({
         ...f,
@@ -453,7 +674,7 @@ export function RadioStudio(): ReactElement {
     setAttachingAudio(true);
     setAttachErr(null);
     try {
-      const durationSec = await probeDuration(file);
+      const durationSec = await probeAudioDuration(file);
       const res = await RadioApi.uploadAudio(file, durationSec);
       const body: UpdateRadioProgramBody = { audio_url: res.url };
       const d = res.duration_sec ?? durationSec;
@@ -467,15 +688,37 @@ export function RadioStudio(): ReactElement {
     }
   }, [selectedId]);
 
+  // Scheduled playout — PATCH scheduled_at/repeat on the chosen session.
+  const scheduleSession = useCallback(async () => {
+    if (!schSession) return;
+    setScheduling(true);
+    setActionErr(null);
+    try {
+      const updated = await RadioApi.updateProgram(schSession, {
+        scheduled_at: nextOccurrenceIso(schTime),
+        repeat: schRepeat,
+      });
+      setPrograms((ps) => (ps ? ps.map((p) => (p.id === updated.id ? updated : p)) : ps));
+    } catch {
+      setActionErr("Could not schedule the session.");
+    } finally {
+      setScheduling(false);
+    }
+  }, [schSession, schTime, schRepeat]);
+
   // Local-only host comment (not persisted — admins can't post as a member).
   const [localSay, setLocalSay] = useState<{ id: string; text: string }[]>([]);
-  const postComment = () => {
+  const postComment = (): void => {
     if (!draft.trim()) return;
     setLocalSay((c) => [{ id: `local-${Date.now()}`, text: draft.trim() }, ...c]);
     setDraft("");
   };
 
   const category = (selected?.category ?? "Sermon") as string;
+  const listenerCount = health?.listeners ?? selected?.peak_listeners ?? 0;
+  const scheduledPrograms = (programs ?? [])
+    .filter((p) => p.scheduled_at)
+    .sort((a, b) => (a.scheduled_at ?? "").localeCompare(b.scheduled_at ?? ""));
 
   return (
     <div className="relative overflow-hidden" style={{ minHeight: "100%", background: BG, fontFamily: "'Manrope', sans-serif", color: TEXT }}>
@@ -533,17 +776,10 @@ export function RadioStudio(): ReactElement {
         ) : loadErr ? (
           <StateCard icon={ShieldAlert} title="Couldn't load broadcasts" body={loadErr} action={<GoldButton onClick={load}>Try again</GoldButton>} />
         ) : (
-          <>
-          {/* ══════════ Audio library + Sessions ══════════ */}
-          <div className="grid gap-4 sm:gap-5 grid-cols-1 lg:grid-cols-2" style={{ marginBottom: 20 }}>
-            <AudioLibraryPanel />
-            <SessionsPanel />
-          </div>
-
           <div className="grid gap-4 sm:gap-5 grid-cols-1 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
             {/* ══════════ LEFT — main studio ══════════ */}
             <div className="flex flex-col gap-5" style={{ minWidth: 0 }}>
-              {/* Program selector */}
+              {/* Broadcast card (program selector + selected session) */}
               <Panel>
                 <SectionHead icon={RadioIcon} title="Broadcast" hint={loading ? "Loading…" : `${programs?.length ?? 0} program${(programs?.length ?? 0) === 1 ? "" : "s"}`} />
                 {loading ? (
@@ -551,7 +787,7 @@ export function RadioStudio(): ReactElement {
                     <Loader2 size={14} className="rs-spin" /> Loading programs…
                   </div>
                 ) : (programs?.length ?? 0) === 0 ? (
-                  <div style={{ fontSize: 12.5, color: DIM, padding: "6px 0" }}>No programs yet — create one with the form below.</div>
+                  <div style={{ fontSize: 12.5, color: DIM, padding: "6px 0" }}>No programs yet — create one with the Broadcast information form below.</div>
                 ) : (
                   <div className="flex gap-2 flex-wrap" style={{ marginBottom: selected ? 16 : 0 }}>
                     {programs?.map((p) => {
@@ -571,12 +807,17 @@ export function RadioStudio(): ReactElement {
                   <div className="flex gap-4 flex-wrap" style={{ marginTop: 4 }}>
                     <div className="rounded-2xl shrink-0 flex items-center justify-center relative overflow-hidden" style={{ width: 118, height: 118, background: selected.artwork_url ? `center/cover url("${selected.artwork_url}")` : `linear-gradient(140deg, ${GOLD_DEEP}, #6E4E12)`, boxShadow: "inset 0 0 40px rgba(0,0,0,0.3)" }}>
                       {!selected.artwork_url && <RadioIcon size={40} style={{ color: "#FFF3D6" }} />}
-                      <div className="absolute" style={{ inset: 0, background: "radial-gradient(circle at 30% 20%, rgba(255,255,255,0.25), transparent 55%)" }} />
+                      <div className="absolute" style={{ inset: 0, background: "radial-gradient(circle at 30% 20%, rgba(255,255,255,0.25), transparent 55%)", pointerEvents: "none" }} />
+                      {/* artwork upload straight on the card */}
+                      <label className="rs-btn absolute flex items-center justify-center rounded-lg" title="Update artwork" style={{ right: 6, bottom: 6, width: 28, height: 28, background: "rgba(10,17,32,0.72)", color: GOLD, border: `1px solid ${GOLD}44`, cursor: cardArtBusy ? "default" : "pointer" }}>
+                        {cardArtBusy ? <Loader2 size={13} className="rs-spin" /> : <ImagePlus size={13} />}
+                        <input type="file" accept="image/*" disabled={cardArtBusy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void uploadCardArtwork(f); }} style={hiddenInput} />
+                      </label>
                     </div>
                     <div style={{ flex: 1, minWidth: 180 }}>
                       <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                         <span className="rounded-full px-2 py-0.5" style={{ background: "rgba(230,198,110,0.16)", color: GOLD, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em" }}>{category}</span>
-                        <span style={{ fontSize: 11, color: DIM }}>{VIS_LABELS[(selected.visibility as VisKey) ?? "public"]}</span>
+                        <span style={{ fontSize: 11, color: DIM }}>{VIS_LABELS[selected.visibility] ?? "Public"}</span>
                       </div>
                       <div style={{ fontFamily: SERIF, fontSize: 24, lineHeight: 1.1 }}>{selected.title}</div>
                       {selected.description && (
@@ -594,11 +835,18 @@ export function RadioStudio(): ReactElement {
               {/* Session audio + schedule + auto-air (selected program) */}
               {selected && (
                 <Panel>
-                  <SectionHead
-                    icon={Music}
-                    title="Session audio & schedule"
-                    hint={selected.audio_url ? (fmtClock(selected.audio_duration_sec) ?? "Attached") : "No audio"}
-                  />
+                  <div className="flex items-center justify-between mb-3.5">
+                    <div className="flex items-center gap-2">
+                      <Music size={15} style={{ color: GOLD }} />
+                      <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.01em" }}>Session audio & schedule</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span style={{ fontSize: 11, color: DIM }}>{selected.audio_url ? (fmtClock(selected.audio_duration_sec) ?? "Attached") : "No audio"}</span>
+                      <button onClick={beginEdit} className="rs-btn flex items-center gap-1.5 rounded-lg px-2.5" style={{ height: 28, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 11, fontWeight: 700 }}>
+                        <Pencil size={12} /> Edit
+                      </button>
+                    </div>
+                  </div>
 
                   {selected.audio_url ? (
                     <div className="rounded-xl px-3 py-3 mb-3" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
@@ -617,17 +865,7 @@ export function RadioStudio(): ReactElement {
                       <label className="rs-btn flex items-center gap-2 rounded-xl px-3.5 shrink-0" style={{ height: 36, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12, fontWeight: 700, cursor: attachingAudio ? "default" : "pointer", opacity: attachingAudio ? 0.6 : 1 }}>
                         {attachingAudio ? <Loader2 size={14} className="rs-spin" /> : <Music size={14} />}
                         {attachingAudio ? "Uploading…" : "Attach audio"}
-                        <input
-                          type="file"
-                          accept="audio/*"
-                          disabled={attachingAudio}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            e.target.value = "";
-                            if (file) void attachAudio(file);
-                          }}
-                          style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", border: 0 }}
-                        />
+                        <input type="file" accept="audio/*" disabled={attachingAudio} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void attachAudio(f); }} style={hiddenInput} />
                       </label>
                     </div>
                   )}
@@ -657,36 +895,15 @@ export function RadioStudio(): ReactElement {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <Metric label="Status" value={live ? "LIVE" : "PAUSED"} valueColor={live ? "#FCA5A5" : GOLD} dot={live ? RED : GOLD} />
                     <Metric label="Duration" value={fmtDuration(elapsed)} mono />
-                    <Metric label="Listeners" value={(health?.listeners ?? selected.peak_listeners).toLocaleString()} />
+                    <Metric label="Listeners" value={listenerCount.toLocaleString()} />
                     <Metric label="Health" value={healthWord(health)} valueColor={GREEN} sub={health ? `${health.bitrate} kbps` : "—"} />
                   </div>
                 </Panel>
               )}
 
-              {/* Ingest URL + stream key (broadcaster credentials) */}
-              {selected && (
-                <Panel>
-                  <SectionHead icon={KeyRound} title="Ingest & stream key" hint="Broadcaster only — keep secret" />
-                  <div style={{ fontSize: 11, color: DIM, marginTop: -8, marginBottom: 12, lineHeight: 1.45 }}>
-                    Live-mic streaming (advanced) — not needed for uploaded-audio sessions.
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <CredRow label="Ingest URL" value={selected.ingest_url ?? "—"} onCopy={selected.ingest_url ? () => copy("Ingest URL", selected.ingest_url!) : undefined} copied={copied === "Ingest URL"} />
-                    <CredRow label="Stream key" value={rotatedKey ?? selected.stream_key ?? "—"} secret onCopy={(rotatedKey ?? selected.stream_key) ? () => copy("Stream key", (rotatedKey ?? selected.stream_key)!) : undefined} copied={copied === "Stream key"} />
-                    {selected.hls_url && (
-                      <CredRow label="HLS playback" value={selected.hls_url} onCopy={() => copy("HLS playback", selected.hls_url!)} copied={copied === "HLS playback"} />
-                    )}
-                  </div>
-                  <button onClick={rotateKey} disabled={busy} className="rs-btn flex items-center justify-center gap-2 rounded-xl mt-3" style={{ width: "100%", height: 38, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12.5, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>
-                    <RefreshCw size={14} className={busy ? "rs-spin" : ""} /> Rotate stream key
-                  </button>
-                  {rotatedKey && <div style={{ fontSize: 11, color: GREEN, marginTop: 8, textAlign: "center" }}>New key issued — the old key stops working immediately.</div>}
-                </Panel>
-              )}
-
               {/* Waveform */}
               <Panel>
-                <SectionHead icon={Activity} title="Waveform" hint={live ? "Reacting to live audio" : "Idle"} />
+                <SectionHead icon={Activity} title="Waveform" hint={previewTitle ? `On air · ${previewTitle}` : live ? "Reacting to live audio" : "Idle"} />
                 <div className="flex items-center justify-center gap-[3px]" style={{ height: 120, padding: "6px 2px" }}>
                   {bars.map((b, i) => {
                     const hue = b > 0.85 ? RED : b > 0.6 ? GOLD : GOLD_DEEP;
@@ -697,7 +914,7 @@ export function RadioStudio(): ReactElement {
 
               {/* Broadcast controls */}
               <Panel>
-                <SectionHead icon={RadioIcon} title="Broadcast controls" hint={selected ? "Manual override — take live now" : "Select a program first"} />
+                <SectionHead icon={RadioIcon} title="Broadcast controls" hint={selected ? "Manual override — take live now" : "Select a session first"} />
                 {actionErr && <div style={{ fontSize: 11.5, color: "#FCA5A5", marginBottom: 10, textAlign: "center" }}>{actionErr}</div>}
                 <div className="flex items-center justify-center gap-3 flex-wrap" style={{ padding: "6px 0 2px" }}>
                   {!live && phase !== "paused" ? (
@@ -715,7 +932,7 @@ export function RadioStudio(): ReactElement {
                           <Play size={20} /> Resume
                         </button>
                       )}
-                      <button onClick={endBroadcast} disabled={busy} className="rs-btn flex items-center gap-2 rounded-2xl px-6" style={{ height: 60, background: "rgba(239,68,68,0.14)", color: "#FCA5A5", border: `1px solid ${RED}55`, fontSize: 15, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>
+                      <button onClick={() => void endBroadcast()} disabled={busy} className="rs-btn flex items-center gap-2 rounded-2xl px-6" style={{ height: 60, background: "rgba(239,68,68,0.14)", color: "#FCA5A5", border: `1px solid ${RED}55`, fontSize: 15, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>
                         <Square size={18} /> End Broadcast
                       </button>
                     </>
@@ -723,7 +940,7 @@ export function RadioStudio(): ReactElement {
                 </div>
                 {selected?.record_broadcast && (
                   <div className="flex items-center justify-center gap-1.5 mt-3" style={{ fontSize: 11, color: DIM }}>
-                    <Disc3 size={12} style={{ color: RED }} className={live ? "rs-live-dot" : ""} /> Recording {live ? "in progress" : "armed"} · target: {selected.record_target ?? "cloud"}
+                    <Disc3 size={12} style={{ color: RED }} className={live ? "rs-live-dot" : ""} /> Recording {live ? "in progress" : "armed"} · saving to {fmtTarget(selected.record_target)}
                   </div>
                 )}
               </Panel>
@@ -782,9 +999,50 @@ export function RadioStudio(): ReactElement {
                 </div>
               </Panel>
 
-              {/* Broadcast form — create a real program */}
+              {/* Audio library — real track catalog (upload & tag) */}
+              <AudioLibraryPanel />
+
+              {/* Sessions — real program playlists (order, loop, live preview) */}
+              <SessionsPanel onPreview={setPreviewTitle} />
+
+              {/* Scheduled playout — real schedule (PATCH scheduled_at/repeat) */}
               <Panel>
-                <SectionHead icon={Plus} title="New broadcast" hint="Create a program" />
+                <SectionHead icon={CalendarClock} title="Scheduled playout" hint="Sessions by air-time" />
+                <div className="flex gap-2 mb-3 flex-wrap">
+                  <select value={schSession} onChange={(e) => setSchSession(e.target.value)} className="rounded-lg px-2.5" style={{ flex: 1, minWidth: 130, height: 38, background: "rgba(255,255,255,0.05)", border: `1px solid ${PANEL_BORDER}`, color: TEXT, fontSize: 12 }}>
+                    <option value="" style={optStyle}>Choose session…</option>
+                    {(programs ?? []).map((p) => <option key={p.id} value={p.id} style={optStyle}>{p.title}</option>)}
+                  </select>
+                  <input type="time" value={schTime} onChange={(e) => setSchTime(e.target.value)} className="rounded-lg px-2.5" style={{ height: 38, background: "rgba(255,255,255,0.05)", border: `1px solid ${PANEL_BORDER}`, color: TEXT, fontSize: 12 }} />
+                  <select value={schRepeat} onChange={(e) => setSchRepeat(e.target.value)} className="rounded-lg px-2.5" style={{ height: 38, background: "rgba(255,255,255,0.05)", border: `1px solid ${PANEL_BORDER}`, color: TEXT, fontSize: 12 }}>
+                    {REPEAT_OPTIONS.map((r) => <option key={r} value={r} style={optStyle}>{REPEAT_LABEL[r]}</option>)}
+                  </select>
+                  <button onClick={() => void scheduleSession()} disabled={!schSession || scheduling} className="rs-btn flex items-center gap-1.5 rounded-lg px-3.5" style={{ height: 38, background: GOLD, color: "#0A1120", fontSize: 12, fontWeight: 800, opacity: !schSession || scheduling ? 0.55 : 1 }}>
+                    {scheduling ? <Loader2 size={14} className="rs-spin" /> : <CalendarClock size={14} />} Schedule
+                  </button>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {scheduledPrograms.length === 0 && <div style={{ fontSize: 11.5, color: DIMMER, textAlign: "center", padding: 12 }}>No scheduled sessions yet.</div>}
+                  {scheduledPrograms.map((p) => (
+                    <div key={p.id} className="flex items-center gap-3 rounded-xl px-3 py-2.5" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
+                      <span className="rs-tnum flex items-center justify-center rounded-lg shrink-0" style={{ width: 52, height: 34, background: "rgba(230,198,110,0.12)", color: GOLD, fontFamily: MONO, fontSize: 13, fontWeight: 700 }}>{fmtTimeChip(p.scheduled_at ?? "")}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="truncate flex items-center gap-1.5" style={{ fontSize: 12, fontWeight: 600 }}>
+                          {p.title}
+                          {p.loop_mode !== "none" && <Repeat size={11} style={{ color: "#7BE3A3" }} />}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: DIM }}>{fmtSchedule(p.scheduled_at)} · {REPEAT_LABEL[p.repeat ?? "none"] ?? p.repeat} · {p.auto_go_live ? "auto-air" : "manual"}</div>
+                      </div>
+                      <span className="shrink-0" style={{ fontSize: 10, color: DIM }}>{statusLabel(p.status)}</span>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+
+              {/* Broadcast information — create a real program / edit the selected one */}
+              <div ref={formRef}>
+              <Panel>
+                <SectionHead icon={editingId ? Pencil : Plus} title={editingId ? "Edit session" : "Broadcast information"} hint={editingId ? "Saves to the selected session" : "Create a new session"} />
                 {formErr && <div style={{ fontSize: 11.5, color: "#FCA5A5", marginBottom: 10 }}>{formErr}</div>}
                 <div className="grid gap-2.5" style={{ gridTemplateColumns: "1fr 1fr" }}>
                   <Field label="Title" full>
@@ -820,17 +1078,7 @@ export function RadioStudio(): ReactElement {
                       <label className="rs-btn flex items-center gap-2 rounded-xl px-3.5 shrink-0" style={{ height: 38, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12.5, fontWeight: 700, cursor: uploadingArtwork ? "default" : "pointer", opacity: uploadingArtwork ? 0.6 : 1 }}>
                         {uploadingArtwork ? <Loader2 size={14} className="rs-spin" /> : <ImagePlus size={14} />}
                         {uploadingArtwork ? "Uploading…" : form.artwork_url ? "Replace image" : "Upload image"}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          disabled={uploadingArtwork}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            e.target.value = "";
-                            if (file) void uploadArtwork(file);
-                          }}
-                          style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", border: 0 }}
-                        />
+                        <input type="file" accept="image/*" disabled={uploadingArtwork} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void uploadArtwork(f); }} style={hiddenInput} />
                       </label>
                       <input className="rs-in" value={form.artwork_url} onChange={(e) => setForm((f) => ({ ...f, artwork_url: e.target.value }))} placeholder="…or paste a URL" style={{ ...inputStyle, flex: 1, minWidth: 160 }} />
                     </div>
@@ -843,17 +1091,7 @@ export function RadioStudio(): ReactElement {
                       <label className="rs-btn flex items-center gap-2 rounded-xl px-3.5 shrink-0" style={{ height: 38, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12.5, fontWeight: 700, cursor: uploadingAudio ? "default" : "pointer", opacity: uploadingAudio ? 0.6 : 1 }}>
                         {uploadingAudio ? <Loader2 size={14} className="rs-spin" /> : <Music size={14} />}
                         {uploadingAudio ? "Uploading…" : form.audio_url ? "Replace audio" : "Upload audio"}
-                        <input
-                          type="file"
-                          accept="audio/*"
-                          disabled={uploadingAudio}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            e.target.value = "";
-                            if (file) void uploadAudio(file);
-                          }}
-                          style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", border: 0 }}
-                        />
+                        <input type="file" accept="audio/*" disabled={uploadingAudio} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void uploadFormAudio(f); }} style={hiddenInput} />
                       </label>
                       {form.audio_url ? (
                         <span className="inline-flex items-center gap-1.5 truncate" style={{ fontSize: 11.5, color: DIM, minWidth: 0 }}>
@@ -886,7 +1124,7 @@ export function RadioStudio(): ReactElement {
                   </Field>
                   <Field label="Repeat">
                     <select value={form.repeat} onChange={(e) => setForm((f) => ({ ...f, repeat: e.target.value }))} style={inputStyle}>
-                      {["none", "daily", "weekdays", "weekly"].map((r) => <option key={r} value={r} style={optStyle}>{r}</option>)}
+                      {REPEAT_OPTIONS.map((r) => <option key={r} value={r} style={optStyle}>{REPEAT_LABEL[r]}</option>)}
                     </select>
                   </Field>
                   <Field label="Timezone">
@@ -922,15 +1160,65 @@ export function RadioStudio(): ReactElement {
                       </select>
                     )}
                   </div>
-                  <button onClick={submitForm} disabled={creating} className="rs-btn flex items-center gap-2 rounded-xl px-5" style={{ height: 40, background: GOLD, color: "#0A1120", fontSize: 13, fontWeight: 800, opacity: creating ? 0.6 : 1 }}>
-                    {creating ? <Loader2 size={15} className="rs-spin" /> : <Plus size={15} />} Create broadcast
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {editingId && (
+                      <button onClick={cancelEdit} className="rs-btn rounded-xl px-4" style={{ height: 40, background: "rgba(255,255,255,0.06)", color: TEXT, fontSize: 12.5, fontWeight: 600, border: `1px solid ${PANEL_BORDER}` }}>
+                        Cancel
+                      </button>
+                    )}
+                    <button onClick={() => void submitForm()} disabled={creating} className="rs-btn flex items-center gap-2 rounded-xl px-5" style={{ height: 40, background: GOLD, color: "#0A1120", fontSize: 13, fontWeight: 800, opacity: creating ? 0.6 : 1 }}>
+                      {creating ? <Loader2 size={15} className="rs-spin" /> : editingId ? <Check size={15} /> : <Plus size={15} />} {editingId ? "Save changes" : "Create broadcast"}
+                    </button>
+                  </div>
                 </div>
               </Panel>
+              </div>
+
+              {/* Ingest URL + stream key (broadcaster credentials) */}
+              {selected && (
+                <Panel>
+                  <SectionHead icon={KeyRound} title="Ingest & stream key" hint="Broadcaster only — keep secret" />
+                  <div style={{ fontSize: 11, color: DIM, marginTop: -8, marginBottom: 12, lineHeight: 1.45 }}>
+                    Live-mic streaming (advanced) — not needed for uploaded-audio sessions.
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <CredRow label="Ingest URL" value={selected.ingest_url ?? "—"} onCopy={selected.ingest_url ? () => copy("Ingest URL", selected.ingest_url!) : undefined} copied={copied === "Ingest URL"} />
+                    <CredRow label="Stream key" value={rotatedKey ?? selected.stream_key ?? "—"} secret onCopy={(rotatedKey ?? selected.stream_key) ? () => copy("Stream key", (rotatedKey ?? selected.stream_key)!) : undefined} copied={copied === "Stream key"} />
+                    {selected.hls_url && (
+                      <CredRow label="HLS playback" value={selected.hls_url} onCopy={() => copy("HLS playback", selected.hls_url!)} copied={copied === "HLS playback"} />
+                    )}
+                  </div>
+                  <button onClick={() => void rotateKey()} disabled={busy} className="rs-btn flex items-center justify-center gap-2 rounded-xl mt-3" style={{ width: "100%", height: 38, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12.5, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>
+                    <RefreshCw size={14} className={busy ? "rs-spin" : ""} /> Rotate stream key
+                  </button>
+                  {rotatedKey && <div style={{ fontSize: 11, color: GREEN, marginTop: 8, textAlign: "center" }}>New key issued — the old key stops working immediately.</div>}
+                </Panel>
+              )}
             </div>
 
             {/* ══════════ RIGHT — engagement + system ══════════ */}
             <div className="flex flex-col gap-5" style={{ minWidth: 0 }}>
+              {/* Live listeners — roster is studio chrome; the count is real */}
+              <Panel>
+                <SectionHead icon={Smartphone} title="Live listeners" hint={live ? `${listenerCount.toLocaleString()} on air` : "Off air"} />
+                <div className="flex flex-col gap-2" style={{ maxHeight: 220, overflowY: "auto" }}>
+                  {SEED_LISTENERS.map((p) => (
+                    <div key={p.id} className="flex items-center gap-3 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
+                      <span className="flex items-center justify-center rounded-full shrink-0" style={{ width: 30, height: 30, background: `linear-gradient(135deg, ${GOLD}, ${GOLD_DEEP})`, color: "#0A1120", fontSize: 11, fontWeight: 800 }}>{p.initials}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="truncate" style={{ fontSize: 12.5, fontWeight: 600 }}>{p.name}</div>
+                        <div className="flex items-center gap-1" style={{ fontSize: 10.5, color: DIM }}>
+                          <Smartphone size={10} /> {p.device} · {p.place}
+                        </div>
+                      </div>
+                      <span className="inline-flex items-center gap-1 shrink-0" style={{ fontSize: 9.5, fontWeight: 700, color: live ? GREEN : DIMMER }}>
+                        <span className={`rounded-full ${live ? "rs-live-dot" : ""}`} style={{ width: 6, height: 6, background: live ? GREEN : DIMMER }} /> {live ? "Listening" : "Idle"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+
               {/* Comments & reactions (comments REAL; reactions decorative) */}
               <Panel>
                 <SectionHead icon={Heart} title="Comments & reactions" hint={live ? "Live" : selected ? `${comments.length}` : "—"} />
@@ -943,7 +1231,7 @@ export function RadioStudio(): ReactElement {
                   <input className="rs-in" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") postComment(); }} placeholder="Say something to listeners…" style={{ flex: 1, minWidth: 0, height: 38, background: "rgba(255,255,255,0.05)", border: `1px solid ${PANEL_BORDER}`, color: TEXT, fontSize: 12.5, outline: "none", borderRadius: 12, padding: "0 12px" }} />
                   <button onClick={postComment} className="rs-btn flex items-center justify-center rounded-xl shrink-0" style={{ width: 42, height: 38, background: GOLD, color: "#0A1120" }}><Send size={16} /></button>
                 </div>
-                <div className="flex flex-col gap-2" style={{ maxHeight: 300, overflowY: "auto" }}>
+                <div className="flex flex-col gap-2" style={{ maxHeight: 260, overflowY: "auto" }}>
                   {localSay.map((c) => (
                     <div key={c.id} className="rounded-xl px-3 py-2" style={{ background: "rgba(230,198,110,0.08)", border: `1px solid ${GOLD}33` }}>
                       <div className="flex items-center justify-between">
@@ -970,15 +1258,15 @@ export function RadioStudio(): ReactElement {
                 </div>
               </Panel>
 
-              {/* Stream health dashboard (REAL while live) */}
+              {/* Stream health (REAL while live) */}
               <Panel>
                 <SectionHead icon={Gauge} title="Stream health" hint={live ? healthWord(health) : "Off air"} />
                 <div className="grid grid-cols-2 gap-2">
                   <Health icon={Cpu} label="CPU" value={health ? `${Math.round(health.cpu)}%` : "—"} ok={!health || health.cpu < 80} />
                   <Health icon={HardDrive} label="Memory" value={health ? `${health.memory.toFixed(1)} GB` : "—"} ok={!health || health.memory < 6} />
-                  <Health icon={Signal} label="Bitrate" value={health ? `${health.bitrate} kbps` : "—"} ok />
-                  <Health icon={Activity} label="Latency" value={health ? `${Math.round(health.latency)} ms` : "—"} ok={!health || health.latency < 200} />
                   <Health icon={Wifi} label="Stability" value={health ? `${Math.round(health.stability)}%` : "—"} ok={!health || health.stability > 90} />
+                  <Health icon={Activity} label="Latency" value={health ? `${Math.round(health.latency)} ms` : "—"} ok={!health || health.latency < 200} />
+                  <Health icon={Signal} label="Bitrate" value={health ? `${health.bitrate} kbps` : "—"} ok />
                   <Health icon={ShieldAlert} label="Dropped" value={health ? String(health.dropped) : "—"} ok={!health || health.dropped === 0} />
                 </div>
                 {!live && <div style={{ fontSize: 11, color: DIMMER, marginTop: 10, textAlign: "center" }}>Health metrics stream from the encoder once you go live.</div>}
@@ -988,11 +1276,7 @@ export function RadioStudio(): ReactElement {
               <Panel>
                 <SectionHead icon={Smartphone} title="Devices" hint="Broadcast from anywhere" />
                 <div className="flex flex-col gap-2 mb-3">
-                  {[
-                    { name: "iPhone 16 Pro", icon: Smartphone, status: "Connected", batt: 82 },
-                    { name: "MacBook Pro", icon: Laptop, status: "Connected", batt: 100 },
-                    { name: "Samsung Tablet", icon: Tablet, status: "Standby", batt: 47 },
-                  ].map((d) => {
+                  {SEED_DEVICES.map((d) => {
                     const Icon = d.icon;
                     const on = d.status === "Connected";
                     return (
@@ -1031,9 +1315,28 @@ export function RadioStudio(): ReactElement {
                   })}
                 </div>
               </Panel>
+
+              {/* Visibility + recording quick settings — PATCH the selected session */}
+              <Panel>
+                <SectionHead icon={Upload} title="Broadcast settings" hint={selected ? "Selected session" : "No session selected"} />
+                <div style={{ fontSize: 11, color: DIM, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, marginBottom: 8 }}>Visibility</div>
+                <div className="flex gap-2 mb-4 flex-wrap">
+                  {VIS_ORDER.map((v) => {
+                    const on = selected?.visibility === v;
+                    return (
+                      <button key={v} onClick={() => void quickPatch({ visibility: v })} disabled={!selected} className="rs-btn rounded-lg px-3 py-1.5" style={{ fontSize: 11.5, fontWeight: 700, background: on ? GOLD : "rgba(255,255,255,0.05)", color: on ? "#0A1120" : DIM, border: `1px solid ${on ? GOLD : PANEL_BORDER}`, opacity: selected ? 1 : 0.5 }}>{VIS_LABELS[v]}</button>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center justify-between rounded-xl px-3 py-2.5" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}`, opacity: selected ? 1 : 0.5 }}>
+                  <span className="flex items-center gap-2" style={{ fontSize: 12.5, fontWeight: 600 }}><Disc3 size={15} style={{ color: RED }} /> Record broadcast</span>
+                  <button onClick={() => { if (selected) void quickPatch({ record_broadcast: !selected.record_broadcast }); }} disabled={!selected} className="rounded-full shrink-0" style={{ width: 42, height: 24, background: selected?.record_broadcast ? GOLD_DEEP : "rgba(255,255,255,0.14)", padding: 3, transition: "background .15s", border: "none", cursor: selected ? "pointer" : "default" }}>
+                    <span className="block rounded-full" style={{ width: 18, height: 18, background: "#fff", transform: selected?.record_broadcast ? "translateX(18px)" : "translateX(0)", transition: "transform .15s" }} />
+                  </button>
+                </div>
+              </Panel>
             </div>
           </div>
-          </>
         )}
       </div>
 
@@ -1097,23 +1400,13 @@ export function RadioStudio(): ReactElement {
 }
 
 /* ── helpers ── */
-function statusLabel(s: RadioProgram["status"]): string {
-  return s === "live" ? "Live" : s === "scheduled" ? "Scheduled" : s === "ended" ? "Ended" : "Draft";
-}
-function healthWord(h: StreamHealth | null): string {
-  if (!h) return "—";
-  if (h.stability > 95 && h.dropped === 0) return "Excellent";
-  if (h.stability > 85) return "Good";
-  return "Fair";
-}
-
 const inputStyle: React.CSSProperties = {
   width: "100%", height: 38, background: "rgba(255,255,255,0.05)", border: `1px solid ${PANEL_BORDER}`,
   color: TEXT, fontSize: 12.5, outline: "none", borderRadius: 10, padding: "0 12px",
 };
 const optStyle: React.CSSProperties = { background: "#131E33", color: TEXT };
 
-/* ── building blocks ── */
+/* ── building blocks (Figma make) ── */
 function Panel({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }): ReactElement {
   return (
     <div className="rs-panel rounded-2xl" style={{ background: PANEL, border: `1px solid ${PANEL_BORDER}`, padding: 18, boxShadow: "0 18px 40px -28px rgba(0,0,0,0.8)", ...style }}>
@@ -1243,124 +1536,37 @@ function GoldButton({ children, onClick }: { children: React.ReactNode; onClick:
   );
 }
 
-/* ═══════════════════ Audio library + Sessions ═══════════════════ */
+/* ═══════════════════ Audio library + Sessions (REAL) ═══════════════════ */
 
-const TRACK_KINDS = ["music", "preaching", "audio"] as const;
-const KIND_LABEL: Record<RadioTrackKind, string> = { music: "Music", preaching: "Preaching", audio: "Audio" };
-// Per-kind accents: MUSIC green, PREACHING gold, AUDIO blue.
-const KIND_ACCENT: Record<RadioTrackKind, string> = { music: GREEN, preaching: GOLD, audio: "#60A5FA" };
-
-// Human-readable byte size ("31.2 MB").
-function fmtBytes(bytes: number | null | undefined): string | null {
-  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return null;
-  const units = ["B", "KB", "MB", "GB"];
-  let n = bytes;
-  let u = 0;
-  while (n >= 1024 && u < units.length - 1) { n /= 1024; u++; }
-  return `${n >= 100 || u === 0 ? Math.round(n) : n.toFixed(1)} ${units[u]}`;
-}
-
-// Read an audio file's duration client-side (best-effort) — shared with uploads.
-function probeAudioDuration(file: File): Promise<number | undefined> {
-  return new Promise((resolve) => {
-    try {
-      const url = URL.createObjectURL(file);
-      const el = document.createElement("audio");
-      el.preload = "metadata";
-      el.onloadedmetadata = () => {
-        const d = Number.isFinite(el.duration) ? Math.round(el.duration) : undefined;
-        URL.revokeObjectURL(url);
-        resolve(d && d > 0 ? d : undefined);
-      };
-      el.onerror = () => { URL.revokeObjectURL(url); resolve(undefined); };
-      el.src = url;
-    } catch { resolve(undefined); }
-  });
-}
-
-// Filename without its extension → default track title.
-function baseName(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return dot > 0 ? name.slice(0, dot) : name;
-}
-
-const LOOP_MODES: RadioLoopMode[] = ["none", "loop_all", "repeat_one"];
-const LOOP_LABEL: Record<RadioLoopMode, string> = { none: "Off", loop_all: "Loop all", repeat_one: "Repeat one" };
-
-// A small dropdown that lets the caller pick one of the sessions (programs).
-function SessionMenu({
-  sessions, onPick, label, icon,
-}: {
-  sessions: RadioProgram[];
-  onPick: (programId: string) => void;
-  label: string;
-  icon?: ReactElement;
-}): ReactElement {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-  return (
-    <div ref={ref} className="relative shrink-0">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="rs-btn flex items-center gap-1.5 rounded-lg px-2.5"
-        style={{ height: 30, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 11.5, fontWeight: 700 }}
-      >
-        {icon} {label} <ChevronDown size={13} />
-      </button>
-      {open && (
-        <div
-          className="absolute right-0 z-30 rounded-xl overflow-hidden"
-          style={{ top: "calc(100% + 6px)", minWidth: 200, maxHeight: 260, overflowY: "auto", background: "#131E33", border: `1px solid ${PANEL_BORDER}`, boxShadow: "0 18px 40px rgba(0,0,0,0.55)" }}
-        >
-          {sessions.length === 0 ? (
-            <div style={{ fontSize: 11.5, color: DIMMER, padding: "10px 12px" }}>No sessions yet</div>
-          ) : (
-            sessions.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => { setOpen(false); onPick(s.id); }}
-                className="rs-btn w-full text-left flex items-center gap-2 px-3 py-2"
-                style={{ background: "none", border: "none", color: TEXT, fontSize: 12 }}
-              >
-                {s.is_live && <span className="rs-live-dot rounded-full shrink-0" style={{ width: 6, height: 6, background: RED }} />}
-                <span className="truncate">{s.title}</span>
-              </button>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Audio library panel — reusable track catalog + upload ──
+// ── Audio library panel — reusable track catalog + upload, Figma-styled ──
 function AudioLibraryPanel(): ReactElement {
   const [tracks, setTracks] = useState<RadioTrack[] | null>(null);
-  const [kind, setKind] = useState<RadioTrackKind>("music");
+  const [uploadKind, setUploadKind] = useState<RadioTrackKind>("music");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [sessions, setSessions] = useState<RadioProgram[]>([]);
   const [note, setNote] = useState<string | null>(null);
 
-  const load = useCallback((k: RadioTrackKind) => {
+  const load = useCallback(() => {
     setLoading(true);
     setErr(null);
-    RadioApi.tracks(k)
+    RadioApi.tracks()
       .then((list) => setTracks(list))
       .catch(() => { setTracks(null); setErr("Could not load the audio library."); })
       .finally(() => setLoading(false));
   }, []);
-  useEffect(() => { load(kind); }, [load, kind]);
-  useEffect(() => { RadioApi.programs().then(setSessions).catch(() => setSessions([])); }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const loadSessions = useCallback(() => {
+    RadioApi.programs().then(setSessions).catch(() => setSessions([]));
+  }, []);
+  useEffect(() => { loadSessions(); }, [loadSessions]);
+  useEffect(() => {
+    const h = (): void => loadSessions();
+    window.addEventListener("rs:programs-changed", h);
+    return () => window.removeEventListener("rs:programs-changed", h);
+  }, [loadSessions]);
 
   const upload = useCallback(async (file: File) => {
     if (file.size > 200 * 1024 * 1024) { setErr("Audio is larger than 200 MB. Please choose a smaller file."); return; }
@@ -1369,17 +1575,17 @@ function AudioLibraryPanel(): ReactElement {
     try {
       const durationSec = await probeAudioDuration(file);
       const res = await RadioApi.uploadAudio(file, durationSec);
-      const body: CreateRadioTrackBody = { title: baseName(file.name), kind, audio_url: res.url, size_bytes: file.size };
+      const body: CreateRadioTrackBody = { title: baseName(file.name), kind: uploadKind, audio_url: res.url, size_bytes: file.size };
       const d = res.duration_sec ?? durationSec;
       if (d != null) body.duration_sec = d;
       await RadioApi.createTrack(body);
-      load(kind);
+      load();
     } catch {
       setErr("Upload failed. Please try again.");
     } finally {
       setUploading(false);
     }
-  }, [kind, load]);
+  }, [uploadKind, load]);
 
   const remove = useCallback(async (id: string) => {
     try {
@@ -1407,44 +1613,19 @@ function AudioLibraryPanel(): ReactElement {
 
   return (
     <Panel>
-      <div className="flex items-center justify-between mb-3.5">
-        <div className="flex items-center gap-2">
-          <span style={{ fontSize: 16 }}>🎵</span>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>Audio library</span>
-        </div>
-        <span style={{ fontSize: 11, color: DIM }}>{loading ? "Loading…" : `${count} track${count === 1 ? "" : "s"}`}</span>
-      </div>
+      <SectionHead icon={Music} title="Audio library" hint={loading ? "Loading…" : `${count} track${count === 1 ? "" : "s"}`} />
 
-      {/* Segmented control + upload */}
-      <div className="flex items-center gap-2 flex-wrap mb-3.5">
-        <div className="flex items-center rounded-xl p-0.5" style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${PANEL_BORDER}` }}>
-          {TRACK_KINDS.map((k) => {
-            const sel = k === kind;
-            return (
-              <button
-                key={k}
-                onClick={() => setKind(k)}
-                className="rs-btn rounded-lg px-3"
-                style={{ height: 30, background: sel ? "rgba(230,198,110,0.16)" : "transparent", color: sel ? GOLD : DIM, fontSize: 11.5, fontWeight: 700, border: sel ? `1px solid ${GOLD}44` : "1px solid transparent" }}
-              >
-                {KIND_LABEL[k]}
-              </button>
-            );
-          })}
+      {/* Upload-kind picker + dashed upload — exactly the make's row */}
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <div className="flex gap-1 rounded-lg p-1" style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${PANEL_BORDER}` }}>
+          {TRACK_KINDS.map((k) => (
+            <button key={k} onClick={() => setUploadKind(k)} className="rs-btn rounded-md px-2.5 py-1" style={{ fontSize: 10.5, fontWeight: 700, background: uploadKind === k ? KIND_META[k].color : "transparent", color: uploadKind === k ? "#0A1120" : DIM }}>{KIND_META[k].label}</button>
+          ))}
         </div>
-        <label
-          className="rs-btn flex items-center gap-2 rounded-xl px-3.5 shrink-0"
-          style={{ height: 34, background: "rgba(230,198,110,0.06)", color: GOLD, border: `1.5px dashed ${GOLD}66`, fontSize: 12, fontWeight: 700, cursor: uploading ? "default" : "pointer", opacity: uploading ? 0.6 : 1 }}
-        >
-          {uploading ? <Loader2 size={14} className="rs-spin" /> : <UploadCloud size={14} />}
-          {uploading ? "Uploading…" : "Upload music"}
-          <input
-            type="file"
-            accept="audio/*"
-            disabled={uploading}
-            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void upload(f); }}
-            style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", border: 0 }}
-          />
+        <label className="rs-btn flex items-center justify-center gap-2 rounded-lg px-3 cursor-pointer" style={{ flex: 1, minWidth: 150, height: 34, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px dashed ${GOLD}66`, fontSize: 12, fontWeight: 700, opacity: uploading ? 0.6 : 1 }}>
+          {uploading ? <Loader2 size={14} className="rs-spin" /> : <Upload size={14} />}
+          {uploading ? "Uploading…" : `Upload ${KIND_META[uploadKind].label.toLowerCase()}`}
+          <input type="file" accept="audio/*" multiple={false} disabled={uploading} hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void upload(f); }} />
         </label>
       </div>
 
@@ -1452,7 +1633,7 @@ function AudioLibraryPanel(): ReactElement {
       {note && <div style={{ fontSize: 11, color: GREEN, marginBottom: 8 }}>{note}</div>}
 
       {/* Track rows */}
-      <div className="flex flex-col gap-2" style={{ maxHeight: 420, overflowY: "auto" }}>
+      <div className="flex flex-col gap-2" style={{ maxHeight: 240, overflowY: "auto" }}>
         {loading ? (
           <div className="flex items-center gap-2" style={{ fontSize: 12, color: DIM, padding: "6px 0" }}>
             <Loader2 size={14} className="rs-spin" /> Loading tracks…
@@ -1461,34 +1642,33 @@ function AudioLibraryPanel(): ReactElement {
           <div style={{ fontSize: 12, color: DIMMER, padding: "10px 0", textAlign: "center" }}>No tracks yet — upload one above.</div>
         ) : (
           tracks?.map((t) => {
-            const accent = KIND_ACCENT[t.kind];
+            const meta = KIND_META[t.kind];
             const dur = fmtClock(t.duration_sec);
             const size = fmtBytes(t.size_bytes);
             return (
               <div key={t.id} className="flex items-center gap-3 rounded-xl px-3 py-2.5" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
-                <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 32, height: 32, background: `${accent}22`, color: accent }}>
-                  <Music size={15} />
-                </span>
+                <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 32, height: 32, background: `${meta.color}22`, color: meta.color }}><Music size={15} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="flex items-center gap-2">
-                    <span className="truncate" style={{ fontSize: 12.5, fontWeight: 600 }}>{t.title}</span>
-                    <span className="rounded-full shrink-0 px-1.5 py-0.5" style={{ background: `${accent}22`, color: accent, fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>{t.kind}</span>
-                  </div>
-                  <div className="flex items-center gap-2 rs-tnum" style={{ fontSize: 10.5, color: DIMMER, marginTop: 2, fontFamily: MONO }}>
-                    {dur && <span>{dur}</span>}
-                    {dur && size && <span>·</span>}
-                    {size && <span>{size}</span>}
-                    {!dur && !size && <span>—</span>}
+                  <div className="truncate" style={{ fontSize: 12, fontWeight: 600 }}>{t.title}</div>
+                  <div className="flex items-center gap-2" style={{ marginTop: 2 }}>
+                    <span className="rounded-full px-1.5" style={{ fontSize: 9, fontWeight: 800, background: `${meta.color}22`, color: meta.color, textTransform: "uppercase", letterSpacing: "0.04em" }}>{meta.label}</span>
+                    <span className="rs-tnum" style={{ fontSize: 10.5, color: DIM, fontFamily: MONO }}>{dur ?? "—:—"}{size ? ` · ${size}` : ""}</span>
                   </div>
                 </div>
-                <SessionMenu sessions={sessions} label="Session" icon={<Plus size={13} />} onPick={(pid) => void addToSession(pid, t)} />
-                <button
-                  onClick={() => void remove(t.id)}
-                  title="Delete track"
-                  className="rs-btn flex items-center justify-center rounded-lg shrink-0"
-                  style={{ width: 30, height: 30, background: "rgba(255,255,255,0.05)", color: DIM }}
-                >
-                  <X size={14} />
+                {sessions.length > 0 && (
+                  <select
+                    value=""
+                    onChange={(e) => { const v = e.target.value; if (v) void addToSession(v, t); }}
+                    title="Add to session"
+                    className="rs-btn rounded-lg shrink-0"
+                    style={{ height: 30, background: "rgba(255,255,255,0.05)", border: `1px solid ${PANEL_BORDER}`, color: GOLD, fontSize: 11, fontWeight: 700, padding: "0 6px" }}
+                  >
+                    <option value="" style={optStyle}>+ Session</option>
+                    {sessions.map((s) => <option key={s.id} value={s.id} style={optStyle}>{s.title}</option>)}
+                  </select>
+                )}
+                <button onClick={() => void remove(t.id)} title="Delete track" className="rs-btn flex items-center justify-center rounded-lg shrink-0" style={{ width: 26, height: 26, background: "rgba(255,255,255,0.05)", color: DIM }}>
+                  <X size={12} />
                 </button>
               </div>
             );
@@ -1499,8 +1679,8 @@ function AudioLibraryPanel(): ReactElement {
   );
 }
 
-// ── Sessions panel — program playlists + loop + live preview ──
-function SessionsPanel(): ReactElement {
+// ── Sessions panel — program playlists + loop + live preview, Figma-styled ──
+function SessionsPanel({ onPreview }: { onPreview: (title: string | null) => void }): ReactElement {
   const [sessions, setSessions] = useState<RadioProgram[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -1556,6 +1736,7 @@ function SessionsPanel(): ReactElement {
       setSessions((s) => [created, ...(s ?? [])]);
       setPlaylists((p) => ({ ...p, [created.id]: [] }));
       setName("");
+      window.dispatchEvent(new CustomEvent("rs:programs-changed"));
     } catch {
       setErr("Could not create the session.");
     } finally {
@@ -1568,13 +1749,15 @@ function SessionsPanel(): ReactElement {
     if (el) { el.pause(); el.removeAttribute("src"); el.load(); }
     setPreviewProgram(null);
     setPreviewIndex(0);
-  }, []);
+    onPreview(null);
+  }, [onPreview]);
 
   const removeSession = useCallback(async (id: string) => {
     try {
       await RadioApi.deleteProgram(id);
       setSessions((s) => (s ? s.filter((p) => p.id !== id) : s));
       if (previewProgram === id) stopPreview();
+      window.dispatchEvent(new CustomEvent("rs:programs-changed"));
     } catch {
       setErr("Could not delete the session.");
     }
@@ -1637,9 +1820,10 @@ function SessionsPanel(): ReactElement {
     if (!item || !el) return;
     setPreviewProgram(programId);
     setPreviewIndex(index);
+    onPreview(item.track.title);
     el.src = item.track.audio_url;
     void el.play().catch(() => {});
-  }, [playlists]);
+  }, [playlists, onPreview]);
 
   const playLive = useCallback(async (program: RadioProgram) => {
     const items = playlists[program.id];
@@ -1647,7 +1831,10 @@ function SessionsPanel(): ReactElement {
     setErr(null);
     // Server-authoritative go-live (best effort — preview runs regardless).
     RadioApi.goLive(program.id)
-      .then((updated) => setSessions((s) => (s ? s.map((p) => (p.id === updated.id ? updated : p)) : s)))
+      .then((updated) => {
+        setSessions((s) => (s ? s.map((p) => (p.id === updated.id ? updated : p)) : s));
+        window.dispatchEvent(new CustomEvent("rs:programs-changed"));
+      })
       .catch(() => {});
     playAt(program.id, 0);
   }, [playlists, playAt]);
@@ -1667,6 +1854,7 @@ function SessionsPanel(): ReactElement {
   }, [previewProgram, previewIndex, sessions, playlists, playAt, stopPreview]);
 
   const count = sessions?.length ?? 0;
+  const airing = sessions?.find((s) => s.is_live) ?? null;
   const previewItem = previewProgram ? playlists[previewProgram]?.[previewIndex] : undefined;
 
   return (
@@ -1674,39 +1862,28 @@ function SessionsPanel(): ReactElement {
       {/* hidden preview element */}
       <audio ref={audioRef} onEnded={onEnded} style={{ display: "none" }} />
 
-      <div className="flex items-center justify-between mb-3.5">
-        <div className="flex items-center gap-2">
-          <ListMusic size={15} style={{ color: GOLD }} />
-          <span style={{ fontSize: 13, fontWeight: 700 }}>Sessions</span>
-        </div>
-        <span style={{ fontSize: 11, color: DIM }}>{loading ? "Loading…" : `${count} session${count === 1 ? "" : "s"}`}</span>
-      </div>
+      <SectionHead icon={ListMusic} title="Sessions" hint={loading ? "Loading…" : airing ? `On air: ${airing.title}` : `${count} session${count === 1 ? "" : "s"}`} />
 
       {/* Create session */}
-      <div className="flex items-center gap-2 mb-3.5">
+      <div className="flex gap-2 mb-3">
         <input
-          className="rs-in"
+          className="rs-in rounded-lg px-3"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") void create(); }}
-          placeholder="New session name…"
-          style={{ ...inputStyle, height: 36, flex: 1, minWidth: 0 }}
+          placeholder="New session name (e.g. Sunrise Devotion)"
+          style={{ flex: 1, minWidth: 0, height: 36, background: "rgba(255,255,255,0.05)", border: `1px solid ${PANEL_BORDER}`, color: TEXT, fontSize: 12, outline: "none" }}
         />
-        <button
-          onClick={() => void create()}
-          disabled={creating || !name.trim()}
-          className="rs-btn flex items-center gap-1.5 rounded-xl px-3.5 shrink-0"
-          style={{ height: 36, background: GOLD, color: "#0A1120", fontSize: 12.5, fontWeight: 800, opacity: creating || !name.trim() ? 0.55 : 1 }}
-        >
+        <button onClick={() => void create()} disabled={creating || !name.trim()} className="rs-btn flex items-center gap-1.5 rounded-lg px-3" style={{ height: 36, background: GOLD, color: "#0A1120", fontSize: 12, fontWeight: 800, opacity: creating || !name.trim() ? 0.55 : 1 }}>
           {creating ? <Loader2 size={14} className="rs-spin" /> : <Plus size={14} />} Create
         </button>
       </div>
 
       {err && <div style={{ fontSize: 11, color: "#FCA5A5", marginBottom: 8 }}>{err}</div>}
       {previewItem && (
-        <div className="flex items-center gap-2 rounded-xl px-3 py-2 mb-3" style={{ background: "rgba(34,197,94,0.10)", border: `1px solid ${GREEN}44` }}>
-          <Play size={13} style={{ color: GREEN }} />
-          <span className="truncate" style={{ fontSize: 11.5, color: "#86EFAC" }}>Now previewing: {previewItem.track.title}</span>
+        <div className="flex items-center gap-2 rounded-xl px-3 py-2 mb-3" style={{ background: "rgba(239,68,68,0.08)", border: `1px solid ${RED}44` }}>
+          <Disc3 size={13} className="rs-live-dot" style={{ color: RED }} />
+          <span className="truncate" style={{ fontSize: 11.5, color: "#FCA5A5" }}>On air preview: {previewItem.track.title}</span>
           <button onClick={stopPreview} className="rs-btn ml-auto flex items-center justify-center rounded-md shrink-0" style={{ width: 24, height: 24, background: "rgba(255,255,255,0.06)", color: DIM }}><Square size={12} /></button>
         </div>
       )}
@@ -1722,94 +1899,56 @@ function SessionsPanel(): ReactElement {
         ) : (
           sessions?.map((s) => {
             const items = playlists[s.id] ?? [];
+            const active = s.is_live || previewProgram === s.id;
             const LoopIcon = s.loop_mode === "repeat_one" ? Repeat1 : Repeat;
-            const loopActive = s.loop_mode !== "none";
-            const addable = library.filter(Boolean);
+            const loopOn = s.loop_mode !== "none";
             return (
-              <div key={s.id} className="rounded-xl px-3 py-3" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <div style={{ flex: 1, minWidth: 120 }}>
-                    <div className="flex items-center gap-2">
-                      {s.is_live && <span className="rs-live-dot rounded-full shrink-0" style={{ width: 7, height: 7, background: RED }} />}
-                      <span className="truncate" style={{ fontSize: 13, fontWeight: 700 }}>{s.title}</span>
-                    </div>
-                    <span style={{ fontSize: 10.5, color: DIMMER }}>{items.length} item{items.length === 1 ? "" : "s"}</span>
+              <div key={s.id} className="rounded-xl" style={{ background: active ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${active ? RED + "44" : PANEL_BORDER}`, padding: 12 }}>
+                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                  <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 28, height: 28, background: active ? RED : "rgba(230,198,110,0.14)", color: active ? "#fff" : GOLD }}>
+                    {active ? <Disc3 size={14} className="rs-live-dot" /> : <ListMusic size={14} />}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="truncate" style={{ fontSize: 12.5, fontWeight: 700 }}>{s.title}</div>
+                    <div style={{ fontSize: 10, color: DIM }}>{items.length} item{items.length === 1 ? "" : "s"}{s.is_live ? " · ON AIR" : previewProgram === s.id ? " · PREVIEW" : ""}</div>
                   </div>
-                  <button
-                    onClick={() => void cycleLoop(s)}
-                    title={`Loop: ${LOOP_LABEL[s.loop_mode]}`}
-                    className="rs-btn flex items-center gap-1.5 rounded-lg px-2.5 shrink-0"
-                    style={{ height: 30, background: loopActive ? "rgba(230,198,110,0.14)" : "rgba(255,255,255,0.04)", color: loopActive ? GOLD : DIM, border: `1px solid ${loopActive ? GOLD + "55" : PANEL_BORDER}`, fontSize: 11, fontWeight: 700 }}
-                  >
-                    <LoopIcon size={13} /> {LOOP_LABEL[s.loop_mode]}
+                  <button onClick={() => void cycleLoop(s)} title={`Loop: ${LOOP_LABEL[s.loop_mode]}`} className="rs-btn flex items-center gap-1 rounded-lg px-2 py-1 shrink-0" style={{ fontSize: 10, fontWeight: 700, background: loopOn ? "rgba(123,227,163,0.16)" : "rgba(255,255,255,0.05)", color: loopOn ? "#7BE3A3" : DIM, border: `1px solid ${loopOn ? "#7BE3A366" : PANEL_BORDER}` }}>
+                    <LoopIcon size={11} /> {LOOP_LABEL[s.loop_mode]}
                   </button>
-                  <button
-                    onClick={() => void playLive(s)}
-                    disabled={items.length === 0}
-                    className="rs-btn flex items-center gap-1.5 rounded-lg px-3 shrink-0"
-                    style={{ height: 30, background: GOLD, color: "#0A1120", fontSize: 11.5, fontWeight: 800, opacity: items.length === 0 ? 0.5 : 1 }}
-                  >
-                    <Play size={13} /> Play live
-                  </button>
-                  <button
-                    onClick={() => void removeSession(s.id)}
-                    title="Delete session"
-                    className="rs-btn flex items-center justify-center rounded-lg shrink-0"
-                    style={{ width: 30, height: 30, background: "rgba(255,255,255,0.05)", color: DIM }}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-
-                {/* Playlist items */}
-                <div className="flex flex-col gap-1.5" style={{ marginTop: 10 }}>
-                  {items.length === 0 ? (
-                    <div style={{ fontSize: 11, color: DIMMER, padding: "4px 0" }}>No tracks in this session yet.</div>
+                  {previewProgram === s.id ? (
+                    <button onClick={stopPreview} className="rs-btn flex items-center gap-1 rounded-lg px-2.5 py-1 shrink-0" style={{ fontSize: 10.5, fontWeight: 700, background: RED, color: "#fff", border: `1px solid ${RED}` }}>
+                      <Square size={11} /> Stop
+                    </button>
                   ) : (
-                    items.map((it, i) => {
-                      const accent = KIND_ACCENT[it.track.kind];
-                      const playing = previewProgram === s.id && previewIndex === i;
-                      return (
-                        <div key={it.id} className="flex items-center gap-2 rounded-lg px-2.5 py-1.5" style={{ background: playing ? "rgba(34,197,94,0.10)" : "rgba(255,255,255,0.02)", border: `1px solid ${playing ? GREEN + "44" : PANEL_BORDER}` }}>
-                          <span className="rs-tnum shrink-0" style={{ fontFamily: MONO, fontSize: 11, color: DIM, width: 16, textAlign: "right" }}>{i + 1}</span>
-                          <span className="rounded-full shrink-0" style={{ width: 8, height: 8, background: accent }} />
-                          <span className="truncate" style={{ flex: 1, minWidth: 0, fontSize: 12 }}>{it.track.title}</span>
-                          <button
-                            onClick={() => void reorder(s.id, i, i - 1)}
-                            disabled={i === 0}
-                            title="Move up"
-                            className="rs-btn flex items-center justify-center rounded-md shrink-0"
-                            style={{ width: 24, height: 24, background: "rgba(255,255,255,0.05)", color: i === 0 ? DIMMER : DIM, opacity: i === 0 ? 0.4 : 1 }}
-                          >
-                            <ArrowUp size={12} />
-                          </button>
-                          <button
-                            onClick={() => void reorder(s.id, i, i + 1)}
-                            disabled={i === items.length - 1}
-                            title="Move down"
-                            className="rs-btn flex items-center justify-center rounded-md shrink-0"
-                            style={{ width: 24, height: 24, background: "rgba(255,255,255,0.05)", color: i === items.length - 1 ? DIMMER : DIM, opacity: i === items.length - 1 ? 0.4 : 1 }}
-                          >
-                            <ArrowDown size={12} />
-                          </button>
-                          <button
-                            onClick={() => void removeItem(s.id, it.id)}
-                            title="Remove from session"
-                            className="rs-btn flex items-center justify-center rounded-md shrink-0"
-                            style={{ width: 24, height: 24, background: "rgba(255,255,255,0.05)", color: DIM }}
-                          >
-                            <X size={12} />
-                          </button>
-                        </div>
-                      );
-                    })
+                    <button onClick={() => void playLive(s)} disabled={items.length === 0} className="rs-btn flex items-center gap-1 rounded-lg px-2.5 py-1 shrink-0" style={{ fontSize: 10.5, fontWeight: 700, background: "rgba(230,198,110,0.14)", color: GOLD, border: `1px solid ${GOLD}44`, opacity: items.length === 0 ? 0.4 : 1 }}>
+                      <Play size={11} /> Play live
+                    </button>
                   )}
+                  <button onClick={() => void removeSession(s.id)} title="Delete session" className="rs-btn flex items-center justify-center rounded-lg shrink-0" style={{ width: 26, height: 26, background: "rgba(255,255,255,0.05)", color: DIM }}><X size={12} /></button>
                 </div>
 
-                {/* Add track footer */}
-                <div style={{ marginTop: 10 }}>
-                  <TrackMenu tracks={addable} onPick={(trackId) => void addTrack(s.id, trackId)} />
+                {/* ordered items — "after this, play this" */}
+                <div className="flex flex-col gap-1">
+                  {items.length === 0 && <div style={{ fontSize: 11, color: DIMMER, padding: "6px 0" }}>Empty — add tracks from the library above.</div>}
+                  {items.map((it, idx) => {
+                    const meta = KIND_META[it.track.kind];
+                    const nowIdx = previewProgram === s.id && previewIndex === idx;
+                    return (
+                      <div key={it.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: nowIdx ? "rgba(239,68,68,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${nowIdx ? RED + "44" : "transparent"}` }}>
+                        <span className="rs-tnum flex items-center justify-center rounded shrink-0" style={{ width: 18, height: 18, background: "rgba(255,255,255,0.08)", fontSize: 10, fontWeight: 700, color: nowIdx ? "#FCA5A5" : DIM }}>{idx + 1}</span>
+                        <span className="rounded-full shrink-0" style={{ width: 6, height: 6, background: meta.color }} />
+                        <span className="truncate" style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: nowIdx ? 700 : 500 }}>{it.track.title}</span>
+                        {nowIdx && <span style={{ fontSize: 9, fontWeight: 800, color: "#FCA5A5" }}>NOW</span>}
+                        <button onClick={() => void reorder(s.id, idx, idx - 1)} disabled={idx === 0} title="Move up" className="rs-btn shrink-0" style={{ background: "none", border: "none", color: DIM, opacity: idx === 0 ? 0.3 : 1, cursor: idx === 0 ? "default" : "pointer", padding: 0 }}><ArrowUp size={13} /></button>
+                        <button onClick={() => void reorder(s.id, idx, idx + 1)} disabled={idx === items.length - 1} title="Move down" className="rs-btn shrink-0" style={{ background: "none", border: "none", color: DIM, opacity: idx === items.length - 1 ? 0.3 : 1, cursor: idx === items.length - 1 ? "default" : "pointer", padding: 0 }}><ArrowDown size={13} /></button>
+                        <button onClick={() => void removeItem(s.id, it.id)} title="Remove from session" className="rs-btn shrink-0" style={{ background: "none", border: "none", color: DIM, cursor: "pointer", padding: 0 }}><X size={12} /></button>
+                      </div>
+                    );
+                  })}
                 </div>
+
+                {/* append next piece */}
+                <AddTrackSelect tracks={library} onPick={(trackId) => void addTrack(s.id, trackId)} />
               </div>
             );
           })
@@ -1819,54 +1958,18 @@ function SessionsPanel(): ReactElement {
   );
 }
 
-// A full-width dropdown appending a library track to a session.
-function TrackMenu({ tracks, onPick }: { tracks: RadioTrack[]; onPick: (trackId: string) => void }): ReactElement {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
+// The make's dashed "+ Add track to this session…" select, fed by the real library.
+function AddTrackSelect({ tracks, onPick }: { tracks: RadioTrack[]; onPick: (trackId: string) => void }): ReactElement {
   return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="rs-btn w-full flex items-center justify-center gap-1.5 rounded-lg"
-        style={{ height: 32, background: "rgba(230,198,110,0.08)", color: GOLD, border: `1px dashed ${GOLD}55`, fontSize: 11.5, fontWeight: 700 }}
-      >
-        <Plus size={13} /> Add track to this session… <ChevronDown size={13} />
-      </button>
-      {open && (
-        <div
-          className="absolute left-0 right-0 z-30 rounded-xl overflow-hidden"
-          style={{ top: "calc(100% + 6px)", maxHeight: 240, overflowY: "auto", background: "#131E33", border: `1px solid ${PANEL_BORDER}`, boxShadow: "0 18px 40px rgba(0,0,0,0.55)" }}
-        >
-          {tracks.length === 0 ? (
-            <div style={{ fontSize: 11.5, color: DIMMER, padding: "10px 12px" }}>No library tracks yet</div>
-          ) : (
-            tracks.map((t) => {
-              const accent = KIND_ACCENT[t.kind];
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => { setOpen(false); onPick(t.id); }}
-                  className="rs-btn w-full text-left flex items-center gap-2 px-3 py-2"
-                  style={{ background: "none", border: "none", color: TEXT, fontSize: 12 }}
-                >
-                  <span className="rounded-full shrink-0" style={{ width: 8, height: 8, background: accent }} />
-                  <span className="truncate">{t.title}</span>
-                  <span className="ml-auto shrink-0" style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", color: accent }}>{t.kind}</span>
-                </button>
-              );
-            })
-          )}
-        </div>
-      )}
-    </div>
+    <select
+      value=""
+      onChange={(e) => { const v = e.target.value; if (v) onPick(v); }}
+      className="rs-btn w-full rounded-lg mt-2"
+      style={{ height: 32, background: "rgba(255,255,255,0.05)", border: `1px dashed ${PANEL_BORDER}`, color: GOLD, fontSize: 11.5, fontWeight: 700, padding: "0 8px" }}
+    >
+      <option value="" style={optStyle}>+ Add track to this session…</option>
+      {tracks.map((t) => <option key={t.id} value={t.id} style={optStyle}>{KIND_META[t.kind].label} · {t.title}</option>)}
+    </select>
   );
 }
 
