@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import {
   Activity, Bell, Copy, Cpu, Disc3, Flame, Gauge, HardDrive, Headphones,
-  Heart, KeyRound, Laptop, Loader2, Mic, MicOff, Pause, Play, Plus,
+  Heart, ImagePlus, KeyRound, Laptop, Loader2, Mic, MicOff, Pause, Play, Plus,
   QrCode, RefreshCw, Radio as RadioIcon, Send, ShieldAlert, Signal,
   SlidersHorizontal, Smartphone, Square, Tablet, Trash2, Volume2,
   Wifi, X, Check, type LucideIcon,
@@ -18,6 +18,8 @@ import {
 import { AxiosError } from "axios";
 import {
   RadioApi,
+  OpsApi,
+  uploadToCloudinary,
   type RadioProgram,
   type RadioComment,
   type StreamHealth,
@@ -116,6 +118,8 @@ export function RadioStudio(): ReactElement {
   });
   const [creating, setCreating] = useState(false);
   const [formErr, setFormErr] = useState<string | null>(null);
+  const [uploadingArtwork, setUploadingArtwork] = useState(false);
+  const [artworkErr, setArtworkErr] = useState<string | null>(null);
 
   const selected = programs?.find((p) => p.id === selectedId) ?? null;
   const live = phase === "live";
@@ -341,6 +345,25 @@ export function RadioStudio(): ReactElement {
       setCreating(false);
     }
   }, [form]);
+
+  // Upload an artwork image (bytes go direct to Cloudinary) → fills artwork_url.
+  const uploadArtwork = useCallback(async (file: File) => {
+    if (file.size > 10 * 1024 * 1024) {
+      setArtworkErr("Image is larger than 10 MB. Please choose a smaller image.");
+      return;
+    }
+    setUploadingArtwork(true);
+    setArtworkErr(null);
+    try {
+      const sign = await OpsApi.signAdminImage("announcements");
+      const { secure_url } = await uploadToCloudinary(sign, file);
+      setForm((f) => ({ ...f, artwork_url: secure_url }));
+    } catch {
+      setArtworkErr("Upload failed — paste an image URL instead.");
+    } finally {
+      setUploadingArtwork(false);
+    }
+  }, []);
 
   // Local-only host comment (not persisted — admins can't post as a member).
   const [localSay, setLocalSay] = useState<{ id: string; text: string }[]>([]);
@@ -617,8 +640,29 @@ export function RadioStudio(): ReactElement {
                   <Field label="Tags (comma-separated)" full>
                     <input className="rs-in" value={form.tags} onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))} placeholder="faith, james, sunday" style={inputStyle} />
                   </Field>
-                  <Field label="Artwork URL" full>
-                    <input className="rs-in" value={form.artwork_url} onChange={(e) => setForm((f) => ({ ...f, artwork_url: e.target.value }))} placeholder="https://…" style={inputStyle} />
+                  <Field label="Artwork" full>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      {form.artwork_url && (
+                        <span className="rounded-lg shrink-0 overflow-hidden" style={{ width: 52, height: 52, border: `1px solid ${PANEL_BORDER}`, background: `center/cover no-repeat url("${form.artwork_url}")` }} aria-label="Artwork preview" />
+                      )}
+                      <label className="rs-btn flex items-center gap-2 rounded-xl px-3.5 shrink-0" style={{ height: 38, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12.5, fontWeight: 700, cursor: uploadingArtwork ? "default" : "pointer", opacity: uploadingArtwork ? 0.6 : 1 }}>
+                        {uploadingArtwork ? <Loader2 size={14} className="rs-spin" /> : <ImagePlus size={14} />}
+                        {uploadingArtwork ? "Uploading…" : form.artwork_url ? "Replace image" : "Upload image"}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={uploadingArtwork}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            e.target.value = "";
+                            if (file) void uploadArtwork(file);
+                          }}
+                          style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0 0 0 0)", border: 0 }}
+                        />
+                      </label>
+                      <input className="rs-in" value={form.artwork_url} onChange={(e) => setForm((f) => ({ ...f, artwork_url: e.target.value }))} placeholder="…or paste a URL" style={{ ...inputStyle, flex: 1, minWidth: 160 }} />
+                    </div>
+                    {artworkErr && <span style={{ fontSize: 11, color: "#FCA5A5", marginTop: 6 }}>{artworkErr}</span>}
                   </Field>
                   <Field label="Schedule (optional)">
                     <input type="datetime-local" value={form.scheduled_at} onChange={(e) => setForm((f) => ({ ...f, scheduled_at: e.target.value }))} style={inputStyle} />
