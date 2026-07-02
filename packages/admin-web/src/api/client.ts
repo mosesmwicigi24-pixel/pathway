@@ -1724,6 +1724,87 @@ export const AssistantApi = {
     api.post<{ reply: string }>("/assistant/chat", body).then((r) => r.data),
 };
 
+// ---- Radio Broadcast Studio + Virtual Audio Mixer (admin) ------------------
+// Wire contract: docs/RADIO_STUDIO_CONTRACT.md. Types come from @nuru/shared.
+// The admin projection (RadioProgram) carries the ingest secrets (stream_key /
+// ingest_url) — never surfaced to members. go-live/end/rotate-key and health are
+// server-authoritative; the client reflects status/is_live, never originates it.
+import type {
+  RadioProgram,
+  RadioComment,
+  StreamHealth,
+  CreateRadioProgramBody,
+  UpdateRadioProgramBody,
+  RadioProgramStatus,
+  MixerScene,
+  MixerSceneBody,
+  MixerSceneUpdateBody,
+  MixerJingle,
+  MixerJingleBody,
+} from "@nuru/shared";
+
+export type {
+  RadioProgram,
+  RadioComment,
+  StreamHealth,
+  CreateRadioProgramBody,
+  UpdateRadioProgramBody,
+  RadioProgramStatus,
+  MixerChannel,
+  MixerScene,
+  MixerSceneBody,
+  MixerJingle,
+  MixerJingleBody,
+} from "@nuru/shared";
+
+const R = "/admin/radio";
+export const RadioApi = {
+  // Programs ---------------------------------------------------------------
+  // NB: the radio routes return bare arrays (not the {data:[…]} envelope used
+  // elsewhere in this portal) — see backend src/modules/radio/index.ts.
+  programs: (status?: RadioProgramStatus) =>
+    api
+      .get<RadioProgram[]>(`${R}/programs`, { params: status ? { status } : {} })
+      .then((r) => r.data),
+  program: (id: string) => api.get<RadioProgram>(`${R}/programs/${id}`).then((r) => r.data),
+  createProgram: (body: CreateRadioProgramBody) =>
+    api.post<RadioProgram>(`${R}/programs`, body).then((r) => r.data),
+  updateProgram: (id: string, body: UpdateRadioProgramBody) =>
+    api.patch<RadioProgram>(`${R}/programs/${id}`, body).then((r) => r.data),
+  deleteProgram: (id: string) =>
+    api.delete<{ ok: true }>(`${R}/programs/${id}`).then((r) => r.data),
+
+  // Broadcast lifecycle (server-authoritative) -----------------------------
+  goLive: (id: string) => api.post<RadioProgram>(`${R}/programs/${id}/go-live`).then((r) => r.data),
+  end: (id: string) => api.post<RadioProgram>(`${R}/programs/${id}/end`).then((r) => r.data),
+  rotateKey: (id: string) =>
+    api.post<{ stream_key: string }>(`${R}/programs/${id}/rotate-key`).then((r) => r.data),
+  // 409 when the program is not live — callers stop polling on that.
+  health: (id: string) => api.get<StreamHealth>(`${R}/programs/${id}/health`).then((r) => r.data),
+
+  // Listener interactions --------------------------------------------------
+  comments: (id: string) =>
+    api.get<RadioComment[]>(`${R}/programs/${id}/comments`).then((r) => r.data),
+  hideComment: (commentId: string) =>
+    api.delete<{ ok: true }>(`${R}/comments/${commentId}`).then((r) => r.data),
+
+  // Mixer scenes -----------------------------------------------------------
+  scenes: () => api.get<MixerScene[]>(`${R}/mixer/scenes`).then((r) => r.data),
+  createScene: (body: MixerSceneBody) =>
+    api.post<MixerScene>(`${R}/mixer/scenes`, body).then((r) => r.data),
+  updateScene: (id: string, body: MixerSceneUpdateBody) =>
+    api.patch<MixerScene>(`${R}/mixer/scenes/${id}`, body).then((r) => r.data),
+  deleteScene: (id: string) =>
+    api.delete<{ ok: true }>(`${R}/mixer/scenes/${id}`).then((r) => r.data),
+
+  // Jingle soundboard ------------------------------------------------------
+  jingles: () => api.get<MixerJingle[]>(`${R}/mixer/jingles`).then((r) => r.data),
+  createJingle: (body: MixerJingleBody) =>
+    api.post<MixerJingle>(`${R}/mixer/jingles`, body).then((r) => r.data),
+  deleteJingle: (id: string) =>
+    api.delete<{ ok: true }>(`${R}/mixer/jingles/${id}`).then((r) => r.data),
+};
+
 // --- Default single-flight token refresh -----------------------------------
 // Wire the 401 interceptor (above) to refresh the access token using the stored
 // refresh token. SINGLE-FLIGHT: a page fires many requests at once, so a burst of

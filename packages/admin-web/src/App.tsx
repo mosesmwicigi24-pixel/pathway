@@ -29,6 +29,8 @@ import { Profile } from "./components/pages/Profile";
 import { Notifications } from "./components/pages/Notifications";
 import { MemberIntelligence } from "./components/pages/MemberIntelligence";
 import { Proximity } from "./components/pages/Proximity";
+import { RadioStudio } from "./components/pages/RadioStudio";
+import { MixerStudio } from "./components/pages/MixerStudio";
 import { Users } from "./components/pages/Users";
 import { Roles } from "./components/pages/Roles";
 import { Congregations } from "./components/pages/Congregations";
@@ -64,6 +66,8 @@ const router = createBrowserRouter([
       { path: "finance", element: <Finance /> },
       { path: "certificates", element: <Certificates /> },
       { path: "badges", element: <Badges /> },
+      { path: "radio", element: <RadioStudio /> },
+      { path: "mixer", element: <MixerStudio /> },
       { path: "intelligence", element: <MemberIntelligence /> },
       { path: "proximity", element: <Proximity /> },
       { path: "users", element: <Users /> },
