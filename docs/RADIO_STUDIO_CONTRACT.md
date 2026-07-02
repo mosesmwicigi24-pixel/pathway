@@ -110,3 +110,38 @@ meters/waveform) as client state.
 (Preaching/Worship/Prayer/Interview) → persisted mixer_scenes; music bed player; jingle
 soundboard w/ upload → mixer_jingles. Persist scenes + jingles via API; live meters are
 client-simulated.
+
+## ADDENDUM (2026-07-02) — uploaded session audio + auto-air scheduler
+
+A session (radio_program) can now carry an **uploaded audio recording** broadcast when the
+session goes live, and can **auto-air at its scheduled time**. Pre-recorded/scheduled model
+alongside the existing live-mic ingest.
+
+**Migration (next number, 1758000000087):** add to `radio_programs`:
+- `audio_url TEXT` — uploaded broadcast audio (self-hosted `/media/<uuid>.<ext>`)
+- `audio_duration_sec INT` — optional, for UI
+- `auto_go_live BOOLEAN NOT NULL DEFAULT true` — scheduler airs it at scheduled_at when true
+- index `(status, scheduled_at)` for the scheduler sweep
+
+**Audio upload (admin, self-hosted disk — mirrors video upload):**
+`POST /admin/media/audio/upload` (multipart file) → stores to `MEDIA_STORAGE_DIR`, returns
+`{ url, duration_sec? }` (mp3/m4a/aac/wav/ogg). Reuse the video-disk storage helper + the
+`/media/` nginx route (large body + byte-range already configured).
+
+**Contract additions:** `RadioProgram` + `RadioProgramPublic` gain `audio_url`,
+`audio_duration_sec`, `auto_go_live` (members DO get audio_url to play; still NO stream_key).
+`CreateRadioProgramBody` + `UpdateRadioProgramBody` gain `audio_url?`, `audio_duration_sec?`,
+`auto_go_live?`. OpenAPI: add the upload path + fields.
+
+**Auto-air worker job (~30–60s tick):**
+1. Air due: `status='scheduled' AND auto_go_live AND NOT is_live AND scheduled_at <= now()`
+   → shared go-live logic (status=live, is_live, live_started_at, provider.start). Idempotent.
+2. Auto-end: `is_live AND duration_min IS NOT NULL AND live_started_at + duration_min*'1 min'
+   <= now()` → end (status=ended, is_live=false, live_ended_at, provider.stop).
+Manual go-live/end still work. Extract shared `airProgram(id)`/`endProgram(id)` on the service.
+
+**Web + iPad UI:** create form + session panel gain an **Upload audio** field (→ upload
+endpoint, sets audio_url; filename/preview + inline player + uploading state), the existing
+**Schedule** surfaced clearly, an **Auto-air** toggle (`auto_go_live`), and **Take live now**.
+A session with audio_url shows an inline audio player; going live broadcasts that audio
+(members play audio_url — mobile next session).

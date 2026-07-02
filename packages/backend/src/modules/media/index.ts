@@ -59,6 +59,37 @@ export function registerMedia(ctx: AppContext): Router {
       return next(err);
     });
 
+  // Uploaded session audio (Radio): bytes stream straight to OUR disk, same
+  // storage + cap as video. Returns a bare { url, duration_sec } (no media_assets
+  // row) — the caller stashes url/duration on the radio_program.
+  const audioUpload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, storageDir),
+      filename: (_req, file, cb) => {
+        const ext = (extname(file.originalname) || ".mp3").toLowerCase().replace(/[^.a-z0-9]/g, "") || ".mp3";
+        cb(null, `${randomUUID()}${ext}`);
+      },
+    }),
+    limits: { fileSize: ctx.env.MEDIA_MAX_UPLOAD_BYTES, files: 1 },
+    fileFilter: (_req, file, cb) => {
+      if (file.mimetype?.startsWith("audio/")) cb(null, true);
+      else cb(new ApiError("VALIDATION_FAILED", "Only audio files can be uploaded"));
+    },
+  });
+  const uploadAudio = (req: Request, res: Response, next: NextFunction): void =>
+    audioUpload.single("file")(req, res, (err: unknown) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        return next(
+          new ApiError(
+            "VALIDATION_FAILED",
+            err.code === "LIMIT_FILE_SIZE" ? "Audio exceeds the maximum upload size" : err.message,
+          ),
+        );
+      }
+      return next(err);
+    });
+
   // Thumbnail (poster) images also live on our own disk (served via /media). 10 MB
   // cap, images only — used for uploaded posters and frames captured from a video.
   const THUMB_MAX = 10 * 1024 * 1024;
@@ -213,6 +244,23 @@ export function registerMedia(ctx: AppContext): Router {
           ...body,
         }),
       );
+    }),
+  );
+
+  // Upload session audio straight to OUR storage (Radio). Bare { url, duration_sec }
+  // response — no media_assets row (like /me/avatar). duration_sec is client-supplied.
+  r.post(
+    "/admin/media/audio/upload",
+    auth, perm("videos", "create"),
+    uploadAudio,
+    handler(async (req, res) => {
+      const file = req.file;
+      if (!file) throw new ApiError("VALIDATION_FAILED", "No audio file was uploaded (field 'file')");
+      const body = parseBody(
+        z.object({ duration_sec: z.coerce.number().int().positive() }).partial(),
+        req.body ?? {},
+      );
+      res.status(201).json({ url: `${publicBase}/${file.filename}`, duration_sec: body.duration_sec ?? null });
     }),
   );
 

@@ -23,6 +23,8 @@ import { AnnouncementService } from "./modules/announcements/service.js";
 import { FinancialService } from "./modules/financial/service.js";
 import { buildPaymentGateway } from "./modules/financial/gateway.js";
 import { buildMobileMoneyProviders } from "./modules/financial/providers.js";
+import { RadioService } from "./modules/radio/service.js";
+import { buildStreamProvider } from "./modules/radio/provider.js";
 
 function main(): void {
   const env = loadEnv();
@@ -55,6 +57,16 @@ function main(): void {
     5 * 60_000,
   );
   stops.push(() => clearInterval(schedTimer));
+
+  // Radio auto-air (ADDENDUM): air scheduled programs at their time + auto-end
+  // live ones past their duration. Single worker → the is_live-guarded sweep is
+  // double-fire-safe; each goLive/end is isolated. ~30s tick.
+  const radio = new RadioService(db.primary, buildStreamProvider(env));
+  const radioTimer = setInterval(
+    () => void radio.airDueEvents().catch((err) => log.error({ err }, "radio auto-air failed")),
+    30_000,
+  );
+  stops.push(() => clearInterval(radioTimer));
 
   // Daily jobs on cron (server local time). Each guards its own errors.
   const engagement = new EngagementService(db.primary, db.replica);

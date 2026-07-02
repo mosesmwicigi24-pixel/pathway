@@ -98,6 +98,9 @@ export interface RadioProgram {
   is_live: boolean;
   live_started_at: ISODateTime | null;
   live_ended_at: ISODateTime | null;
+  audio_url: string | null;
+  audio_duration_sec: number | null;
+  auto_go_live: boolean;
   record_broadcast: boolean;
   record_target: RadioRecordTarget | null;
   peak_listeners: number;
@@ -188,6 +191,9 @@ export interface CreateRadioProgramBody {
   duration_min?: number;
   repeat?: string;
   timezone?: string;
+  audio_url?: string;
+  audio_duration_sec?: number;
+  auto_go_live?: boolean;
   record_broadcast?: boolean;
   record_target?: RadioRecordTarget;
 }
@@ -195,6 +201,12 @@ export interface CreateRadioProgramBody {
 export type UpdateRadioProgramBody = Partial<CreateRadioProgramBody> & {
   status?: RadioProgramStatus;
 };
+
+/** Bare result of POST /admin/media/audio/upload (no media_assets row). */
+export interface AudioUploadResult {
+  url: string;
+  duration_sec: number | null;
+}
 
 export interface RadioReactBody {
   kind: RadioReactionKind;

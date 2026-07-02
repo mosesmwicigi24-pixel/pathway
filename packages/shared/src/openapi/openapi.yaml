@@ -1414,6 +1414,28 @@ paths:
         "201": { description: Stored asset }
         "400": { description: Validation failed (not a video / too large) }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/media/audio/upload:
+    post:
+      tags: [system]
+      summary: Admin. Upload session audio (Radio) to our own storage (VPS disk); returns a bare { url, duration_sec } (no media_assets row).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                duration_sec: { type: integer }
+      responses:
+        "201":
+          description: Stored audio URL
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AudioUploadResult" }
+        "400": { description: Validation failed (not audio / too large / no file) }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/media/videos/chunk:
     put:
       tags: [system]
@@ -3860,6 +3882,9 @@ components:
         is_live: { type: boolean }
         live_started_at: { type: [string, "null"], format: date-time }
         live_ended_at: { type: [string, "null"], format: date-time }
+        audio_url: { type: [string, "null"] }
+        audio_duration_sec: { type: [integer, "null"] }
+        auto_go_live: { type: boolean }
         record_broadcast: { type: boolean }
         record_target: { type: [string, "null"], enum: [cloud, local, both, null] }
         peak_listeners: { type: integer }
@@ -3894,6 +3919,9 @@ components:
         is_live: { type: boolean }
         live_started_at: { type: [string, "null"], format: date-time }
         live_ended_at: { type: [string, "null"], format: date-time }
+        audio_url: { type: [string, "null"] }
+        audio_duration_sec: { type: [integer, "null"] }
+        auto_go_live: { type: boolean }
         record_broadcast: { type: boolean }
         record_target: { type: [string, "null"], enum: [cloud, local, both, null] }
         peak_listeners: { type: integer }
@@ -3917,6 +3945,9 @@ components:
         duration_min: { type: integer, minimum: 1, maximum: 1440 }
         repeat: { type: string, maxLength: 30 }
         timezone: { type: string, maxLength: 60 }
+        audio_url: { type: string, maxLength: 2000 }
+        audio_duration_sec: { type: integer, minimum: 1 }
+        auto_go_live: { type: boolean }
         record_broadcast: { type: boolean }
         record_target: { type: string, enum: [cloud, local, both] }
     UpdateRadioProgramBody:
@@ -3925,6 +3956,13 @@ components:
         - type: object
           properties:
             status: { type: string, enum: [draft, scheduled, live, ended] }
+    AudioUploadResult:
+      type: object
+      description: Bare result of POST /admin/media/audio/upload (no media_assets row).
+      required: [url, duration_sec]
+      properties:
+        url: { type: string }
+        duration_sec: { type: [integer, "null"] }
     RadioReactionCounts:
       type: object
       required: [heart, amen, fire]

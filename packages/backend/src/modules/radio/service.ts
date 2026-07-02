@@ -28,6 +28,9 @@ export interface RadioProgramRow {
   is_live: boolean;
   live_started_at: string | null;
   live_ended_at: string | null;
+  audio_url: string | null;
+  audio_duration_sec: number | null;
+  auto_go_live: boolean;
   record_broadcast: boolean;
   record_target: "cloud" | "local" | "both" | null;
   peak_listeners: number;
@@ -83,8 +86,9 @@ export interface MixerJingleRow {
 const PROGRAM_COLUMNS = `
   id, title, description, category, speaker, location, artwork_url, tags, visibility,
   scheduled_at, duration_min, repeat, timezone, status, is_live, live_started_at,
-  live_ended_at, record_broadcast, record_target, peak_listeners, ingest_provider,
-  ingest_url, stream_key, hls_url, created_by, created_at, updated_at`;
+  live_ended_at, audio_url, audio_duration_sec, auto_go_live, record_broadcast,
+  record_target, peak_listeners, ingest_provider, ingest_url, stream_key, hls_url,
+  created_by, created_at, updated_at`;
 
 function toPublic(row: RadioProgramRow): RadioProgramPublic {
   const { stream_key: _sk, ingest_url: _iu, ingest_provider: _ip, ...rest } = row;
@@ -113,6 +117,9 @@ export class RadioService {
       duration_min: z.number().int().positive().max(1440).optional(),
       repeat: z.string().max(30).optional(),
       timezone: z.string().max(60).optional(),
+      audio_url: z.string().max(2000).optional(),
+      audio_duration_sec: z.number().int().positive().optional(),
+      auto_go_live: z.boolean().optional(),
       record_broadcast: z.boolean().optional(),
       record_target: z.enum(["cloud", "local", "both"]).optional(),
     })
@@ -208,9 +215,11 @@ export class RadioService {
         c,
         `INSERT INTO radio_programs
            (title, description, category, speaker, location, artwork_url, tags, visibility,
-            scheduled_at, duration_min, repeat, timezone, status, record_broadcast, record_target, created_by)
+            scheduled_at, duration_min, repeat, timezone, status, audio_url, audio_duration_sec,
+            auto_go_live, record_broadcast, record_target, created_by)
          VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'{}'::text[]),COALESCE($8,'public'),
-                 $9,$10,COALESCE($11,'none'),$12,$13,COALESCE($14,false),$15,$16)
+                 $9,$10,COALESCE($11,'none'),$12,$13,$14,$15,COALESCE($16,true),
+                 COALESCE($17,false),$18,$19)
          RETURNING id`,
         [
           input.title,
@@ -226,6 +235,9 @@ export class RadioService {
           input.repeat ?? null,
           input.timezone ?? null,
           status,
+          input.audio_url ?? null,
+          input.audio_duration_sec ?? null,
+          input.auto_go_live ?? null,
           input.record_broadcast ?? null,
           input.record_target ?? null,
           createdBy,
@@ -265,6 +277,9 @@ export class RadioService {
     if (input.duration_min !== undefined) set("duration_min", input.duration_min);
     if (input.repeat !== undefined) set("repeat", input.repeat);
     if (input.timezone !== undefined) set("timezone", input.timezone);
+    if (input.audio_url !== undefined) set("audio_url", input.audio_url);
+    if (input.audio_duration_sec !== undefined) set("audio_duration_sec", input.audio_duration_sec);
+    if (input.auto_go_live !== undefined) set("auto_go_live", input.auto_go_live);
     if (input.status !== undefined) set("status", input.status);
     if (input.record_broadcast !== undefined) set("record_broadcast", input.record_broadcast);
     if (input.record_target !== undefined) set("record_target", input.record_target);
@@ -318,6 +333,53 @@ export class RadioService {
         [id],
       );
     });
+  }
+
+  /**
+   * Auto-air sweep (worker, ~30s tick). Airs scheduled programs whose time has
+   * come (auto_go_live) and auto-ends live programs past their duration. Runs on
+   * a single worker (// single-worker assumption) — the SELECTs guard is_live so a
+   * tick can't double-fire go-live, and each goLive/end is isolated in try/catch
+   * so one failure doesn't abort the sweep. Idempotent.
+   */
+  async airDueEvents(now = new Date()): Promise<{ aired: number; ended: number }> {
+    let aired = 0;
+    let ended = 0;
+
+    const toAir = await many<{ id: string }>(
+      this.pool,
+      `SELECT id FROM radio_programs
+        WHERE status = 'scheduled' AND auto_go_live = true AND is_live = false
+          AND scheduled_at IS NOT NULL AND scheduled_at <= $1`,
+      [now],
+    );
+    for (const { id } of toAir) {
+      try {
+        await this.goLive(id);
+        aired += 1;
+      } catch {
+        /* one failure must not abort the sweep; next tick retries. */
+      }
+    }
+
+    const toEnd = await many<{ id: string }>(
+      this.pool,
+      `SELECT id FROM radio_programs
+        WHERE status = 'live' AND is_live = true
+          AND duration_min IS NOT NULL AND live_started_at IS NOT NULL
+          AND live_started_at + (duration_min || ' minutes')::interval <= $1`,
+      [now],
+    );
+    for (const { id } of toEnd) {
+      try {
+        await this.end(id);
+        ended += 1;
+      } catch {
+        /* isolate — next tick retries. */
+      }
+    }
+
+    return { aired, ended };
   }
 
   async rotateKey(id: string): Promise<{ stream_key: string }> {

@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser } from "./helpers/factories.js";
+import { RadioService } from "../src/modules/radio/service.js";
+import { FakeStreamProvider } from "../src/modules/radio/provider.js";
 
 const auth = (t: string) => ({ Authorization: t });
 
@@ -223,6 +225,82 @@ describe("radio — comments create + moderation hide", () => {
     const adminList = await agent().get(`/v1/admin/radio/programs/${prog.id}/comments`).set(auth(adminTok));
     expect(adminList.body).toHaveLength(1);
     expect(adminList.body[0].hidden).toBe(true);
+  });
+});
+
+describe("radio — uploaded session audio + auto-air (ADDENDUM)", () => {
+  it("create with audio_url + auto_go_live=false persists and returns them", async () => {
+    const prog = await createProgram({
+      audio_url: "http://localhost:8080/media/abc.mp3",
+      audio_duration_sec: 1800,
+      auto_go_live: false,
+    });
+    expect(prog.audio_url).toBe("http://localhost:8080/media/abc.mp3");
+    expect(prog.audio_duration_sec).toBe(1800);
+    expect(prog.auto_go_live).toBe(false);
+  });
+
+  it("auto_go_live defaults to true when omitted", async () => {
+    const prog = await createProgram();
+    expect(prog.auto_go_live).toBe(true);
+  });
+
+  it("member GET includes audio fields but still no stream_key", async () => {
+    const prog = await createProgram({
+      visibility: "public",
+      audio_url: "http://localhost:8080/media/sermon.mp3",
+      audio_duration_sec: 900,
+    });
+    const member = await createUser({ congregationId: cong, role: "Student", email: "aud@dev.local" });
+    const tok = bearer({ sub: member.user_id, role: "Student", cong });
+    const res = await agent().get(`/v1/radio/programs/${prog.id}`).set(auth(tok));
+    expect(res.status).toBe(200);
+    expect(res.body.audio_url).toBe("http://localhost:8080/media/sermon.mp3");
+    expect(res.body.audio_duration_sec).toBe(900);
+    expect(res.body.auto_go_live).toBe(true);
+    expect(res.body.stream_key).toBeUndefined();
+    expect(res.body.ingest_url).toBeUndefined();
+  });
+
+  it("airDueEvents airs due auto-air programs, skips opted-out, auto-ends over-duration", async () => {
+    const svc = new RadioService(testPool(), new FakeStreamProvider());
+    const past = new Date(Date.now() - 5 * 60_000).toISOString();
+
+    // Due + auto-air on → should go live.
+    const due = await createProgram({ scheduled_at: past, auto_go_live: true });
+    // Due + auto-air off → should stay scheduled.
+    const optedOut = await createProgram({ scheduled_at: past, auto_go_live: false });
+
+    const first = await svc.airDueEvents();
+    expect(first.aired).toBe(1);
+
+    const dueRow = await agent().get(`/v1/admin/radio/programs/${due.id}`).set(auth(adminTok));
+    expect(dueRow.body.status).toBe("live");
+    expect(dueRow.body.is_live).toBe(true);
+
+    const optRow = await agent().get(`/v1/admin/radio/programs/${optedOut.id}`).set(auth(adminTok));
+    expect(optRow.body.status).toBe("scheduled");
+    expect(optRow.body.is_live).toBe(false);
+
+    // A live program past its duration_min → auto-ended.
+    await testPool().query(
+      `UPDATE radio_programs SET duration_min = 30, live_started_at = now() - interval '45 minutes' WHERE id = $1`,
+      [due.id],
+    );
+    const second = await svc.airDueEvents();
+    expect(second.ended).toBe(1);
+
+    const endedRow = await agent().get(`/v1/admin/radio/programs/${due.id}`).set(auth(adminTok));
+    expect(endedRow.body.status).toBe("ended");
+    expect(endedRow.body.is_live).toBe(false);
+  });
+});
+
+describe("radio — audio upload validation", () => {
+  it("rejects with 400 when no file is provided", async () => {
+    const res = await agent().post("/v1/admin/media/audio/upload").set(auth(adminTok));
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_FAILED");
   });
 });
 
