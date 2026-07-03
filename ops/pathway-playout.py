@@ -89,7 +89,9 @@ mic = compress(attack=5., release=80., ratio=3., threshold=-18., mic)
 bed = eq3(eq_bed_low, eq_bed_mid, eq_bed_high, bed)
 # Loudness-normalize the bed so tracks mastered at different levels don't jump
 # in volume when the playlist advances (the "music suddenly got louder" bug).
-bed = normalize(target=-16., gain_max=8., gain_min=-8., bed)
+# up=8s: quiet passages swell back SLOWLY (no pumping under a voice-over);
+# down=0.1s: loud entrances still duck instantly; gain_max=4 caps the boost.
+bed = normalize(target=-16., up=8., down=0.1, gain_max=4., gain_min=-8., bed)
 
 mix = add(normalize=false,
   [amplify(bed_g, bed), amplify(jin_g, jq), amplify(mic_g, mic)])
