@@ -94,7 +94,7 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | Cell Engagement | reports/engagement, /admin/cells | ✅ | ✅ | Parity |
 | Cell Detail | reports/engagement + members (filtered by cell_group_id) | ✅ | ✅ | ~~D-01~~ resolved — iPad now matches web's sourcing |
 | Members | /admin/members (+id, results, enrollment, graduation) | ✅ | ✅ | Parity |
-| Member Detail | /admin/members/{id} (+results) | ✅ | ✅ | Parity |
+| Member Detail | /admin/members/{id} (+results, password-reset) | ✅ | ✅ | Parity — incl. **admin password reset** (`POST /admin/members/:id/password-reset`, rank-guarded) on both surfaces as of 2026-07-03 |
 | Reflection Queue | /admin/reflections (+decision, history) | ✅ | ✅ | Parity |
 | Chat (oversight) | /chat/* + moderation + /assistant/chat | ✅ | ✅ | Parity (iPad mute/archive local-only) |
 | Events | calendar, /admin/events/*, announcements, moments | ✅ | ✅ | Parity (iPad adds client-rendered QR) |
@@ -114,8 +114,8 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | Countries | /admin/countries | ✅ | ✅ | Parity (no delete either side) |
 | Languages | /admin/languages | ✅ | ✅ | Parity |
 | My Profile | /me (+password, activity) | ✅ | ✅ | Parity |
-| **Radio Studio** | `/admin/radio/programs` (+go-live/end/rotate-key/health/comments) | ✅ | ✅ | **NEW 2026-07-02** — live broadcast console; real `StreamProvider` abstraction (fake default, cloudflare/mux/rtmp via `RADIO_STREAM_PROVIDER`+creds). Member `/radio/*` API shipped for mobile (next). Real audio playback pending a media-server provider + creds |
-| **Audio Mixer** | `/admin/radio/mixer/{scenes,jingles}` | ✅ | ✅ | **NEW 2026-07-02** — broadcaster console; scenes/jingles persist to DB (admin-only; not a member surface). Jingle audio upload uses a placeholder URL until an audio-media pipeline lands |
+| **Radio Studio** | `/admin/radio/programs` (+go-live/end/rotate-key/health/comments/tracks/audio-upload) | ✅ | ✅ | **LIVE 2026-07-03** — real broadcast on self-hosted **Icecast** (`RADIO_STREAM_PROVIDER=icecast`) + **liquidsoap** playout engine (playlist bed + jingle queue + live-mic harbor). iPad broadcasts a connected USB mic natively (AVAudioEngine→AAC→Icecast SOURCE) with boost + **On-air/Cue in-ear monitor**. Session audio upload (≤110 MB, MP3/WAV/AAC/ALAC), playlists, loop modes, now-playing. Member app plays the live stream with auto-reconnect + adaptive buffer. See [[radio-live-icecast]] |
+| **Audio Mixer** | `/admin/radio/mixer/{scenes,jingles}` + `/mixer/live/{levels,eq,jingle,status}` | ✅ | ✅ | **LIVE 2026-07-03** — drives the liquidsoap mix over telnet: mic/bed/jingle/master faders (gliding), per-bus 3-band EQ + compressor, jingle fire, and sound presets (Talk Show / Podcast / Voice Over Music / Warm Music / Bright). Consoles hydrate from the engine's real state so settings survive navigation. Admin-only (not a member surface) |
 | Module Preview (learner) | /admin/modules/:id (+questions) | ✅ | ❌ | **D-06** iPad has no standalone learner-preview |
 | Reset Password page | /auth/password/reset | ✅ | ❌ | Minor — iPad login only |
 
