@@ -169,6 +169,8 @@ export interface StreamHealth {
   dropped: number;
   stability: number;
   listeners: number;
+  /** Current on-air track from the stream's icy metadata (null when unknown). */
+  now_playing?: string | null;
 }
 
 /** A single mixer channel strip within a scene. */

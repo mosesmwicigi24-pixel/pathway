@@ -25,6 +25,8 @@ export interface StreamHealth {
   dropped: number; // dropped frames
   stability: number; // percent 0-100
   listeners: number; // current listeners
+  /** Current on-air track from the stream's icy metadata (null when unknown). */
+  now_playing?: string | null;
 }
 
 /** Minimal program shape the provider needs — the module passes the row. */
@@ -191,6 +193,9 @@ export class IcecastStreamProvider implements StreamProvider {
         dropped: 0,
         stability: 100, // connected → "Excellent" (0-100 DTO scale)
         listeners: num(match.listeners) || 0,
+        // Icy stream metadata — liquidsoap publishes the current track's tags,
+        // so admins can see which song is on air right now.
+        now_playing: icyTitle(match),
       };
     } catch {
       // A down/unreachable Icecast must never 500 the live-status route.
@@ -205,6 +210,19 @@ interface IcecastSource {
   listeners?: number | string;
   bitrate?: number | string;
   "ice-bitrate"?: number | string;
+  title?: string;
+  artist?: string;
+  yp_currently_playing?: string;
+}
+
+/** Current-track label from Icecast's icy metadata (null when absent). */
+function icyTitle(s: IcecastSource): string | null {
+  const artist = typeof s.artist === "string" ? s.artist.trim() : "";
+  const title = typeof s.title === "string" ? s.title.trim() : "";
+  if (artist && title) return `${artist} — ${title}`;
+  if (title) return title;
+  const yp = typeof s.yp_currently_playing === "string" ? s.yp_currently_playing.trim() : "";
+  return yp || null;
 }
 
 /** Coerce a possibly-string numeric field to a finite number (0 on failure). */
