@@ -4,7 +4,8 @@
 import type { Pool, PoolClient } from "pg";
 import { maybeOne, one, tx, recordChange, enqueueOutbox, recordActivityEvent } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
-import { loadEnrollment, ensureEnrollment, loadModule, isModuleUnlocked, type EnrollmentRef } from "./gating.js";
+import { loadEnrollment, ensureEnrollment, loadModule, isModuleUnlocked, isEntryModule, type EnrollmentRef } from "./gating.js";
+import { AssessmentService } from "../assessment/service.js";
 
 export interface CompleteResult {
   progress_id: string;
@@ -54,19 +55,30 @@ export class ProgressService {
         });
       }
 
-      // Forward-only upsert: completion only moves forward (§1.7 monotonic merge).
-      const row = await one<{ progress_id: string; is_completed: boolean }>(
+      // Content gate on "Mark complete" (§1.3): a non-quiz module may only be
+      // completed once its content is genuinely consumed AND reflected on —
+      // read → watch → listen → reflect, same server-authoritative gate the quiz
+      // uses. Quiz modules are exempt here: they complete by passing the quiz,
+      // whose assembleQuiz already enforced this gate. The universal entry point
+      // (L1·M1) stays frictionless. If the client supplies the reflection inline,
+      // persist it FIRST so the gate sees it. Throws CONTENT_INCOMPLETE (409).
+      const kindRow = await one<{ evaluation_kind: string }>(
         c,
-        `INSERT INTO module_progress (enrollment_id, module_id, is_completed, completed_at, client_mutation_id, reflection_text)
-         VALUES ($1,$2,TRUE,$3,$4,$5)
-         ON CONFLICT (enrollment_id, module_id) DO UPDATE
-           SET is_completed = TRUE,
-               completed_at = COALESCE(module_progress.completed_at, EXCLUDED.completed_at),
-               client_mutation_id = COALESCE(module_progress.client_mutation_id, EXCLUDED.client_mutation_id),
-               reflection_text = COALESCE(EXCLUDED.reflection_text, module_progress.reflection_text),
-               row_version = module_progress.row_version + 1
-         RETURNING progress_id, is_completed`,
-        [enrollment.enrollment_id, moduleId, completedAt ?? new Date().toISOString(), clientMutationId, reflectionText ?? null],
+        `SELECT evaluation_kind FROM modules WHERE module_id = $1`,
+        [moduleId],
+      );
+      const isEntry = isEntryModule(module.level_number, module.module_sequence_number);
+      const contentGated = kindRow.evaluation_kind !== "quiz" && !isEntry;
+
+      // Anchor the progress row (created here if absent) so any inline reflection
+      // can be persisted BEFORE the content gate runs — the reflect step must see
+      // this request's reflection, matching quiz-submit semantics.
+      const prog = await one<{ progress_id: string }>(
+        c,
+        `INSERT INTO module_progress (enrollment_id, module_id) VALUES ($1, $2)
+         ON CONFLICT (enrollment_id, module_id) DO UPDATE SET row_version = module_progress.row_version
+         RETURNING progress_id`,
+        [enrollment.enrollment_id, moduleId],
       );
 
       // A submitted reflection becomes a reviewable module_reflections row (B3):
@@ -82,10 +94,34 @@ export class ProgressService {
              SET body = EXCLUDED.body, state = 'pending', submitted_at = now(),
                  reviewed_by = NULL, reviewed_at = NULL, feedback_notes = NULL
            RETURNING reflection_id`,
-          [row.progress_id, userId, moduleId, reflectionText],
+          [prog.progress_id, userId, moduleId, reflectionText],
         );
         await recordChange(c, "module_reflections", refl.reflection_id, userId, "upsert");
       }
+
+      // Content gate on "Mark complete" (§1.3): a non-quiz module may only be
+      // completed once its content is genuinely consumed AND reflected on —
+      // read → watch → listen → reflect, the same server-authoritative gate the
+      // quiz uses. Quiz modules are exempt here (they complete by passing the
+      // quiz, whose assembleQuiz already enforced this); the universal entry
+      // point (L1·M1) stays frictionless. Throws CONTENT_INCOMPLETE (409).
+      if (contentGated) {
+        await AssessmentService.requireContentComplete(c, userId, moduleId);
+      }
+
+      // Forward-only completion: is_completed only moves forward (§1.7 monotonic).
+      const row = await one<{ progress_id: string; is_completed: boolean }>(
+        c,
+        `UPDATE module_progress
+            SET is_completed = TRUE,
+                completed_at = COALESCE(completed_at, $2),
+                client_mutation_id = COALESCE(client_mutation_id, $3),
+                reflection_text = COALESCE($4, reflection_text),
+                row_version = row_version + 1
+          WHERE progress_id = $1
+          RETURNING progress_id, is_completed`,
+        [prog.progress_id, completedAt ?? new Date().toISOString(), clientMutationId, reflectionText ?? null],
+      );
 
       await recordChange(c, "module_progress", row.progress_id, userId, "upsert");
       // Verified signal → re-evaluate faithfulness badges (§G.3). Idempotent worker.

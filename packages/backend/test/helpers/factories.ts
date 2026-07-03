@@ -85,12 +85,15 @@ export async function createModule(
 }
 
 /** Record enough reading engagement that the server-authoritative content gate
- *  (assembleQuiz) treats the lesson as consumed — the honest precondition for a
- *  member reaching the quiz. Video/audio seconds optional for media modules. */
+ *  (assembleQuiz / mark-complete) treats the lesson as consumed — the honest
+ *  precondition for a member reaching the quiz: read → watch → listen → reflect.
+ *  Also writes a reflection by default (the final content step); pass
+ *  `reflect: false` to record only engagement (e.g. to assert the reflect gate).
+ *  Video/audio seconds optional for media modules. */
 export async function markContentConsumed(
   userId: string,
   moduleId: string,
-  opts: { reading?: number; video?: number; audio?: number; lastPage?: number } = {},
+  opts: { reading?: number; video?: number; audio?: number; lastPage?: number; reflect?: boolean } = {},
 ): Promise<void> {
   await testPool().query(
     `INSERT INTO module_engagement (user_id, module_id, reading_seconds, video_seconds, audio_seconds, last_page)
@@ -99,6 +102,30 @@ export async function markContentConsumed(
        reading_seconds = EXCLUDED.reading_seconds, video_seconds = EXCLUDED.video_seconds,
        audio_seconds = EXCLUDED.audio_seconds, last_page = EXCLUDED.last_page`,
     [userId, moduleId, opts.reading ?? 300, opts.video ?? 0, opts.audio ?? 0, opts.lastPage ?? 99],
+  );
+  if (opts.reflect !== false) await markReflected(userId, moduleId);
+}
+
+/** Write a non-empty reflection for (user, module) — the content gate's final
+ *  'reflect' step. Creates/reuses the member's module_progress row to anchor the
+ *  FK, then upserts the reflection (module_reflections is keyed by progress_id). */
+export async function markReflected(
+  userId: string,
+  moduleId: string,
+  body = "A genuine reflection on what this lesson stirred in me.",
+): Promise<void> {
+  const { rows } = await testPool().query<{ progress_id: string }>(
+    `INSERT INTO module_progress (enrollment_id, module_id)
+     SELECT enrollment_id, $2 FROM enrollments WHERE user_id = $1
+     ON CONFLICT (enrollment_id, module_id) DO UPDATE SET row_version = module_progress.row_version
+     RETURNING progress_id`,
+    [userId, moduleId],
+  );
+  await testPool().query(
+    `INSERT INTO module_reflections (progress_id, user_id, module_id, body)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (progress_id) DO UPDATE SET body = EXCLUDED.body`,
+    [rows[0]!.progress_id, userId, moduleId, body],
   );
 }
 

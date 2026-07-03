@@ -506,9 +506,13 @@ paths:
   /me/pathway:
     get:
       tags: [curriculum]
-      summary: Per-member pathway summary; each level with module counts and completion status.
+      summary: >-
+        Per-member pathway summary; each level with module counts and status
+        (completed | active | awaiting_review | locked). A level whose exam is passed
+        but the discipler has not yet ushered reports status 'awaiting_review' and
+        awaiting_review:true; the next level stays 'locked' until ushered.
       responses:
-        "200": { description: Pathway summary }
+        "200": { description: "Pathway summary — { current_level, levels: [{ level_number, title, theme, description, total_modules, completed_modules, minutes, status, awaiting_review }] }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /levels/{n}/modules:
     get:
@@ -1137,6 +1141,67 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /reviews/levels:
+    get:
+      tags: [portal]
+      summary: >-
+        Instructor+. Pending level advancements for members the discipler leads (cell-scoped,
+        §5.4). Passing a level exam records a pending advancement; ushering advances the level.
+      responses:
+        "200":
+          description: Pending advancements awaiting the discipler
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, user_id, member_name, level_number, exam_score, created_at]
+                      properties:
+                        id: { type: string, format: uuid }
+                        user_id: { type: string, format: uuid }
+                        member_name: { type: string }
+                        level_number: { type: integer }
+                        exam_score: { type: [number, "null"] }
+                        created_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /reviews/levels/{id}/usher:
+    post:
+      tags: [portal]
+      summary: >-
+        Instructor+. Usher a member into the next level — marks the advancement ushered,
+        advances current_level to N+1 (idempotent), and notifies the member. Cell-scoped (§5.4).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string, maxLength: 2000 }
+      responses:
+        "200":
+          description: Ushered
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status, advanced, new_level]
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string, enum: [ushered] }
+                  advanced: { type: boolean }
+                  new_level: { type: [integer, "null"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /relationships:
     post:
       tags: [portal]
@@ -1924,11 +1989,71 @@ paths:
   /modules/{id}/reflection:
     get:
       tags: [assessment]
-      summary: The member's own module reflection — state + reviewer feedback (never the pastoral note).
+      summary: The member's saved standalone reflection for a module (null when none). Unlock-gated like getModule.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: Reflection }
+        "200":
+          description: The saved reflection, or null
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    oneOf:
+                      - type: "null"
+                      - type: object
+                        required: [body, created_at]
+                        properties:
+                          body: { type: string }
+                          created_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/GateLocked" }
+    post:
+      tags: [assessment]
+      summary: >-
+        Write (or overwrite) the member's reflection on a module — one of the content
+        steps the quiz / mark-complete gate requires (read → watch → listen → reflect).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [body, created_at]
+                    properties:
+                      body: { type: string }
+                      created_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/GateLocked" }
+  /modules/{id}/reflection/review:
+    get:
+      tags: [assessment]
+      summary: The member's own module-reflection review state + reviewer feedback (never the pastoral note).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Reflection review state }
         "404": { $ref: "#/components/responses/NotFound" }
   /admin/reflections:
     get:

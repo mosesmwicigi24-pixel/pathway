@@ -138,6 +138,22 @@ export class ExamService {
       await recordChange(c, "level_exam_attempts", attempt.exam_attempt_id, userId, "upsert");
       await audit(c, userId, "exam.attempted", "levels", String(levelNumber), { score, is_passed: isPassed });
 
+      // THE RULE: "Modules a member earns alone; LEVELS require a human discipler
+      // to usher them in." A passing exam no longer advances current_level — it
+      // records a PENDING advancement for the level just cleared. current_level
+      // stays put until a discipler ushers the member (see reviews/levels).
+      // Idempotent: UNIQUE(user_id, level_number) makes a re-pass a no-op and
+      // never overwrites an already-'ushered' row.
+      if (isPassed) {
+        await c.query(
+          `INSERT INTO level_advancements (user_id, level_number, exam_attempt_id, status)
+           VALUES ($1, $2, $3, 'pending')
+           ON CONFLICT (user_id, level_number) DO UPDATE
+             SET exam_attempt_id = COALESCE(level_advancements.exam_attempt_id, EXCLUDED.exam_attempt_id)`,
+          [userId, levelNumber, attempt.exam_attempt_id],
+        );
+      }
+
       return {
         exam_attempt_id: attempt.exam_attempt_id,
         score_achieved: score,

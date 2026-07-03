@@ -11,6 +11,7 @@ import { ApiError } from "../../http/errors.js";
 import { assertCellInScope } from "../../http/auth.js";
 import type { Principal } from "../../http/http.js";
 import { NotificationService } from "../notifications/service.js";
+import { loadModule, isModuleUnlocked, loadEnrollment, ensureEnrollment } from "../progress/gating.js";
 
 const DECISION_TO_STATE = { approve: "approved", return: "returned", defer: "deferred" } as const;
 
@@ -22,6 +23,76 @@ export class ModuleReflectionService {
     notifications?: NotificationService,
   ) {
     this.notifications = notifications ?? new NotificationService(pool);
+  }
+
+  static readonly SaveBody = z.object({ body: z.string().trim().min(1).max(4000) });
+
+  /** Same module-unlock check as getModule (§1.9): a member can only read/write
+   *  a reflection for content they can actually open. NOT_FOUND / GATE_LOCKED. */
+  private async assertModuleUnlocked(userId: string, moduleId: string): Promise<void> {
+    const module = await loadModule(this.pool, moduleId);
+    if (!module) throw new ApiError("NOT_FOUND", "Module not found");
+    const enrollment = await loadEnrollment(this.pool, userId);
+    if (
+      module.level_number === 1 && module.module_sequence_number === 1
+        ? false
+        : !enrollment || !(await isModuleUnlocked(this.pool, enrollment, module))
+    ) {
+      throw new ApiError("GATE_LOCKED", "Module is not yet unlocked", {
+        module_sequence_number: module.module_sequence_number,
+      });
+    }
+  }
+
+  /**
+   * Member writes (or overwrites) their standalone reflection for a module. The
+   * reflection is content, not a review submission — it upserts the current
+   * reflection body in place. We create/reuse the member's module_progress row to
+   * anchor the FK (module_reflections is keyed by progress_id). Re-saving a body
+   * updates it and (when it had been sent back) re-enters 'pending' so the review
+   * queue sees the fresh text; approved reflections stay approved. Gated by the
+   * same module-unlock check as getModule.
+   */
+  async saveReflection(userId: string, moduleId: string, body: string): Promise<{ body: string; created_at: string }> {
+    await this.assertModuleUnlocked(userId, moduleId);
+    return tx(this.pool, async (c) => {
+      const enrollment = await ensureEnrollment(c, userId);
+      const prog = await one<{ progress_id: string }>(
+        c,
+        `INSERT INTO module_progress (enrollment_id, module_id) VALUES ($1, $2)
+         ON CONFLICT (enrollment_id, module_id) DO UPDATE SET row_version = module_progress.row_version
+         RETURNING progress_id`,
+        [enrollment.enrollment_id, moduleId],
+      );
+      const row = await one<{ reflection_id: string; body: string; submitted_at: string }>(
+        c,
+        `INSERT INTO module_reflections (progress_id, user_id, module_id, body)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (progress_id) DO UPDATE
+           SET body = EXCLUDED.body,
+               state = CASE WHEN module_reflections.state = 'returned' THEN 'pending'::review_state
+                            ELSE module_reflections.state END,
+               submitted_at = now(),
+               reviewed_by = NULL, reviewed_at = NULL, feedback_notes = NULL
+         RETURNING reflection_id, body, submitted_at`,
+        [prog.progress_id, userId, moduleId, body],
+      );
+      await recordChange(c, "module_reflections", row.reflection_id, userId, "upsert");
+      await audit(c, userId, "reflection.saved", "module_reflections", row.reflection_id, { module_id: moduleId });
+      return { body: row.body, created_at: row.submitted_at };
+    });
+  }
+
+  /** The member's saved reflection body for a module, or null when none exists. */
+  async getReflection(userId: string, moduleId: string): Promise<{ body: string; created_at: string } | null> {
+    await this.assertModuleUnlocked(userId, moduleId);
+    const row = await maybeOne<{ body: string; created_at: string }>(
+      this.pool,
+      `SELECT body, submitted_at AS created_at FROM module_reflections
+        WHERE user_id = $1 AND module_id = $2`,
+      [userId, moduleId],
+    );
+    return row ?? null;
   }
 
   /** The member's own reflection for a module — state + feedback, never the pastoral note. */

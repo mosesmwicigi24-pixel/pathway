@@ -10,6 +10,7 @@ import { AssessmentService } from "./service.js";
 import { ReflectionService } from "./reflection.js";
 import { ModuleReflectionService } from "./moduleReflection.js";
 import { ExamService } from "./exam.js";
+import { LevelAdvancementService } from "./levelAdvancement.js";
 
 export const assessmentRouter: Router = Router();
 
@@ -18,14 +19,38 @@ export function registerAssessment(ctx: AppContext): Router {
   const reflections = new ReflectionService(ctx.db.primary);
   const moduleReflections = new ModuleReflectionService(ctx.db.primary);
   const exams = new ExamService(ctx.db.primary);
+  const levelAdvancements = new LevelAdvancementService(ctx.db.primary);
   const auth = authenticate(ctx.env);
   const leaderPlus = [auth, requireRole("Instructor")] as const;
   const r = assessmentRouter;
 
-  // ---- Module reflections (Contract Matrix B3) ----
-  // The member's own reflection state + reviewer feedback (never the pastoral note).
+  // ---- Standalone module reflection (member content, part of the content gate) ----
+  // The member writes a reflection on the module; it is one of the content steps
+  // the quiz / mark-complete gate requires (read → watch → listen → reflect).
+  // GET returns { data: { body, created_at } | null }; unlock-gated like getModule.
   r.get(
     "/modules/:id/reflection",
+    auth,
+    handler(async (req, res) => {
+      res.json({ data: await moduleReflections.getReflection(requirePrincipal(req).userId, req.params.id ?? "") });
+    }),
+  );
+
+  r.post(
+    "/modules/:id/reflection",
+    auth,
+    handler(async (req, res) => {
+      const input = parseBody(ModuleReflectionService.SaveBody, req.body ?? {});
+      res.json({
+        data: await moduleReflections.saveReflection(requirePrincipal(req).userId, req.params.id ?? "", input.body),
+      });
+    }),
+  );
+
+  // ---- Module-reflection review (Contract Matrix B3) ----
+  // The member's own reflection state + reviewer feedback (never the pastoral note).
+  r.get(
+    "/modules/:id/reflection/review",
     auth,
     handler(async (req, res) => {
       res.json(await moduleReflections.myReflection(requirePrincipal(req).userId, req.params.id ?? ""));
@@ -116,6 +141,28 @@ export function registerAssessment(ctx: AppContext): Router {
     requireRole("Instructor"),
     handler(async (req, res) => {
       res.json({ data: await reflections.listPending(requirePrincipal(req)) });
+    }),
+  );
+
+  // --- Level advancement (the discipler "usher" gate) ---
+  // Pending advancements for members the discipler leads (cell-scoped, §5.4).
+  r.get(
+    "/reviews/levels",
+    auth,
+    requireRole("Instructor"),
+    handler(async (req, res) => {
+      res.json({ data: await levelAdvancements.listPending(requirePrincipal(req)) });
+    }),
+  );
+
+  // Usher a member into the next level — advances current_level, notifies them.
+  r.post(
+    "/reviews/levels/:id/usher",
+    auth,
+    requireRole("Instructor"),
+    handler(async (req, res) => {
+      const input = parseBody(LevelAdvancementService.UsherBody, req.body ?? {});
+      res.json(await levelAdvancements.usher(requirePrincipal(req), req.params.id ?? "", input.note));
     }),
   );
 

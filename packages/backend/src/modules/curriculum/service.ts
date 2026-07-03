@@ -81,6 +81,16 @@ export class CurriculumService {
   async getPathwaySummary(userId: string): Promise<unknown> {
     const enrollment = await loadEnrollment(this.pool, userId);
     const currentLevel = enrollment?.current_level ?? 1;
+
+    // Levels the member has passed the exam for but a discipler has not yet
+    // ushered them past (§1.9 usher gate). These surface as 'awaiting_review' so
+    // the client can show "awaiting your discipler" instead of a bare "active".
+    const awaitingRows = await many<{ level_number: number }>(
+      this.pool,
+      `SELECT level_number FROM level_advancements WHERE user_id = $1 AND status = 'pending'`,
+      [userId],
+    );
+    const awaitingLevels = new Set(awaitingRows.map((r) => r.level_number));
     const rows = await many<{
       level_number: number;
       title: string;
@@ -115,8 +125,12 @@ export class CurriculumService {
 
     const levels = rows.map((r) => {
       const allDone = r.total_modules > 0 && r.completed_modules >= r.total_modules;
-      const status =
-        r.level_number < currentLevel
+      // The member has cleared this level's exam and is awaiting their discipler:
+      // report 'awaiting_review' (the next level stays locked until ushered).
+      const awaitingReview = awaitingLevels.has(r.level_number) && r.level_number === currentLevel;
+      const status = awaitingReview
+        ? "awaiting_review"
+        : r.level_number < currentLevel
           ? "completed"
           : r.level_number > currentLevel
             ? "locked"
@@ -132,6 +146,7 @@ export class CurriculumService {
         completed_modules: r.completed_modules,
         minutes: r.minutes,
         status,
+        awaiting_review: awaitingReview,
       };
     });
     return { current_level: currentLevel, levels };

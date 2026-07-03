@@ -665,6 +665,17 @@ export interface ModuleVersion {
   created_at: string;
 }
 
+// A member who passed a level exam and is AWAITING their discipler to usher them
+// into the next level. Server-scoped to the signed-in leader's cells (§5.4).
+export interface LevelReviewRow {
+  id: string;
+  user_id: string;
+  member_name: string;
+  level_number: number;
+  exam_score: number | null;
+  created_at: string;
+}
+
 const unwrap = <T>(p: Promise<{ data: { data: T } }>): Promise<T> => p.then((r) => r.data.data);
 
 export const CurriculumApi = {
@@ -705,6 +716,18 @@ export const CurriculumApi = {
   updateQuestion: (qid: string, body: Record<string, unknown>) =>
     api.put<AdminQuestion>(`/admin/questions/${qid}`, body).then((r) => r.data),
   deleteQuestion: (qid: string) => api.delete<{ deleted: boolean }>(`/admin/questions/${qid}`).then((r) => r.data),
+
+  // Level-review queue: members who passed a level exam and await their discipler
+  // ushering them into the next level (server-scoped to the leader's cells).
+  levelReviews: () => unwrap(api.get<{ data: LevelReviewRow[] }>("/reviews/levels")),
+  // Advance a member to the next level and notify them. Idempotent (§3.6).
+  usherLevel: (id: string, note?: string) =>
+    api
+      .post<{ user_id: string; level_number: number }>(
+        `/reviews/levels/${id}/usher`,
+        note && note.trim() ? { note: note.trim() } : {},
+      )
+      .then((r) => r.data),
 };
 
 // ---- Growth content authoring (Admin+, WP5 over B9) ----

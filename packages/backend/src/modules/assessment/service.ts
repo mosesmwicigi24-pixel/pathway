@@ -55,12 +55,14 @@ export class AssessmentService {
   /**
    * Server-authoritative CONTENT gate (§1.3): the quiz cannot start until the
    * member has genuinely taken in the lesson — read to the end, watched ≥90% of
-   * any video, and heard ≥90% of any audio — judged from module_engagement, not
-   * the client's word. The client mirrors this, but the server is the truth so a
-   * crafted client can't skip straight to the quiz. Throws CONTENT_INCOMPLETE
-   * (409) naming the first unmet step.
+   * any video, heard ≥90% of any audio, AND written a reflection — judged from
+   * module_engagement + module_reflections, not the client's word. The client
+   * mirrors this, but the server is the truth so a crafted client can't skip
+   * straight to the quiz. Throws CONTENT_INCOMPLETE (409) naming the first unmet
+   * step in order: read → watch → listen → reflect. Shared by assembleQuiz and
+   * (for non-quiz modules) completeModule, so both paths enforce one gate.
    */
-  private async requireContentComplete(c: Queryable, userId: string, moduleId: string): Promise<void> {
+  static async requireContentComplete(c: Queryable, userId: string, moduleId: string): Promise<void> {
     const m = await one<{
       lesson_content: string;
       video_url: string | null;
@@ -108,13 +110,34 @@ export class AssessmentService {
           ? audioS >= m.audio_duration_sec * 0.9
           : audioS >= 20);
 
-    const missing = !readDone ? "read" : !watchDone ? "watch" : !listenDone ? "listen" : null;
+    // REFLECT — a non-empty reflection row for this user+module (any state,
+    // including 'returned': the member did write one). The reflection is the
+    // last content step: taking in the lesson AND responding to it in writing.
+    const reflected = await maybeOne<{ ok: number }>(
+      c,
+      `SELECT 1 AS ok FROM module_reflections
+        WHERE user_id = $1 AND module_id = $2 AND length(btrim(body)) > 0 LIMIT 1`,
+      [userId, moduleId],
+    );
+    const reflectDone = reflected != null;
+
+    const missing = !readDone
+      ? "read"
+      : !watchDone
+        ? "watch"
+        : !listenDone
+          ? "listen"
+          : !reflectDone
+            ? "reflect"
+            : null;
     if (missing) {
       const msg = missing === "read"
         ? "Finish reading the lesson before the quiz"
         : missing === "watch"
           ? "Finish the video before the quiz"
-          : "Finish the audio before the quiz";
+          : missing === "listen"
+            ? "Finish the audio before the quiz"
+            : "Write your reflection before the quiz";
       throw new ApiError("CONTENT_INCOMPLETE", msg, { step: missing });
     }
   }
@@ -123,7 +146,7 @@ export class AssessmentService {
    *  server-side time-limit clock and reports attempts remaining (B4). */
   async assembleQuiz(userId: string, moduleId: string): Promise<unknown> {
     const { enrollment } = await this.requireUnlocked(this.pool, userId, moduleId);
-    await this.requireContentComplete(this.pool, userId, moduleId);
+    await AssessmentService.requireContentComplete(this.pool, userId, moduleId);
     const cfg = await one<{ time_limit_sec: number | null; max_attempts: number | null }>(
       this.pool,
       `SELECT time_limit_sec, max_attempts FROM modules WHERE module_id = $1`,

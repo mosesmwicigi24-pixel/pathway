@@ -11,6 +11,7 @@ import {
   createEnrollment,
   createModule,
   createLeaderAssignment,
+  markContentConsumed,
 } from "./helpers/factories.js";
 import { SyncService } from "../src/modules/sync/service.js";
 
@@ -50,6 +51,10 @@ afterAll(async () => {
 });
 
 async function submitReflection(text: string): Promise<void> {
+  // Mark-complete on a non-quiz module is content-gated (read→watch→listen→
+  // reflect); the request supplies the reflection, so record the reading first
+  // (reflect:false — the completion itself writes the reflection body).
+  await markContentConsumed(memberId, m1, { reflect: false });
   const res = await agent()
     .post(`/v1/modules/${m1}/complete`)
     .set(auth(memberTok))
@@ -88,7 +93,7 @@ describe("review lifecycle + gating", () => {
     expect(await nextUnlocked()).toBe(false); // RETURNED re-locks the next module
 
     // Member sees state + feedback but never the pastoral note.
-    const mine = await agent().get(`/v1/modules/${m1}/reflection`).set(auth(memberTok));
+    const mine = await agent().get(`/v1/modules/${m1}/reflection/review`).set(auth(memberTok));
     expect(mine.body.state).toBe("returned");
     expect(mine.body.feedback_notes).toBe("Go deeper on application");
     expect(mine.body.pastoral_note).toBeUndefined();
