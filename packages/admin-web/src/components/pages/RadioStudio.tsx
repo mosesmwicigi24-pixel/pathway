@@ -15,7 +15,7 @@
 // Session lock-screen metadata/controls so audio survives screen-lock).
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
-  Activity, ArrowDown, ArrowUp, Bell, CalendarClock, Check, Copy, Cpu, Disc3, Flame, Gauge,
+  Activity, ArrowDown, ArrowUp, Bell, CalendarClock, Check, ChevronDown, Copy, Cpu, Disc3, Flame, Gauge,
   HardDrive, Headphones, Heart, ImagePlus, KeyRound, Laptop, ListMusic, Loader2, Mic, MicOff,
   Music, Pause, Pencil, Play, Plus, QrCode, RefreshCw, Radio as RadioIcon, Repeat, Repeat1,
   Send, ShieldAlert, Signal, SlidersHorizontal, Smartphone, Square, Tablet, Trash2, Upload,
@@ -331,6 +331,7 @@ export function RadioStudio(): ReactElement {
   const [health, setHealth] = useState<StreamHealth | null>(null);
   const [comments, setComments] = useState<RadioComment[]>([]);
   const [rotatedKey, setRotatedKey] = useState<string | null>(null);
+  const [credsOpen, setCredsOpen] = useState(false); // ingest/stream-key disclosure — collapsed on mount (secrets panel)
   const [copied, setCopied] = useState<string | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -838,10 +839,12 @@ export function RadioStudio(): ReactElement {
         @keyframes rs-pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.82); } }
         @keyframes rs-pop { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
         @keyframes rs-spin { to { transform: rotate(360deg); } }
+        @keyframes rs-reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
         .rs-live-dot { animation: rs-pulse 1.4s ease-in-out infinite; }
         .rs-count { animation: rs-pop .4s cubic-bezier(.22,1,.36,1); }
         .rs-spin { animation: rs-spin 1s linear infinite; }
-        @media (prefers-reduced-motion: reduce) { .rs-live-dot, .rs-count, .rs-panel, .rs-spin { animation: none !important; transition: none !important; } }
+        .rs-reveal { animation: rs-reveal .2s ease; }
+        @media (prefers-reduced-motion: reduce) { .rs-live-dot, .rs-count, .rs-panel, .rs-spin, .rs-reveal { animation: none !important; transition: none !important; } }
       `}</style>
 
       {/* ambient studio glows */}
@@ -1329,24 +1332,42 @@ export function RadioStudio(): ReactElement {
               </Panel>
               </div>
 
-              {/* Ingest URL + stream key (broadcaster credentials) */}
+              {/* Ingest URL + stream key (broadcaster credentials) — collapsed disclosure by default */}
               {selected && (
                 <Panel>
-                  <SectionHead icon={KeyRound} title="Ingest & stream key" hint="Broadcaster only — keep secret" />
-                  <div style={{ fontSize: 11, color: DIM, marginTop: -8, marginBottom: 12, lineHeight: 1.45 }}>
-                    Live-mic streaming (advanced) — not needed for uploaded-audio sessions.
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <CredRow label="Ingest URL" value={selected.ingest_url ?? "—"} onCopy={selected.ingest_url ? () => copy("Ingest URL", selected.ingest_url!) : undefined} copied={copied === "Ingest URL"} />
-                    <CredRow label="Stream key" value={rotatedKey ?? selected.stream_key ?? "—"} secret onCopy={(rotatedKey ?? selected.stream_key) ? () => copy("Stream key", (rotatedKey ?? selected.stream_key)!) : undefined} copied={copied === "Stream key"} />
-                    {selected.hls_url && (
-                      <CredRow label="HLS playback" value={selected.hls_url} onCopy={() => copy("HLS playback", selected.hls_url!)} copied={copied === "HLS playback"} />
-                    )}
-                  </div>
-                  <button onClick={() => void rotateKey()} disabled={busy} className="rs-btn flex items-center justify-center gap-2 rounded-xl mt-3" style={{ width: "100%", height: 38, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12.5, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>
-                    <RefreshCw size={14} className={busy ? "rs-spin" : ""} /> Rotate stream key
+                  <button
+                    onClick={() => setCredsOpen((o) => !o)}
+                    aria-expanded={credsOpen}
+                    className="rs-btn flex items-center justify-between gap-2"
+                    style={{ width: "100%", background: "none", border: "none", padding: 0, cursor: "pointer", color: TEXT, textAlign: "left" }}
+                  >
+                    <span className="flex items-center gap-2">
+                      <KeyRound size={15} style={{ color: GOLD }} />
+                      <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.01em" }}>Ingest & stream key</span>
+                    </span>
+                    <span className="flex items-center gap-2 shrink-0">
+                      <span style={{ fontSize: 11, color: DIM }}>Broadcaster only — keep secret</span>
+                      <ChevronDown size={15} style={{ color: DIM, transform: credsOpen ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .2s ease" }} />
+                    </span>
                   </button>
-                  {rotatedKey && <div style={{ fontSize: 11, color: GREEN, marginTop: 8, textAlign: "center" }}>New key issued — the old key stops working immediately.</div>}
+                  {credsOpen && (
+                    <div className="rs-reveal" style={{ marginTop: 14 }}>
+                      <div style={{ fontSize: 11, color: DIM, marginBottom: 12, lineHeight: 1.45 }}>
+                        Live-mic streaming (advanced) — not needed for uploaded-audio sessions.
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <CredRow label="Ingest URL" value={selected.ingest_url ?? "—"} onCopy={selected.ingest_url ? () => copy("Ingest URL", selected.ingest_url!) : undefined} copied={copied === "Ingest URL"} />
+                        <CredRow label="Stream key" value={rotatedKey ?? selected.stream_key ?? "—"} secret onCopy={(rotatedKey ?? selected.stream_key) ? () => copy("Stream key", (rotatedKey ?? selected.stream_key)!) : undefined} copied={copied === "Stream key"} />
+                        {selected.hls_url && (
+                          <CredRow label="HLS playback" value={selected.hls_url} onCopy={() => copy("HLS playback", selected.hls_url!)} copied={copied === "HLS playback"} />
+                        )}
+                      </div>
+                      <button onClick={() => void rotateKey()} disabled={busy} className="rs-btn flex items-center justify-center gap-2 rounded-xl mt-3" style={{ width: "100%", height: 38, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 12.5, fontWeight: 700, opacity: busy ? 0.6 : 1 }}>
+                        <RefreshCw size={14} className={busy ? "rs-spin" : ""} /> Rotate stream key
+                      </button>
+                      {rotatedKey && <div style={{ fontSize: 11, color: GREEN, marginTop: 8, textAlign: "center" }}>New key issued — the old key stops working immediately.</div>}
+                    </div>
+                  )}
                 </Panel>
               )}
             </div>
