@@ -102,6 +102,14 @@ full = mksafe(amplify(mas_g, mix))
 output.icecast(%mp3(bitrate=128),
   host="127.0.0.1", port={icecast_port}, password="{password}",
   mount="{mount}", name={title}, full)
+
+# Presenter monitor: PRE-FADER bed + jingles, NO mic — what the broadcaster
+# hears in the USB mic's headphones (own voice comes via hardware sidetone).
+# Pre-fader so the music stays clear in-ear even while ducked on air.
+monitor = mksafe(add(normalize=false, [bed, jq]))
+output.icecast(%mp3(bitrate=128),
+  host="127.0.0.1", port={icecast_port}, password="{password}",
+  mount="{monitor_mount}", name="Monitor (pre-fader)", monitor)
 """
 
 
@@ -193,6 +201,7 @@ def write_liq(prog, pw):
         password=pw,
         icecast_port=8300,
         mount=mount_for(prog),
+        monitor_mount=mount_for(prog).replace("/s_", "/mon_"),
         title=json.dumps(prog.get("title") or "Nuru Radio"),
         bed_def=bed_def,
     )
