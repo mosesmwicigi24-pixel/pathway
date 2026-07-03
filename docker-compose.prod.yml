@@ -23,6 +23,11 @@ x-backend-env: &backend-env
   JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
   YOUVERSION_LANGUAGE_RANGES: en;sw
   LOG_LEVEL: info
+  # FCM push (§D-M9). Path (inside the container) to the Firebase Admin service-
+  # account JSON, bind-mounted read-only into api+worker by docker-compose.vps.yml.
+  # Server-side secret — the file lives ONLY on the VPS, never committed (§5.10).
+  # Unset → the logging dispatch provider (no delivery), so dev/tests are unaffected.
+  FCM_SERVICE_ACCOUNT: ${FCM_SERVICE_ACCOUNT:-}
 
 services:
   postgres:
