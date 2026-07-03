@@ -4760,6 +4760,7 @@ components:
         currency: { type: string }
         status: { type: string }
         fund: { type: [string, "null"] }
+        receipt_code: { type: [string, "null"], description: M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL); null for older or non-mobile-money gifts }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
 
@@ -4774,6 +4775,7 @@ components:
         fund: { type: [string, "null"] }
         method: { type: string }
         provider_ref: { type: [string, "null"] }
+        receipt_code: { type: [string, "null"], description: M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL); null for older or non-mobile-money gifts }
         schedule_id: { type: [string, "null"], format: uuid }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }

@@ -21,6 +21,9 @@ export interface MobileMoneyCallback {
   event_id: string;
   ref: string; // the checkout reference we stored on the transaction
   status: "succeeded" | "failed";
+  /** M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL), when the
+   *  success callback carries it. Display-only; settlement still keys off `ref`. */
+  receipt?: string | undefined;
 }
 
 export interface MobileMoneyProvider {
@@ -63,7 +66,12 @@ export class FakeMobileMoneyProvider implements MobileMoneyProvider {
     if (!parsed.event_id || !parsed.ref || !parsed.status) {
       throw new ApiError("VALIDATION_FAILED", "Malformed mobile-money callback");
     }
-    return { event_id: parsed.event_id, ref: parsed.ref, status: parsed.status === "succeeded" ? "succeeded" : "failed" };
+    return {
+      event_id: parsed.event_id,
+      ref: parsed.ref,
+      status: parsed.status === "succeeded" ? "succeeded" : "failed",
+      receipt: typeof parsed.receipt === "string" ? parsed.receipt : undefined,
+    };
   }
 }
 
@@ -156,7 +164,15 @@ export class DarajaMpesaProvider implements MobileMoneyProvider {
   /** Parse Daraja's stkCallback. No signature to verify (Daraja sends none). */
   verifyCallback(rawBody: Buffer | string): MobileMoneyCallback {
     const body = typeof rawBody === "string" ? rawBody : rawBody.toString("utf8");
-    let parsed: { Body?: { stkCallback?: { CheckoutRequestID?: string; ResultCode?: number } } };
+    let parsed: {
+      Body?: {
+        stkCallback?: {
+          CheckoutRequestID?: string;
+          ResultCode?: number;
+          CallbackMetadata?: { Item?: Array<{ Name?: string; Value?: unknown }> };
+        };
+      };
+    };
     try {
       parsed = JSON.parse(body);
     } catch {
@@ -166,10 +182,19 @@ export class DarajaMpesaProvider implements MobileMoneyProvider {
     if (!cb?.CheckoutRequestID || cb.ResultCode === undefined) {
       throw new ApiError("VALIDATION_FAILED", "Malformed M-Pesa callback");
     }
+    const succeeded = Number(cb.ResultCode) === 0;
+    // On success the metadata carries the MpesaReceiptNumber (the code in the
+    // member's SMS). Failures/cancellations have no receipt.
+    let receipt: string | undefined;
+    if (succeeded) {
+      const item = cb.CallbackMetadata?.Item?.find((i) => i?.Name === "MpesaReceiptNumber");
+      if (typeof item?.Value === "string" && item.Value) receipt = item.Value;
+    }
     return {
       event_id: cb.CheckoutRequestID, // unique per push → idempotency key
       ref: cb.CheckoutRequestID,
-      status: Number(cb.ResultCode) === 0 ? "succeeded" : "failed",
+      status: succeeded ? "succeeded" : "failed",
+      receipt,
     };
   }
 

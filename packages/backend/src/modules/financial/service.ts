@@ -202,6 +202,16 @@ export class FinancialService {
 
       if (cb.status === "succeeded") {
         await this.settle(c, { provider_ref: cb.ref });
+        // Capture the M-Pesa receipt code (from the SMS) for the member's
+        // statement — display-only, set once, never overwrites, never touches
+        // amount/status/ledger.
+        if (cb.receipt) {
+          await c.query(
+            `UPDATE transactions SET receipt_code = $2
+              WHERE provider_ref = $1 AND receipt_code IS NULL`,
+            [cb.ref, cb.receipt],
+          );
+        }
       } else {
         await c.query(
           `UPDATE transactions SET status = 'failed' WHERE provider_ref = $1 AND status <> 'succeeded'`,
@@ -354,6 +364,7 @@ export class FinancialService {
       `SELECT t.transaction_id, t.amount_minor, t.currency, t.status, f.code AS fund,
               t.provider,
               COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref,
+              t.receipt_code,
               t.created_at, t.settled_at
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
         WHERE t.user_id = $1 ORDER BY t.created_at DESC`,
@@ -374,6 +385,7 @@ export class FinancialService {
       this.pool,
       `SELECT t.transaction_id, t.amount_minor, t.currency, t.status, f.code AS fund,
               t.provider, COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref,
+              t.receipt_code,
               t.schedule_id, t.created_at, t.settled_at
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
         WHERE t.transaction_id = $1 AND t.user_id = $2`,
@@ -399,7 +411,7 @@ export class FinancialService {
   /** Render the caller's giving statement as a PDF (dep-free), grouped by month
    *  with settled-only totals — what the mobile "Download" action saves. */
   async statementPdf(userId: string): Promise<Buffer> {
-    const rows = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; provider_ref: string | null; created_at: string }>;
+    const rows = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; provider_ref: string | null; receipt_code: string | null; created_at: string }>;
     const me = await maybeOne<{ full_name: string; congregation: string | null }>(
       this.pool,
       `SELECT u.full_name, c.name AS congregation FROM users u LEFT JOIN congregations c ON c.congregation_id = u.congregation_id WHERE u.user_id = $1`,
@@ -425,7 +437,11 @@ export class FinancialService {
         label: dayLabel(recs[0]!.created_at),
         totalLabel: ksh(recs.reduce((s, r) => s + (settled(r.status) ? r.amount_minor : 0), 0)),
         rows: recs.map((r) => {
-          const ref = (r.provider_ref ?? "").replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase();
+          // Prefer the real M-Pesa receipt code when present; fall back to the
+          // trimmed provider_ref for older/non-mobile-money gifts.
+          const ref = r.receipt_code
+            ? r.receipt_code.replace(/[^a-zA-Z0-9]/g, "").toUpperCase()
+            : (r.provider_ref ?? "").replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase();
           return `${r.fund[0]!.toUpperCase()}${r.fund.slice(1)}  ${ksh(r.amount_minor)}  ${timeLabel(r.created_at)}  ${methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}`;
         }),
       }));
@@ -443,10 +459,10 @@ export class FinancialService {
   /** Render ONE of the caller's gifts as a downloadable receipt PDF (the in-app
    *  "Giving receipt"). Owner-scoped (404 otherwise). Money stays server-side. */
   async receiptPdf(userId: string, transactionId: string): Promise<Buffer> {
-    const t = await maybeOne<{ amount_minor: number; currency: string; status: string; fund: string | null; provider: string | null; provider_ref: string | null; created_at: unknown; settled_at: unknown }>(
+    const t = await maybeOne<{ amount_minor: number; currency: string; status: string; fund: string | null; provider: string | null; provider_ref: string | null; receipt_code: string | null; created_at: unknown; settled_at: unknown }>(
       this.pool,
       `SELECT t.amount_minor, t.currency, t.status, f.code AS fund, t.provider,
-              COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref, t.created_at, t.settled_at
+              COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref, t.receipt_code, t.created_at, t.settled_at
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
         WHERE t.transaction_id = $1 AND t.user_id = $2`,
       [transactionId, userId],
@@ -465,7 +481,8 @@ export class FinancialService {
     const method = provider === "stripe" ? "card" : provider;
     const methodLabel = ({ mpesa: "M-PESA", airtel: "Airtel Money", card: "Card", paypal: "PayPal" } as Record<string, string>)[method] ?? method;
     const fund = t.fund ? t.fund[0]!.toUpperCase() + t.fund.slice(1) : "Gift";
-    const ref = (t.provider_ref ?? "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+    // Prefer the real M-Pesa receipt code; fall back to provider_ref otherwise.
+    const ref = (t.receipt_code ?? t.provider_ref ?? "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
     return renderReceiptPdf({
       congregation: me?.congregation ?? "Nuru Place Church",
       member: me?.full_name ?? "",

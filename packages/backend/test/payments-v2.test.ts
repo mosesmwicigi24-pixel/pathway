@@ -98,6 +98,74 @@ describe("mobile money (same trust model as Stripe, §5.6)", () => {
     expect(count.rows[0].n).toBe(2);
   });
 
+  it("captures the M-Pesa receipt code on success, once, and surfaces it in giving history", async () => {
+    const intent = (await svc.createGivingIntent(user, {
+      fund: "mission",
+      amount_minor: 20000,
+      currency: "KES",
+      method: "mpesa",
+      idempotency_key: "give-rcpt-001",
+    })) as { transaction_id: string; provider_ref: string };
+
+    const ok = signedBody(mpesa, {
+      event_id: "evt_rcpt_1",
+      ref: intent.provider_ref,
+      status: "succeeded",
+      receipt: "UG3J29U3OL",
+    });
+    await svc.handleMobileMoneyCallback("mpesa", ok.body, ok.signature);
+
+    const stored = await testPool().query(`SELECT receipt_code FROM transactions WHERE transaction_id=$1`, [
+      intent.transaction_id,
+    ]);
+    expect(stored.rows[0].receipt_code).toBe("UG3J29U3OL");
+
+    // A duplicate callback (even one carrying a different receipt) must never
+    // overwrite the captured code — the processed_webhooks dedupe short-circuits.
+    const dup = signedBody(mpesa, {
+      event_id: "evt_rcpt_1",
+      ref: intent.provider_ref,
+      status: "succeeded",
+      receipt: "ZZZZZZZZZZ",
+    });
+    const replay = await svc.handleMobileMoneyCallback("mpesa", dup.body, dup.signature);
+    expect(replay.duplicate).toBe(true);
+    const after = await testPool().query(`SELECT receipt_code FROM transactions WHERE transaction_id=$1`, [
+      intent.transaction_id,
+    ]);
+    expect(after.rows[0].receipt_code).toBe("UG3J29U3OL");
+
+    // GET /giving/history carries the receipt_code for the mobile statement.
+    const hist = await supertest(app).get("/v1/giving/history").set({ Authorization: userTok });
+    expect(hist.status).toBe(200);
+    const rec = (hist.body.data as Array<{ transaction_id: string; receipt_code: string | null }>).find(
+      (r) => r.transaction_id === intent.transaction_id,
+    );
+    expect(rec?.receipt_code).toBe("UG3J29U3OL");
+  });
+
+  it("a failed callback leaves receipt_code null", async () => {
+    const intent = (await svc.createGivingIntent(user, {
+      fund: "gift",
+      amount_minor: 5000,
+      currency: "KES",
+      method: "mpesa",
+      idempotency_key: "give-rcpt-fail",
+    })) as { transaction_id: string; provider_ref: string };
+    const cb = signedBody(mpesa, {
+      event_id: "evt_rcpt_fail",
+      ref: intent.provider_ref,
+      status: "failed",
+      receipt: "SHOULDNOTLAND",
+    });
+    await svc.handleMobileMoneyCallback("mpesa", cb.body, cb.signature);
+    const row = await testPool().query(`SELECT status, receipt_code FROM transactions WHERE transaction_id=$1`, [
+      intent.transaction_id,
+    ]);
+    expect(row.rows[0].status).toBe("failed");
+    expect(row.rows[0].receipt_code).toBeNull();
+  });
+
   it("a failed callback marks the transaction failed without any ledger post", async () => {
     const intent = (await svc.createGivingIntent(user, {
       fund: "gift",

@@ -15,7 +15,7 @@ const provider = new DarajaMpesaProvider({
   callbackUrl: "https://example.org/v1/webhooks/mobilemoney/mpesa",
 });
 
-const callback = (resultCode: number, checkoutId = "ws_CO_123") =>
+const callback = (resultCode: number, checkoutId = "ws_CO_123", receipt?: string) =>
   JSON.stringify({
     Body: {
       stkCallback: {
@@ -23,6 +23,17 @@ const callback = (resultCode: number, checkoutId = "ws_CO_123") =>
         CheckoutRequestID: checkoutId,
         ResultCode: resultCode,
         ResultDesc: resultCode === 0 ? "The service request is processed successfully." : "Cancelled",
+        ...(resultCode === 0
+          ? {
+              CallbackMetadata: {
+                Item: [
+                  { Name: "Amount", Value: 200 },
+                  ...(receipt ? [{ Name: "MpesaReceiptNumber", Value: receipt }] : []),
+                  { Name: "PhoneNumber", Value: 254711222333 },
+                ],
+              },
+            }
+          : {}),
       },
     },
   });
@@ -45,5 +56,19 @@ describe("DarajaMpesaProvider.verifyCallback", () => {
   it("rejects a malformed callback", () => {
     expect(() => provider.verifyCallback("{ not json")).toThrow();
     expect(() => provider.verifyCallback(JSON.stringify({ Body: {} }))).toThrow();
+  });
+
+  it("extracts MpesaReceiptNumber from the success metadata", () => {
+    const cb = provider.verifyCallback(callback(0, "ws_CO_RCPT", "UG3J29U3OL"));
+    expect(cb.status).toBe("succeeded");
+    expect(cb.receipt).toBe("UG3J29U3OL");
+  });
+
+  it("leaves receipt undefined when the success callback carries no receipt", () => {
+    expect(provider.verifyCallback(callback(0, "ws_CO_NORCPT")).receipt).toBeUndefined();
+  });
+
+  it("never surfaces a receipt on a failed callback", () => {
+    expect(provider.verifyCallback(callback(1032, "ws_CO_FAIL")).receipt).toBeUndefined();
   });
 });
