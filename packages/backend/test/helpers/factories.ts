@@ -84,6 +84,24 @@ export async function createModule(
   return rows[0]!.module_id;
 }
 
+/** Record enough reading engagement that the server-authoritative content gate
+ *  (assembleQuiz) treats the lesson as consumed — the honest precondition for a
+ *  member reaching the quiz. Video/audio seconds optional for media modules. */
+export async function markContentConsumed(
+  userId: string,
+  moduleId: string,
+  opts: { reading?: number; video?: number; audio?: number; lastPage?: number } = {},
+): Promise<void> {
+  await testPool().query(
+    `INSERT INTO module_engagement (user_id, module_id, reading_seconds, video_seconds, audio_seconds, last_page)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (user_id, module_id) DO UPDATE SET
+       reading_seconds = EXCLUDED.reading_seconds, video_seconds = EXCLUDED.video_seconds,
+       audio_seconds = EXCLUDED.audio_seconds, last_page = EXCLUDED.last_page`,
+    [userId, moduleId, opts.reading ?? 300, opts.video ?? 0, opts.audio ?? 0, opts.lastPage ?? 99],
+  );
+}
+
 /** Insert `days` interaction events on distinct recent days (drives the Hᵢ signal). */
 export async function addInteractionDays(userId: string, days: number): Promise<void> {
   for (let i = 1; i <= days; i++) {

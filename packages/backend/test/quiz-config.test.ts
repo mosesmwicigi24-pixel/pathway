@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
-import { createCongregation, createUser, createEnrollment, createModule, addQuestion } from "./helpers/factories.js";
+import { createCongregation, createUser, createEnrollment, createModule, addQuestion, markContentConsumed } from "./helpers/factories.js";
 
 let cong: string, memberTok: string, adminTok: string, moduleId: string, questionId: string;
 
@@ -21,6 +21,7 @@ beforeEach(async () => {
   memberTok = bearer({ sub: member.user_id, role: "Student", cong });
   moduleId = await createModule(1, 1, { evaluationKind: "quiz" });
   questionId = await addQuestion(moduleId, "A");
+  await markContentConsumed(member.user_id, moduleId);   // content gate precondition
 });
 afterAll(async () => {
   await closeTestPool();

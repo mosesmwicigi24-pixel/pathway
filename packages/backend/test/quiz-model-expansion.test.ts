@@ -12,6 +12,7 @@ import {
   createEnrollment,
   createModule,
   addTypedQuestion,
+  markContentConsumed,
 } from "./helpers/factories.js";
 import { AssessmentService } from "../src/modules/assessment/service.js";
 import { ExamService } from "../src/modules/assessment/exam.js";
@@ -112,6 +113,7 @@ describe("scoring the new types (§1.3 server-authoritative)", () => {
       correct: JSON.stringify(["A", "B"]),
       answerOptions: { choices: [{ id: "1", text: "A", is_correct: true }, { id: "2", text: "B", is_correct: true }, { id: "3", text: "C", is_correct: false }] },
     });
+    await markContentConsumed(studentId, m);   // content gate precondition
     const quiz = (await assess().assembleQuiz(studentId, m)) as { questions: Array<{ answer_options: { choices: unknown[] } }> };
     for (const c of quiz.questions[0]!.answer_options.choices as Array<Record<string, unknown>>) {
       expect(c).not.toHaveProperty("is_correct");

@@ -8,6 +8,7 @@ import {
   createEnrollment,
   createModule,
   addQuestion,
+  markContentConsumed,
 } from "./helpers/factories.js";
 import { AssessmentService } from "../src/modules/assessment/service.js";
 import { ProgressService } from "../src/modules/progress/service.js";
@@ -31,10 +32,23 @@ describe("assessment / quiz (§1.9, §3.7)", () => {
     l1m2 = await createModule(1, 2);
     q1 = await addQuestion(l1m1, "A");
     q2 = await addQuestion(l1m1, "B");
+    // The member has read the lesson — the content gate's precondition.
+    await markContentConsumed(userId, l1m1);
   });
 
   afterAll(async () => {
     await closeTestPool();
+  });
+
+  it("blocks the quiz until the lesson content is consumed (§1.3)", async () => {
+    // l1m1 is the unlocked entry module; clear the setup's engagement so the
+    // ONLY thing standing between the member and the quiz is having read it.
+    await testPool().query(`DELETE FROM module_engagement WHERE module_id = $1`, [l1m1]);
+    await expect(assess().assembleQuiz(userId, l1m1)).rejects.toMatchObject({ code: "CONTENT_INCOMPLETE" });
+    // Once the lesson is read, the quiz assembles.
+    await markContentConsumed(userId, l1m1);
+    const quiz = (await assess().assembleQuiz(userId, l1m1)) as { question_count: number };
+    expect(quiz.question_count).toBe(2);
   });
 
   it("assembles a quiz without leaking correct answers", async () => {

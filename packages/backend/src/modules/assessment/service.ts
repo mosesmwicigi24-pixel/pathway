@@ -12,6 +12,7 @@ import { z } from "zod";
 import { many, maybeOne, one, tx, recordChange, audit, recordActivityEvent, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { loadEnrollment, loadModule, isModuleUnlocked, type EnrollmentRef } from "../progress/gating.js";
+import { splitContentPages } from "../curriculum/service.js";
 import { gradeSubmission, stripAnswerSignal, type GradableQuestion } from "./grading.js";
 
 export interface QuizResult {
@@ -51,10 +52,78 @@ export class AssessmentService {
     return { enrollment, moduleSeq: module.module_sequence_number };
   }
 
+  /**
+   * Server-authoritative CONTENT gate (§1.3): the quiz cannot start until the
+   * member has genuinely taken in the lesson — read to the end, watched ≥90% of
+   * any video, and heard ≥90% of any audio — judged from module_engagement, not
+   * the client's word. The client mirrors this, but the server is the truth so a
+   * crafted client can't skip straight to the quiz. Throws CONTENT_INCOMPLETE
+   * (409) naming the first unmet step.
+   */
+  private async requireContentComplete(c: Queryable, userId: string, moduleId: string): Promise<void> {
+    const m = await one<{
+      lesson_content: string;
+      video_url: string | null;
+      audio_url: string | null;
+      video_duration_sec: number | null;
+      audio_duration_sec: number | null;
+    }>(
+      c,
+      `SELECT lesson_content, video_url, audio_url, video_duration_sec, audio_duration_sec
+         FROM modules WHERE module_id = $1`,
+      [moduleId],
+    );
+    const eng = await maybeOne<{
+      reading_seconds: number; video_seconds: number; audio_seconds: number; last_page: number;
+    }>(
+      c,
+      `SELECT reading_seconds, video_seconds, audio_seconds, last_page
+         FROM module_engagement WHERE user_id = $1 AND module_id = $2`,
+      [userId, moduleId],
+    );
+    const reading = eng?.reading_seconds ?? 0;
+    const videoS = eng?.video_seconds ?? 0;
+    const audioS = eng?.audio_seconds ?? 0;
+    const lastPage = eng?.last_page ?? 1;
+
+    // READ — genuine time on the lesson, and (for paged lessons) the last page
+    // reached. The read floor is half the expected 220-wpm read time (generous
+    // for fast readers), min 20s, so an instant page-skip can't clear it.
+    const pages = splitContentPages(m.lesson_content).length;
+    const words = m.lesson_content.trim().split(/\s+/).filter(Boolean).length;
+    const readFloor = Math.max(20, Math.round((words / 220) * 60 * 0.5));
+    const readDone = reading >= readFloor && (pages <= 1 || lastPage >= pages);
+
+    // WATCH / LISTEN — ≥90% of a known duration; when a medium is present but its
+    // length was never set, require it was genuinely opened/heard (≥20s).
+    const has = (u: string | null) => !!u && u.trim().length > 0;
+    const watchDone = !has(m.video_url)
+      ? true
+      : (m.video_duration_sec && m.video_duration_sec > 0
+          ? videoS >= m.video_duration_sec * 0.9
+          : videoS >= 20);
+    const listenDone = !has(m.audio_url)
+      ? true
+      : (m.audio_duration_sec && m.audio_duration_sec > 0
+          ? audioS >= m.audio_duration_sec * 0.9
+          : audioS >= 20);
+
+    const missing = !readDone ? "read" : !watchDone ? "watch" : !listenDone ? "listen" : null;
+    if (missing) {
+      const msg = missing === "read"
+        ? "Finish reading the lesson before the quiz"
+        : missing === "watch"
+          ? "Finish the video before the quiz"
+          : "Finish the audio before the quiz";
+      throw new ApiError("CONTENT_INCOMPLETE", msg, { step: missing });
+    }
+  }
+
   /** Assemble a randomized quiz (no correct answers leaked, §5.8). Starts the
    *  server-side time-limit clock and reports attempts remaining (B4). */
   async assembleQuiz(userId: string, moduleId: string): Promise<unknown> {
     const { enrollment } = await this.requireUnlocked(this.pool, userId, moduleId);
+    await this.requireContentComplete(this.pool, userId, moduleId);
     const cfg = await one<{ time_limit_sec: number | null; max_attempts: number | null }>(
       this.pool,
       `SELECT time_limit_sec, max_attempts FROM modules WHERE module_id = $1`,
