@@ -10,6 +10,7 @@ import {
   ClipboardList, AlertTriangle, Target, Tag, Hash, Video,
   Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, List, ListOrdered,
   Quote, Code2, Link as LinkIcon, Image as ImageIcon, Table as TableIcon, Minus,
+  SeparatorHorizontal,
 } from "lucide-react";
 import {
   CurriculumApi, type AdminLevel, type AdminModuleSummary, type AdminModule, type EvaluationKind,
@@ -29,6 +30,8 @@ const labelToBe: Record<LevelStatus, string> = { Published: "published", Draft: 
 const EVAL_OPTS: { v: EvaluationKind; l: string }[] = [
   { v: "none", l: "— none —" }, { v: "quiz", l: "Quiz" }, { v: "reflection", l: "Reflection" }, { v: "exit_exam", l: "Exit exam" },
 ];
+/** Mobile-reader page marker — mirrors the server split (whitespace-tolerant). */
+const PAGE_BREAK_RE = /<!--\s*page-break\s*-->/;
 const fieldLabel: CSSProperties = { fontSize: 10.5, fontWeight: 700, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: "0.08em", display: "block", marginBottom: 6 };
 const fieldInput: CSSProperties = { width: "100%", height: 42, borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--input-background)", fontSize: 13, padding: "0 14px", color: "var(--foreground)", outline: "none" };
 const areaInput: CSSProperties = { width: "100%", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--input-background)", fontSize: 13, padding: "10px 14px", color: "var(--foreground)", outline: "none", resize: "vertical", lineHeight: 1.6, fontFamily: "var(--font-sans)" };
@@ -206,7 +209,12 @@ export function LevelDetail(): ReactElement {
     { Icon: ImageIcon, title: "Image", act: () => insert("![alt](https://)") },
     { Icon: TableIcon, title: "Table", act: () => insert("\n| A | B |\n| --- | --- |\n| 1 | 2 |\n") },
     { Icon: Minus, title: "Divider", act: () => insert("\n---\n") },
+    { Icon: SeparatorHorizontal, title: "Insert page break", act: () => insert("\n\n<!-- page-break -->\n\n"), group: true },
   ];
+  // Live mobile pagination hint — same split the server applies (trim + drop empties).
+  const pageCount = draft
+    ? Math.max(1, draft.lesson_content.split(PAGE_BREAK_RE).map((p) => p.trim()).filter(Boolean).length)
+    : 1;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--background)" }}>
@@ -446,7 +454,8 @@ export function LevelDetail(): ReactElement {
                         </span>
                       ))}
                       <div style={{ flex: 1, minWidth: 8 }} />
-                      <span style={{ fontSize: 10.5, color: "var(--muted-foreground)" }}>{draft.lesson_content.length} chars</span>
+                      <span title="How the mobile reader paginates this lesson" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(200,155,60,0.12)", color: "var(--nuru-gold)", border: "1px solid rgba(200,155,60,0.3)" }}><SeparatorHorizontal size={10} /> {pageCount} page{pageCount === 1 ? "" : "s"} on mobile</span>
+                      <span style={{ fontSize: 10.5, color: "var(--muted-foreground)", marginLeft: 6 }}>{draft.lesson_content.length} chars</span>
                     </div>
                     {mdView === "write" ? (
                       <textarea ref={contentRef} value={draft.lesson_content} onChange={(e) => setField("lesson_content", e.target.value)} rows={16} placeholder={"## Section heading\n\nWrite the lesson here…"} style={{ width: "100%", borderRadius: "0 0 10px 10px", border: "1.5px solid var(--border)", borderTop: "none", background: "var(--input-background)", fontSize: 13, padding: "12px 14px", color: "var(--foreground)", outline: "none", resize: "vertical", lineHeight: 1.7, fontFamily: "var(--font-mono), monospace" }} />

@@ -8,6 +8,7 @@ import type { Pool } from "pg";
 import { z } from "zod";
 import { many, maybeOne, one, tx, recordChange, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
+import { splitContentPages } from "./service.js";
 
 const KIND = z.enum(["none", "reflection", "quiz", "exit_exam"]);
 
@@ -437,9 +438,10 @@ export class AdminCurriculumService {
   }
 
   async getModule(moduleId: string): Promise<unknown> {
-    const row = await this.fetchModule(this.pool, moduleId);
+    const row = (await this.fetchModule(this.pool, moduleId)) as { lesson_content: string } | null;
     if (!row) throw new ApiError("NOT_FOUND", "Module not found");
-    return row;
+    // Same derived pagination the member reader gets — powers the portal preview.
+    return { ...row, content_pages: splitContentPages(row.lesson_content) };
   }
 
   private fetchModule(c: Queryable, moduleId: string): Promise<unknown> {

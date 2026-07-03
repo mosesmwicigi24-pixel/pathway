@@ -9,6 +9,22 @@ import { ApiError } from "../../http/errors.js";
 import { cacheGetSet, cacheKeys } from "../../cache.js";
 import { loadEnrollment, loadModule, isModuleUnlocked, isEntryModule } from "../progress/gating.js";
 
+/** Authoring marker that splits a lesson body into mobile reader pages. */
+const PAGE_BREAK = /<!--\s*page-break\s*-->/;
+
+/**
+ * Server-authored pagination: split lesson_content on the `<!-- page-break -->`
+ * marker (whitespace-tolerant), trim the pieces, drop empties. Falls back to a
+ * single page (the whole body) when no markers are present.
+ */
+export function splitContentPages(lessonContent: string): string[] {
+  const pages = lessonContent
+    .split(PAGE_BREAK)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  return pages.length > 0 ? pages : [lessonContent];
+}
+
 export class CurriculumService {
   constructor(
     private readonly pool: Pool,
@@ -158,8 +174,12 @@ export class CurriculumService {
     return out;
   }
 
-  /** Full lesson content + (signed) media URL. 409 GATE_LOCKED if not unlocked. */
-  async getModule(userId: string, moduleId: string): Promise<unknown> {
+  /**
+   * The member getModule gating check (§1.9), shared by every member-facing
+   * read/write on a module body — 404 for unknown or non-published modules,
+   * 409 GATE_LOCKED when the module is not yet unlocked for this member.
+   */
+  private async assertUnlocked(userId: string, moduleId: string): Promise<void> {
     const module = await loadModule(this.pool, moduleId);
     if (!module) throw new ApiError("NOT_FOUND", "Module not found");
     // Students never receive non-published bodies — drafts/archived are invisible
@@ -180,10 +200,15 @@ export class CurriculumService {
         });
       }
     }
+  }
+
+  /** Full lesson content + (signed) media URL. 409 GATE_LOCKED if not unlocked. */
+  async getModule(userId: string, moduleId: string): Promise<unknown> {
+    await this.assertUnlocked(userId, moduleId);
     // Published lesson bodies are identical for every reader, so the (heavy)
     // content read is cached and busted whenever an admin edits the module.
     const full = await cacheGetSet(this.redis, cacheKeys.moduleContent(moduleId), 600, () =>
-      one<{ video_url: string | null }>(
+      one<{ lesson_content: string; video_url: string | null }>(
         this.pool,
         `SELECT module_id, level_number, module_sequence_number, title, lesson_content,
                 summary, key_verses, video_url, evaluation_kind, estimated_minutes,
@@ -194,7 +219,58 @@ export class CurriculumService {
     );
     // Media is brokered as a signed URL by the media module; the raw video_url is
     // a placeholder reference here (§4.5). Wired when the media module lands.
-    return { ...full, locked: false };
+    // content_pages is derived (never stored): lesson_content stays untouched for
+    // older clients; the mobile reader paginates on the server-authored split.
+    return { ...full, content_pages: splitContentPages(full.lesson_content), locked: false };
+  }
+
+  /** Heartbeat body — all deltas optional; each capped at 600s (10 min). */
+  static readonly EngagementSchema = z.object({
+    reading_seconds: z.number().int().min(0).max(600).optional(),
+    audio_seconds: z.number().int().min(0).max(600).optional(),
+    video_seconds: z.number().int().min(0).max(600).optional(),
+    last_page: z.number().int().min(1).optional(),
+  });
+
+  /**
+   * Accumulate an engagement heartbeat for (user, module). Totals grow by the
+   * clamped deltas (a single heartbeat can never claim more than 600s per
+   * channel — server-side cap, defense in depth beyond the zod bound);
+   * last_page overwrites only when provided. Gated exactly like getModule:
+   * a member cannot write engagement for content they cannot open (§1.9).
+   */
+  async recordEngagement(
+    userId: string,
+    moduleId: string,
+    input: z.infer<typeof CurriculumService.EngagementSchema>,
+  ): Promise<unknown> {
+    await this.assertUnlocked(userId, moduleId);
+    const clamp = (v: number | undefined): number => Math.max(0, Math.min(v ?? 0, 600));
+    return one(
+      this.pool,
+      `INSERT INTO module_engagement (user_id, module_id, reading_seconds, audio_seconds, video_seconds, last_page)
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6, 1))
+       ON CONFLICT (user_id, module_id) DO UPDATE SET
+         reading_seconds = module_engagement.reading_seconds + EXCLUDED.reading_seconds,
+         audio_seconds   = module_engagement.audio_seconds   + EXCLUDED.audio_seconds,
+         video_seconds   = module_engagement.video_seconds   + EXCLUDED.video_seconds,
+         last_page       = COALESCE($6, module_engagement.last_page),
+         updated_at      = now()
+       RETURNING reading_seconds, audio_seconds, video_seconds, last_page`,
+      [userId, moduleId, clamp(input.reading_seconds), clamp(input.audio_seconds), clamp(input.video_seconds), input.last_page ?? null],
+    );
+  }
+
+  /** The member's accumulated engagement for a module (zeros / page 1 when none). */
+  async getEngagement(userId: string, moduleId: string): Promise<unknown> {
+    await this.assertUnlocked(userId, moduleId);
+    const row = await maybeOne(
+      this.pool,
+      `SELECT reading_seconds, audio_seconds, video_seconds, last_page
+         FROM module_engagement WHERE user_id = $1 AND module_id = $2`,
+      [userId, moduleId],
+    );
+    return row ?? { reading_seconds: 0, audio_seconds: 0, video_seconds: 0, last_page: 1 };
   }
 
   static readonly EditModuleSchema = z

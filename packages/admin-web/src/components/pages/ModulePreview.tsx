@@ -16,6 +16,20 @@ const diffStyle: Record<string, { bg: string; color: string }> = {
 };
 const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 
+/** Mobile-reader page marker — mirrors the server-authored content_pages split. */
+const PAGE_BREAK_RE = /<!--\s*page-break\s*-->/;
+
+/** Labeled divider shown where an author placed a page break ("— Page 2 —"). */
+function PageDivider({ page, accent }: { page: number; accent: string }): ReactElement {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "30px 0" }}>
+      <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: accent, whiteSpace: "nowrap" }}>— Page {page} —</span>
+      <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+    </div>
+  );
+}
+
 /** Learner-side option labels for any choice question (legacy string[] or Figma choices). */
 function previewOptions(q: AdminQuestion): string[] {
   if (q.q_type === "TrueFalse") return ["True", "False"];
@@ -119,6 +133,9 @@ export function ModulePreview(): ReactElement {
     );
   }
 
+  // Prefer the server-authored split; fall back to splitting locally so a stale
+  // response (without content_pages) still previews the breaks.
+  const pages = mod.content_pages ?? (mod.lesson_content ?? "").split(PAGE_BREAK_RE).map((p) => p.trim()).filter(Boolean);
   const words = (mod.lesson_content ?? "").trim().split(/\s+/).filter(Boolean).length;
   const readMins = Math.max(1, Math.ceil(words / 200));
   const objectives = (mod.objectives ?? "").split("\n").map((s) => s.trim()).filter(Boolean);
@@ -165,7 +182,14 @@ export function ModulePreview(): ReactElement {
           </div>
         ) : null}
 
-        {(mod.lesson_content ?? "").trim() ? <MarkdownPreview content={mod.lesson_content} /> : <p style={{ fontSize: 14, color: "var(--muted-foreground)", fontStyle: "italic" }}>No lesson content yet.</p>}
+        {(mod.lesson_content ?? "").trim() ? (
+          pages.map((page, i) => (
+            <div key={i}>
+              {i > 0 ? <PageDivider page={i + 1} accent={accent} /> : null}
+              <MarkdownPreview content={page} />
+            </div>
+          ))
+        ) : <p style={{ fontSize: 14, color: "var(--muted-foreground)", fontStyle: "italic" }}>No lesson content yet.</p>}
 
         {scriptures.length > 0 ? (
           <div style={{ background: "linear-gradient(180deg, #FFFBEB 0%, #FDF5DA 100%)", border: "1px solid #F5E0A8", borderRadius: 16, padding: "18px 20px", marginTop: 24 }}>

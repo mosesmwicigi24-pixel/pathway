@@ -1466,6 +1466,16 @@ export class AdminOpsService {
     const activeDays = Number(habit.active_days);
     const habitsPct = Math.min(100, Math.round((activeDays / 30) * 100));
 
+    // Total time-in-content across every module (reading + audio + video), from
+    // the mobile reader's engagement heartbeats. Surfaced as whole minutes.
+    const engSecs = await one<{ secs: string }>(
+      this.replica,
+      `SELECT COALESCE(SUM(reading_seconds + audio_seconds + video_seconds), 0) AS secs
+         FROM module_engagement WHERE user_id = $1`,
+      [userId],
+    );
+    const engagementMinutes = Math.round(Number(engSecs.secs) / 60);
+
     // Guardian consent (minors only) — name/relation/dates are admin-safe; the
     // encrypted contact blob is intentionally not returned.
     const guardian = (m.is_minor as boolean)
@@ -1557,6 +1567,7 @@ export class AdminOpsService {
         events_held: held,
         current_streak_days: m.current_streak_days ?? 0,
         longest_streak_days: m.longest_streak_days ?? 0,
+        engagement_minutes: engagementMinutes,
       },
       guardian: guardian
         ? {

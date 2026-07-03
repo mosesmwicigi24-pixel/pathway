@@ -64,6 +64,25 @@ export function registerCurriculum(ctx: AppContext): Router {
     }),
   );
 
+  // Engagement heartbeat — accumulate reading/audio/video seconds + last page.
+  // Gated exactly like getModule (§1.9): CONTRACT IS FIXED (iOS builds against it).
+  r.post(
+    "/modules/:id/engagement",
+    auth,
+    handler(async (req, res) => {
+      const input = parseBody(CurriculumService.EngagementSchema, req.body);
+      res.json(await svc.recordEngagement(requirePrincipal(req).userId, idOf(req, "id"), input));
+    }),
+  );
+
+  r.get(
+    "/modules/:id/engagement",
+    auth,
+    handler(async (req, res) => {
+      res.json(await svc.getEngagement(requirePrincipal(req).userId, idOf(req, "id")));
+    }),
+  );
+
   // Sanitised YouVersion passage by ref + version + language (§3.3).
   r.get(
     "/scripture",

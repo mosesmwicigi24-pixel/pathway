@@ -577,6 +577,8 @@ export interface AdminModuleSummary {
 
 export interface AdminModule extends AdminModuleSummary {
   lesson_content: string;
+  /** Derived, GET-only: lesson_content split on <!-- page-break --> markers (mobile reader pagination). */
+  content_pages?: string[];
   key_verses: string[] | null;
   quiz_pass_mark: string;
   estimated_minutes: number | null;

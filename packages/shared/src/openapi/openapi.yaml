@@ -521,11 +521,50 @@ paths:
   /modules/{id}:
     get:
       tags: [curriculum]
-      summary: Full lesson content + signed media URL.
+      summary: Full lesson content + signed media URL. Includes server-authored content_pages (lesson_content split on <!-- page-break --> markers; falls back to one page).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
         "200": { description: Module body }
+        "409": { $ref: "#/components/responses/GateLocked" }
+  /modules/{id}/engagement:
+    get:
+      tags: [curriculum]
+      summary: The member's accumulated engagement for a module (zeros / page 1 when none). Gated like the module body (§1.9).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Engagement totals
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModuleEngagement" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/GateLocked" }
+    post:
+      tags: [curriculum]
+      summary: Engagement heartbeat — accumulate reading/audio/video second deltas (each server-capped at 600) and overwrite last_page when provided. Gated like the module body (§1.9).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reading_seconds: { type: integer, minimum: 0, maximum: 600 }
+                audio_seconds: { type: integer, minimum: 0, maximum: 600 }
+                video_seconds: { type: integer, minimum: 0, maximum: 600 }
+                last_page: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Updated totals
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModuleEngagement" }
+        "400": { description: Validation failed }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/GateLocked" }
   /scripture:
     get:
@@ -604,7 +643,7 @@ paths:
   /admin/modules/{id}:
     get:
       tags: [curriculum]
-      summary: Admin. Full module record incl. content + current version.
+      summary: Admin. Full module record incl. content + current version + derived content_pages (page-break split, same as the member read).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
@@ -4541,6 +4580,15 @@ components:
           additionalProperties: { type: number }
 
     # --- Auth & identity (§3.3, §5.3) ---
+    ModuleEngagement:
+      type: object
+      required: [reading_seconds, audio_seconds, video_seconds, last_page]
+      description: Accumulated per-(member, module) engagement totals from reader heartbeats.
+      properties:
+        reading_seconds: { type: integer, minimum: 0 }
+        audio_seconds: { type: integer, minimum: 0 }
+        video_seconds: { type: integer, minimum: 0 }
+        last_page: { type: integer, minimum: 1 }
     OAuthExchange:
       type: object
       required: [code]
