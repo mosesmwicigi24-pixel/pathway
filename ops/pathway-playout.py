@@ -103,10 +103,13 @@ output.icecast(%mp3(bitrate=128),
   host="127.0.0.1", port={icecast_port}, password="{password}",
   mount="{mount}", name={title}, full)
 
-# Presenter monitor: PRE-FADER bed + jingles, NO mic — what the broadcaster
-# hears in the USB mic's headphones (own voice comes via hardware sidetone).
-# Pre-fader so the music stays clear in-ear even while ducked on air.
-monitor = mksafe(add(normalize=false, [bed, jq]))
+# Presenter monitor: the FULL on-air chain minus the mic — bed fader + EQ,
+# jingle fader, master EQ + master gain — so preset/fader moves (e.g. Voice
+# Over Music ducking the bed) are heard in-ear exactly as on air. Own voice
+# comes via the mic's hardware sidetone, never through this feed.
+mon_mix = add(normalize=false, [amplify(bed_g, bed), amplify(jin_g, jq)])
+mon_mix = eq3(eq_master_low, eq_master_mid, eq_master_high, mon_mix)
+monitor = mksafe(amplify(mas_g, mon_mix))
 output.icecast(%mp3(bitrate=128),
   host="127.0.0.1", port={icecast_port}, password="{password}",
   mount="{monitor_mount}", name="Monitor (pre-fader)", monitor)
