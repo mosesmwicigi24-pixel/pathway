@@ -186,6 +186,21 @@ function urlFileName(url: string): string {
   }
 }
 
+// Fuzzy-match the encoder's icy now-playing metadata ("Artist — Title" or bare
+// title) against a library track: case-insensitive containment either way on
+// the track title, with the audio_url basename (extension stripped) as a
+// fallback key. No match → no highlight; we never guess.
+function trackMatchesNowPlaying(nowPlaying: string, track: RadioTrack): boolean {
+  const np = nowPlaying.trim().toLowerCase();
+  if (!np) return false;
+  const title = track.title.trim().toLowerCase();
+  if (title && (np.includes(title) || title.includes(np))) return true;
+  const file = urlFileName(track.audio_url);
+  if (file === "Attached audio") return false; // urlFileName's failure fallback
+  const base = baseName(file).trim().toLowerCase();
+  return base.length > 0 && (np.includes(base) || base.includes(np));
+}
+
 // Recording target label ("saving to Cloud + Local").
 function fmtTarget(target: RadioProgram["record_target"]): string {
   if (target === "both") return "Cloud + Local";
@@ -1026,6 +1041,13 @@ export function RadioStudio(): ReactElement {
                     <Metric label="Listeners" value={listenerCount.toLocaleString()} />
                     <Metric label="Health" value={healthWord(health)} valueColor={GREEN} sub={health ? `${health.bitrate} kbps` : "—"} />
                   </div>
+                  {/* Icy now-playing metadata from the encoder (server health poll) */}
+                  {health?.now_playing && (
+                    <div className="flex items-center gap-2 rounded-lg px-3 py-2 mt-3" style={{ background: "rgba(230,198,110,0.10)", border: `1px solid ${GOLD}33` }}>
+                      <span className="rs-live-dot rounded-full shrink-0" style={{ width: 7, height: 7, background: GOLD }} />
+                      <span className="truncate" style={{ fontSize: 11.5, fontWeight: 600, color: GOLD }}>♪ Now playing: {health.now_playing}</span>
+                    </div>
+                  )}
                 </Panel>
               )}
 
@@ -1131,7 +1153,12 @@ export function RadioStudio(): ReactElement {
               <AudioLibraryPanel />
 
               {/* Sessions — real program playlists (order, loop, live preview) */}
-              <SessionsPanel onPreview={setPreviewTitle} onEdit={beginEditProgram} />
+              <SessionsPanel
+                onPreview={setPreviewTitle}
+                onEdit={beginEditProgram}
+                liveProgramId={live && selected ? selected.id : null}
+                nowPlaying={live ? health?.now_playing ?? null : null}
+              />
 
               {/* Scheduled playout — real schedule (PATCH scheduled_at/repeat) */}
               <Panel>
@@ -1824,7 +1851,15 @@ function AudioLibraryPanel(): ReactElement {
 }
 
 // ── Sessions panel — program playlists + loop + live preview, Figma-styled ──
-function SessionsPanel({ onPreview, onEdit }: { onPreview: (title: string | null) => void; onEdit: (p: RadioProgram) => void }): ReactElement {
+// `liveProgramId`/`nowPlaying` come from the parent's health poll of the REAL
+// broadcast: for the session that IS the live program, the playlist row whose
+// track fuzzily matches the icy now-playing metadata gets a gold ON AIR mark.
+function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: {
+  onPreview: (title: string | null) => void;
+  onEdit: (p: RadioProgram) => void;
+  liveProgramId: string | null;
+  nowPlaying: string | null;
+}): ReactElement {
   const [sessions, setSessions] = useState<RadioProgram[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -1860,7 +1895,9 @@ function SessionsPanel({ onPreview, onEdit }: { onPreview: (title: string | null
 
   const loadPlaylist = useCallback((programId: string) => {
     RadioApi.playlist(programId)
-      .then((items) => setPlaylists((p) => ({ ...p, [programId]: items })))
+      // Coerce at the single write point: everything stored in `playlists` MUST
+      // be an array — a non-array here once white-screened the whole studio.
+      .then((items) => setPlaylists((p) => ({ ...p, [programId]: Array.isArray(items) ? items : [] })))
       .catch(() => {});
   }, []);
 
@@ -1972,22 +2009,29 @@ function SessionsPanel({ onPreview, onEdit }: { onPreview: (title: string | null
     }
   }, [loadPlaylist]);
 
-  const reorder = useCallback(async (programId: string, from: number, to: number) => {
-    const items = playlists[programId];
-    if (!items || to < 0 || to >= items.length) return;
-    const next = items.slice();
-    const [moved] = next.splice(from, 1);
-    if (!moved) return;
-    next.splice(to, 0, moved);
-    setPlaylists((p) => ({ ...p, [programId]: next })); // optimistic
+  // Reorder derives from the SAME `items` array the rows render from (passed by
+  // the caller), so it can never act on a missing/stale playlists[] entry. The
+  // reorder endpoint returns {ok:true} — NOT the playlist — so after saving we
+  // re-fetch to reconcile instead of storing the response (storing that object
+  // as a "playlist" is what used to crash the route with `.map is not a
+  // function`). Everything is wrapped so a playlist mutation can only ever
+  // surface the inline error, never the router error boundary.
+  const reorder = useCallback(async (programId: string, items: RadioPlaylistItem[], from: number, to: number) => {
     try {
-      const saved = await RadioApi.reorderPlaylist(programId, next.map((i) => i.id));
-      setPlaylists((p) => ({ ...p, [programId]: saved }));
+      if (!Array.isArray(items) || items.length === 0) { loadPlaylist(programId); return; }
+      if (from < 0 || from >= items.length || to < 0 || to >= items.length) return;
+      const next = items.slice();
+      const [moved] = next.splice(from, 1);
+      if (!moved) return;
+      next.splice(to, 0, moved);
+      setPlaylists((p) => ({ ...p, [programId]: next })); // optimistic
+      await RadioApi.reorderPlaylist(programId, next.map((i) => i.id));
+      loadPlaylist(programId); // reconcile with the server's order
     } catch {
-      setPlaylists((p) => ({ ...p, [programId]: items }));
+      setPlaylists((p) => ({ ...p, [programId]: items })); // revert optimistic
       setErr("Could not reorder the playlist.");
     }
-  }, [playlists]);
+  }, [loadPlaylist]);
 
   // ── Live preview (client-side player honoring loop_mode) ──
   const playAt = useCallback((programId: string, index: number) => {
@@ -2100,6 +2144,11 @@ function SessionsPanel({ onPreview, onEdit }: { onPreview: (title: string | null
           sessions?.map((s) => {
             const items = playlists[s.id] ?? [];
             const active = s.is_live || previewProgram === s.id;
+            // The row actually airing on the REAL broadcast — only for the live
+            // program, only when the icy metadata matches a track (never guess).
+            const onAirIdx = liveProgramId === s.id && nowPlaying
+              ? items.findIndex((it) => trackMatchesNowPlaying(nowPlaying, it.track))
+              : -1;
             const LoopIcon = s.loop_mode === "repeat_one" ? Repeat1 : Repeat;
             const loopOn = s.loop_mode !== "none";
             return (
@@ -2141,14 +2190,21 @@ function SessionsPanel({ onPreview, onEdit }: { onPreview: (title: string | null
                   {items.map((it, idx) => {
                     const meta = KIND_META[it.track.kind];
                     const nowIdx = previewProgram === s.id && previewIndex === idx;
+                    const onAir = idx === onAirIdx;
                     return (
-                      <div key={it.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: nowIdx ? "rgba(239,68,68,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${nowIdx ? RED + "44" : "transparent"}` }}>
-                        <span className="rs-tnum flex items-center justify-center rounded shrink-0" style={{ width: 18, height: 18, background: "rgba(255,255,255,0.08)", fontSize: 10, fontWeight: 700, color: nowIdx ? "#FCA5A5" : DIM }}>{idx + 1}</span>
+                      <div key={it.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: nowIdx ? "rgba(239,68,68,0.12)" : onAir ? "rgba(230,198,110,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${nowIdx ? RED + "44" : onAir ? GOLD + "55" : "transparent"}` }}>
+                        <span className="rs-tnum flex items-center justify-center rounded shrink-0" style={{ width: 18, height: 18, background: "rgba(255,255,255,0.08)", fontSize: 10, fontWeight: 700, color: nowIdx ? "#FCA5A5" : onAir ? GOLD : DIM }}>{idx + 1}</span>
                         <span className="rounded-full shrink-0" style={{ width: 6, height: 6, background: meta.color }} />
-                        <span className="truncate" style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: nowIdx ? 700 : 500 }}>{it.track.title}</span>
-                        {nowIdx && <span style={{ fontSize: 9, fontWeight: 800, color: "#FCA5A5" }}>NOW</span>}
-                        <button onClick={() => void reorder(s.id, idx, idx - 1)} disabled={idx === 0} title="Move up" className="rs-btn shrink-0" style={{ background: "none", border: "none", color: DIM, opacity: idx === 0 ? 0.3 : 1, cursor: idx === 0 ? "default" : "pointer", padding: 0 }}><ArrowUp size={13} /></button>
-                        <button onClick={() => void reorder(s.id, idx, idx + 1)} disabled={idx === items.length - 1} title="Move down" className="rs-btn shrink-0" style={{ background: "none", border: "none", color: DIM, opacity: idx === items.length - 1 ? 0.3 : 1, cursor: idx === items.length - 1 ? "default" : "pointer", padding: 0 }}><ArrowDown size={13} /></button>
+                        <span className="truncate" style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: nowIdx || onAir ? 700 : 500 }}>{it.track.title}</span>
+                        {onAir && (
+                          <span className="inline-flex items-center gap-1 shrink-0" style={{ fontSize: 9, fontWeight: 800, color: GOLD, letterSpacing: "0.06em" }}>
+                            <span className="rs-live-dot rounded-full" style={{ width: 6, height: 6, background: GOLD }} /> ON AIR
+                          </span>
+                        )}
+                        {nowIdx && <span className="shrink-0" style={{ fontSize: 9, fontWeight: 800, color: "#FCA5A5" }}>NOW</span>}
+                        <span className="rs-tnum shrink-0" style={{ fontFamily: MONO, fontSize: 10.5, color: onAir ? GOLD : DIM, minWidth: 34, textAlign: "right" }}>{fmtClock(it.track.duration_sec) ?? "—"}</span>
+                        <button onClick={() => void reorder(s.id, items, idx, idx - 1)} disabled={idx === 0} title="Move up" className="rs-btn shrink-0" style={{ background: "none", border: "none", color: DIM, opacity: idx === 0 ? 0.3 : 1, cursor: idx === 0 ? "default" : "pointer", padding: 0 }}><ArrowUp size={13} /></button>
+                        <button onClick={() => void reorder(s.id, items, idx, idx + 1)} disabled={idx === items.length - 1} title="Move down" className="rs-btn shrink-0" style={{ background: "none", border: "none", color: DIM, opacity: idx === items.length - 1 ? 0.3 : 1, cursor: idx === items.length - 1 ? "default" : "pointer", padding: 0 }}><ArrowDown size={13} /></button>
                         <button onClick={() => void removeItem(s.id, it.id)} title="Remove from session" className="rs-btn shrink-0" style={{ background: "none", border: "none", color: DIM, cursor: "pointer", padding: 0 }}><X size={12} /></button>
                       </div>
                     );

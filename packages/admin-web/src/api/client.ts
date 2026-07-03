@@ -1910,9 +1910,11 @@ export const RadioApi = {
       .then((r) => r.data),
   removeFromPlaylist: (programId: string, itemId: string) =>
     api.delete<{ ok: true }>(`${R}/programs/${programId}/tracks/${itemId}`).then((r) => r.data),
+  // NOTE: the reorder endpoint returns {ok:true} (see openapi.yaml), NOT the
+  // reordered playlist — callers must re-fetch the playlist to reconcile.
   reorderPlaylist: (programId: string, itemIds: string[]) =>
     api
-      .put<RadioPlaylistItem[]>(`${R}/programs/${programId}/tracks/order`, { item_ids: itemIds })
+      .put<{ ok: true }>(`${R}/programs/${programId}/tracks/order`, { item_ids: itemIds })
       .then((r) => r.data),
 
   // Session loop mode (server-authoritative) -------------------------------
