@@ -112,7 +112,14 @@ mon_mix = eq3(eq_master_low, eq_master_mid, eq_master_high, mon_mix)
 monitor = mksafe(amplify(mas_g, mon_mix))
 output.icecast(%mp3(bitrate=128),
   host="127.0.0.1", port={icecast_port}, password="{password}",
-  mount="{monitor_mount}", name="Monitor (pre-fader)", monitor)
+  mount="{monitor_mount}", name="Monitor (on-air)", monitor)
+
+# Cue feed: PRE-FADER bed + jingles — music always clear in-ear regardless of
+# on-air ducking (DJ-style cue/PFL). The broadcaster picks On-air vs Cue.
+cue = mksafe(add(normalize=false, [bed, jq]))
+output.icecast(%mp3(bitrate=128),
+  host="127.0.0.1", port={icecast_port}, password="{password}",
+  mount="{cue_mount}", name="Monitor (cue)", cue)
 """
 
 
@@ -205,6 +212,7 @@ def write_liq(prog, pw):
         icecast_port=8300,
         mount=mount_for(prog),
         monitor_mount=mount_for(prog).replace("/s_", "/mon_"),
+        cue_mount=mount_for(prog).replace("/s_", "/cue_"),
         title=json.dumps(prog.get("title") or "Nuru Radio"),
         bed_def=bed_def,
     )
