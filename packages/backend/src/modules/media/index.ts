@@ -63,9 +63,9 @@ export function registerMedia(ctx: AppContext): Router {
 
   // Uploaded session audio (Radio): bytes stream straight to OUR disk. Returns a
   // bare { url, duration_sec } (no media_assets row) — the caller stashes
-  // url/duration on the radio_program. Cap 70 MB; formats limited to MP3, WAV,
+  // url/duration on the radio_program. Cap 110 MB; formats limited to MP3, WAV,
   // AAC, and ALAC/AAC in an .m4a container (product decision 2026-07-03).
-  const AUDIO_MAX_BYTES = 70 * 1024 * 1024;
+  const AUDIO_MAX_BYTES = 110 * 1024 * 1024;
   const AUDIO_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".alac"]);
   const AUDIO_MIMES = new Set([
     "audio/mpeg", "audio/mp3",                      // mp3
@@ -96,7 +96,7 @@ export function registerMedia(ctx: AppContext): Router {
         return next(
           new ApiError(
             "VALIDATION_FAILED",
-            err.code === "LIMIT_FILE_SIZE" ? "Audio exceeds the 70 MB upload limit" : err.message,
+            err.code === "LIMIT_FILE_SIZE" ? "Audio exceeds the 110 MB upload limit" : err.message,
           ),
         );
       }

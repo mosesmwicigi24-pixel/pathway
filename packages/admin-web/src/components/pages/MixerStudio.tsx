@@ -54,7 +54,7 @@ const SERIF = "'DM Serif Display', serif";
 /* ── audio upload constraints (mirror the server: 70 MB, MP3/WAV/AAC/ALAC) ── */
 const AUDIO_ACCEPT = ".mp3,.wav,.m4a,.aac,audio/mpeg,audio/wav,audio/mp4,audio/aac";
 function validAudio(file: File): string | null {
-  if (file.size > 70 * 1024 * 1024) return `${file.name} is over the 70 MB limit`;
+  if (file.size > 110 * 1024 * 1024) return `${file.name} is over the 110 MB limit`;
   if (!/\.(mp3|wav|m4a|aac|alac)$/i.test(file.name)) return "Only MP3, WAV, AAC or ALAC (.m4a) audio is allowed";
   return null;
 }
