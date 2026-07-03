@@ -4,7 +4,7 @@ import {
   BookOpen, LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
   TrendingUp, MessageSquare, MessagesSquare, Video, Star, HelpCircle, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
-  Radio, SlidersVertical, UserCheck, type LucideIcon,
+  Radio, SlidersVertical, UserCheck, HeartHandshake, type LucideIcon,
 } from "lucide-react";
 
 export interface NavItem { path: string; label: string; icon: LucideIcon }
@@ -40,6 +40,7 @@ export const navGroups: NavGroup[] = [
     label: "Operations",
     items: [
       { path: "/cell-engagement", label: "Cell Engagement", icon: TrendingUp },
+      { path: "/discipleship-hub", label: "Discipleship Hub", icon: HeartHandshake },
       { path: "/members", label: "Members", icon: Users },
       { path: "/reflection-queue", label: "Reflection Queue", icon: MessageSquare },
       { path: "/level-reviews", label: "Level reviews", icon: UserCheck },
@@ -91,6 +92,7 @@ export const pageTitles: Record<string, string> = {
   "/notifications": "Notifications",
   "/reflection-queue": "Reflection Queue",
   "/level-reviews": "Level Reviews",
+  "/discipleship-hub": "Discipleship Hub",
   "/chat": "Chat",
   "/events": "Events & Attendance",
   "/finance": "Finance",

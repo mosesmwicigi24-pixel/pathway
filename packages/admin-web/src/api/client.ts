@@ -730,6 +730,90 @@ export const CurriculumApi = {
       .then((r) => r.data),
 };
 
+// ---- Discipleship Hub (Instructor console, W over the discipleship aggregation module) ----
+// The Hub is a read-aggregation surface: roster + triage of the leader's disciples,
+// then a per-student dossier that composes progression, growth scores, engagement,
+// reflections, recent activity and an existing DM. All scoping is server-side
+// (relationship_tree + leader_assignments); Admin/SuperAdmin see everyone. Mutating
+// actions in the detail (message, usher, reflection decision) reuse ChatApi /
+// CurriculumApi / OpsApi — the Hub only adds the two read endpoints below.
+export type DiscipleBand = "thriving" | "steady" | "watch" | "at_risk";
+
+/** One row in the leader's roster (GET /disciples). */
+export interface DiscipleRow {
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  cell_name: string | null;
+  cell_group_id: string | null;
+  current_level: number;
+  band: DiscipleBand | null;
+  streak_days: number;
+  days_since_last_activity: number;
+  pending_reflections: number;
+  awaiting_level: number | null;
+}
+export interface RosterSummary {
+  total_students: number;
+  awaiting_action: number;
+}
+
+/** A single reflection inside the dossier — the discipler DOES see the pastoral body. */
+export interface DiscipleReflection {
+  reflection_id: string;
+  module_id: string;
+  module_title: string;
+  level_number: number;
+  state: string;
+  submitted_at: string;
+  body: string;
+  feedback_notes: string | null;
+}
+
+/** The full per-student journey for their discipler (GET /disciples/:id). */
+export interface DiscipleDossier {
+  member: {
+    user_id: string;
+    full_name: string;
+    avatar_url: string | null;
+    cell_name: string | null;
+    established_at: string | null;
+    joined_at: string | null;
+  };
+  progression: {
+    current_level: number;
+    level_title: string;
+    streak_days: number;
+    modules_completed: number;
+    modules_total: number;
+    awaiting_level: number | null;
+  };
+  scores: {
+    overall: number | null;
+    word: number | null;
+    prayer: number | null;
+    habits: number | null;
+    curriculum: number | null;
+    attendance: number | null;
+  };
+  engagement: {
+    e_score: number | null;
+    band: DiscipleBand | null;
+    days_since_last_activity: number;
+  };
+  reflections: DiscipleReflection[];
+  recent_activity: Array<{ kind: string; occurred_at: string }>;
+  dm_conversation_id: string | null;
+}
+
+export const DisciplesApi = {
+  // The leader's roster + triage summary (server-scoped to their disciple set).
+  roster: () =>
+    api.get<{ data: DiscipleRow[]; summary: RosterSummary }>("/disciples").then((r) => r.data),
+  // One student's full journey. 403 FORBIDDEN_SCOPE if :id is out of the leader's set.
+  dossier: (id: string) => unwrap<DiscipleDossier>(api.get(`/disciples/${id}`)),
+};
+
 // ---- Growth content authoring (Admin+, WP5 over B9) ----
 export interface DevotionalRow {
   devotional_id: string;

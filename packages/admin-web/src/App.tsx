@@ -20,6 +20,7 @@ import { CellDetail } from "./components/pages/CellDetail";
 import { Members } from "./components/pages/Members";
 import { ReflectionQueue } from "./components/pages/ReflectionQueue";
 import { LevelReviews } from "./components/pages/LevelReviews";
+import { DiscipleshipHub } from "./components/pages/DiscipleshipHub";
 import { Chat } from "./components/pages/Chat";
 import { Events } from "./components/pages/Events";
 import { Finance } from "./components/pages/Finance";
@@ -63,6 +64,7 @@ const router = createBrowserRouter([
       { path: "notifications", element: <Notifications /> },
       { path: "reflection-queue", element: <ReflectionQueue /> },
       { path: "level-reviews", element: <LevelReviews /> },
+      { path: "discipleship-hub", element: <DiscipleshipHub /> },
       { path: "chat", element: <Chat /> },
       { path: "events", element: <Events /> },
       { path: "finance", element: <Finance /> },
