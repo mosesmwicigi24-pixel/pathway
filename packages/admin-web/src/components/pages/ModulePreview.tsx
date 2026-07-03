@@ -8,6 +8,7 @@ import { useParams } from "react-router-dom";
 import { BookOpen, Clock, Target, GraduationCap, PlayCircle, X, Eye, HelpCircle, Award, Hash } from "lucide-react";
 import { CurriculumApi, type AdminModule, type AdminQuestion, type AdminLevel } from "../../api/client";
 import { MarkdownPreview } from "../MarkdownPreview";
+import { PAGE_BREAK_RE, pageTitleAndBody, sectionLabel } from "../../lib/sections";
 
 const diffStyle: Record<string, { bg: string; color: string }> = {
   beginner: { bg: "#E8F6EE", color: "#0F6B33" },
@@ -16,15 +17,13 @@ const diffStyle: Record<string, { bg: string; color: string }> = {
 };
 const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** Mobile-reader page marker — mirrors the server-authored content_pages split. */
-const PAGE_BREAK_RE = /<!--\s*page-break\s*-->/;
-
-/** Labeled divider shown where an author placed a page break ("— Page 2 —"). */
-function PageDivider({ page, accent }: { page: number; accent: string }): ReactElement {
+/** Labeled divider shown at a section boundary — e.g. "— Section 2 · Our Response —". */
+function SectionDivider({ index0, title, accent }: { index0: number; title: string | null; accent: string }): ReactElement {
+  const label = title ? `Section ${index0 + 1} · ${title}` : sectionLabel(title, index0);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "30px 0" }}>
       <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
-      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: accent, whiteSpace: "nowrap" }}>— Page {page} —</span>
+      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: accent, whiteSpace: "nowrap" }}>— {label} —</span>
       <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
     </div>
   );
@@ -183,12 +182,17 @@ export function ModulePreview(): ReactElement {
         ) : null}
 
         {(mod.lesson_content ?? "").trim() ? (
-          pages.map((page, i) => (
-            <div key={i}>
-              {i > 0 ? <PageDivider page={i + 1} accent={accent} /> : null}
-              <MarkdownPreview content={page} />
-            </div>
-          ))
+          pages.map((page, i) => {
+            // Same title rule as the authoring outline: a leading markdown heading
+            // becomes the section title and is stripped so it isn't shown twice.
+            const { title, body } = pageTitleAndBody(page);
+            return (
+              <div key={i}>
+                <SectionDivider index0={i} title={title} accent={accent} />
+                <MarkdownPreview content={body} />
+              </div>
+            );
+          })
         ) : <p style={{ fontSize: 14, color: "var(--muted-foreground)", fontStyle: "italic" }}>No lesson content yet.</p>}
 
         {scriptures.length > 0 ? (

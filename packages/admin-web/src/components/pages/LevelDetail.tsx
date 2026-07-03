@@ -10,7 +10,7 @@ import {
   ClipboardList, AlertTriangle, Target, Tag, Hash, Video,
   Bold, Italic, Strikethrough, Heading1, Heading2, Heading3, List, ListOrdered,
   Quote, Code2, Link as LinkIcon, Image as ImageIcon, Table as TableIcon, Minus,
-  SeparatorHorizontal,
+  SeparatorHorizontal, Trash2,
 } from "lucide-react";
 import {
   CurriculumApi, type AdminLevel, type AdminModuleSummary, type AdminModule, type EvaluationKind,
@@ -19,6 +19,7 @@ import { errorMessage } from "../../util/error";
 import { MarkdownPreview } from "../MarkdownPreview";
 import { LevelModal, type LevelFormData, type LevelStatus } from "../curriculum/LevelModal";
 import { ModuleQuizBuilder, type QuizSettings } from "../curriculum/ModuleQuizBuilder";
+import { splitSections, sectionLabel, addSection, renameSection, deleteSection } from "../../lib/sections";
 
 const statusPill: Record<string, { bg: string; color: string }> = {
   published: { bg: "#E8F6EE", color: "#0F6B33" },
@@ -30,8 +31,6 @@ const labelToBe: Record<LevelStatus, string> = { Published: "published", Draft: 
 const EVAL_OPTS: { v: EvaluationKind; l: string }[] = [
   { v: "none", l: "— none —" }, { v: "quiz", l: "Quiz" }, { v: "reflection", l: "Reflection" }, { v: "exit_exam", l: "Exit exam" },
 ];
-/** Mobile-reader page marker — mirrors the server split (whitespace-tolerant). */
-const PAGE_BREAK_RE = /<!--\s*page-break\s*-->/;
 const fieldLabel: CSSProperties = { fontSize: 10.5, fontWeight: 700, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: "0.08em", display: "block", marginBottom: 6 };
 const fieldInput: CSSProperties = { width: "100%", height: 42, borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--input-background)", fontSize: 13, padding: "0 14px", color: "var(--foreground)", outline: "none" };
 const areaInput: CSSProperties = { width: "100%", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--input-background)", fontSize: 13, padding: "10px 14px", color: "var(--foreground)", outline: "none", resize: "vertical", lineHeight: 1.6, fontFamily: "var(--font-sans)" };
@@ -209,12 +208,11 @@ export function LevelDetail(): ReactElement {
     { Icon: ImageIcon, title: "Image", act: () => insert("![alt](https://)") },
     { Icon: TableIcon, title: "Table", act: () => insert("\n| A | B |\n| --- | --- |\n| 1 | 2 |\n") },
     { Icon: Minus, title: "Divider", act: () => insert("\n---\n") },
-    { Icon: SeparatorHorizontal, title: "Insert page break", act: () => insert("\n\n<!-- page-break -->\n\n"), group: true },
+    { Icon: SeparatorHorizontal, title: "Add section", act: () => draft && setField("lesson_content", addSection(draft.lesson_content)), group: true },
   ];
-  // Live mobile pagination hint — same split the server applies (trim + drop empties).
-  const pageCount = draft
-    ? Math.max(1, draft.lesson_content.split(PAGE_BREAK_RE).map((p) => p.trim()).filter(Boolean).length)
-    : 1;
+  // Live titled-sections model — same page-break split the mobile reader applies.
+  const sections = draft ? splitSections(draft.lesson_content) : [];
+  const pageCount = Math.max(1, sections.length);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--background)" }}>
@@ -464,6 +462,42 @@ export function LevelDetail(): ReactElement {
                         {draft.lesson_content.trim() ? <MarkdownPreview content={draft.lesson_content} /> : <p style={{ color: "var(--muted-foreground)" }}>Nothing to preview yet.</p>}
                       </div>
                     )}
+
+                    {/* Sections outline — titled teaching sections over the page-break markers.
+                        Each row renames the section's leading heading; delete removes the piece. */}
+                    <div style={{ marginTop: 18, borderRadius: 12, border: "1.5px solid var(--border)", background: "var(--card)", overflow: "hidden" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 14px", borderBottom: "1px solid var(--border)", background: "var(--secondary)" }}>
+                        <SeparatorHorizontal size={13} style={{ color: "var(--nuru-gold)" }} />
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--nuru-navy)" }}>Sections outline</span>
+                        <span style={{ fontSize: 10.5, color: "var(--muted-foreground)" }}>{sections.length} section{sections.length === 1 ? "" : "s"} · how the reader paginates</span>
+                      </div>
+                      {sections.length === 0 ? (
+                        <div style={{ padding: "16px 14px", fontSize: 12.5, color: "var(--muted-foreground)" }}>No sections yet. Add one to start structuring the lesson.</div>
+                      ) : (
+                        <div>
+                          {sections.map((sec, i) => (
+                            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderBottom: "1px solid var(--border)" }}>
+                              <span style={{ flexShrink: 0, width: 22, height: 22, borderRadius: 6, background: "var(--secondary)", color: "var(--nuru-navy)", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
+                              <input
+                                value={sec.title ?? ""}
+                                placeholder={sectionLabel(null, i)}
+                                onChange={(e) => setField("lesson_content", renameSection(draft.lesson_content, i, e.target.value))}
+                                style={{ flex: 1, minWidth: 0, height: 32, borderRadius: 8, border: "1.5px solid var(--border)", background: "var(--input-background)", fontSize: 12.5, padding: "0 10px", color: "var(--foreground)", outline: "none" }}
+                              />
+                              <button
+                                title="Delete section"
+                                onClick={() => setField("lesson_content", deleteSection(draft.lesson_content, i))}
+                                style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: "1px solid #FECACA", background: "#FFF5F5", color: "#DC2626", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                              ><Trash2 size={13} /></button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <button
+                        onClick={() => setField("lesson_content", addSection(draft.lesson_content))}
+                        style={{ width: "100%", padding: "10px 14px", textAlign: "left", display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, fontWeight: 700, color: "var(--nuru-gold)", background: "transparent", border: "none", cursor: "pointer" }}
+                      ><Plus size={13} /> Add section</button>
+                    </div>
 
                     {/* Footer */}
                     <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 22, paddingBottom: 40, flexWrap: "wrap" }}>
