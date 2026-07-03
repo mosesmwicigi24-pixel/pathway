@@ -24,6 +24,11 @@ export type MixerLiveChannel = "mic" | "bed" | "jingle" | "master";
 
 export const MIXER_LIVE_CHANNELS: readonly MixerLiveChannel[] = ["mic", "bed", "jingle", "master"];
 
+/** The engine's nine EQ vars, reported back in status() so UIs can hydrate. */
+export const EQ_STATUS_KEYS: readonly string[] = (["mic", "bed", "master"] as const).flatMap(
+  (bus) => (["low", "mid", "high"] as const).map((band) => `eq_${bus}_${band}`),
+);
+
 export interface MixerLiveStatus {
   connected: boolean;
   gains?: Record<string, number>; // 0..100 per channel, present when connected
@@ -178,15 +183,25 @@ export class TelnetMixerControl implements MixerControl {
 
   async status(): Promise<MixerLiveStatus> {
     try {
+      // Channel gains (0..1 wire → 0..100 here) PLUS the nine EQ band gains
+      // (raw dB, keyed eq_<bus>_<band>) so consoles hydrate their UI from the
+      // engine's real state after a remount instead of resetting to flat.
       const responses = await telnetExchange(
         this.host,
         this.port,
-        MIXER_LIVE_CHANNELS.map((ch) => `var.get ${ch}`),
+        [
+          ...MIXER_LIVE_CHANNELS.map((ch) => `var.get ${ch}`),
+          ...EQ_STATUS_KEYS.map((k) => `var.get ${k}`),
+        ],
       );
       const gains: Record<string, number> = {};
       MIXER_LIVE_CHANNELS.forEach((ch, i) => {
         const f = Number.parseFloat(responses[i] ?? "");
         if (Number.isFinite(f)) gains[ch] = clampLevel(f * 100);
+      });
+      EQ_STATUS_KEYS.forEach((k, i) => {
+        const f = Number.parseFloat(responses[MIXER_LIVE_CHANNELS.length + i] ?? "");
+        if (Number.isFinite(f)) gains[k] = clampEqDb(f);
       });
       return { connected: true, gains };
     } catch {
@@ -238,7 +253,9 @@ export class FakeMixerControl implements MixerControl {
     this.fired.push(filePath);
   }
   async status(): Promise<MixerLiveStatus> {
-    return { connected: true, gains: { ...this.gains } };
+    // Mirror the telnet control: EQ bands ride in gains keyed eq_<bus>_<band>.
+    const eqEntries = Object.fromEntries(Object.entries(this.eq).map(([k, v]) => [`eq_${k}`, v]));
+    return { connected: true, gains: { ...this.gains, ...eqEntries } };
   }
   reset(): void {
     this.gains = {};

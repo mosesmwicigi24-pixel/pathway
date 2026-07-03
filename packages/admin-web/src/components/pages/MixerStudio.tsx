@@ -13,8 +13,11 @@
 // a scene also POSTs /mixer/live/scene, and firing a pad POSTs /mixer/live/jingle.
 // LIVE EQ (API-backed when connected): 3-band peaking EQ per bus (mic/bed/master;
 // 100 Hz / 1.2 kHz / 8 kHz, −12…+12 dB) POSTs /mixer/live/eq — slider drags are
-// debounced ~250ms per bus, preset chips send all 9 bands at once. EQ state is
-// client-held (the server has no getter; engine defaults to 0 dB = Flat).
+// debounced ~250ms per bus, preset chips send all 9 bands at once. On mount the
+// board hydrates ONCE from /mixer/live/status `gains` (mic/bed/jingle/master
+// 0..100 + eq_<bus>_<band> dB) so revisiting the page shows the engine's real
+// state instead of Flat/defaults — skipped if the user already touched a fader
+// or EQ slider, and never re-applied by later polls.
 // LOCAL (client-only): the other strips, VU meters, music-bed player transport.
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
@@ -162,11 +165,17 @@ export function MixerStudio(): ReactElement {
   const [liveErr, setLiveErr] = useState<string | null>(null);
   const levelTimers = useRef(new Map<MixerLiveChannels, ReturnType<typeof setTimeout>>());
 
-  // ── live EQ (client-held; the server has no getter — engine defaults 0 = Flat) ──
+  // ── live EQ (hydrated once from the engine via /mixer/live/status `gains`) ──
   const [eq, setEq] = useState<EqState>(EQ_FLAT);
   const [eqPreset, setEqPreset] = useState<string | null>("flat");
   const eqRef = useRef<EqState>(EQ_FLAT); // latest bands for debounced POSTs (no stale closures)
   const eqTimers = useRef(new Map<MixerEqBus, ReturnType<typeof setTimeout>>());
+
+  // ── one-shot hydration from the engine's real state ──
+  const hydratedRef = useRef(false); // engine state adopted (first connected poll with gains)
+  const dirtyRef = useRef(false); // any user fader/EQ edit — blocks hydration for this visit
+  // strip levels applied by hydration; re-overlaid if the slower scenes load lands after
+  const hydratedLevelsRef = useRef<Partial<Record<string, number>> | null>(null);
 
   // ── music bed player (local) ──
   const [bedIdx, setBedIdx] = useState(0);
@@ -174,18 +183,66 @@ export function MixerStudio(): ReactElement {
 
   const anySolo = channels.some((c) => c.solo);
 
+  // Adopt the engine's real state (status `gains`) so a page revisit shows the
+  // broadcast truth instead of Flat/defaults: the nine `eq_<bus>_<band>` dB
+  // values (missing key → 0 dB) and the mapped strip/master gains (only keys
+  // the engine reported). Pure state adoption — never POSTs back and never
+  // arms the debounce timers, since the engine already holds these values.
+  const hydrateFromEngine = useCallback((gains: Record<string, number>) => {
+    hydratedRef.current = true;
+    // EQ bands
+    const nextEq: EqState = eqState([0, 0, 0], [0, 0, 0], [0, 0, 0]);
+    for (const bus of EQ_BUSES) {
+      for (const band of EQ_BANDS) {
+        const v = gains[`eq_${bus.id}_${band.id}`];
+        if (typeof v === "number" && Number.isFinite(v)) nextEq[bus.id][band.id] = Math.max(EQ_MIN, Math.min(EQ_MAX, v));
+      }
+    }
+    eqRef.current = nextEq;
+    setEq(nextEq);
+    // Highlight the preset chip only if all 9 bands match one (±0.05 dB);
+    // anything else is an implicit "Custom" — no chip lit.
+    const match = EQ_PRESETS.find((p) =>
+      EQ_BUSES.every((bus) => EQ_BANDS.every((band) => Math.abs(p.bands[bus.id][band.id] - nextEq[bus.id][band.id]) <= 0.05)));
+    setEqPreset(match ? match.id : null);
+    // Mapped strips (mic1→mic, music→bed, jingle→jingle) + master fader
+    const levels: Partial<Record<string, number>> = {};
+    for (const [stripId, liveId] of Object.entries(LIVE_CHANNEL_MAP)) {
+      const v = liveId ? gains[liveId] : undefined;
+      if (typeof v === "number" && Number.isFinite(v)) levels[stripId] = Math.max(0, Math.min(100, Math.round(v)));
+    }
+    hydratedLevelsRef.current = levels;
+    setChannels((cs) => cs.map((c) => {
+      const v = levels[c.id];
+      return v == null ? c : { ...c, level: v };
+    }));
+    const m = gains["master"];
+    if (typeof m === "number" && Number.isFinite(m)) setMaster(Math.max(0, Math.min(100, Math.round(m))));
+  }, []);
+
   // ── engine status poll (every 5s; endpoint never errors, but be safe) ──
+  // The FIRST connected response carrying `gains` hydrates the board — once,
+  // and only if the user hasn't touched a fader/EQ yet. A not-connected first
+  // poll simply leaves hydratedRef unset, so the next connected poll retries.
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {
       let connected = false;
-      try { connected = (await RadioApi.liveStatus()).connected; } catch { connected = false; }
-      if (!cancelled) { engineRef.current = connected; setEngineConnected(connected); }
+      let gains: Record<string, number> | undefined;
+      try {
+        const s = await RadioApi.liveStatus();
+        connected = s.connected;
+        gains = s.gains;
+      } catch { connected = false; }
+      if (cancelled) return;
+      engineRef.current = connected;
+      setEngineConnected(connected);
+      if (connected && gains && !hydratedRef.current && !dirtyRef.current) hydrateFromEngine(gains);
     };
     void poll();
     const t = setInterval(() => { void poll(); }, 5000);
     return () => { cancelled = true; clearInterval(t); };
-  }, []);
+  }, [hydrateFromEngine]);
 
   // Debounced (~250ms trailing edge, per channel) gain push to the engine.
   // A fader drag collapses to one POST carrying only the changed channel; each
@@ -223,6 +280,7 @@ export function MixerStudio(): ReactElement {
   }, []);
 
   const setEqBand = useCallback((bus: MixerEqBus, band: MixerEqBand, value: number) => {
+    dirtyRef.current = true; // user edit — hydration must never overwrite it
     const v = Math.max(EQ_MIN, Math.min(EQ_MAX, value));
     const next: EqState = { ...eqRef.current, [bus]: { ...eqRef.current[bus], [band]: v } };
     eqRef.current = next;
@@ -232,6 +290,7 @@ export function MixerStudio(): ReactElement {
   }, [pushLiveEq]);
 
   const applyEqPreset = useCallback((preset: (typeof EQ_PRESETS)[number]) => {
+    dirtyRef.current = true; // user edit — hydration must never overwrite it
     // clone so later slider edits never mutate the preset constants
     const next: EqState = { mic: { ...preset.bands.mic }, bed: { ...preset.bands.bed }, master: { ...preset.bands.master } };
     eqRef.current = next;
@@ -273,7 +332,20 @@ export function MixerStudio(): ReactElement {
       }
       setScenes(list);
       const def = list.find((s) => s.is_default) ?? list[0];
-      if (def) { setActiveScene(def.id); if (def.channels?.length) setChannels(def.channels); }
+      if (def) {
+        setActiveScene(def.id);
+        if (def.channels?.length) {
+          // If the status poll already hydrated engine gains (it usually beats
+          // this slower scenes load), keep those — the engine is the truth.
+          const hydrated = hydratedLevelsRef.current;
+          setChannels(hydrated
+            ? def.channels.map((c) => {
+                const v = hydrated[c.id];
+                return v == null ? c : { ...c, level: v };
+              })
+            : def.channels);
+        }
+      }
     } catch (e: unknown) {
       const status = e instanceof AxiosError ? e.response?.status : undefined;
       if (status === 403) setForbidden(true);
@@ -304,6 +376,7 @@ export function MixerStudio(): ReactElement {
     setChannels((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
 
   const applyScene = (scene: MixerScene) => {
+    dirtyRef.current = true; // user chose these levels — hydration must not overwrite
     setActiveScene(scene.id);
     if (scene.channels?.length) {
       // Apply saved levels/pan/mute onto the current board by channel id.
@@ -492,11 +565,13 @@ export function MixerStudio(): ReactElement {
                         dimmed={anySolo && !c.solo}
                         live={liveTarget != null}
                         onLevel={(v) => {
+                          dirtyRef.current = true; // user edit — blocks hydration
                           setChan(c.id, { level: v });
                           if (liveTarget) pushLiveLevel(liveTarget, c.muted ? 0 : v);
                         }}
                         onPan={(v) => setChan(c.id, { pan: v })}
                         onMute={() => {
+                          dirtyRef.current = true; // changes the on-air gain — blocks hydration
                           const muted = !c.muted;
                           setChan(c.id, { muted });
                           // mute → gain 0 on air; unmute → re-send the fader value
@@ -513,10 +588,10 @@ export function MixerStudio(): ReactElement {
                     <div style={{ fontSize: 9.5, color: DIM, marginTop: 1, marginBottom: 10 }}>Main out</div>
                     <div className="flex items-end justify-center gap-2" style={{ height: 168 }}>
                       <VBar level={masterMeter} tall />
-                      <input type="range" min={0} max={100} value={master} onChange={(e) => { const v = Number(e.target.value); setMaster(v); pushLiveLevel("master", masterMuted ? 0 : v); }} className="mx-fader" style={{ height: 168, accentColor: GOLD }} />
+                      <input type="range" min={0} max={100} value={master} onChange={(e) => { dirtyRef.current = true; const v = Number(e.target.value); setMaster(v); pushLiveLevel("master", masterMuted ? 0 : v); }} className="mx-fader" style={{ height: 168, accentColor: GOLD }} />
                     </div>
                     <div className="mx-tnum" style={{ fontFamily: MONO, fontSize: 12, color: GOLD, marginTop: 8 }}>{master}</div>
-                    <button onClick={() => { const muted = !masterMuted; setMasterMuted(muted); pushLiveLevel("master", muted ? 0 : master); }} className="mx-btn flex items-center justify-center gap-1 rounded-lg mt-2" style={{ width: "100%", height: 30, background: masterMuted ? "rgba(239,68,68,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${masterMuted ? RED + "66" : PANEL_BORDER}`, color: masterMuted ? "#FCA5A5" : DIM, fontSize: 11, fontWeight: 700 }}>
+                    <button onClick={() => { dirtyRef.current = true; const muted = !masterMuted; setMasterMuted(muted); pushLiveLevel("master", muted ? 0 : master); }} className="mx-btn flex items-center justify-center gap-1 rounded-lg mt-2" style={{ width: "100%", height: 30, background: masterMuted ? "rgba(239,68,68,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${masterMuted ? RED + "66" : PANEL_BORDER}`, color: masterMuted ? "#FCA5A5" : DIM, fontSize: 11, fontWeight: 700 }}>
                       {masterMuted ? <VolumeX size={13} /> : <Volume2 size={13} />} {masterMuted ? "Muted" : "Live"}
                     </button>
                   </div>
