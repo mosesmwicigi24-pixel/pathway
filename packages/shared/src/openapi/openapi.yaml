@@ -3215,6 +3215,77 @@ paths:
         "200": { description: Attendance score }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  # --- Discipleship Hub (read-aggregation composition layer; no new tables) ---
+  /me/discipleship:
+    get:
+      tags: [progress]
+      summary: My Discipleship Hub — discipler, progression, scores, reflections (self).
+      description: >-
+        Single call powering the member Hub. Resolves the discipler (explicit
+        relationship_tree edge, else cell leader), progression at the current
+        level, growth scores, and the member's own reflections. Pure GET — never
+        creates a DM. can_message is false for minors.
+      responses:
+        "200":
+          description: My Discipleship Hub
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/MyDiscipleship" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /disciples:
+    get:
+      tags: [portal]
+      summary: A discipler's roster + triage across all their cells + relationship edges.
+      description: >-
+        Instructor+; scoped to the caller's disciple set (union of relationship_tree
+        edges + members of cells in leader_assignments). Admin/SuperAdmin see all
+        students. Sorted with action-needed students first.
+      responses:
+        "200":
+          description: Roster + triage summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, summary]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DiscipleRosterRow" } }
+                  summary:
+                    type: object
+                    required: [total_students, awaiting_action]
+                    properties:
+                      total_students: { type: integer }
+                      awaiting_action: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /disciples/{id}:
+    get:
+      tags: [portal]
+      summary: One student's full journey for their discipler (Instructor-scoped dossier).
+      description: >-
+        403 FORBIDDEN_SCOPE if the student is not in the caller's disciple set.
+        The discipler DOES see reflection bodies + feedback_notes (pastoral),
+        unlike the member's own Hub. Admin/SuperAdmin unrestricted.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Student dossier
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/DiscipleDossier" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # --- Growth-content authoring (Admin+) — every mobile growth element editable ---
   /admin/growth/devotionals:
     get:
@@ -4388,6 +4459,144 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    HubScores:
+      type: object
+      description: Growth scores, 0–100 ints; null if not yet computed.
+      required: [overall, word, prayer, habits, curriculum, attendance]
+      properties:
+        overall: { type: [integer, "null"] }
+        word: { type: [integer, "null"] }
+        prayer: { type: [integer, "null"] }
+        habits: { type: [integer, "null"] }
+        curriculum: { type: [integer, "null"] }
+        attendance: { type: [integer, "null"] }
+    MyDiscipleship:
+      type: object
+      required: [discipler, dm_conversation_id, can_message, progression, scores, reflections, next_meeting_at, notes]
+      properties:
+        discipler:
+          type: [object, "null"]
+          required: [user_id, full_name, avatar_url, role_label, cell_name, established_at]
+          properties:
+            user_id: { type: string, format: uuid }
+            full_name: { type: string }
+            avatar_url: { type: [string, "null"] }
+            role_label: { type: string, enum: [Cell Leader, Discipler] }
+            cell_name: { type: [string, "null"] }
+            established_at: { type: [string, "null"], format: date-time }
+        dm_conversation_id:
+          type: [string, "null"]
+          format: uuid
+          description: Present only if a DM already exists; a GET never creates one.
+        can_message: { type: boolean, description: false for minors (chat blocks minors). }
+        progression:
+          type: object
+          required: [current_level, level_title, streak_days, modules_completed, modules_total, awaiting_review, awaiting_level]
+          properties:
+            current_level: { type: integer }
+            level_title: { type: string }
+            streak_days: { type: integer }
+            modules_completed: { type: integer }
+            modules_total: { type: integer }
+            awaiting_review: { type: boolean }
+            awaiting_level: { type: [integer, "null"] }
+        scores: { $ref: "#/components/schemas/HubScores" }
+        reflections:
+          type: array
+          description: The member's own reflections, most-recent first, cap 20. Never exposes pastoral_note.
+          items:
+            type: object
+            required: [module_id, module_title, level_number, state, submitted_at, feedback_notes]
+            properties:
+              module_id: { type: string, format: uuid }
+              module_title: { type: string }
+              level_number: { type: integer }
+              state: { type: string, enum: [approved, pending, returned, deferred] }
+              submitted_at: { type: string, format: date-time }
+              feedback_notes: { type: [string, "null"] }
+        next_meeting_at: { type: [string, "null"], format: date-time }
+        notes:
+          type: array
+          items:
+            type: object
+            required: [topic, body, met_at, next_meeting_at]
+            properties:
+              topic: { type: string }
+              body: { type: string }
+              met_at: { type: string, format: date-time }
+              next_meeting_at: { type: [string, "null"], format: date-time }
+    DiscipleRosterRow:
+      type: object
+      required: [user_id, full_name, avatar_url, cell_name, cell_group_id, current_level, band, streak_days, days_since_last_activity, pending_reflections, awaiting_level]
+      properties:
+        user_id: { type: string, format: uuid }
+        full_name: { type: string }
+        avatar_url: { type: [string, "null"] }
+        cell_name: { type: [string, "null"] }
+        cell_group_id: { type: [string, "null"], format: uuid }
+        current_level: { type: integer }
+        band: { type: [string, "null"], enum: [thriving, steady, watch, at_risk, null] }
+        streak_days: { type: integer }
+        days_since_last_activity: { type: [integer, "null"] }
+        pending_reflections: { type: integer }
+        awaiting_level: { type: [integer, "null"] }
+    DiscipleDossier:
+      type: object
+      required: [member, progression, scores, engagement, reflections, recent_activity, dm_conversation_id]
+      properties:
+        member:
+          type: object
+          required: [user_id, full_name, avatar_url, cell_name, established_at, joined_at]
+          properties:
+            user_id: { type: string, format: uuid }
+            full_name: { type: string }
+            avatar_url: { type: [string, "null"] }
+            cell_name: { type: [string, "null"] }
+            established_at: { type: [string, "null"], format: date-time }
+            joined_at: { type: [string, "null"], format: date-time }
+        progression:
+          type: object
+          required: [current_level, level_title, streak_days, modules_completed, modules_total, awaiting_level]
+          properties:
+            current_level: { type: integer }
+            level_title: { type: string }
+            streak_days: { type: integer }
+            modules_completed: { type: integer }
+            modules_total: { type: integer }
+            awaiting_level: { type: [integer, "null"] }
+        scores: { $ref: "#/components/schemas/HubScores" }
+        engagement:
+          type: object
+          required: [e_score, band, days_since_last_activity]
+          properties:
+            e_score: { type: [integer, "null"], description: 0–100 (engagement Eᵢ ×100). }
+            band: { type: [string, "null"], enum: [thriving, steady, watch, at_risk, null] }
+            days_since_last_activity: { type: [integer, "null"] }
+        reflections:
+          type: array
+          description: Discipler DOES see body + feedback_notes (pastoral). Most-recent first, cap 20.
+          items:
+            type: object
+            required: [reflection_id, module_id, module_title, level_number, state, submitted_at, body, feedback_notes]
+            properties:
+              reflection_id: { type: string, format: uuid }
+              module_id: { type: string, format: uuid }
+              module_title: { type: string }
+              level_number: { type: integer }
+              state: { type: string, enum: [approved, pending, returned, deferred] }
+              submitted_at: { type: string, format: date-time }
+              body: { type: string }
+              feedback_notes: { type: [string, "null"] }
+        recent_activity:
+          type: array
+          description: Last ~20 interaction_events.
+          items:
+            type: object
+            required: [kind, occurred_at]
+            properties:
+              kind: { type: string }
+              occurred_at: { type: string, format: date-time }
+        dm_conversation_id: { type: [string, "null"], format: uuid }
     Error:
       type: object
       required: [error]

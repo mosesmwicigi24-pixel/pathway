@@ -148,6 +148,43 @@ export async function createLeaderAssignment(leaderUserId: string, cellGroupId: 
   return rows[0]!.assignment_id;
 }
 
+/** Set a cell group's leader (the cell-scope discipler resolution path). */
+export async function setCellLeader(cellGroupId: string, leaderUserId: string): Promise<void> {
+  await testPool().query(`UPDATE cell_groups SET leader_user_id = $2 WHERE cell_group_id = $1`, [
+    cellGroupId,
+    leaderUserId,
+  ]);
+}
+
+/** Explicit 1:1 discipling edge (relationship_tree) — the preferred discipler path. */
+export async function createRelationship(multiplierId: string, discipleId: string): Promise<void> {
+  await testPool().query(
+    `INSERT INTO relationship_tree (multiplier_id, disciple_id) VALUES ($1, $2)
+     ON CONFLICT (disciple_id) DO UPDATE SET multiplier_id = EXCLUDED.multiplier_id`,
+    [multiplierId, discipleId],
+  );
+}
+
+/** A pending level advancement — the "awaiting usher" gate (§1.9). */
+export async function createPendingLevelAdvancement(userId: string, levelNumber: number): Promise<string> {
+  const { rows } = await testPool().query<{ id: string }>(
+    `INSERT INTO level_advancements (user_id, level_number, status) VALUES ($1, $2, 'pending')
+     ON CONFLICT (user_id, level_number) DO UPDATE SET status = 'pending' RETURNING id`,
+    [userId, levelNumber],
+  );
+  return rows[0]!.id;
+}
+
+/** Mark a module completed for a member (creates/reuses the module_progress row). */
+export async function completeModule(userId: string, moduleId: string): Promise<void> {
+  await testPool().query(
+    `INSERT INTO module_progress (enrollment_id, module_id, is_completed, completed_at)
+     SELECT enrollment_id, $2, TRUE, now() FROM enrollments WHERE user_id = $1
+     ON CONFLICT (enrollment_id, module_id) DO UPDATE SET is_completed = TRUE, completed_at = now()`,
+    [userId, moduleId],
+  );
+}
+
 export async function createEvent(
   congregationId: string,
   opts: { eventId?: string; qrSecret?: string; cellGroupId?: string } = {},
