@@ -449,7 +449,8 @@ export class AdminCurriculumService {
       c,
       `SELECT module_id, level_number, module_sequence_number, title, summary, lesson_content,
               key_verses, status, is_published, evaluation_kind, quiz_pass_mark, estimated_minutes,
-              video_url, media_asset_id, time_limit_sec, max_attempts, quiz_shuffle,
+              video_url, video_duration_sec, audio_url, audio_duration_sec,
+              media_asset_id, time_limit_sec, max_attempts, quiz_shuffle,
               quiz_show_answers, quiz_show_score,
               difficulty, objectives, tags, visibility, required,
               current_version, row_version, created_at, updated_at
@@ -467,6 +468,11 @@ export class AdminCurriculumService {
       quiz_pass_mark: z.number().min(0).max(100).optional(),
       estimated_minutes: z.number().int().min(0).nullable().optional(),
       video_url: z.string().url().max(512).nullable().optional(),
+      // Real media durations (whole seconds) → reader "watch X min / listen Y min"
+      // labels. Admin-controlled audio track, brokered to a signed URL for members.
+      video_duration_sec: z.number().int().min(0).nullable().optional(),
+      audio_url: z.string().url().max(512).nullable().optional(),
+      audio_duration_sec: z.number().int().min(0).nullable().optional(),
       media_asset_id: z.string().uuid().nullable().optional(), // managed Video Library asset (W2)
       key_verses: z.array(z.string()).nullable().optional(),
       time_limit_sec: z.number().int().min(30).max(7200).nullable().optional(),
@@ -527,6 +533,9 @@ export class AdminCurriculumService {
         quiz_pass_mark: input.quiz_pass_mark,
         estimated_minutes: input.estimated_minutes,
         video_url: input.video_url,
+        video_duration_sec: input.video_duration_sec,
+        audio_url: input.audio_url,
+        audio_duration_sec: input.audio_duration_sec,
         media_asset_id: input.media_asset_id,
         time_limit_sec: input.time_limit_sec,
         max_attempts: input.max_attempts,

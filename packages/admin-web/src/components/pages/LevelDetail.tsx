@@ -34,6 +34,12 @@ const EVAL_OPTS: { v: EvaluationKind; l: string }[] = [
 const fieldLabel: CSSProperties = { fontSize: 10.5, fontWeight: 700, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: "0.08em", display: "block", marginBottom: 6 };
 const fieldInput: CSSProperties = { width: "100%", height: 42, borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--input-background)", fontSize: 13, padding: "0 14px", color: "var(--foreground)", outline: "none" };
 const areaInput: CSSProperties = { width: "100%", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--input-background)", fontSize: 13, padding: "10px 14px", color: "var(--foreground)", outline: "none", resize: "vertical", lineHeight: 1.6, fontFamily: "var(--font-sans)" };
+// Media durations are stored as whole seconds; the editor shows/edits minutes.
+const secToMin = (sec: number | null): number => (sec == null ? 0 : Math.round(sec / 60));
+const minToSec = (min: string): number | null => {
+  const n = Math.max(0, Math.round(Number(min)));
+  return Number.isFinite(n) && n > 0 ? n * 60 : null;
+};
 
 export function LevelDetail(): ReactElement {
   const navigate = useNavigate();
@@ -121,6 +127,8 @@ export function LevelDetail(): ReactElement {
         title: draft.title, summary: draft.summary, lesson_content: draft.lesson_content,
         evaluation_kind: draft.evaluation_kind, quiz_pass_mark: Number(draft.quiz_pass_mark),
         estimated_minutes: draft.estimated_minutes, video_url: draft.video_url || null,
+        video_duration_sec: draft.video_duration_sec, audio_url: draft.audio_url || null,
+        audio_duration_sec: draft.audio_duration_sec,
         key_verses: verses.length ? verses : null, max_attempts: draft.max_attempts,
         difficulty: draft.difficulty, objectives: draft.objectives || null, tags: draft.tags || null,
         visibility: draft.visibility, required: draft.required,
@@ -437,9 +445,23 @@ export function LevelDetail(): ReactElement {
 
                     <div style={{ height: 1, background: "var(--border)", marginBottom: 22 }} />
                     <SectionHead icon={<Video size={14} />} label="Lesson media" />
-                    <div style={{ marginBottom: 22 }}>
+                    <div style={{ marginBottom: 18 }}>
                       <label style={fieldLabel}>Lesson video URL <span style={{ fontWeight: 400, textTransform: "none", fontSize: 10 }}>(or manage in the <button onClick={() => navigate("/video-library")} style={{ color: "var(--nuru-gold)", background: "none", border: "none", cursor: "pointer", fontSize: 10, fontWeight: 600, padding: 0 }}>Video Library</button>)</span></label>
                       <input value={draft.video_url ?? ""} onChange={(e) => setField("video_url", e.target.value || null)} placeholder="https://…" style={fieldInput} />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 18 }}>
+                      <div>
+                        <label style={fieldLabel}>Video length (minutes) <span style={{ fontWeight: 400, textTransform: "none", fontSize: 10 }}>(reader "watch" label)</span></label>
+                        <input type="number" min={0} value={secToMin(draft.video_duration_sec)} onChange={(e) => setField("video_duration_sec", minToSec(e.target.value))} placeholder="0" style={fieldInput} />
+                      </div>
+                      <div>
+                        <label style={fieldLabel}>Audio length (minutes) <span style={{ fontWeight: 400, textTransform: "none", fontSize: 10 }}>(reader "listen" label)</span></label>
+                        <input type="number" min={0} value={secToMin(draft.audio_duration_sec)} onChange={(e) => setField("audio_duration_sec", minToSec(e.target.value))} placeholder="0" style={fieldInput} />
+                      </div>
+                    </div>
+                    <div style={{ marginBottom: 22 }}>
+                      <label style={fieldLabel}>Lesson audio URL <span style={{ fontWeight: 400, textTransform: "none", fontSize: 10 }}>(admin-controlled; served to members)</span></label>
+                      <input value={draft.audio_url ?? ""} onChange={(e) => setField("audio_url", e.target.value || null)} placeholder="https://…" style={fieldInput} />
                     </div>
 
                     <div style={{ height: 1, background: "var(--border)", marginBottom: 22 }} />
@@ -452,7 +474,7 @@ export function LevelDetail(): ReactElement {
                         </span>
                       ))}
                       <div style={{ flex: 1, minWidth: 8 }} />
-                      <span title="How the mobile reader paginates this lesson" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(200,155,60,0.12)", color: "var(--nuru-gold)", border: "1px solid rgba(200,155,60,0.3)" }}><SeparatorHorizontal size={10} /> {pageCount} page{pageCount === 1 ? "" : "s"} on mobile</span>
+                      <span title="How the reader splits this lesson into sections" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 999, background: "rgba(200,155,60,0.12)", color: "var(--nuru-gold)", border: "1px solid rgba(200,155,60,0.3)" }}><SeparatorHorizontal size={10} /> {pageCount} section{pageCount === 1 ? "" : "s"}</span>
                       <span style={{ fontSize: 10.5, color: "var(--muted-foreground)", marginLeft: 6 }}>{draft.lesson_content.length} chars</span>
                     </div>
                     {mdView === "write" ? (

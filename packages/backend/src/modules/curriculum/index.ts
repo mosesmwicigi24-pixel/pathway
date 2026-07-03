@@ -9,6 +9,7 @@ import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { CurriculumService } from "./service.js";
 import { AdminCurriculumService } from "./admin.js";
 import { ScriptureService, buildScriptureProvider } from "./scripture.js";
+import { MediaService } from "../media/service.js";
 import { renderSafeMarkdown } from "./markdown.js";
 import { cacheInvalidate, cacheKeys } from "../../cache.js";
 
@@ -18,7 +19,9 @@ const levelParam = z.coerce.number().int().min(1);
 const idOf = (req: { params: Record<string, string | undefined> }, k: string): string => req.params[k] ?? "";
 
 export function registerCurriculum(ctx: AppContext): Router {
-  const svc = new CurriculumService(ctx.db.primary, ctx.redis);
+  // Media signer brokers member lesson video/audio into signed, expiring URLs
+  // (§4.5). Unconfigured (no CLOUDINARY_URL) → raw refs pass through unsigned.
+  const svc = new CurriculumService(ctx.db.primary, ctx.redis, new MediaService(ctx.env.CLOUDINARY_URL));
   const admin = new AdminCurriculumService(ctx.db.primary);
   const scripture = new ScriptureService(buildScriptureProvider(ctx.env), ctx.env.YOUVERSION_LANGUAGE_RANGES, ctx.redis);
   const auth = authenticate(ctx.env);

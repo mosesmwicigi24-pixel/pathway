@@ -12,6 +12,33 @@ import { loadEnrollment, loadModule, isModuleUnlocked, isEntryModule } from "../
 /** Authoring marker that splits a lesson body into mobile reader pages. */
 const PAGE_BREAK = /<!--\s*page-break\s*-->/;
 
+/** How long a brokered lesson media URL stays valid (10 min — matches media TTL). */
+const MEDIA_TTL_SEC = 600;
+
+/**
+ * The slice of MediaService the reader needs to broker a lesson media reference.
+ * Injecting only this keeps CurriculumService constructible without Cloudinary
+ * (tests / Redis-less dev) — brokering degrades to a raw passthrough when absent.
+ */
+export interface MediaSigner {
+  signedUrl(objectKey: string, ttlSeconds?: number): { url: string; expires_at: string };
+}
+
+/**
+ * Broker a stored lesson media reference to a member-safe URL. Mirrors the media
+ * module's rule (§4.5, video.ts): already-absolute `http(s)://` links are external
+ * (inherently shareable) and pass through unchanged; hosted object keys are signed
+ * into a short-lived, tamper-evident URL so the raw storage ref never leaks. With
+ * no signer configured (or a blank value) the raw value passes through so the
+ * service stays usable without media credentials.
+ */
+export function brokerMediaUrl(value: string | null, signer?: MediaSigner): string | null {
+  if (!value) return null;
+  if (!signer) return value;
+  if (/^https?:\/\//i.test(value)) return value; // external, shareable link — no signing
+  return signer.signedUrl(value, MEDIA_TTL_SEC).url;
+}
+
 /**
  * Server-authored pagination: split lesson_content on the `<!-- page-break -->`
  * marker (whitespace-tolerant), trim the pieces, drop empties. Falls back to a
@@ -29,6 +56,10 @@ export class CurriculumService {
   constructor(
     private readonly pool: Pool,
     private readonly redis?: Redis,
+    // Optional media broker: when present, member lesson media (video/audio) is
+    // signed into short-lived URLs (§4.5). Absent → raw refs pass through, so the
+    // service still builds without Cloudinary (tests / Redis-less dev).
+    private readonly media?: MediaSigner,
   ) {}
 
   /** Level catalog — identical for everyone, so cached (busted on admin edits). */
@@ -208,20 +239,36 @@ export class CurriculumService {
     // Published lesson bodies are identical for every reader, so the (heavy)
     // content read is cached and busted whenever an admin edits the module.
     const full = await cacheGetSet(this.redis, cacheKeys.moduleContent(moduleId), 600, () =>
-      one<{ lesson_content: string; video_url: string | null }>(
+      one<{
+        lesson_content: string;
+        video_url: string | null;
+        video_duration_sec: number | null;
+        audio_url: string | null;
+        audio_duration_sec: number | null;
+      }>(
         this.pool,
         `SELECT module_id, level_number, module_sequence_number, title, lesson_content,
-                summary, key_verses, video_url, evaluation_kind, estimated_minutes,
+                summary, key_verses, video_url, video_duration_sec,
+                audio_url, audio_duration_sec, evaluation_kind, estimated_minutes,
                 quiz_pass_mark, current_version
            FROM modules WHERE module_id = $1`,
         [moduleId],
       ),
     );
-    // Media is brokered as a signed URL by the media module; the raw video_url is
-    // a placeholder reference here (§4.5). Wired when the media module lands.
-    // content_pages is derived (never stored): lesson_content stays untouched for
-    // older clients; the mobile reader paginates on the server-authored split.
-    return { ...full, content_pages: splitContentPages(full.lesson_content), locked: false };
+    // Lesson media is brokered to signed, expiring URLs so raw storage refs never
+    // leak (§4.5) — done AFTER the cache read (the raw row is cached; per-request
+    // signed URLs are not). Durations pass through as whole seconds for the reader's
+    // "watch X min / listen Y min" labels. content_pages is derived (never stored):
+    // lesson_content stays untouched for older clients; the reader paginates on the
+    // server-authored split. CONTRACT (iOS): video_url signed, video_duration_sec,
+    // audio_url signed|null, audio_duration_sec.
+    return {
+      ...full,
+      video_url: brokerMediaUrl(full.video_url, this.media),
+      audio_url: brokerMediaUrl(full.audio_url, this.media),
+      content_pages: splitContentPages(full.lesson_content),
+      locked: false,
+    };
   }
 
   /** Heartbeat body — all deltas optional; each capped at 600s (10 min). */

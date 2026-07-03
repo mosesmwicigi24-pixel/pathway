@@ -521,11 +521,15 @@ paths:
   /modules/{id}:
     get:
       tags: [curriculum]
-      summary: Full lesson content + signed media URL. Includes server-authored content_pages (lesson_content split on <!-- page-break --> markers; falls back to one page).
+      summary: Full lesson content + signed media URLs (video + admin audio) with real durations. Includes server-authored content_pages (lesson_content split on <!-- page-break --> markers; falls back to one page).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: Module body }
+        "200":
+          description: Module body
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModuleBody" }
         "409": { $ref: "#/components/responses/GateLocked" }
   /modules/{id}/engagement:
     get:
@@ -652,9 +656,14 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
     put:
       tags: [curriculum]
-      summary: Admin. Edit any field; content edits version the module (optimistic-concurrency).
+      summary: Admin. Edit any field (incl. media durations + admin audio); content edits version the module (optimistic-concurrency).
       parameters:
         - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModuleUpdate" }
       responses:
         "200": { description: Updated }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
@@ -4589,6 +4598,76 @@ components:
         audio_seconds: { type: integer, minimum: 0 }
         video_seconds: { type: integer, minimum: 0 }
         last_page: { type: integer, minimum: 1 }
+    ModuleBody:
+      type: object
+      description: >-
+        Member-facing full module read (§3.3). Lesson media is brokered to signed,
+        expiring URLs (raw storage refs never leak, §4.5); durations are whole
+        seconds for the reader's "watch X min / listen Y min" labels. content_pages
+        is derived (lesson_content split on <!-- page-break --> markers; one page
+        when none). FIXED wire contract consumed by the iOS build.
+      properties:
+        module_id: { type: string, format: uuid }
+        level_number: { type: integer, minimum: 1 }
+        module_sequence_number: { type: integer, minimum: 1 }
+        title: { type: string }
+        summary: { type: [string, "null"] }
+        lesson_content: { type: string }
+        content_pages:
+          type: array
+          items: { type: string }
+          description: Server-authored reader pages (page-break split; one page when no markers).
+        key_verses: { type: [array, "null"], items: { type: string } }
+        evaluation_kind: { type: string }
+        estimated_minutes: { type: [integer, "null"], minimum: 0 }
+        video_url:
+          type: [string, "null"]
+          description: Signed, expiring lesson video URL (brokered; null when unset).
+        video_duration_sec:
+          type: [integer, "null"]
+          minimum: 0
+          description: Lesson video length in whole seconds (null when unset).
+        audio_url:
+          type: [string, "null"]
+          description: Signed, expiring lesson audio URL (admin-controlled, brokered; null when unset).
+        audio_duration_sec:
+          type: [integer, "null"]
+          minimum: 0
+          description: Lesson audio length in whole seconds (null when unset).
+        quiz_pass_mark: { type: number }
+        current_version: { type: integer, minimum: 1 }
+        locked: { type: boolean, description: Always false on this read (gated 409 otherwise). }
+    ModuleUpdate:
+      type: object
+      description: >-
+        Admin module edit (§3.3). All fields optional; a lesson_content change
+        versions the module. Media durations are whole seconds; audio_url is the
+        admin-controlled lesson audio (brokered to members). Nullable fields accept
+        null to clear.
+      properties:
+        title: { type: string, minLength: 1, maxLength: 255 }
+        summary: { type: [string, "null"] }
+        lesson_content: { type: string, minLength: 1 }
+        evaluation_kind: { type: string }
+        quiz_pass_mark: { type: number, minimum: 0, maximum: 100 }
+        estimated_minutes: { type: [integer, "null"], minimum: 0 }
+        video_url: { type: [string, "null"], format: uri, maxLength: 512 }
+        video_duration_sec:
+          type: [integer, "null"]
+          minimum: 0
+          description: Lesson video length in whole seconds (null to clear).
+        audio_url:
+          type: [string, "null"]
+          format: uri
+          maxLength: 512
+          description: Admin-controlled lesson audio URL (null to clear).
+        audio_duration_sec:
+          type: [integer, "null"]
+          minimum: 0
+          description: Lesson audio length in whole seconds (null to clear).
+        media_asset_id: { type: [string, "null"], format: uuid }
+        key_verses: { type: [array, "null"], items: { type: string } }
+        expected_row_version: { type: integer, minimum: 1, description: Optimistic-concurrency guard (§5.8). }
     OAuthExchange:
       type: object
       required: [code]

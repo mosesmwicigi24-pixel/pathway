@@ -583,6 +583,11 @@ export interface AdminModule extends AdminModuleSummary {
   quiz_pass_mark: string;
   estimated_minutes: number | null;
   video_url: string | null;
+  /** Real lesson-media durations (whole seconds) → reader "watch X min / listen Y min" labels. */
+  video_duration_sec: number | null;
+  /** Admin-controlled lesson audio (brokered to a signed URL for members). */
+  audio_url: string | null;
+  audio_duration_sec: number | null;
   media_asset_id: string | null;
   time_limit_sec: number | null;
   max_attempts: number | null;
