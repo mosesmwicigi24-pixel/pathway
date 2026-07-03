@@ -55,10 +55,27 @@ settings.server.telnet.bind_addr := "0.0.0.0"
 settings.server.telnet.port := {telnet_port}
 settings.harbor.bind_addrs := ["0.0.0.0"]
 
-mic_g = interactive.float("mic", 1.0)
-bed_g = interactive.float("bed", 0.8)
-jin_g = interactive.float("jingle", 1.0)
-mas_g = interactive.float("master", 0.9)
+# Channel gains GLIDE toward their targets (~0.4/s => full swing in ~2.5s)
+# instead of jumping, so preset switches (Voice Over Music <-> Warm Music)
+# fade musically rather than stepping abruptly.
+def smooth_gain(name, initial) =
+  t = interactive.float(name, initial)
+  c = ref(initial)
+  thread.run(every=0.05, fun() -> begin
+    tv = t()
+    cv = c()
+    step = 0.02
+    if abs(tv - cv) <= step then c := tv
+    elsif tv > cv then c := cv + step
+    else c := cv - step end
+  end)
+  {{c()}}
+end
+
+mic_g = smooth_gain("mic", 1.0)
+bed_g = smooth_gain("bed", 0.8)
+jin_g = smooth_gain("jingle", 1.0)
+mas_g = smooth_gain("master", 0.9)
 
 # 3-band peaking EQ per bus (gains in dB, -12..+12, driven by the Mixer UI).
 eq_mic_low = interactive.float("eq_mic_low", 0.)

@@ -110,7 +110,7 @@ const EQ_PRESETS: ReadonlyArray<{
   id: string; name: string; bands: EqState; levels?: { mic?: number; bed?: number };
 }> = [
   { id: "flat", name: "Flat", bands: EQ_FLAT },
-  { id: "talk", name: "Talk Show", bands: eqState([-2, 2.5, 3.5], [1, -1.5, -1], [0, 0, 1]) },
+  { id: "talk", name: "Talk Show", bands: eqState([-2, 2.5, 3.5], [1, -1.5, -1], [0, 0, 1]), levels: { mic: 93, bed: 10 } },
   { id: "podcast", name: "Podcast Studio", bands: eqState([1.5, 1, 2.5], [0, -2, 0], [0.5, 0, 1]) },
   // Presenter loud and clear, music professionally tucked (mid-carved) underneath.
   { id: "voiceover", name: "Voice Over Music", bands: eqState([-1, 3, 4], [1, -5.5, -2], [0, 0, 0.5]), levels: { mic: 93, bed: 20 } },
