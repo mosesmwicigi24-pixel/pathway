@@ -6,7 +6,7 @@
 // opens the next level. Every usher is scope-checked, audited, and notified.
 import type { Pool } from "pg";
 import { z } from "zod";
-import { many, maybeOne, one, tx, recordChange, audit } from "../../db/db.js";
+import { many, maybeOne, tx, recordChange, audit } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { assertCellInScope } from "../../http/auth.js";
 import type { Principal } from "../../http/http.js";
