@@ -60,6 +60,10 @@ const EnvSchema = z.object({
   CLOUDINARY_URL: z.string().optional(),
   CERT_SIGNING_KEY: z.string().optional(),
   PUSH_PROVIDER_KEY: z.string().optional(),
+  // FCM (§D-M9) — the Firebase Admin service-account JSON as a single-line string
+  // (or a path to the file). Present → real FCM push delivery; absent → the
+  // logging provider (dev/tests complete without sending). Server-side secret.
+  FCM_SERVICE_ACCOUNT: z.string().optional(),
 
   // --- Transactional email (password reset, §5.3). SMTP by name only (§5.10);
   // absent → a logging no-op (dev). In prod we relay through the on-VPS mailcow. ---

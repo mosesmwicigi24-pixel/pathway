@@ -78,7 +78,7 @@ paths:
   /auth/login:
     post:
       tags: [auth]
-      summary: Email + password sign-in (argon2id verify). Generic error on bad credentials; 403 if suspended; 429 if locked after repeated failures.
+      summary: Email + password sign-in (argon2id verify). Generic error on bad credentials; 403 if suspended or (under scope=admin) a member signs into a staff console; 429 if locked after repeated failures.
       security: []
       requestBody:
         required: true
@@ -90,6 +90,10 @@ paths:
               properties:
                 email: { type: string, format: email }
                 password: { type: string }
+                scope:
+                  type: string
+                  enum: [admin]
+                  description: Sent by the admin consoles (web portal + iPad). Under this scope a self-registered member (Student role) is refused with 403; the member app omits it.
       responses:
         "200":
           description: A token pair, OR a 2FA challenge when the account has a second factor enabled.

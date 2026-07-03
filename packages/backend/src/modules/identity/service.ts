@@ -157,8 +157,21 @@ export class IdentityService {
    * (issueSession → signAccessToken + issueRefreshToken) — no parallel logic. The
    * route is hard-gated to NODE_ENV !== 'production' and never mounted there.
    */
+  // Roles allowed to sign into the admin consoles (web portal + iPad). A self-
+  // registered member is always "Student" (see register()/loginWithOAuth), so
+  // excluding it keeps members out of the consoles while the member app is open
+  // to them. Instructors need the console for the Discipleship Hub.
+  static readonly STAFF_ROLES: ReadonlySet<string> = new Set(["Instructor", "Admin", "SuperAdmin"]);
+
   static readonly LoginSchema = z
-    .object({ email: z.string().email(), password: z.string().min(1).max(200) })
+    .object({
+      email: z.string().email(),
+      password: z.string().min(1).max(200),
+      // Admin consoles (web portal + iPad) send scope:"admin". Under that scope a
+      // self-registered member (Student) is refused — the consoles are staff-only.
+      // The member app omits scope and is unaffected (§5.4).
+      scope: z.enum(["admin"]).optional(),
+    })
     .strict();
 
   /**
@@ -225,6 +238,22 @@ export class IdentityService {
         /* keep the existing hash; the user is still authenticated */
       }
     }
+    // Admin-console scope gate: the web portal / iPad send scope:"admin". Only
+    // staff (Instructor and up) may sign in there; a self-registered member
+    // (Student) is refused AFTER the password check, so this never reveals which
+    // emails are staff. The member app omits scope, so members still sign into
+    // the app normally. Server-authoritative — a client can't bypass it (§1.1, §5.4).
+    if (input.scope === "admin" && !IdentityService.STAFF_ROLES.has(row.role)) {
+      await audit(this.pool, row.user_id, "user.login_denied_scope", "users", row.user_id, {
+        scope: "admin",
+        role: row.role,
+      });
+      throw new ApiError(
+        "FORBIDDEN_SCOPE",
+        "This portal is for staff accounts. Members should sign in with the Nuru Pathway app.",
+      );
+    }
+
     // 2FA gate: with a second factor enrolled, the password alone is not enough.
     // Hand back a short-lived challenge instead of a session; the client must
     // complete it via loginCompleteMfa with a TOTP or recovery code (§5.3).

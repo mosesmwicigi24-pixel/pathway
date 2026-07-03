@@ -19,6 +19,9 @@ services:
     # nginx at https://pathway.nuruplace.org/media/...), NOT Cloudinary.
     volumes:
       - /var/www/pathway-media:/data/media
+      # FCM push (§D-M9): the Firebase Admin service-account JSON, read-only.
+      # Path matches FCM_SERVICE_ACCOUNT in the shared backend-env anchor.
+      - /opt/pathway/secrets/fcm-service-account.json:/run/secrets/fcm.json:ro
     environment:
       MEDIA_STORAGE_DIR: ${MEDIA_STORAGE_DIR:-/data/media}
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://pathway.nuruplace.org/media}
@@ -55,3 +58,11 @@ services:
       MPESA_ENV: ${MPESA_ENV:-sandbox}
       MPESA_TX_TYPE: ${MPESA_TX_TYPE:-CustomerPayBillOnline}
       MPESA_CALLBACK_URL: ${MPESA_CALLBACK_URL:-https://pathway.nuruplace.org/v1/webhooks/mobilemoney/mpesa}
+
+  # The worker runs the notification dispatcher (worker.ts → buildDispatchProvider),
+  # so it — not the api — is what actually sends FCM pushes. Mount the same
+  # read-only service-account file here; FCM_SERVICE_ACCOUNT (shared anchor) points
+  # at it. All other env comes from the base *backend-env anchor in prod.yml.
+  worker:
+    volumes:
+      - /opt/pathway/secrets/fcm-service-account.json:/run/secrets/fcm.json:ro

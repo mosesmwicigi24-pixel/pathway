@@ -147,7 +147,9 @@ export const PortalApi = {
   /** Email + password sign-in (argon2 verified server-side). Returns a session,
    *  OR a 2FA challenge when the account has a second factor on. */
   async login(email: string, password: string): Promise<LoginResult> {
-    const { data } = await api.post<LoginResult>("/auth/login", { email, password });
+    // scope:"admin" — this is a staff console. The backend refuses a member
+    // (Student) account here even with a correct password (§5.4).
+    const { data } = await api.post<LoginResult>("/auth/login", { email, password, scope: "admin" });
     return data;
   },
   /** Complete a 2FA login: exchange the challenge token + a TOTP/recovery code. */

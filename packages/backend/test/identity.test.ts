@@ -146,9 +146,9 @@ describe("identity / auth", () => {
   });
 
   // ---- Email + password login (POST /auth/login) ----
-  async function makePwUser(email: string, password: string, status = "active") {
+  async function makePwUser(email: string, password: string, status = "active", role = "Admin") {
     const cong = await createCongregation();
-    const u = await createUser({ congregationId: cong, role: "Admin", email });
+    const u = await createUser({ congregationId: cong, role, email });
     const argon2 = (await import("argon2")).default;
     const ph = await argon2.hash(password, { type: argon2.argon2id });
     await testPool().query("UPDATE users SET password_hash=$2, account_status=$3 WHERE user_id=$1", [u.user_id, ph, status]);
@@ -198,6 +198,32 @@ describe("identity / auth", () => {
     );
     expect(rows[0].failed_login_count).toBe(0);
     expect(rows[0].locked_until).toBeNull();
+  });
+
+  // ---- Admin-console scope gate (staff-only login) ----
+  it("refuses a member (Student) from the admin console under scope=admin, even with the right password (403)", async () => {
+    await makePwUser("member@dev.local", "right-pass-9", "active", "Student");
+    const res = await agent()
+      .post("/v1/auth/login")
+      .send({ email: "member@dev.local", password: "right-pass-9", scope: "admin" });
+    expect(res.status).toBe(403);
+    expect(res.body.access_token).toBeUndefined();
+  });
+
+  it("still lets that same member sign into the member app (no scope) → 200", async () => {
+    await makePwUser("member2@dev.local", "right-pass-9", "active", "Student");
+    const res = await agent().post("/v1/auth/login").send({ email: "member2@dev.local", password: "right-pass-9" });
+    expect(res.status).toBe(200);
+    expect(res.body.access_token).toBeTruthy();
+  });
+
+  it("lets staff (Instructor and up) sign into the admin console under scope=admin", async () => {
+    await makePwUser("inst@dev.local", "right-pass-9", "active", "Instructor");
+    const res = await agent()
+      .post("/v1/auth/login")
+      .send({ email: "inst@dev.local", password: "right-pass-9", scope: "admin" });
+    expect(res.status).toBe(200);
+    expect(res.body.access_token).toBeTruthy();
   });
 
   // ---- Self-service register (POST /auth/register) ----
