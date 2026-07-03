@@ -102,12 +102,20 @@ function eqState(
   };
 }
 const EQ_FLAT: EqState = eqState([0, 0, 0], [0, 0, 0], [0, 0, 0]);
-// Sound presets — one tap sets all 9 bands (tone only; scenes handle levels).
-const EQ_PRESETS: ReadonlyArray<{ id: string; name: string; bands: EqState }> = [
+// Sound presets — one tap sets all 9 bands. Most are tone-only (scenes handle
+// levels), but a preset may optionally carry `levels` (0..100 on-air gains for
+// the mic/bed buses): applying it then also moves the mapped strips (mic1/music)
+// and pushes one /mixer/live/levels POST alongside the EQ POST.
+const EQ_PRESETS: ReadonlyArray<{
+  id: string; name: string; bands: EqState; levels?: { mic?: number; bed?: number };
+}> = [
   { id: "flat", name: "Flat", bands: EQ_FLAT },
   { id: "talk", name: "Talk Show", bands: eqState([-2, 2.5, 3.5], [1, -1.5, -1], [0, 0, 1]) },
   { id: "podcast", name: "Podcast Studio", bands: eqState([1.5, 1, 2.5], [0, -2, 0], [0.5, 0, 1]) },
-  { id: "warm", name: "Warm Music", bands: eqState([0, 0, 0], [3, 0, -1], [1, 0, 0]) },
+  // Presenter loud and clear, music professionally tucked (mid-carved) underneath.
+  { id: "voiceover", name: "Voice Over Music", bands: eqState([-1, 3, 4], [1, -5.5, -2], [0, 0, 0.5]), levels: { mic: 95, bed: 28 } },
+  // Levels swing back to music-forward; EQ unchanged.
+  { id: "warm", name: "Warm Music", bands: eqState([0, 0, 0], [3, 0, -1], [1, 0, 0]), levels: { mic: 60, bed: 80 } },
   { id: "bright", name: "Bright Music", bands: eqState([0, 0, 0], [1, 0.5, 3], [0, 0, 1.5]) },
 ];
 // +3.5 / −2.0 / 0 — signed one-decimal dB readout (unicode minus, flat shows "0").
@@ -299,10 +307,34 @@ export function MixerStudio(): ReactElement {
     // drop pending per-bus debounces so they can't overwrite the full-board POST
     eqTimers.current.forEach((t) => clearTimeout(t));
     eqTimers.current.clear();
+    // Levels-carrying presets also move the mapped strip faders (mic1→mic,
+    // music→bed) so the console mirrors what goes on air; affected strips are
+    // unmuted since the preset asserts they're audible at these levels. The
+    // engine gets ONE /mixer/live/levels POST below — so drop any pending
+    // per-channel debounces instead of firing them again here.
+    const levels: Partial<Record<MixerLiveChannels, number>> = {};
+    if (preset.levels?.mic != null) levels.mic = Math.max(0, Math.min(100, Math.round(preset.levels.mic)));
+    if (preset.levels?.bed != null) levels.bed = Math.max(0, Math.min(100, Math.round(preset.levels.bed)));
+    if (preset.levels) {
+      setChannels((cs) => cs.map((c) => {
+        const live = LIVE_CHANNEL_MAP[c.id];
+        const v = live ? levels[live] : undefined;
+        return v == null ? c : { ...c, level: v, muted: false };
+      }));
+      for (const target of Object.keys(levels) as MixerLiveChannels[]) {
+        const pending = levelTimers.current.get(target);
+        if (pending) { clearTimeout(pending); levelTimers.current.delete(target); }
+      }
+    }
     if (!engineRef.current) return; // offline → local only
     RadioApi.liveEq(next)
       .then(() => setLiveErr(null))
       .catch(() => setLiveErr(`"${preset.name}" EQ was applied locally, but the on-air engine didn't take it.`));
+    if (preset.levels) {
+      RadioApi.liveLevels(levels)
+        .then(() => setLiveErr(null))
+        .catch(() => setLiveErr(`"${preset.name}" levels were applied locally, but the on-air engine didn't take them.`));
+    }
   }, []);
 
   // flush pending debounce timers on unmount
@@ -664,7 +696,7 @@ export function MixerStudio(): ReactElement {
                   })}
                 </div>
                 <div style={{ fontSize: 10.5, color: DIMMER, marginTop: 7, marginBottom: 14 }}>
-                  Presets shape tone (EQ). Use Scenes for level balance.
+                  Presets shape tone (EQ); Voice Over Music and Warm Music also set mic/bed levels. Use Scenes for full level balance.
                 </div>
 
                 {/* three bus groups side by side */}
