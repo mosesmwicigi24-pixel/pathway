@@ -113,7 +113,7 @@ const EQ_PRESETS: ReadonlyArray<{
   { id: "talk", name: "Talk Show", bands: eqState([-2, 2.5, 3.5], [1, -1.5, -1], [0, 0, 1]) },
   { id: "podcast", name: "Podcast Studio", bands: eqState([1.5, 1, 2.5], [0, -2, 0], [0.5, 0, 1]) },
   // Presenter loud and clear, music professionally tucked (mid-carved) underneath.
-  { id: "voiceover", name: "Voice Over Music", bands: eqState([-1, 3, 4], [1, -5.5, -2], [0, 0, 0.5]), levels: { mic: 93, bed: 28 } },
+  { id: "voiceover", name: "Voice Over Music", bands: eqState([-1, 3, 4], [1, -5.5, -2], [0, 0, 0.5]), levels: { mic: 93, bed: 20 } },
   // Levels swing back to music-forward; EQ unchanged.
   { id: "warm", name: "Warm Music", bands: eqState([0, 0, 0], [3, 0, -1], [1, 0, 0]), levels: { mic: 60, bed: 80 } },
   { id: "bright", name: "Bright Music", bands: eqState([0, 0, 0], [1, 0.5, 3], [0, 0, 1.5]) },

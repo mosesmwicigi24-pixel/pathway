@@ -81,18 +81,21 @@ api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError) => {
     const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
-    if (error.response?.status === 401 && original && !original._retry) {
-      original._retry = true;
-      if (refreshHandler) {
-        const token = await refreshHandler();
-        if (token) {
-          setAccessToken(token);
-          original.headers.Authorization = `Bearer ${token}`;
-          return api(original);
+    if (error.response?.status === 401 && original) {
+      if (!original._retry) {
+        original._retry = true;
+        if (refreshHandler) {
+          const token = await refreshHandler();
+          if (token) {
+            setAccessToken(token);
+            original.headers.Authorization = `Bearer ${token}`;
+            return api(original);
+          }
         }
       }
-      // Refresh missing or failed — the session is dead. Never redirect the
-      // login/auth calls themselves (would loop).
+      // Reaching here the session is dead: refresh missing, refresh failed, or
+      // the refreshed retry ALSO came back 401. Bounce to login (never for the
+      // auth calls themselves, and not when already there — would loop).
       const url = original.url ?? "";
       if (!url.includes("/auth/") && !window.location.pathname.startsWith("/login")) {
         window.location.assign("/login");
