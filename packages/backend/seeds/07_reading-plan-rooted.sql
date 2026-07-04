@@ -66,7 +66,7 @@ JOIN LATERAL (VALUES
       'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4',
       'https://images.unsplash.com/photo-1438232992991-995b7058bbb3?auto=format&fit=crop&w=1080&q=80'),
   (1, 'scripture',  'Today''s Reading', d.reference,
-      '_' || d.reference || '_ — read slowly, and ask the Lord to speak.', NULL, NULL),
+      d.reference || ' — read slowly, and ask the Lord to speak.', NULL, NULL),
   (2, 'devotional', 'Devotional',       NULL,
       v.devo, NULL, NULL),
   (3, 'talk',       'Talk it Over',     NULL,
