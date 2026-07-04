@@ -336,6 +336,21 @@ paths:
       responses:
         "201": { description: Avatar set }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/media/audio:
+    post:
+      tags: [auth]
+      summary: Upload a member voice note (multipart audio, field 'file', 5 MB cap); returns { url }. Duration/waveform travel in the domain payload (prayer wall audio_waveform / chat attachment_meta), not here.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201": { description: Voice note stored }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/onboarding:
     post:
       tags: [auth]
