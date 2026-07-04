@@ -6,8 +6,16 @@
 -- client's typography job, not the content's. Forward-only content repair,
 -- scoped tightly to the seeded pattern so authored content is never touched.
 
+-- Up Migration
+
 UPDATE reading_plan_day_segments
    SET content = substring(content from 2 for position('_ — ' in content) - 2)
                  || substring(content from position('_ — ' in content) + 1)
  WHERE kind = 'scripture'
    AND content LIKE '\_%\_ — %' ESCAPE '\';
+
+-- Down Migration
+
+-- Content repair is one-way: the underscore wrappers were a seed defect, so
+-- down is a deliberate no-op (nothing to restore).
+SELECT 1;
