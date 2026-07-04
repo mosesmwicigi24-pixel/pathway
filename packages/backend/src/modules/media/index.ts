@@ -169,6 +169,42 @@ export function registerMedia(ctx: AppContext): Router {
     res.status(201).json({ avatar_url: url });
   }));
 
+  // Member voice notes — completes the flow the schema already anticipates
+  // (prayer_wall_posts.audio_url/audio_waveform, chat attachment_url/meta):
+  // members had NO way to upload the audio those columns reference. Tight 5 MB
+  // cap (a ~90s AAC note is well under 1 MB); bare { url } response like
+  // /me/avatar — duration/waveform travel in the domain payload, not here.
+  const VOICE_MAX = 5 * 1024 * 1024;
+  const voiceUpload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, storageDir),
+      filename: (_req, file, cb) => {
+        const ext = (extname(file.originalname) || ".m4a").toLowerCase().replace(/[^.a-z0-9]/g, "") || ".m4a";
+        cb(null, `voice_${randomUUID()}${ext}`);
+      },
+    }),
+    limits: { fileSize: VOICE_MAX, files: 1 },
+    fileFilter: (_req, file, cb) => {
+      const ext = (extname(file.originalname) || "").toLowerCase();
+      if (AUDIO_MIMES.has(file.mimetype ?? "") || AUDIO_EXTS.has(ext)) cb(null, true);
+      else cb(new ApiError("VALIDATION_FAILED", "Only MP3, WAV, AAC or ALAC (.m4a) audio can be uploaded"));
+    },
+  });
+  const voiceUploadMw = (req: Request, res: Response, next: NextFunction): void =>
+    voiceUpload.single("file")(req, res, (err: unknown) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        return next(new ApiError("VALIDATION_FAILED", err.code === "LIMIT_FILE_SIZE" ? "Voice note exceeds 5 MB" : err.message));
+      }
+      return next(err);
+    });
+
+  r.post("/me/media/audio", auth, voiceUploadMw, handler(async (req, res) => {
+    const file = req.file;
+    if (!file) throw new ApiError("VALIDATION_FAILED", "No audio was uploaded (field 'file')");
+    res.status(201).json({ url: `${publicBase}/${file.filename}` });
+  }));
+
   // Broker a signed URL for an object key the caller already holds a reference to.
   r.get(
     "/media/url",

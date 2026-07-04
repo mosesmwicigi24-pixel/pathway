@@ -457,6 +457,8 @@ export class GrowthService {
         [userId, planId, dayNumber, input.body, input.client_mutation_id ?? null],
       );
       await recordChange(c, "reading_plan_day_reflections", String(row.id), userId, "upsert");
+      // A written plan-day reflection fulfills today's reflection rhythm (§1.8).
+      await recordActivityEvent(c, userId, "reflection", { oncePerDayTz: "Africa/Nairobi" });
       return row;
     });
   }

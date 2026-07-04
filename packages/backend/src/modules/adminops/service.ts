@@ -535,6 +535,10 @@ export class AdminOpsService {
   // app's displayed timezone.
 
   static readonly RHYTHM_KINDS = ["prayer", "word", "reflection"] as const;
+  // scripture_read is the engagement pipeline's "engaged the Word" event (plan
+  // segments, module reading) — it fulfills the Word rhythm too, so the chip
+  // reflects real reading, not just a tap. Query-only; never a manual tick kind.
+  private static readonly RHYTHM_QUERY_KINDS = ["prayer", "word", "reflection", "scripture_read"] as const;
   private static readonly RHYTHM_TZ = "Africa/Nairobi";
 
   /** Which of prayer/word/reflection the member has completed today. */
@@ -544,10 +548,10 @@ export class AdminOpsService {
       `SELECT DISTINCT kind FROM interaction_events
         WHERE user_id = $1 AND kind = ANY($2::text[])
           AND (occurred_at AT TIME ZONE $3)::date = (now() AT TIME ZONE $3)::date`,
-      [userId, [...AdminOpsService.RHYTHM_KINDS], AdminOpsService.RHYTHM_TZ],
+      [userId, [...AdminOpsService.RHYTHM_QUERY_KINDS], AdminOpsService.RHYTHM_TZ],
     );
     const done = new Set(rows.map((r) => r.kind));
-    return { prayer: done.has("prayer"), word: done.has("word"), reflection: done.has("reflection") };
+    return { prayer: done.has("prayer"), word: done.has("word") || done.has("scripture_read"), reflection: done.has("reflection") };
   }
 
   /** Mark one rhythm done for today (idempotent per day). Returns today's state. */

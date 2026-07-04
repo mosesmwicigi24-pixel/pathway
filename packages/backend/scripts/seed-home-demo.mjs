@@ -15,8 +15,29 @@ const url = process.env.DATABASE_URL;
 if (!url) { console.error("DATABASE_URL is required"); process.exit(1); }
 
 // ---- stable demo media (public, hotlink-friendly) ----
-const img = (seed, w = 1200, h = 800) => `https://picsum.photos/seed/nuru-${seed}/${w}/${h}`;
-const avatar = (n) => `https://i.pravatar.cc/240?img=${n}`;
+// Curated, subject-matched Unsplash photos — random picsum seeds gave every
+// event/announcement an unrelated stock photo (owner: images must be realistic
+// and match the content). Falls back to picsum only for unmapped seeds.
+const CURATED = {
+  worship: "photo-1507692049790-de58290a4334",   // hands raised in worship
+  cell: "photo-1529156069898-49953e39b3ac",      // small group together
+  cellmeet: "photo-1529156069898-49953e39b3ac",
+  youth: "photo-1523240795612-9a054b0db644",     // young people together
+  summit: "photo-1540575467063-178a50c2df87",    // conference audience
+  andrew: "photo-1511632765486-a01980e01a18",    // hands joined — invite a friend
+  "andrew-a": "photo-1511632765486-a01980e01a18",
+  "andrew-b": "photo-1529156069898-49953e39b3ac",
+  time: "photo-1501139083538-0139583c060f",      // clock — service times
+  baptism: "photo-1505118380757-91f5f5632de0",   // open water
+  "baptism-a": "photo-1505118380757-91f5f5632de0",
+};
+const img = (seed, w = 1200, h = 800) =>
+  CURATED[seed]
+    ? `https://images.unsplash.com/${CURATED[seed]}?w=${w}&h=${h}&fit=crop&q=80`
+    : `https://picsum.photos/seed/nuru-${seed}/${w}/${h}`;
+// Clean initial-medallion avatars instead of fake stock faces for named leaders.
+const avatar = (name) =>
+  `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=C89B3C&color=0B1F33&size=240&font-size=0.4`;
 const YT_ID = "ScMzIvxBSi4";
 
 // ---- fixed demo ids (so re-runs are clean) ----
@@ -107,9 +128,9 @@ try {
 
   // ---------------------------------------------------------------- 3. disciplers carousel
   const disciplers = [
-    { id: ID.disc1, name: "Pastor Miriam Okoth", role: "Instructor", av: avatar(45),
+    { id: ID.disc1, name: "Pastor Miriam Okoth", role: "Instructor", av: avatar("Miriam Okoth"),
       msg: "So proud of your consistency, Ada. Let's finish Foundations strong this week." },
-    { id: ID.disc2, name: "David Mwangi", role: "Instructor", av: avatar(12),
+    { id: ID.disc2, name: "David Mwangi", role: "Instructor", av: avatar("David Mwangi"),
       msg: "Praying for you daily. Reach out any time — we walk this together." },
   ];
   for (const d of disciplers) {
@@ -129,7 +150,7 @@ try {
       `UPDATE users SET avatar_url=COALESCE(avatar_url,$2),
           discipler_message=COALESCE(discipler_message,'Keep walking in the light — I''m cheering you on.')
         WHERE user_id=$1`,
-      [leader, avatar(33)],
+      [leader, avatar("Cell Leader")],
     );
     await c.query("INSERT INTO rbac_user_roles (user_id, role_key) VALUES ($1,'discipler') ON CONFLICT DO NOTHING", [leader]);
   }

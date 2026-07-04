@@ -39,7 +39,7 @@ const bandMeta: Record<DiscipleBand, { label: string; dot: string; bg: string; c
   thriving: { label: "Thriving", dot: "#16A34A", bg: "#F0FDF4", color: "#15803D" },
   steady: { label: "Steady", dot: "#0EA5E9", bg: "#E0F2FE", color: "#0369A1" },
   watch: { label: "Watch", dot: "#F59E0B", bg: "#FFFBEB", color: "#B45309" },
-  at_risk: { label: "At-risk", dot: "#DC2626", bg: "#FEF2F2", color: "#B91C1C" },
+  at_risk: { label: "At risk", dot: "#DC2626", bg: "#FEF2F2", color: "#B91C1C" },
 };
 
 function BandPill({ band }: { band: DiscipleBand | null }): ReactElement | null {
@@ -171,7 +171,7 @@ export function DiscipleshipHub(): ReactElement {
             { label: "Disciples", value: String(summary?.total_students ?? rows.length), Icon: Users, tint: "#EEF4FB", tone: "#1E4E8C" },
             { label: "Awaiting action", value: String(awaiting), Icon: HeartHandshake, tint: "#FDF5E5", tone: "#8A6B1F" },
             { label: "On watch", value: String(bandCounts.watch), Icon: Clock, tint: "#FFFBEB", tone: "#B45309" },
-            { label: "At-risk", value: String(bandCounts.at_risk), Icon: CircleAlert, tint: "#FEF2F2", tone: "#B91C1C" },
+            { label: "At risk", value: String(bandCounts.at_risk), Icon: CircleAlert, tint: "#FEF2F2", tone: "#B91C1C" },
           ].map((k) => {
             const Icon = k.Icon;
             return (

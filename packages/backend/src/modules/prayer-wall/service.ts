@@ -5,7 +5,7 @@
 // writes (client-generated ids + client_mutation_id).
 import type { Pool } from "pg";
 import { z } from "zod";
-import { many, maybeOne, one, tx, type Queryable } from "../../db/db.js";
+import { many, maybeOne, one, recordActivityEvent, tx, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 
 const PRAY = "🙏";
@@ -83,6 +83,8 @@ export class PrayerWallService {
         [input.post_id, userId, cong, input.title ?? null, input.body, input.audio_url ?? null, input.audio_waveform ? JSON.stringify(input.audio_waveform) : null, input.client_mutation_id ?? null],
       );
       if (res.rowCount === 0) return { post_id: input.post_id, duplicate: true };
+      // Lifting a prayer publicly fulfills today's prayer rhythm (real act, not a tap).
+      await recordActivityEvent(c, userId, "prayer", { oncePerDayTz: "Africa/Nairobi" });
       return { post_id: input.post_id, duplicate: false };
     });
   }
@@ -161,6 +163,8 @@ export class PrayerWallService {
       const del = await c.query(`DELETE FROM prayer_wall_reactions WHERE post_id = $1 AND user_id = $2 AND emoji = $3`, [postId, userId, emoji]);
       if ((del.rowCount ?? 0) > 0) return { on: false };
       await c.query(`INSERT INTO prayer_wall_reactions (post_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [postId, userId, emoji]);
+      // Standing with someone in prayer fulfills today's prayer rhythm.
+      await recordActivityEvent(c, userId, "prayer", { oncePerDayTz: "Africa/Nairobi" });
       return { on: true };
     });
   }
@@ -178,6 +182,8 @@ export class PrayerWallService {
         [input.comment_id, postId, userId, input.body, input.audio_url ?? null, input.audio_waveform ? JSON.stringify(input.audio_waveform) : null, input.client_mutation_id ?? null],
       );
       if (res.rowCount === 0) return { comment_id: input.comment_id, duplicate: true };
+      // Encouraging someone on the wall fulfills today's prayer rhythm.
+      await recordActivityEvent(c, userId, "prayer", { oncePerDayTz: "Africa/Nairobi" });
       return { comment_id: input.comment_id, duplicate: false };
     });
   }

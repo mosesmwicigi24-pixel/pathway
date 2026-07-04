@@ -6,7 +6,7 @@
 // audited and the member (and optionally their multiplier) is notified.
 import type { Pool } from "pg";
 import { z } from "zod";
-import { many, maybeOne, one, tx, recordChange, audit } from "../../db/db.js";
+import { many, maybeOne, one, recordActivityEvent, tx, recordChange, audit } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { assertCellInScope } from "../../http/auth.js";
 import type { Principal } from "../../http/http.js";
@@ -78,6 +78,8 @@ export class ModuleReflectionService {
         [prog.progress_id, userId, moduleId, body],
       );
       await recordChange(c, "module_reflections", row.reflection_id, userId, "upsert");
+      // Writing a module reflection fulfills today's reflection rhythm (§1.8).
+      await recordActivityEvent(c, userId, "reflection", { oncePerDayTz: "Africa/Nairobi" });
       await audit(c, userId, "reflection.saved", "module_reflections", row.reflection_id, { module_id: moduleId });
       return { body: row.body, created_at: row.submitted_at };
     });

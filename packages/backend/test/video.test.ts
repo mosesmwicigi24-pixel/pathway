@@ -389,3 +389,27 @@ describe("home video reactions (emoji + love/like counter)", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("member voice-note upload (POST /me/media/audio)", () => {
+  it("stores audio for a plain member and returns a public /media URL", async () => {
+    // Student role on purpose — voice notes are a MEMBER capability (prayer
+    // wall audio prayers, chat voice messages), unlike the admin audio route.
+    const tok = bearer({ sub: adminId, role: "Student", cong });
+    const res = await agent()
+      .post("/v1/me/media/audio")
+      .set("Authorization", tok)
+      .attach("file", Buffer.from("fake-aac-bytes"), { filename: "note.m4a", contentType: "audio/mp4" });
+    expect(res.status).toBe(201);
+    expect(res.body.url).toContain("/media/");
+    expect(res.body.url).toMatch(/voice_.*\.m4a$/);
+  });
+
+  it("rejects non-audio uploads with 400", async () => {
+    const tok = bearer({ sub: adminId, role: "Student", cong });
+    const res = await agent()
+      .post("/v1/me/media/audio")
+      .set("Authorization", tok)
+      .attach("file", Buffer.from("hello"), { filename: "notes.txt", contentType: "text/plain" });
+    expect(res.status).toBe(400);
+  });
+});
