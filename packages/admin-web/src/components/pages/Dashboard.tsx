@@ -29,7 +29,7 @@ const BAND_META: { key: string; name: string; color: string }[] = [
   { key: "thriving", name: "Thriving", color: "#22c55e" },
   { key: "steady", name: "Steady", color: "#1d4e86" },
   { key: "watch", name: "Watch", color: "#c89b3c" },
-  { key: "at_risk", name: "At-risk", color: "#f0405f" },
+  { key: "at_risk", name: "At risk", color: "#f0405f" },
 ];
 
 const pct = (v: number): string => `${Math.round((v ?? 0) * 100)}%`;

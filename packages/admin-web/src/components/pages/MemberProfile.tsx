@@ -20,12 +20,17 @@ const PROGRAMME_LABELS: Record<Programme, string> = {
 };
 
 const STEADY = { bg: "#FFF6E0", color: "#A87616" };
+// Keyed by the RAW wire band (engagement_scores.band) — the old Title-Case
+// keys never matched, so at-risk members silently rendered with the neutral
+// style. bandLabel prettifies for display ("At risk", matching mobile).
 const bandStyle: Record<string, { bg: string; color: string }> = {
-  Thriving: { bg: "#E8F6EC", color: "#16A34A" },
-  Steady: STEADY,
-  Watch: { bg: "#FDF0E6", color: "#E07B28" },
-  "At-risk": { bg: "#FDECEC", color: "#DC2626" },
+  thriving: { bg: "#E8F6EC", color: "#16A34A" },
+  steady: STEADY,
+  watch: { bg: "#FDF0E6", color: "#E07B28" },
+  at_risk: { bg: "#FDECEC", color: "#DC2626" },
 };
+const bandLabel = (b: string): string =>
+  b === "at_risk" ? "At risk" : b.charAt(0).toUpperCase() + b.slice(1);
 
 function fmtDate(s: string | null | undefined): string {
   if (!s) return "—";
@@ -95,7 +100,7 @@ export function MemberProfile(): ReactElement {
   const heroItems = [
     { label: "Cell", value: m.cell_name ?? "Unassigned" },
     { label: "Current level", value: `L${lvl.current_level}${lvl.level_title ? ` · ${lvl.level_title}` : ""}` },
-    { label: "Engagement band", value: m.engagement.band ?? "—", isBand: !!m.engagement.band },
+    { label: "Engagement band", value: m.engagement.band ? bandLabel(m.engagement.band) : "—", isBand: !!m.engagement.band },
     { label: "Programme", value: m.programme ? PROGRAMME_LABELS[m.programme] : "—" },
     { label: "Location", value: locationValue },
     { label: "Age · Gender", value: [m.age != null ? `${m.age}` : null, genderLabel].filter(Boolean).join(" · ") || "—" },
@@ -110,7 +115,7 @@ export function MemberProfile(): ReactElement {
     { label: "Curriculum", value: `${m.metrics.curriculum_pct}%`, Icon: BookOpen, iconFg: "#C89B3C", iconBg: "rgba(200,155,60,0.14)", cardBg: "#FDF9EF", border: "#F0E2BD", sub: `Level ${lvl.current_level}` },
     { label: "Attendance", value: `${m.metrics.attendance_pct}%`, Icon: CalendarDays, iconFg: "#1D4E86", iconBg: "rgba(29,78,134,0.12)", cardBg: "#F4F6FB", border: "#DBE2EF", sub: `${m.metrics.attended} · 90d` },
     { label: "Badges", value: String(m.badges.length), Icon: Award, iconFg: "#5B2BB8", iconBg: "rgba(91,43,184,0.12)", cardBg: "#F7F3FC", border: "#E2D7F2", sub: `${m.certificates.length} certs` },
-    { label: "Engagement", value: engScore, Icon: Activity, iconFg: "#A87616", iconBg: "rgba(168,118,22,0.14)", cardBg: "#FFF6E0", border: "#F5E0A8", sub: m.engagement.band ?? "—" },
+    { label: "Engagement", value: engScore, Icon: Activity, iconFg: "#A87616", iconBg: "rgba(168,118,22,0.14)", cardBg: "#FFF6E0", border: "#F5E0A8", sub: m.engagement.band ? bandLabel(m.engagement.band) : "—" },
   ];
 
   const progressCards = [
