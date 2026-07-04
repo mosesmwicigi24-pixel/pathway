@@ -511,10 +511,25 @@ export interface SystemUser {
   locale: string | null;
   account_status: "active" | "invited" | "suspended";
   require_2fa: boolean;
+  is_staff: boolean; // true = a member elevated to portal access (kept role='Student')
   last_active: string | null;
   role_keys: string[];
   discipler_message: string | null;
   avatar_url: string | null;
+}
+
+// A single RBAC (module × capability) cell.
+export interface Permission {
+  module_id: string;
+  capability: string;
+}
+// Effective/derived permissions for one user (union of role grants + direct grants).
+export interface UserPermissions {
+  user_id: string;
+  bridged: boolean; // legacy SuperAdmin/Admin — full access via the bridge
+  from_roles: Permission[];
+  direct: Permission[];
+  effective: Permission[];
 }
 
 export const SystemApi = {
@@ -540,6 +555,10 @@ export const SystemApi = {
   createUser: (body: Record<string, unknown>) => api.post<SystemUser>("/admin/users", body).then((r) => r.data),
   updateUser: (id: string, body: Record<string, unknown>) => api.put<SystemUser>(`/admin/users/${id}`, body).then((r) => r.data),
   deleteUser: (id: string) => api.delete<{ deleted: boolean }>(`/admin/users/${id}`).then((r) => r.data),
+  // Per-user direct permission grants (layered on top of role grants).
+  userPermissions: (id: string) => api.get<UserPermissions>(`/admin/users/${id}/permissions`).then((r) => r.data),
+  setUserPermissions: (id: string, permissions: Permission[]) =>
+    api.put<{ user_id: string; count: number }>(`/admin/users/${id}/permissions`, { permissions }).then((r) => r.data),
 };
 
 // ---- Curriculum CMS (Admin/SuperAdmin) ----
@@ -1221,6 +1240,12 @@ export const OpsApi = {
         { graduated },
       )
       .then((r) => r.data),
+  // Elevate a member into a privileged portal user (sets is_staff; they appear on
+  // System ▸ Users). Demote clears is_staff + all role/permission grants.
+  elevateMember: (userId: string) =>
+    api.post<{ user_id: string; full_name: string; is_staff: boolean; role: string }>(`/admin/members/${userId}/elevate`, {}).then((r) => r.data),
+  demoteMember: (userId: string) =>
+    api.post<{ user_id: string; full_name: string; is_staff: boolean; role: string }>(`/admin/members/${userId}/demote`, {}).then((r) => r.data),
 
   reflections: (q: { state?: ReflectionState; overdue?: boolean } = {}) =>
     api.get<{ data: ReflectionRow[] }>("/admin/reflections", { params: q }).then((r) => r.data.data),

@@ -1059,6 +1059,46 @@ export class AdminOpsService {
     });
   }
 
+  /**
+   * Elevate/demote a member to/from a privileged portal user (§5.4).
+   *
+   *   elevate (staff=true):  set users.is_staff = TRUE. The member keeps
+   *     role='Student' and their member-app access is untouched, but the login
+   *     scope gate now admits them into the admin console and they appear on
+   *     System ▸ Users, where roles + direct permissions are assigned.
+   *
+   *   demote (staff=false):  set users.is_staff = FALSE AND remove every RBAC
+   *     role assignment and direct permission grant, so the member fully loses
+   *     portal access and drops off System ▸ Users. Membership is untouched.
+   *
+   * Idempotent. Audited. Returns the member's post-change staff state.
+   */
+  async setMemberStaff(adminId: string, userId: string, staff: boolean): Promise<unknown> {
+    return tx(this.pool, async (c) => {
+      const member = await maybeOne<{ user_id: string; is_staff: boolean; role: string }>(
+        c,
+        `SELECT user_id, is_staff, role FROM users WHERE user_id = $1 AND deleted_at IS NULL`,
+        [userId],
+      );
+      if (!member) throw new ApiError("NOT_FOUND", "Member not found");
+
+      if (member.is_staff !== staff) {
+        await c.query(`UPDATE users SET is_staff = $2, updated_at = now() WHERE user_id = $1`, [userId, staff]);
+        if (!staff) {
+          // Demotion strips all portal grants so access is fully revoked.
+          await c.query(`DELETE FROM rbac_user_roles WHERE user_id = $1`, [userId]);
+          await c.query(`DELETE FROM rbac_user_permissions WHERE user_id = $1`, [userId]);
+        }
+        await audit(c, adminId, staff ? "member.elevated" : "member.demoted", "users", userId, {});
+      }
+      return one<{ user_id: string; full_name: string; is_staff: boolean; role: string }>(
+        c,
+        `SELECT user_id, full_name, is_staff, role FROM users WHERE user_id = $1`,
+        [userId],
+      );
+    });
+  }
+
   // ---------------- Audit viewer (SuperAdmin) ----------------
 
   static readonly ListAudit = z.object({

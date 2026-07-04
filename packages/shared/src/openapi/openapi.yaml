@@ -954,6 +954,46 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/Unprocessable" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/users/{id}/permissions:
+    get:
+      tags: [system]
+      summary: RBAC. A user's role-derived permissions, direct per-user grants, and their effective union (users:view, §5.4).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Permissions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_id, bridged, from_roles, direct, effective]
+                properties:
+                  user_id: { type: string, format: uuid }
+                  bridged: { type: boolean, description: True for a legacy SuperAdmin/Admin (full access via the bridge). }
+                  from_roles: { type: array, items: { $ref: "#/components/schemas/Permission" } }
+                  direct: { type: array, items: { $ref: "#/components/schemas/Permission" } }
+                  effective: { type: array, items: { $ref: "#/components/schemas/Permission" } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    put:
+      tags: [system]
+      summary: RBAC. Replace a user's direct per-user permission grants (layered on top of role grants; role grants untouched) (users:edit).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permissions]
+              properties:
+                permissions: { type: array, items: { $ref: "#/components/schemas/Permission" } }
+      responses:
+        "200": { description: Direct grants set }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
 
   # --- Progress, assessment & reflections (§3.3) ---
   /modules/{id}/complete:
@@ -2513,6 +2553,48 @@ paths:
       responses:
         "200": { description: Graduation flag updated }
         "400": { description: Validation failed }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/members/{id}/elevate:
+    post:
+      tags: [portal]
+      summary: Admin. Elevate a member (a Student) into a privileged portal user — sets users.is_staff so they gain admin-console access and appear on System ▸ Users, without a separate registration. Role/permission grants are assigned there. Member-app access unchanged. Idempotent. Audited. (users:create).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Member staff state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_id, full_name, is_staff, role]
+                properties:
+                  user_id: { type: string, format: uuid }
+                  full_name: { type: string }
+                  is_staff: { type: boolean }
+                  role: { type: string }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/members/{id}/demote:
+    post:
+      tags: [portal]
+      summary: Admin. Demote a portal-elevated member — clears users.is_staff AND removes every RBAC role assignment + direct permission grant, so they fully lose portal access and drop off System ▸ Users. Membership + member-app access untouched. Idempotent. Audited. (users:create).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Member staff state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_id, full_name, is_staff, role]
+                properties:
+                  user_id: { type: string, format: uuid }
+                  full_name: { type: string }
+                  is_staff: { type: boolean }
+                  role: { type: string }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
   /admin/audit:
@@ -4478,6 +4560,17 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    Permission:
+      type: object
+      description: A single RBAC (module × capability) cell. 16 fixed modules × 6 capabilities.
+      required: [module_id, capability]
+      properties:
+        module_id:
+          type: string
+          enum: [dashboard, levels, cms, quiz, videos, cells, members, reflections, events, finance, certificates, badges, users, rolesAdmin, countries, languages, congregations]
+        capability:
+          type: string
+          enum: [view, create, edit, delete, approve, export]
     HubScores:
       type: object
       description: Growth scores, 0–100 ints; null if not yet computed.

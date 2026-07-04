@@ -56,9 +56,11 @@ export function requireRole(min: UserRole) {
 }
 
 /**
- * Fine-grained permission gate (§5.4). A role grants (module_id, capability)
- * cells via the RBAC matrix; this asserts the caller holds the given capability
- * on the given module through any of their assigned *active* roles.
+ * Fine-grained permission gate (§5.4). A caller holds a (module_id, capability)
+ * cell if EITHER an assigned *active* role grants it (rbac_role_permissions) OR
+ * the user has a direct per-user grant (rbac_user_permissions). Effective
+ * permission is the UNION of the two — direct grants let an admin hand an
+ * individual (e.g. an elevated member) a precise capability without a whole role.
  *
  * Legacy bridge: the coarse portal admins (SuperAdmin, Admin) always pass — these
  * endpoints were Admin-gated before RBAC, so their access is unchanged. Granular
@@ -79,6 +81,10 @@ export function requirePermission(q: Queryable) {
              JOIN rbac_roles r ON r.role_key = ur.role_key AND r.status = 'active'
              JOIN rbac_role_permissions rp ON rp.role_key = ur.role_key
             WHERE ur.user_id = $1 AND rp.module_id = $2 AND rp.capability = $3
+           UNION ALL
+           SELECT 1 AS ok
+             FROM rbac_user_permissions up
+            WHERE up.user_id = $1 AND up.module_id = $2 AND up.capability = $3
             LIMIT 1`,
           [p.userId, moduleId, capability],
         );

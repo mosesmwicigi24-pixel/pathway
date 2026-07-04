@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Search, Plus, ChevronDown, ArrowRight, Mail, UserCheck, UserPlus, Users as UsersIcon,
   ChevronRight, CheckCircle2, Flag, Download, Printer, X, GraduationCap, MoreVertical, Pencil, Check,
-  BarChart3, Award, Star, BookOpen, KeyRound, Copy,
+  BarChart3, Award, Star, BookOpen, KeyRound, Copy, ShieldPlus,
 } from "lucide-react";
 import {
   OpsApi, AdminApi, SystemApi, CurriculumApi,
@@ -167,6 +167,19 @@ export function Members(): ReactElement {
     catch (e) { setError(errorMessage(e, "Could not update graduation.")); }
   }
 
+  // Elevate a member into a privileged portal user (no separate registration).
+  // They keep their Student membership + member-app access, but gain admin-console
+  // sign-in and appear on System ▸ Users, where roles/permissions are assigned.
+  async function elevate(userId: string, name: string): Promise<void> {
+    setMenuFor(null);
+    if (!window.confirm(`Make ${name} a portal user? They'll be able to sign in to the admin portal and will appear on System ▸ Users, where you can assign their roles and permissions. Their member access is unchanged.`)) return;
+    try {
+      await OpsApi.elevateMember(userId);
+      await load();
+      window.alert(`${name} is now a portal user. Assign their roles and permissions on System ▸ Users.`);
+    } catch (e) { setError(errorMessage(e, "Could not elevate this member.")); }
+  }
+
   return (
     <div className="min-h-full" style={{ background: "var(--background)" }} onClick={() => setMenuFor(null)}>
       <div style={{ background: "var(--nuru-dark)", padding: "22px clamp(16px,4vw,48px) 24px" }}>
@@ -308,6 +321,7 @@ export function Members(): ReactElement {
                               <div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-1 rounded-xl z-20" style={{ background: "#fff", border: "1px solid var(--border)", boxShadow: "0 12px 32px rgba(11,31,51,0.18)", minWidth: 168, overflow: "hidden" }}>
                                 <button onClick={() => { setMenuFor(null); setEditId(m.user_id); }} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none" }}><Pencil size={14} style={{ color: "var(--nuru-gold)" }} /> Edit member</button>
                                 <button onClick={() => { setMenuFor(null); setPwResetFor({ userId: m.user_id, name: m.full_name }); }} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><KeyRound size={14} style={{ color: "#0E7490" }} /> Reset password</button>
+                                <button onClick={() => void elevate(m.user_id, m.full_name)} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><ShieldPlus size={14} style={{ color: "var(--nuru-gold)" }} /> Make portal user</button>
                                 <button onClick={() => void graduate(m.user_id, !isGraduated)} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><GraduationCap size={14} style={{ color: "#7C3AED" }} /> {isGraduated ? "Un-graduate" : "Mark graduated"}</button>
                               </div>
                             ) : null}
