@@ -192,10 +192,11 @@ export class IdentityService {
         failed_login_count: number;
         locked_until: Date | null;
         mfa_enabled: boolean;
+        is_staff: boolean;
       }
     >(
       this.pool,
-      `SELECT user_id, role, congregation_id, password_hash, account_status, failed_login_count, locked_until, mfa_enabled
+      `SELECT user_id, role, congregation_id, password_hash, account_status, failed_login_count, locked_until, mfa_enabled, is_staff
          FROM users WHERE email = $1 AND deleted_at IS NULL`,
       [input.email],
     );
@@ -239,11 +240,13 @@ export class IdentityService {
       }
     }
     // Admin-console scope gate: the web portal / iPad send scope:"admin". Only
-    // staff (Instructor and up) may sign in there; a self-registered member
-    // (Student) is refused AFTER the password check, so this never reveals which
-    // emails are staff. The member app omits scope, so members still sign into
-    // the app normally. Server-authoritative — a client can't bypass it (§1.1, §5.4).
-    if (input.scope === "admin" && !IdentityService.STAFF_ROLES.has(row.role)) {
+    // staff (Instructor and up) OR a member elevated to portal access
+    // (users.is_staff) may sign in there; an ordinary self-registered member
+    // (Student, not elevated) is refused AFTER the password check, so this never
+    // reveals which emails are staff. The member app omits scope, so members still
+    // sign into the app normally. Server-authoritative — a client can't bypass it
+    // (§1.1, §5.4).
+    if (input.scope === "admin" && !IdentityService.STAFF_ROLES.has(row.role) && !row.is_staff) {
       await audit(this.pool, row.user_id, "user.login_denied_scope", "users", row.user_id, {
         scope: "admin",
         role: row.role,

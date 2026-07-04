@@ -352,16 +352,19 @@ export function registerSystem(ctx: AppContext): Router {
   // ── System users (portal accounts) ──
   const USER_SELECT = `
     SELECT u.user_id, u.full_name, u.email, u.phone_number, u.country_code, u.locale,
-           u.account_status, u.require_2fa, u.discipler_message, u.avatar_url,
+           u.account_status, u.require_2fa, u.is_staff, u.discipler_message, u.avatar_url,
            (SELECT max(ie.occurred_at) FROM interaction_events ie WHERE ie.user_id = u.user_id) AS last_active,
            COALESCE(array_agg(ur.role_key) FILTER (WHERE ur.role_key IS NOT NULL), '{}') AS role_keys
       FROM users u
       LEFT JOIN rbac_user_roles ur ON ur.user_id = u.user_id`;
 
   r.get("/admin/users", auth, perm("users", "view"), handler(async (_req, res) => {
+    // A row is a "portal user" when it's a staff-role account, has an RBAC role
+    // assigned, OR has been elevated (is_staff) — an elevated member appears here
+    // even before any role/permission is assigned.
     const rows = await many<Record<string, unknown>>(read,
       `${USER_SELECT}
-        WHERE u.deleted_at IS NULL AND (u.role <> 'Student' OR ur.role_key IS NOT NULL)
+        WHERE u.deleted_at IS NULL AND (u.role <> 'Student' OR ur.role_key IS NOT NULL OR u.is_staff)
         GROUP BY u.user_id
         ORDER BY u.full_name`);
     res.json({ data: rows });
@@ -449,6 +452,70 @@ export function registerSystem(ctx: AppContext): Router {
       await audit(c, principal.userId, "user.deleted", "users", id, {});
     });
     res.json({ deleted: true });
+  }));
+
+  // ── Per-user direct permission grants (RBAC) ──
+  // Direct (module_id, capability) grants layered on top of a user's role grants.
+  // The effective permission a user holds is the UNION of role grants and these
+  // direct grants (enforced in requirePermission). This lets an admin hand an
+  // individual — e.g. an elevated member — a precise capability without a role.
+
+  // GET: the user's role-derived permissions, their direct grants, and the
+  // computed effective union — so the Users page can render an accurate matrix.
+  r.get("/admin/users/:id/permissions", auth, perm("users", "view"), handler(async (req, res) => {
+    const id = String(req.params.id);
+    const user = await maybeOne<{ role: string }>(read, `SELECT role FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [id]);
+    if (!user) throw new ApiError("NOT_FOUND", "User not found");
+    // A legacy SuperAdmin/Admin passes every gate via the bridge — surface that as
+    // full effective access so the UI reflects reality (§5.4).
+    const isBridged = user.role === "SuperAdmin" || user.role === "Admin";
+    const fromRoles = await many<{ module_id: string; capability: string }>(read,
+      `SELECT DISTINCT rp.module_id, rp.capability
+         FROM rbac_user_roles ur
+         JOIN rbac_roles r ON r.role_key = ur.role_key AND r.status = 'active'
+         JOIN rbac_role_permissions rp ON rp.role_key = ur.role_key
+        WHERE ur.user_id = $1`, [id]);
+    const direct = await many<{ module_id: string; capability: string }>(read,
+      `SELECT module_id, capability FROM rbac_user_permissions WHERE user_id = $1`, [id]);
+    const key = (p: { module_id: string; capability: string }) => `${p.module_id}:${p.capability}`;
+    const effectiveSet = new Set<string>();
+    if (isBridged) {
+      for (const m of PERM_MODULES) for (const cap of CAPABILITIES) effectiveSet.add(`${m}:${cap}`);
+    } else {
+      for (const p of fromRoles) effectiveSet.add(key(p));
+      for (const p of direct) effectiveSet.add(key(p));
+    }
+    const effective = Array.from(effectiveSet).map((s) => {
+      const [module_id, capability] = s.split(":");
+      return { module_id, capability };
+    });
+    res.json({
+      user_id: id,
+      bridged: isBridged,
+      from_roles: fromRoles,
+      direct,
+      effective,
+    });
+  }));
+
+  // PUT: replace the user's direct-grant set wholesale (mirrors the role matrix
+  // endpoint). Role grants are never touched — only the per-user layer.
+  r.put("/admin/users/:id/permissions", auth, perm("users", "edit"), handler(async (req, res) => {
+    const id = String(req.params.id);
+    const input = parseBody(PermsInput, req.body);
+    await tx(db, async (c) => {
+      if (!await maybeOne(c, `SELECT 1 FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [id])) {
+        throw new ApiError("NOT_FOUND", "User not found");
+      }
+      await c.query(`DELETE FROM rbac_user_permissions WHERE user_id = $1`, [id]);
+      for (const p of input.permissions) {
+        await c.query(
+          `INSERT INTO rbac_user_permissions (user_id, module_id, capability, granted_by) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+          [id, p.module_id, p.capability, requirePrincipal(req).userId]);
+      }
+      await audit(c, requirePrincipal(req).userId, "user.permissions_set", "users", id, { count: input.permissions.length });
+    });
+    res.json({ user_id: id, count: input.permissions.length });
   }));
 
   return r;

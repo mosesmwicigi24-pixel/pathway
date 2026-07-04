@@ -146,6 +146,23 @@ export function registerAdminOps(ctx: AppContext): Router {
     res.json(await svc.setGraduation(requirePrincipal(req).userId, userId, input.graduated));
   }));
 
+  // Elevate a member (a Student, one identity) into a privileged portal user
+  // WITHOUT a separate registration: set users.is_staff = TRUE. The member keeps
+  // role='Student' (their member-app experience is unchanged) but gains admin-
+  // console access and appears on System ▸ Users. Roles/direct permissions are
+  // then assigned from the Users page. Guarded by users:manage (the same right that
+  // creates/edits portal accounts).
+  r.post("/admin/members/:id/elevate", auth, perm("users", "create"), handler(async (req, res) => {
+    res.json(await svc.setMemberStaff(requirePrincipal(req).userId, req.params.id ?? "", true));
+  }));
+
+  // Demote: clear is_staff AND remove every RBAC role assignment + direct
+  // permission grant, so the member fully loses portal access and disappears from
+  // System ▸ Users. Their Student membership + member-app access are untouched.
+  r.post("/admin/members/:id/demote", auth, perm("users", "create"), handler(async (req, res) => {
+    res.json(await svc.setMemberStaff(requirePrincipal(req).userId, req.params.id ?? "", false));
+  }));
+
   // ---- Audit viewer ----
   r.get("/admin/audit", ...superOnly, handler(async (req, res) => {
     const q = parseBody(AdminOpsService.ListAudit, req.query);
