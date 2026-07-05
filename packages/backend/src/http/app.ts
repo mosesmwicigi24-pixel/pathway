@@ -53,6 +53,13 @@ import { registerDiscipleship } from "../modules/discipleship/index.js";
 export function createApp(ctx: AppContext): Express {
   const app = express();
   app.disable("x-powered-by");
+  // Behind exactly one reverse proxy (nginx on the VPS). Trust its X-Forwarded-For
+  // so req.ip is the REAL client IP, not the nginx container address. Without this
+  // every request shares one rate-limit bucket keyed to the proxy IP — which
+  // silently throttled ALL logins platform-wide (429 → "couldn't connect") the
+  // moment more than a trickle of members signed in at once. Trusting one hop
+  // takes the client IP nginx appended (spoofed XFF entries sit to its left).
+  app.set("trust proxy", 1);
   app.use(helmet()); // security headers (§5.8)
 
   // Trace context (§4.7) + RED request metrics.
@@ -129,7 +136,12 @@ export function createApp(ctx: AppContext): Express {
 
   // Global limiter (per user/IP) + stricter buckets on auth, payment and sync (§5.8).
   app.use(rateLimit({ store: rl, name: "global", capacity: 300, refillPerSec: 5, keyBy: byUserOrIp }));
-  app.use("/v1/auth", rateLimit({ store: rl, name: "auth", capacity: 20, refillPerSec: 0.5, keyBy: byIp }));
+  // Auth is keyed by real client IP (see trust proxy above). Capacity is generous
+  // because whole congregations legitimately share ONE public IP (church Wi-Fi /
+  // Safaricom CGNAT) and all sign in around a service; brute-force on any single
+  // ACCOUNT is bounded separately by account lockout (failed_login_count), so this
+  // IP bucket only needs to be a coarse abuse guard, not a per-person throttle.
+  app.use("/v1/auth", rateLimit({ store: rl, name: "auth", capacity: 240, refillPerSec: 4, keyBy: byIp }));
   // Strict payment bucket guards money WRITES (intents, schedule create/cancel).
   // Read GETs (history, schedules, statement) skip it — they'd otherwise drain the
   // 30-token bucket on a normal Give→Statement visit and 429 — and fall to global.
