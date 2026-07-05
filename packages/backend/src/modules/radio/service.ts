@@ -91,6 +91,19 @@ export interface RadioCommentRow {
   author_avatar_url?: string | null;
 }
 
+/** One active listener in a program's live roster (users join). */
+export interface RadioListenerRow {
+  user_id: string;
+  name: string;
+  avatar_url: string | null;
+}
+
+/** Live listener roster + real active count (server-authoritative presence). */
+export interface RadioListenerRoster {
+  count: number;
+  listeners: RadioListenerRow[];
+}
+
 export interface MixerSceneRow {
   id: string;
   name: string;
@@ -143,6 +156,10 @@ export class RadioService {
     // HOST-side directory where /media files live (jingle pushes send host paths).
     private readonly liquidsoapMediaDir: string = "/var/www/pathway-media",
   ) {}
+
+  // A listener is "active" if their last heartbeat is within this window. Clients
+  // heartbeat ~every 20s, so 45s survives one dropped beat before they fall off.
+  private static readonly PRESENCE_WINDOW = "45 seconds";
 
   // --- Validation schemas (inline zod, per module convention) ---------------
 
@@ -511,7 +528,11 @@ export class RadioService {
   async health(id: string): Promise<StreamHealth> {
     const program = await this.getAdmin(id);
     if (!program.is_live) throw new ApiError("CONFLICT", "Program is not live");
-    return await this.provider.health({ id: program.id, is_live: program.is_live, peak_listeners: program.peak_listeners });
+    const health = await this.provider.health({ id: program.id, is_live: program.is_live, peak_listeners: program.peak_listeners });
+    // Prefer REAL member presence for the live count when anyone is heartbeating;
+    // fall back to the provider/Icecast count (web/desktop stream pulls) otherwise.
+    const active = await this.activeListenerCount(id);
+    return active > 0 ? { ...health, listeners: active } : health;
   }
 
   // --- Programs: member (public projection) ---------------------------------
@@ -668,6 +689,55 @@ export class RadioService {
     );
     if (!res.rowCount) throw new ApiError("NOT_FOUND", "Comment not found");
     return { ok: true };
+  }
+
+  // --- Live listener presence (real listeners) ------------------------------
+
+  /**
+   * Idempotent heartbeat: upsert the caller's presence in a program's live
+   * roster (last_seen=now). Called ~every 20s while the member's player is
+   * actually playing this program; replays just bump last_seen. 404 if the
+   * program is not member-visible so private programs never leak presence.
+   */
+  async heartbeat(programId: string, userId: string): Promise<{ ok: true }> {
+    await this.assertVisible(programId);
+    await this.pool.query(
+      `INSERT INTO radio_listeners (program_id, user_id, last_seen)
+         VALUES ($1, $2, now())
+       ON CONFLICT (program_id, user_id) DO UPDATE SET last_seen = now()`,
+      [programId, userId],
+    );
+    return { ok: true };
+  }
+
+  /** Real active-listener count: rows whose last_seen is within the presence window. */
+  private async activeListenerCount(programId: string): Promise<number> {
+    const row = await maybeOne<{ n: string }>(
+      this.pool,
+      `SELECT COUNT(*)::text AS n FROM radio_listeners
+        WHERE program_id = $1 AND last_seen > now() - $2::interval`,
+      [programId, RadioService.PRESENCE_WINDOW],
+    );
+    return row ? Number(row.n) : 0;
+  }
+
+  /**
+   * Live roster of real listeners (most-recent first), plus the active count.
+   * Joins users for the display name + avatar. 404 for private programs.
+   */
+  async listeners(programId: string): Promise<RadioListenerRoster> {
+    await this.assertVisible(programId);
+    const listeners = await many<RadioListenerRow>(
+      this.pool,
+      `SELECT rl.user_id, u.full_name AS name, u.avatar_url AS avatar_url
+         FROM radio_listeners rl
+         JOIN users u ON u.user_id = rl.user_id
+        WHERE rl.program_id = $1 AND rl.last_seen > now() - $2::interval
+        ORDER BY rl.last_seen DESC
+        LIMIT 100`,
+      [programId, RadioService.PRESENCE_WINDOW],
+    );
+    return { count: listeners.length, listeners };
   }
 
   // --- Audio library: tracks ------------------------------------------------

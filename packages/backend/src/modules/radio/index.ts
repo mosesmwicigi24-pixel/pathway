@@ -160,6 +160,14 @@ export function registerRadio(
   }));
 
   // Program sub-actions before the bare /:id.
+  // Live listener presence — the member player heartbeats while it is actually
+  // playing (~every 20s); the studio roster + count read from these rows.
+  r.post("/radio/programs/:id/listening", auth, handler(async (req, res) => {
+    res.json(await svc.heartbeat(idOf(req), requirePrincipal(req).userId));
+  }));
+  r.get("/radio/programs/:id/listeners", auth, handler(async (req, res) => {
+    res.json(await svc.listeners(idOf(req)));
+  }));
   r.post("/radio/programs/:id/react", auth, handler(async (req, res) => {
     const input = parseBody(RadioService.React, req.body);
     res.json(await svc.react(idOf(req), requirePrincipal(req).userId, input));
