@@ -840,7 +840,9 @@ export function RadioStudio(): ReactElement {
   };
 
   const category = (selected?.category ?? "Sermon") as string;
-  const listenerCount = health?.listeners ?? selected?.peak_listeners ?? 0;
+  // Prefer the REAL active-listener count (members heartbeating right now) over
+  // the Icecast/peak fallback, so the studio shows who's genuinely on air.
+  const listenerCount = listenerRosterCount > 0 ? listenerRosterCount : (health?.listeners ?? selected?.peak_listeners ?? 0);
   const scheduledPrograms = (programs ?? [])
     .filter((p) => p.scheduled_at)
     .sort((a, b) => (a.scheduled_at ?? "").localeCompare(b.scheduled_at ?? ""));
