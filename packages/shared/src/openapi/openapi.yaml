@@ -3205,6 +3205,47 @@ paths:
         "400": { description: Validation failed }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /growth/plans/{planId}/days/{dayNumber}/talk:
+    get:
+      tags: [progress]
+      summary: The day's shared "Talk it Over" conversation (author, like count, my-like flag), oldest first.
+      parameters:
+        - { name: planId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: dayNumber, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200": { description: "{ data: TalkPost[] } - post_id, day_number, body, created_at, user_id, name, avatar_url, like_count, liked" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [progress]
+      summary: Add my response to the day's Talk it Over conversation.
+      parameters:
+        - { name: planId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: dayNumber, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 2000 }
+      responses:
+        "201": { description: The saved response row (same shape as the list items) }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /growth/talk/{id}/like:
+    post:
+      tags: [progress]
+      summary: Toggle my encouragement heart on a Talk it Over response.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ liked, like_count }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /growth/segments/{id}/complete:
     post:
       tags: [progress]

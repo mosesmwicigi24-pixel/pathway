@@ -79,5 +79,22 @@ export function registerGrowth(ctx: AppContext, providerOverride?: AiProvider): 
     res.json(await svc.getPlanDayReflection(requirePrincipal(req).userId, planId, dayNumber));
   }));
 
+  // ---- Talk it Over — the shared plan-day conversation ----
+  r.get("/growth/plans/:planId/days/:dayNumber/talk", auth, handler(async (req, res) => {
+    const { planId, dayNumber } = parseBody(PlanDayParams, req.params);
+    res.json(await svc.listTalk(requirePrincipal(req).userId, planId, dayNumber));
+  }));
+
+  r.post("/growth/plans/:planId/days/:dayNumber/talk", auth, handler(async (req, res) => {
+    const { planId, dayNumber } = parseBody(PlanDayParams, req.params);
+    const input = parseBody(GrowthService.TalkPost, req.body);
+    res.status(201).json(await svc.postTalk(requirePrincipal(req).userId, planId, dayNumber, input));
+  }));
+
+  r.post("/growth/talk/:id/like", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await svc.toggleTalkLike(requirePrincipal(req).userId, id));
+  }));
+
   return r;
 }

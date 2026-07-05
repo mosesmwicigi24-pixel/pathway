@@ -478,4 +478,81 @@ export class GrowthService {
     );
     return { data: row ?? null };
   }
+
+  // ---- Talk it Over (the shared plan-day conversation) ----
+
+  static TalkPost = z.object({ body: z.string().min(1).max(2000) }).strict();
+
+  /** Shared SELECT for a talk row: author identity + like count + my-like flag.
+   *  $1 is ALWAYS the viewer (for `liked`); callers append WHEREs from $2. */
+  private static readonly TALK_SELECT = `
+    SELECT p.post_id, p.day_number, p.body, p.created_at,
+           u.user_id, u.full_name AS name, u.avatar_url,
+           (SELECT COUNT(*)::int FROM plan_day_talk_likes l WHERE l.post_id = p.post_id) AS like_count,
+           EXISTS(SELECT 1 FROM plan_day_talk_likes l
+                   WHERE l.post_id = p.post_id AND l.user_id = $1) AS liked
+      FROM plan_day_talk_posts p
+      JOIN users u ON u.user_id = p.user_id`;
+
+  /** The day's conversation, oldest first (a reading room, not a feed). */
+  async listTalk(userId: string, planId: string, dayNumber: number): Promise<{ data: unknown[] }> {
+    await this.assertPlanExists(this.pool, planId);
+    const rows = await many(
+      this.pool,
+      `${GrowthService.TALK_SELECT}
+        WHERE p.plan_id = $2 AND p.day_number = $3
+        ORDER BY p.created_at ASC
+        LIMIT 200`,
+      [userId, planId, dayNumber],
+    );
+    return { data: rows };
+  }
+
+  async postTalk(
+    userId: string,
+    planId: string,
+    dayNumber: number,
+    input: z.infer<typeof GrowthService.TalkPost>,
+  ): Promise<unknown> {
+    return tx(this.pool, async (c) => {
+      await this.assertPlanExists(c, planId);
+      const ins = await one<{ post_id: string }>(
+        c,
+        `INSERT INTO plan_day_talk_posts (plan_id, day_number, user_id, body)
+         VALUES ($1, $2, $3, $4) RETURNING post_id`,
+        [planId, dayNumber, userId, input.body],
+      );
+      await recordChange(c, "plan_day_talk_posts", ins.post_id, userId, "upsert");
+      // Speaking in the day's conversation is a reflection act (§1.8).
+      await recordActivityEvent(c, userId, "reflection", { oncePerDayTz: "Africa/Nairobi" });
+      return one(c, `${GrowthService.TALK_SELECT} WHERE p.post_id = $2`, [userId, ins.post_id]);
+    });
+  }
+
+  /** Toggle my encouragement heart on a response. */
+  async toggleTalkLike(userId: string, postId: string): Promise<{ liked: boolean; like_count: number }> {
+    return tx(this.pool, async (c) => {
+      const post = await maybeOne(c, `SELECT 1 FROM plan_day_talk_posts WHERE post_id = $1`, [postId]);
+      if (!post) throw new ApiError("NOT_FOUND", "Response not found");
+      const mine = await maybeOne(
+        c,
+        `SELECT 1 FROM plan_day_talk_likes WHERE post_id = $1 AND user_id = $2`,
+        [postId, userId],
+      );
+      if (mine) {
+        await c.query(`DELETE FROM plan_day_talk_likes WHERE post_id = $1 AND user_id = $2`, [postId, userId]);
+      } else {
+        await c.query(
+          `INSERT INTO plan_day_talk_likes (post_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [postId, userId],
+        );
+      }
+      const n = await one<{ n: number }>(
+        c,
+        `SELECT COUNT(*)::int AS n FROM plan_day_talk_likes WHERE post_id = $1`,
+        [postId],
+      );
+      return { liked: !mine, like_count: n.n };
+    });
+  }
 }
