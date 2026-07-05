@@ -274,15 +274,29 @@ export class GamificationService {
 }
 
 // ---- pure streak math (exported for tests) ----
-export function streakFromDates(descDates: string[], today: string): { current: number; longest: number } {
+
+/// Grace-first "walk with God" streak. A member may miss up to STREAK_GRACE days
+/// (silent auto-freeze / "grace days") without breaking the run — the count is the
+/// number of ACTIVE days, and bridged misses never add to it. This is deliberately
+/// pastoral: life interrupts, and grace covers it (research: Duolingo freezes +
+/// Glorify/Manna's no-shame tone). Set to 0 to restore strict consecutive days.
+export const STREAK_GRACE = 2;
+
+export function streakFromDates(descDates: string[], today: string, grace: number = STREAK_GRACE): { current: number; longest: number } {
   const set = new Set(descDates);
-  // current: consecutive days ending today or yesterday.
+  // current: active days ending near today, bridging up to `grace` missed days.
   let current = 0;
-  let cursor = set.has(today) ? today : addDays(today, -1);
+  let graceLeft = grace;
+  // Skip leading missed days (today backwards) until an active day, spending grace.
+  let cursor = today;
+  let lead = 0;
+  while (!set.has(cursor) && lead < grace + 1) { cursor = addDays(cursor, -1); lead += 1; }
   if (set.has(cursor)) {
-    while (set.has(cursor)) {
-      current += 1;
-      cursor = addDays(cursor, -1);
+    graceLeft -= lead;                       // recent misses consume the budget
+    while (true) {
+      if (set.has(cursor)) { current += 1; cursor = addDays(cursor, -1); }
+      else if (graceLeft > 0) { graceLeft -= 1; cursor = addDays(cursor, -1); } // grace bridges the gap
+      else break;                            // gap beyond grace ends the run
     }
   }
   // longest: scan ascending for the longest run of consecutive days.

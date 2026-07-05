@@ -28,9 +28,22 @@ async function completedModule(userId: string): Promise<void> {
 }
 
 describe("streak math (pure, §G.3)", () => {
-  it("counts consecutive days ending today/yesterday and the longest run", () => {
-    expect(streakFromDates(["2026-06-06", "2026-06-05", "2026-06-03"], "2026-06-06")).toEqual({ current: 2, longest: 2 });
+  it("counts active days ending today/yesterday, with no grace (grace=0)", () => {
+    // strict consecutive behaviour, opt-out via grace=0
+    expect(streakFromDates(["2026-06-06", "2026-06-05", "2026-06-03"], "2026-06-06", 0)).toEqual({ current: 2, longest: 2 });
+    expect(streakFromDates(["2026-06-05"], "2026-06-06", 0)).toEqual({ current: 1, longest: 1 });
+    expect(streakFromDates([], "2026-06-06", 0)).toEqual({ current: 0, longest: 0 });
+  });
+
+  it("grace-first: silent grace days bridge missed days without adding to the count", () => {
+    // 06-04 missed is bridged by grace → 06-03 still counts (3 active days).
+    expect(streakFromDates(["2026-06-06", "2026-06-05", "2026-06-03"], "2026-06-06")).toEqual({ current: 3, longest: 3 });
+    // Missed today but active yesterday → streak alive (grace covers today).
     expect(streakFromDates(["2026-06-05"], "2026-06-06")).toEqual({ current: 1, longest: 1 });
+    // A gap wider than the 2-day grace budget breaks the run.
+    expect(streakFromDates(["2026-06-06", "2026-06-02"], "2026-06-06")).toEqual({ current: 1, longest: 1 });
+    // Inactive longer than grace+1 → streak is 0.
+    expect(streakFromDates(["2026-06-02"], "2026-06-06")).toEqual({ current: 0, longest: 1 });
     expect(streakFromDates([], "2026-06-06")).toEqual({ current: 0, longest: 0 });
   });
 });

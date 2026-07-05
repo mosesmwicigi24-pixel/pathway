@@ -504,12 +504,13 @@ export class HomeService {
       });
     }
 
-    // About to lose a streak today.
+    // Gentle invitation back into the rhythm (grace-first — never loss-aversion;
+    // grace days quietly cover a miss, so this reassures rather than pressures).
     if (ctx.streak >= 2 && !ctx.any_today) {
       candidates.push({
         id: "streak_save",
-        title: `Keep your ${ctx.streak}-day streak alive`,
-        body: "A few minutes today keeps your rhythm going.",
+        title: `${ctx.streak} days with God — continue today`,
+        body: "A few faithful minutes keeps your walk going. Grace covers the rest.",
         cta_label: "Open today's devotional",
         route: "devotional",
         accent: "gold",
