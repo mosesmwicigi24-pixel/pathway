@@ -216,6 +216,83 @@ describe("radio — reactions are idempotent per client_event_id", () => {
   });
 });
 
+describe("radio — real listener presence (heartbeat + roster)", () => {
+  it("heartbeat upserts one row per (program,user); roster returns the real active people + count", async () => {
+    const prog = await createProgram({ visibility: "public" });
+    const a = await createUser({ congregationId: cong, role: "Student", email: "la@dev.local", fullName: "Esther Mutua" });
+    const b = await createUser({ congregationId: cong, role: "Student", email: "lb@dev.local", fullName: "Amos Kiprono" });
+    const tokA = bearer({ sub: a.user_id, role: "Student", cong });
+    const tokB = bearer({ sub: b.user_id, role: "Student", cong });
+
+    // Empty before anyone heartbeats.
+    const empty = await agent().get(`/v1/radio/programs/${prog.id}/listeners`).set(auth(tokA));
+    expect(empty.status).toBe(200);
+    expect(empty.body).toEqual({ count: 0, listeners: [] });
+
+    // Two members heartbeat; A twice (idempotent — still one row).
+    for (const [id, tok] of [[prog.id, tokA], [prog.id, tokA], [prog.id, tokB]] as const) {
+      const hb = await agent().post(`/v1/radio/programs/${id}/listening`).set(auth(tok));
+      expect(hb.status).toBe(200);
+      expect(hb.body).toEqual({ ok: true });
+    }
+
+    const { rows } = await testPool().query(
+      `SELECT COUNT(*)::int AS n FROM radio_listeners WHERE program_id = $1`,
+      [prog.id],
+    );
+    expect(rows[0].n).toBe(2); // A upserted, not duplicated
+
+    const roster = await agent().get(`/v1/radio/programs/${prog.id}/listeners`).set(auth(tokA));
+    expect(roster.status).toBe(200);
+    expect(roster.body.count).toBe(2);
+    const names = (roster.body.listeners as Array<{ name: string; user_id: string; avatar_url: string | null }>)
+      .map((l) => l.name)
+      .sort();
+    expect(names).toEqual(["Amos Kiprono", "Esther Mutua"]);
+    expect(roster.body.listeners[0].avatar_url).toBeNull();
+  });
+
+  it("listeners whose last_seen is older than 45s are excluded from the roster and count", async () => {
+    const prog = await createProgram({ visibility: "public" });
+    const stale = await createUser({ congregationId: cong, role: "Student", email: "stale@dev.local", fullName: "Old Listener" });
+    const fresh = await createUser({ congregationId: cong, role: "Student", email: "fresh@dev.local", fullName: "New Listener" });
+    const tokFresh = bearer({ sub: fresh.user_id, role: "Student", cong });
+
+    // Insert a stale heartbeat directly (60s ago) and a fresh one.
+    await testPool().query(
+      `INSERT INTO radio_listeners (program_id, user_id, last_seen) VALUES ($1,$2, now() - interval '60 seconds')`,
+      [prog.id, stale.user_id],
+    );
+    await agent().post(`/v1/radio/programs/${prog.id}/listening`).set(auth(tokFresh));
+
+    const roster = await agent().get(`/v1/radio/programs/${prog.id}/listeners`).set(auth(tokFresh));
+    expect(roster.body.count).toBe(1);
+    expect(roster.body.listeners.map((l: { name: string }) => l.name)).toEqual(["New Listener"]);
+  });
+
+  it("live health count prefers real active listeners over the provider fallback", async () => {
+    const prog = await createProgram({ visibility: "public" });
+    const id = prog.id as string;
+    await agent().post(`/v1/admin/radio/programs/${id}/go-live`).set(auth(adminTok));
+
+    const m = await createUser({ congregationId: cong, role: "Student", email: "hh@dev.local", fullName: "Live One" });
+    const tok = bearer({ sub: m.user_id, role: "Student", cong });
+    await agent().post(`/v1/radio/programs/${id}/listening`).set(auth(tok));
+
+    const health = await agent().get(`/v1/admin/radio/programs/${id}/health`).set(auth(adminTok));
+    expect(health.status).toBe(200);
+    expect(health.body.listeners).toBe(1); // real presence, not the seeded provider int
+  });
+
+  it("presence heartbeat 404s for a private program (never leaks presence)", async () => {
+    const priv = await createProgram({ visibility: "private" });
+    const m = await createUser({ congregationId: cong, role: "Student", email: "pv@dev.local" });
+    const tok = bearer({ sub: m.user_id, role: "Student", cong });
+    const hb = await agent().post(`/v1/radio/programs/${priv.id}/listening`).set(auth(tok));
+    expect(hb.status).toBe(404);
+  });
+});
+
 describe("radio — comments create + moderation hide", () => {
   it("member posts a comment (idempotent), admin hides it, member no longer sees it", async () => {
     const prog = await createProgram({ visibility: "public" });

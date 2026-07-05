@@ -160,6 +160,19 @@ export interface RadioComment {
   created_at: ISODateTime;
 }
 
+/** One real listener in a live program's roster (server-authoritative presence). */
+export interface RadioListener {
+  user_id: UUID;
+  name: string;
+  avatar_url: string | null;
+}
+
+/** Live listener roster + real active count (GET /radio/programs/:id/listeners). */
+export interface RadioListenerRoster {
+  count: number;
+  listeners: RadioListener[];
+}
+
 /** Operational health of a live broadcast (admin live status bar). */
 export interface StreamHealth {
   cpu: number;

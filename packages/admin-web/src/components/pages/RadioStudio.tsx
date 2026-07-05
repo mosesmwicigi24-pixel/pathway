@@ -28,6 +28,7 @@ import {
   uploadToCloudinary,
   type RadioProgram,
   type RadioComment,
+  type RadioListener,
   type StreamHealth,
   type CreateRadioProgramBody,
   type UpdateRadioProgramBody,
@@ -90,15 +91,15 @@ const REPEAT_OPTIONS = ["none", "daily", "weekdays", "weekly"] as const;
 const REPEAT_LABEL: Record<string, string> = { none: "Once", daily: "Daily", weekdays: "Weekdays", weekly: "Weekly" };
 
 /* Client-side roster/devices — decorative studio chrome from the make. */
-type FakeListener = { id: string; name: string; initials: string; device: string; place: string };
-const SEED_LISTENERS: FakeListener[] = [
-  { id: "l1", name: "Esther Mutua", initials: "EM", device: "iPhone 15", place: "Nairobi" },
-  { id: "l2", name: "Amos Kiprono", initials: "AK", device: "Samsung A54", place: "Eldoret" },
-  { id: "l3", name: "Faith Njeri", initials: "FN", device: "Pixel 8", place: "Nakuru" },
-  { id: "l4", name: "Joseph Mwangi", initials: "JM", device: "iPhone 13", place: "Mombasa" },
-  { id: "l5", name: "Mary Wanjiku", initials: "MW", device: "Tecno Spark", place: "Kisumu" },
-  { id: "l6", name: "Daniel Otieno", initials: "DO", device: "Redmi Note 12", place: "Thika" },
-];
+// Two-letter initials for a listener's avatar fallback (no photo).
+function listenerInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const first = parts[0];
+  if (!first) return "?";
+  if (parts.length === 1) return first.slice(0, 2).toUpperCase();
+  const last = parts[parts.length - 1] ?? first;
+  return ((first[0] ?? "") + (last[0] ?? "")).toUpperCase();
+}
 const SEED_DEVICES = [
   { name: "iPhone 16 Pro", icon: Smartphone, status: "Connected", batt: 82 },
   { name: "MacBook Pro", icon: Laptop, status: "Connected", batt: 100 },
@@ -330,6 +331,9 @@ export function RadioStudio(): ReactElement {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [health, setHealth] = useState<StreamHealth | null>(null);
   const [comments, setComments] = useState<RadioComment[]>([]);
+  // Real live listener roster + count (server presence; polled while selected).
+  const [listeners, setListeners] = useState<RadioListener[]>([]);
+  const [listenerRosterCount, setListenerRosterCount] = useState<number>(0);
   const [rotatedKey, setRotatedKey] = useState<string | null>(null);
   const [credsOpen, setCredsOpen] = useState(false); // ingest/stream-key disclosure — collapsed on mount (secrets panel)
   const [copied, setCopied] = useState<string | null>(null);
@@ -479,6 +483,21 @@ export function RadioStudio(): ReactElement {
     }, 6000);
     return () => clearInterval(t);
   }, [phase, selectedId]);
+
+  // ── real listener roster + count (poll every 15s while a program is selected) ──
+  // These are the actual members whose player heartbeated within the last 45s.
+  useEffect(() => {
+    if (!selectedId) { setListeners([]); setListenerRosterCount(0); return; }
+    let alive = true;
+    const poll = (): void => {
+      RadioApi.listeners(selectedId)
+        .then((r) => { if (alive) { setListeners(r.listeners); setListenerRosterCount(r.count); } })
+        .catch(() => { if (alive) { setListeners([]); setListenerRosterCount(0); } });
+    };
+    poll();
+    const t = setInterval(poll, 15000);
+    return () => { alive = false; clearInterval(t); };
+  }, [selectedId]);
 
   // ── live timer (from live_started_at when available) ──
   useEffect(() => {
@@ -1378,17 +1397,22 @@ export function RadioStudio(): ReactElement {
               <Panel>
                 <SectionHead icon={Smartphone} title="Live listeners" hint={live ? `${listenerCount.toLocaleString()} on air` : "Off air"} />
                 <div className="flex flex-col gap-2" style={{ maxHeight: 220, overflowY: "auto" }}>
-                  {SEED_LISTENERS.map((p) => (
-                    <div key={p.id} className="flex items-center gap-3 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
-                      <span className="flex items-center justify-center rounded-full shrink-0" style={{ width: 30, height: 30, background: `linear-gradient(135deg, ${GOLD}, ${GOLD_DEEP})`, color: "#0A1120", fontSize: 11, fontWeight: 800 }}>{p.initials}</span>
+                  {listeners.length === 0 ? (
+                    <div style={{ fontSize: 12, color: DIM, padding: "10px 4px" }}>
+                      {live ? "No one listening yet." : "Off air — no listeners."}
+                    </div>
+                  ) : listeners.map((p) => (
+                    <div key={p.user_id} className="flex items-center gap-3 rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
+                      {p.avatar_url ? (
+                        <img src={p.avatar_url} alt="" className="rounded-full shrink-0" style={{ width: 30, height: 30, objectFit: "cover" }} />
+                      ) : (
+                        <span className="flex items-center justify-center rounded-full shrink-0" style={{ width: 30, height: 30, background: `linear-gradient(135deg, ${GOLD}, ${GOLD_DEEP})`, color: "#0A1120", fontSize: 11, fontWeight: 800 }}>{listenerInitials(p.name)}</span>
+                      )}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div className="truncate" style={{ fontSize: 12.5, fontWeight: 600 }}>{p.name}</div>
-                        <div className="flex items-center gap-1" style={{ fontSize: 10.5, color: DIM }}>
-                          <Smartphone size={10} /> {p.device} · {p.place}
-                        </div>
                       </div>
-                      <span className="inline-flex items-center gap-1 shrink-0" style={{ fontSize: 9.5, fontWeight: 700, color: live ? GREEN : DIMMER }}>
-                        <span className={`rounded-full ${live ? "rs-live-dot" : ""}`} style={{ width: 6, height: 6, background: live ? GREEN : DIMMER }} /> {live ? "Listening" : "Idle"}
+                      <span className="inline-flex items-center gap-1 shrink-0" style={{ fontSize: 9.5, fontWeight: 700, color: GREEN }}>
+                        <span className="rounded-full rs-live-dot" style={{ width: 6, height: 6, background: GREEN }} /> Listening
                       </span>
                     </div>
                   ))}

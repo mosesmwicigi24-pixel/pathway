@@ -1890,6 +1890,7 @@ import type {
   RadioProgram,
   RadioComment,
   StreamHealth,
+  RadioListenerRoster,
   CreateRadioProgramBody,
   UpdateRadioProgramBody,
   RadioProgramStatus,
@@ -1915,6 +1916,8 @@ export type {
   RadioProgram,
   RadioComment,
   StreamHealth,
+  RadioListener,
+  RadioListenerRoster,
   CreateRadioProgramBody,
   UpdateRadioProgramBody,
   RadioProgramStatus,
@@ -1982,6 +1985,10 @@ export const RadioApi = {
     api.post<{ stream_key: string }>(`${R}/programs/${id}/rotate-key`).then((r) => r.data),
   // 409 when the program is not live — callers stop polling on that.
   health: (id: string) => api.get<StreamHealth>(`${R}/programs/${id}/health`).then((r) => r.data),
+  // Real live listener roster + count (auth-only /radio/* member endpoint; the
+  // admin JWT is accepted). Rows are members active within the last 45s.
+  listeners: (id: string) =>
+    api.get<RadioListenerRoster>(`/radio/programs/${id}/listeners`).then((r) => r.data),
 
   // Listener interactions --------------------------------------------------
   comments: (id: string) =>
