@@ -178,6 +178,32 @@ describe("reading plans + day progress", () => {
   });
 });
 
+describe("Talk it Over — AI compose help", () => {
+  it("returns an editable suggestion (offline provider in tests) and posts nothing", async () => {
+    const plans = await agent().get("/v1/growth/plans").set(auth(meTok));
+    const rooted = plans.body.data.find((p: { code: string }) => p.code === "rooted-psalms-10");
+
+    // No draft → a first-person starter from the day's questions.
+    const fresh = await agent()
+      .post(`/v1/growth/plans/${rooted.plan_id}/days/1/talk/assist`)
+      .set(auth(meTok)).send({});
+    expect(fresh.status).toBe(200);
+    expect(fresh.body.suggestion.length).toBeGreaterThan(0);
+
+    // With a draft → the member's words polished, still just a suggestion.
+    const polish = await agent()
+      .post(`/v1/growth/plans/${rooted.plan_id}/days/1/talk/assist`)
+      .set(auth(meTok)).send({ draft: "i am learning that god knows me" });
+    expect(polish.status).toBe(200);
+    expect(polish.body.suggestion.length).toBeGreaterThan(0);
+
+    // Suggestion only — the day's conversation stays empty until the member posts.
+    const list = await agent().get(`/v1/growth/plans/${rooted.plan_id}/days/1/talk`).set(auth(meTok));
+    expect(list.status).toBe(200);
+    expect(list.body.data).toEqual([]);
+  });
+});
+
 describe("mentor", () => {
   it("returns the discipler from the relationship tree + meeting notes", async () => {
     await testPool().query(`INSERT INTO relationship_tree (multiplier_id, disciple_id) VALUES ($1, $2)`, [mentor, me]);

@@ -555,4 +555,52 @@ export class GrowthService {
       return { liked: !mine, like_count: n.n };
     });
   }
+
+  static TalkAssist = z.object({ draft: z.string().max(2000).optional() }).strict();
+
+  /** Draft (or polish) a member's Talk-it-Over response with the Nuru AI.
+   *  The model sees the day's questions plus the member's own words; the result
+   *  is a SUGGESTION returned to the client for editing — nothing is posted or
+   *  persisted here, and the member always presses send themselves. */
+  async assistTalk(
+    planId: string,
+    dayNumber: number,
+    input: z.infer<typeof GrowthService.TalkAssist>,
+  ): Promise<{ suggestion: string }> {
+    if (!this.provider) throw new ApiError("UPSTREAM_UNAVAILABLE", "The assistant is not configured");
+    await this.assertPlanExists(this.pool, planId);
+    const seg = await maybeOne<{ content: string; plan_title: string }>(
+      this.pool,
+      `SELECT s.content, rp.title AS plan_title
+         FROM reading_plan_day_segments s
+         JOIN reading_plan_days d ON d.plan_day_id = s.plan_day_id
+         JOIN reading_plans rp ON rp.plan_id = d.plan_id
+        WHERE d.plan_id = $1 AND d.day_number = $2 AND s.kind = 'talk'
+        ORDER BY s.sort ASC
+        LIMIT 1`,
+      [planId, dayNumber],
+    );
+    const draft = input.draft?.trim() ?? "";
+    const suggestion = await this.provider.complete({
+      system:
+        "You help a church member compose a short response to today's 'Talk it Over' questions " +
+        "in their Bible reading plan. Write in the FIRST PERSON as the member — honest, warm, " +
+        "plain everyday language, 2–4 sentences, no preachiness, no emojis, no headings, and no " +
+        "quotation marks around the answer. If the member gives their own draft, KEEP their " +
+        "meaning and voice: polish the grammar, sharpen the clarity, finish the thought — never " +
+        "replace their ideas with yours. Return ONLY the response text.",
+      messages: [
+        {
+          role: "user",
+          text:
+            `Plan: ${seg?.plan_title ?? "Reading plan"} — Day ${dayNumber}\n` +
+            `Today's questions:\n${seg?.content ?? "(not available)"}\n\n` +
+            (draft
+              ? `My draft — polish it, keep my voice:\n${draft}`
+              : "I have no draft yet — help me start honestly."),
+        },
+      ],
+    });
+    return { suggestion: suggestion.trim().slice(0, 2000) };
+  }
 }

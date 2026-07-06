@@ -91,6 +91,13 @@ export function registerGrowth(ctx: AppContext, providerOverride?: AiProvider): 
     res.status(201).json(await svc.postTalk(requirePrincipal(req).userId, planId, dayNumber, input));
   }));
 
+  // AI compose help — returns a SUGGESTION for the member to edit; never posts.
+  r.post("/growth/plans/:planId/days/:dayNumber/talk/assist", auth, handler(async (req, res) => {
+    const { planId, dayNumber } = parseBody(PlanDayParams, req.params);
+    const input = parseBody(GrowthService.TalkAssist, req.body);
+    res.json(await svc.assistTalk(planId, dayNumber, input));
+  }));
+
   r.post("/growth/talk/:id/like", auth, handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
     res.json(await svc.toggleTalkLike(requirePrincipal(req).userId, id));
