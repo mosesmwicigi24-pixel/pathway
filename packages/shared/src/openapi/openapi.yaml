@@ -3236,6 +3236,26 @@ paths:
         "400": { description: Validation failed }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /growth/plans/{planId}/days/{dayNumber}/talk/assist:
+    post:
+      tags: [progress]
+      summary: AI compose help for my Talk it Over response — returns a SUGGESTION for the member to edit; nothing is posted or persisted.
+      parameters:
+        - { name: planId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: dayNumber, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                draft: { type: string, maxLength: 2000, description: "The member's own words — polished, never replaced. Omit to get a first-person starter from the day's questions." }
+      responses:
+        "200": { description: "{ suggestion }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { description: Assistant unavailable (no provider key / upstream down) }
   /growth/talk/{id}/like:
     post:
       tags: [progress]
