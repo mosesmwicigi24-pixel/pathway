@@ -106,7 +106,9 @@ export class CurriculumService {
       // admin-set entry point in their placed level (covered by placement, §1.9
       // entry-point). Defaults (start_level 1, seq 1) make the covered clause inert.
       `SELECT l.level_number, l.title, l.theme, l.description, l.exam_status,
-              COUNT(m.module_id)::int AS total_modules,
+              COUNT(m.module_id) FILTER (
+                WHERE m.evaluation_kind <> 'exit_exam' OR l.exam_status = 'published'
+              )::int AS total_modules,
               COUNT(*) FILTER (
                 WHERE m.module_id IS NOT NULL
                   AND (mp.progress_id IS NOT NULL
@@ -172,16 +174,37 @@ export class CurriculumService {
     }>(
       this.pool,
       // The exit-exam module is a CONTAINER for the level's exam questions, not a
-      // readable lesson — it must not appear in the member's trail (it can't be
-      // "read" to completion, which would deadlock the "finish every module" exam
-      // gate). Members reach the exam via the separate "Take the Level N exam" gate.
+      // readable lesson. It IS shown at the foot of the trail (once the level exam
+      // is published) as a visible-but-locked "Level exam" row that unlocks only
+      // after every content module is finished, and whose completion is the exam
+      // pass — never a "read to complete" step. It is deliberately kept OUT of the
+      // "finish every module" gate so it can't deadlock the exam it fronts.
       `SELECT module_id, level_number, module_sequence_number, title, summary, estimated_minutes,
               evaluation_kind, quiz_pass_mark, is_published
          FROM modules
-        WHERE level_number = $1 AND is_published = TRUE AND evaluation_kind <> 'exit_exam'
+        WHERE level_number = $1 AND is_published = TRUE
          ORDER BY module_sequence_number`,
       [levelNumber],
     );
+
+    // Is the level exam published? Members only see the exam row once an admin
+    // flips the Quiz Builder's Review→Publish toggle for this level.
+    const lvl = await maybeOne<{ exam_status: string }>(
+      this.pool,
+      `SELECT exam_status FROM levels WHERE level_number = $1`,
+      [levelNumber],
+    );
+    const examPublished = !lvl || lvl.exam_status === "published";
+    // Has this member already passed the level exam? Drives the exam row's
+    // "completed" state (there is no "read to complete" for an exam container).
+    const examPassed =
+      enrollment !== null &&
+      (await maybeOne(
+        this.pool,
+        `SELECT 1 FROM level_exam_attempts
+          WHERE enrollment_id = $1 AND level_number = $2 AND is_passed = TRUE LIMIT 1`,
+        [enrollment.enrollment_id, levelNumber],
+      )) !== null;
 
     // One query for everything this member has completed; cheap set membership.
     const completedRows = enrollment
@@ -193,8 +216,43 @@ export class CurriculumService {
       : [];
     const completedSet = new Set(completedRows.map((r) => r.module_id));
 
+    const isCovered = (m: { level_number: number; module_sequence_number: number }): boolean =>
+      enrollment !== null &&
+      m.level_number === enrollment.start_level &&
+      m.module_sequence_number < enrollment.start_module_sequence;
+    const isDone = (m: { module_id: string; level_number: number; module_sequence_number: number }): boolean =>
+      completedSet.has(m.module_id) || isCovered(m);
+
+    // The exam row unlocks only after every *content* module (everything but the
+    // exam container itself) is finished — "visible, but not accessible until you
+    // finish all the stuff above it."
+    const contentModules = modules.filter((m) => m.evaluation_kind !== "exit_exam");
+    const allContentDone = contentModules.length > 0 && contentModules.every((m) => isDone(m));
+
     const out: unknown[] = [];
     for (const m of modules) {
+      if (m.evaluation_kind === "exit_exam") {
+        // Only surface the exam row once the admin has published it.
+        if (!examPublished) continue;
+        const unlocked = allContentDone;
+        const completed = examPassed;
+        const status = completed ? "completed" : unlocked ? "next" : "locked";
+        out.push({
+          module_id: m.module_id,
+          level_number: m.level_number,
+          module_sequence_number: m.module_sequence_number,
+          title: m.title,
+          summary: m.summary,
+          estimated_minutes: m.estimated_minutes,
+          evaluation_kind: m.evaluation_kind,
+          quiz_pass_mark: Number(m.quiz_pass_mark),
+          completed,
+          status,
+          progress: completed ? 100 : 0,
+          locked: !unlocked,
+        });
+        continue;
+      }
       const unlocked =
         isEntryModule(m.level_number, m.module_sequence_number) ||
         (enrollment !== null &&
@@ -203,13 +261,7 @@ export class CurriculumService {
             level_number: m.level_number,
             module_sequence_number: m.module_sequence_number,
           })));
-      // Modules before the admin-set entry point are "covered" by the placement —
-      // shown as completed (the member begins at the entry module).
-      const covered =
-        enrollment !== null &&
-        m.level_number === enrollment.start_level &&
-        m.module_sequence_number < enrollment.start_module_sequence;
-      const completed = completedSet.has(m.module_id) || covered;
+      const completed = isDone(m);
       const status = completed ? "completed" : unlocked ? "next" : "locked";
       out.push({
         module_id: m.module_id,

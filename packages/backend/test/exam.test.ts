@@ -94,20 +94,57 @@ describe("level exam (§1.9 rule 2)", () => {
     expect(rows[0].n).toBe(1);
   });
 
-  it("an exit-exam module in the level does NOT block the exam (it's a question container, not a lesson)", async () => {
-    // Author a Level-1 exit-exam module (like the portal's "Create level exam")
-    // and leave it un-completed. The member finishes the real content module only.
-    const examModule = await createModule(1, 11, { evaluationKind: "exit_exam", title: "Final Assessment" });
+  it("shows the exit-exam as a visible, locked-until-ready row that fronts the level exam", async () => {
+    // Author a Level-1 exit-exam module (like the portal's "Create level exam").
+    const examModule = await createModule(1, 11, { evaluationKind: "exit_exam", title: "Level 1 Review" });
     await addQuestion(examModule, "A");
-    await finishModules(); // completes l1m1 (the content module) — NOT the exit-exam module
-
-    // The exam gate opens even though the exit-exam module has no progress.
-    const ex = (await exam().assemble(student, 1)) as { question_count: number };
-    expect(ex.question_count).toBeGreaterThanOrEqual(1);
-
-    // And the exit-exam module is hidden from the member's trail.
     const { CurriculumService } = await import("../src/modules/curriculum/service.js");
-    const mods = (await new CurriculumService(testPool()).listModulesForLevel(student, 1)) as Array<{ evaluation_kind: string }>;
+    const svc = new CurriculumService(testPool());
+    type Row = { evaluation_kind: string; locked: boolean; completed: boolean; status: string };
+
+    // Before the content module is finished the exam row is VISIBLE but LOCKED —
+    // "you can see it, but you can't touch it until everything above it is done."
+    const before = (await svc.listModulesForLevel(student, 1)) as Row[];
+    const examBefore = before.find((m) => m.evaluation_kind === "exit_exam");
+    expect(examBefore).toBeTruthy();
+    expect(examBefore!.locked).toBe(true);
+    expect(examBefore!.completed).toBe(false);
+
+    await finishModules(); // completes l1m1 (the only content module)
+
+    // Now it unlocks (accessible) but is still not "completed" — the exam is a
+    // container, never a read-to-complete lesson.
+    const after = (await svc.listModulesForLevel(student, 1)) as Row[];
+    const examAfter = after.find((m) => m.evaluation_kind === "exit_exam");
+    expect(examAfter!.locked).toBe(false);
+    expect(examAfter!.status).toBe("next");
+    expect(examAfter!.completed).toBe(false);
+
+    // The exam itself assembles (the exit-exam module never blocks its own gate).
+    const assembled = (await exam().assemble(student, 1)) as {
+      question_count: number;
+      questions: Array<{ question_id: string }>;
+    };
+    expect(assembled.question_count).toBeGreaterThanOrEqual(1);
+
+    // Passing the exam flips the row to completed.
+    const pass = await exam().submit(student, 1, {
+      client_mutation_id: MUT,
+      answers: assembled.questions.map((qq) => ({ question_id: qq.question_id, given_answer: "A" })),
+    });
+    expect(pass.is_passed).toBe(true);
+    const done = (await svc.listModulesForLevel(student, 1)) as Row[];
+    expect(done.find((m) => m.evaluation_kind === "exit_exam")!.completed).toBe(true);
+  });
+
+  it("hides the exit-exam row entirely while the level exam is unpublished (review)", async () => {
+    const examModule = await createModule(1, 11, { evaluationKind: "exit_exam", title: "Level 1 Review" });
+    await addQuestion(examModule, "A");
+    await testPool().query("UPDATE levels SET exam_status = 'review' WHERE level_number = 1");
+    const { CurriculumService } = await import("../src/modules/curriculum/service.js");
+    const mods = (await new CurriculumService(testPool()).listModulesForLevel(student, 1)) as Array<{
+      evaluation_kind: string;
+    }>;
     expect(mods.some((m) => m.evaluation_kind === "exit_exam")).toBe(false);
   });
 
