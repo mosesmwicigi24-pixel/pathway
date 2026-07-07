@@ -205,6 +205,40 @@ export function registerMedia(ctx: AppContext): Router {
     res.status(201).json({ url: `${publicBase}/${file.filename}` });
   }));
 
+  // Member post images — a generic image → { url } upload (5 MB, images only)
+  // that composers attach as image_url (event wall "Hype the room", and the
+  // prayer/chat photo paths the schema already anticipates). Mirrors /me/avatar
+  // but does NOT store on the user — it's a one-off post attachment.
+  const IMAGE_MAX = 5 * 1024 * 1024;
+  const imageUpload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, storageDir),
+      filename: (_req, file, cb) => {
+        const ext = (extname(file.originalname) || ".jpg").toLowerCase().replace(/[^.a-z0-9]/g, "") || ".jpg";
+        cb(null, `img_${randomUUID()}${ext}`);
+      },
+    }),
+    limits: { fileSize: IMAGE_MAX, files: 1 },
+    fileFilter: (_req, file, cb) => {
+      if (file.mimetype?.startsWith("image/")) cb(null, true);
+      else cb(new ApiError("VALIDATION_FAILED", "Attachment must be an image"));
+    },
+  });
+  const imageUploadMw = (req: Request, res: Response, next: NextFunction): void =>
+    imageUpload.single("file")(req, res, (err: unknown) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        return next(new ApiError("VALIDATION_FAILED", err.code === "LIMIT_FILE_SIZE" ? "Image exceeds 5 MB" : err.message));
+      }
+      return next(err);
+    });
+
+  r.post("/me/media/image", auth, imageUploadMw, handler(async (req, res) => {
+    const file = req.file;
+    if (!file) throw new ApiError("VALIDATION_FAILED", "No image was uploaded (field 'file')");
+    res.status(201).json({ url: `${publicBase}/${file.filename}` });
+  }));
+
   // Broker a signed URL for an object key the caller already holds a reference to.
   r.get(
     "/media/url",

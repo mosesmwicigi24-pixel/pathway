@@ -351,6 +351,21 @@ paths:
       responses:
         "201": { description: Voice note stored }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/media/image:
+    post:
+      tags: [auth]
+      summary: Upload a member post image (multipart image, field 'file', 5 MB cap); returns { url }. Generic attachment used by composers as image_url (e.g. event wall "Hype the room"). Not stored on the user.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201": { description: "{ url }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/onboarding:
     post:
       tags: [auth]
