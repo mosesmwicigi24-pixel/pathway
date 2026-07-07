@@ -3351,9 +3351,13 @@ paths:
   /me/scores:
     get:
       tags: [progress]
-      summary: All my growth scores + a weighted overall (habits/curriculum/attendance/word/prayer).
+      summary: All my growth scores + a weighted overall (habits/curriculum/attendance/word/prayer), over a rolling 28-day window.
       responses:
-        "200": { description: Scores }
+        "200":
+          description: >-
+            { overall:{score,band}, habits, curriculum, attendance, word, prayer (each {score,band,components,detail}),
+            trend:{ window_days:28, previous, delta, direction:'up'|'down'|'flat', domains:{...per-domain delta} } }
+            where trend compares this 28-day window to the previous 28 days (rolling growth signal).
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/levels/{n}/score:
     get:
@@ -3396,7 +3400,7 @@ paths:
   /me/scores/attendance:
     get:
       tags: [progress]
-      summary: My Attendance score (check-ins vs cell cadence, 30d), 0–100.
+      summary: My Attendance score (app-presence days over the rolling 28d), 0–100.
       responses:
         "200": { description: Attendance score }
         "401": { $ref: "#/components/responses/Unauthorized" }

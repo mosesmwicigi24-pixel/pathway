@@ -35,6 +35,12 @@ describe("composite /me/scores", () => {
       expect(s).toBeLessThanOrEqual(100);
     }
     expect(res.body.overall.band).toBeTruthy();
+    // The rolling 28-day growth trend (this window vs the previous 28 days).
+    expect(res.body.trend.window_days).toBe(28);
+    expect(["up", "down", "flat"]).toContain(res.body.trend.direction);
+    expect(typeof res.body.trend.delta).toBe("number");
+    expect(res.body.trend).toHaveProperty("previous");
+    expect(res.body.trend.domains).toHaveProperty("attendance");
   });
 });
 
@@ -101,32 +107,32 @@ describe("activity ledger feeds the scores", () => {
 
     const after = await agent().get("/v1/me/scores/prayer").set(auth(meTok));
     expect(after.body.detail.prayers_logged).toBe(1);
-    expect(after.body.detail.prayer_days_14).toBeGreaterThanOrEqual(1);
+    expect(after.body.detail.prayer_days).toBeGreaterThanOrEqual(1);
     expect(after.body.score).toBeGreaterThan(0);
 
     const rhythm = await agent().get("/v1/me/rhythm/today").set(auth(meTok));
     expect(rhythm.body.prayer).toBe(true);
   });
 
-  it("app-engagement 'attendance' days lift the attendance score (no event check-in needed)", async () => {
+  it("app-presence days lift the attendance score (any in-app activity, no event check-in needed)", async () => {
     const before = await agent().get("/v1/me/scores/attendance").set(auth(meTok));
     expect(before.body.score).toBe(0);
-    expect(before.body.detail.present_days_30d).toBe(0);
+    expect(before.body.detail.present_days).toBe(0);
 
-    // Two distinct app-present days (the mobile logs an 'attendance' interaction
-    // when a member spends >=5 min in-app + does activity).
+    // Two distinct app-present days — attendance now credits ANY in-app activity
+    // (any interaction_event), not a special 'attendance' kind that was never emitted.
     const { testPool } = await import("./helpers/db.js");
     await testPool().query(
       `INSERT INTO interaction_events (user_id, kind, occurred_at, client_event_id) VALUES
-         ($1, 'attendance', now() - interval '1 day',  gen_random_uuid()),
-         ($1, 'attendance', now() - interval '3 days',  gen_random_uuid())`,
+         ($1, 'word',       now() - interval '1 day',  gen_random_uuid()),
+         ($1, 'reflection', now() - interval '3 days',  gen_random_uuid())`,
       [meId],
     );
 
     const after = await agent().get("/v1/me/scores/attendance").set(auth(meTok));
-    expect(after.body.detail.present_days_30d).toBe(2);
-    expect(after.body.detail.target).toBe(12);
-    expect(after.body.score).toBe(Math.round((100 * 2) / 12)); // 17
+    expect(after.body.detail.present_days).toBe(2);
+    expect(after.body.detail.target).toBe(20);
+    expect(after.body.score).toBe(Math.round((100 * 2) / 20)); // 10
     expect(after.body.score).toBeGreaterThan(0);
   });
 });
