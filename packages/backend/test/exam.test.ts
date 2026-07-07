@@ -94,6 +94,23 @@ describe("level exam (§1.9 rule 2)", () => {
     expect(rows[0].n).toBe(1);
   });
 
+  it("an exit-exam module in the level does NOT block the exam (it's a question container, not a lesson)", async () => {
+    // Author a Level-1 exit-exam module (like the portal's "Create level exam")
+    // and leave it un-completed. The member finishes the real content module only.
+    const examModule = await createModule(1, 11, { evaluationKind: "exit_exam", title: "Final Assessment" });
+    await addQuestion(examModule, "A");
+    await finishModules(); // completes l1m1 (the content module) — NOT the exit-exam module
+
+    // The exam gate opens even though the exit-exam module has no progress.
+    const ex = (await exam().assemble(student, 1)) as { question_count: number };
+    expect(ex.question_count).toBeGreaterThanOrEqual(1);
+
+    // And the exit-exam module is hidden from the member's trail.
+    const { CurriculumService } = await import("../src/modules/curriculum/service.js");
+    const mods = (await new CurriculumService(testPool()).listModulesForLevel(student, 1)) as Array<{ evaluation_kind: string }>;
+    expect(mods.some((m) => m.evaluation_kind === "exit_exam")).toBe(false);
+  });
+
   it("is GATE_LOCKED while the level exam is in 'review' (unpublished)", async () => {
     await finishModules();
     await testPool().query("UPDATE levels SET exam_status = 'review' WHERE level_number = 1");

@@ -171,9 +171,14 @@ export class CurriculumService {
       is_published: boolean;
     }>(
       this.pool,
+      // The exit-exam module is a CONTAINER for the level's exam questions, not a
+      // readable lesson — it must not appear in the member's trail (it can't be
+      // "read" to completion, which would deadlock the "finish every module" exam
+      // gate). Members reach the exam via the separate "Take the Level N exam" gate.
       `SELECT module_id, level_number, module_sequence_number, title, summary, estimated_minutes,
               evaluation_kind, quiz_pass_mark, is_published
-         FROM modules WHERE level_number = $1 AND is_published = TRUE
+         FROM modules
+        WHERE level_number = $1 AND is_published = TRUE AND evaluation_kind <> 'exit_exam'
          ORDER BY module_sequence_number`,
       [levelNumber],
     );

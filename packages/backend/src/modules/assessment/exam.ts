@@ -57,6 +57,7 @@ export class ExamService {
       `SELECT count(*)::int AS n
          FROM modules m
         WHERE m.level_number = $1 AND m.is_published
+          AND m.evaluation_kind <> 'exit_exam'
           AND m.module_sequence_number >= $3
           AND NOT EXISTS (
             SELECT 1 FROM module_progress mp
