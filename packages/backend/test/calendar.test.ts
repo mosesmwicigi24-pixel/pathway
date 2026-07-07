@@ -182,15 +182,18 @@ describe("Events tab: category, going counts, series follow, cell summary", () =
   });
 
   it("listSeries exposes the next occurrence as a tappable event id", async () => {
+    // Anchor the series in the future so listSeries's "next occurrence" (computed
+    // relative to now()) stays the first projected occurrence as real time passes.
+    const win = futureWeekly(6);
     const s = (await svc().createSeries(principal(admin, "Admin", cong), {
       title: "Sunday Service",
       timezone: "Africa/Nairobi",
-      dtstart_local: "2026-07-05T09:00:00",
+      dtstart_local: win.dtstart_local,
       duration_min: 90,
-      rrule: "FREQ=WEEKLY;BYDAY=SU;COUNT=6",
+      rrule: win.rrule,
       visibility: "congregation",
     })) as { series_id: string };
-    const projected = (await svc().projectRange(member, "2026-06-25T00:00:00Z", "2026-08-15T00:00:00Z")) as Array<{ occurrence_id: string; series_id: string }>;
+    const projected = (await svc().projectRange(member, win.from, win.to)) as Array<{ occurrence_id: string; series_id: string }>;
     const next = projected.find((o) => o.series_id === s.series_id)!;
     const list = (await svc().listSeries(member)) as Array<{ series_id: string; next_occurrence_id: string | null; next_at: string | null }>;
     const row = list.find((x) => x.series_id === s.series_id)!;
