@@ -71,7 +71,7 @@ export function QuizBuilder(): ReactElement {
     try {
       await CurriculumApi.createModule({
         level_number: selNo,
-        title: `Level ${selNo} — Final Assessment`,
+        title: `Level ${selNo} Review`,
         lesson_content: "Level exit exam.",
         evaluation_kind: "exit_exam",
       });
