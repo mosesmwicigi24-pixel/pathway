@@ -99,12 +99,13 @@ export class CurriculumService {
       total_modules: number;
       completed_modules: number;
       minutes: number;
+      exam_status: string;
     }>(
       this.pool,
       // A module counts as done if the member completed it OR it sits before the
       // admin-set entry point in their placed level (covered by placement, §1.9
       // entry-point). Defaults (start_level 1, seq 1) make the covered clause inert.
-      `SELECT l.level_number, l.title, l.theme, l.description,
+      `SELECT l.level_number, l.title, l.theme, l.description, l.exam_status,
               COUNT(m.module_id)::int AS total_modules,
               COUNT(*) FILTER (
                 WHERE m.module_id IS NOT NULL
@@ -118,7 +119,7 @@ export class CurriculumService {
          LEFT JOIN module_progress mp
            ON mp.module_id = m.module_id AND mp.is_completed
           AND mp.enrollment_id = $1
-        GROUP BY l.level_number, l.title, l.theme, l.description
+        GROUP BY l.level_number, l.title, l.theme, l.description, l.exam_status
         ORDER BY l.level_number`,
       [enrollment?.enrollment_id ?? null, enrollment?.start_level ?? 1, enrollment?.start_module_sequence ?? 1],
     );
@@ -147,6 +148,9 @@ export class CurriculumService {
         minutes: r.minutes,
         status,
         awaiting_review: awaitingReview,
+        // The level's final exam is live only once an admin publishes it — the
+        // client hides the exam gate until then (the exam is "in review").
+        exam_published: r.exam_status === "published",
       };
     });
     return { current_level: currentLevel, levels };

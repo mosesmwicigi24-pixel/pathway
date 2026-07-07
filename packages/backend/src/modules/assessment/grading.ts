@@ -44,6 +44,40 @@ export function stripAnswerSignal(answerOptions: unknown): unknown {
   return answerOptions;
 }
 
+/** Fisher-Yates in-place shuffle (returns the same array). */
+function fisherYates<T>(a: T[]): T[] {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = a[i]!;
+    a[i] = a[j]!;
+    a[j] = tmp;
+  }
+  return a;
+}
+
+/**
+ * Randomize the ORDER of a question's answer choices before serving it, so the
+ * correct answer isn't pinned to a fixed slot (owner ask: "the answer might be
+ * A, the next in C, the other in B — shuffle the answers"). Grading matches by
+ * choice id/text, never by position, so shuffling is always grade-safe.
+ * Handles both the structured `{choices:[...]}` shape and legacy `string[]`;
+ * scale/short-answer options are returned untouched. Call AFTER
+ * `stripAnswerSignal` (this only reorders — it never re-adds any signal).
+ */
+export function shuffleChoices(answerOptions: unknown): unknown {
+  if (answerOptions === null || answerOptions === undefined) return answerOptions;
+  if (Array.isArray(answerOptions)) {
+    return fisherYates([...answerOptions]); // legacy string[]
+  }
+  if (typeof answerOptions === "object") {
+    const o = answerOptions as { choices?: unknown[]; [k: string]: unknown };
+    if (Array.isArray(o.choices)) {
+      return { ...o, choices: fisherYates([...o.choices]) };
+    }
+  }
+  return answerOptions;
+}
+
 export interface GradableQuestion {
   question_id: string;
   q_type: string;

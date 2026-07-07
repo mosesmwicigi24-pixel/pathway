@@ -583,6 +583,8 @@ export interface AdminLevel {
   exam_show_answers?: boolean;
   exam_show_score?: boolean;
   exam_shuffle?: boolean;
+  // Review → Publish gate for the exam: members see/take it only when 'published'.
+  exam_status?: "review" | "published";
 }
 
 export interface AdminModuleSummary {
@@ -713,6 +715,7 @@ export const CurriculumApi = {
       exam_show_answers?: boolean;
       exam_show_score?: boolean;
       exam_shuffle?: boolean;
+      exam_status?: "review" | "published";
     },
   ) => api.put<AdminLevel>(`/admin/levels/${n}/exam`, body).then((r) => r.data),
 

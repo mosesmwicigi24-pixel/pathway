@@ -289,6 +289,8 @@ export class AdminCurriculumService {
       exam_show_answers: z.boolean().optional(),
       exam_show_score: z.boolean().optional(),
       exam_shuffle: z.boolean().optional(),
+      /** review → publish gate: the exam is member-visible only when published. */
+      exam_status: z.enum(["review", "published"]).optional(),
     })
     .strict();
 
@@ -307,6 +309,7 @@ export class AdminCurriculumService {
         exam_show_answers: input.exam_show_answers,
         exam_show_score: input.exam_show_score,
         exam_shuffle: input.exam_shuffle,
+        exam_status: input.exam_status,
       },
       "level.exam_configured",
     );

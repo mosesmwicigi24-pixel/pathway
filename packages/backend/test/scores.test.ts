@@ -38,6 +38,45 @@ describe("composite /me/scores", () => {
   });
 });
 
+describe("level score — exam 50 / modules 30 / participation 20", () => {
+  it("returns a 100-point breakdown; a passed exam + quiz lift it", async () => {
+    await createEnrollment(meId, 1);
+
+    // No activity yet → exam and modules are 0; total is only participation.
+    const zero = await agent().get("/v1/me/levels/1/score").set(auth(meTok));
+    expect(zero.status).toBe(200);
+    expect(zero.body.exam).toMatchObject({ of: 50, score: 0, passed: false });
+    expect(zero.body.modules).toMatchObject({ of: 30, score: 0 });
+    expect(zero.body.participation.of).toBe(20);
+    expect(zero.body.total).toBe(
+      zero.body.exam.score + zero.body.modules.score + zero.body.participation.score,
+    );
+
+    // Finish a module quiz (100%) and pass the level exam (100%).
+    const { createModule, addQuestion } = await import("./helpers/factories.js");
+    const { markContentConsumed } = await import("./helpers/factories.js");
+    const mod = await createModule(1, 1);
+    const qid = await addQuestion(mod, "A");
+    await markContentConsumed(meId, mod);
+    await agent()
+      .post(`/v1/modules/${mod}/quiz/attempts`)
+      .set(auth(meTok))
+      .send({ client_mutation_id: uuid(11), answers: [{ question_id: qid, given_answer: "A" }] });
+    await agent().post(`/v1/modules/${mod}/complete`).set(auth(meTok)).send({ client_mutation_id: uuid(12) });
+    await agent()
+      .post(`/v1/levels/1/exam/attempts`)
+      .set(auth(meTok))
+      .send({ client_mutation_id: uuid(13), answers: [{ question_id: qid, given_answer: "A" }] });
+
+    const after = await agent().get("/v1/me/levels/1/score").set(auth(meTok));
+    expect(after.body.exam.score).toBe(50); // 100% × 0.5
+    expect(after.body.exam.passed).toBe(true);
+    expect(after.body.modules.score).toBe(30); // 100% × 0.3
+    expect(after.body.total).toBeGreaterThanOrEqual(80);
+    expect(after.body.total).toBeLessThanOrEqual(100);
+  });
+});
+
 describe("activity ledger feeds the scores", () => {
   it("completing a module lifts the curriculum score", async () => {
     await createEnrollment(meId, 1);

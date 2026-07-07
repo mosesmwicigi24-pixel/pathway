@@ -13,7 +13,7 @@ import { many, maybeOne, one, tx, recordChange, audit, recordActivityEvent, type
 import { ApiError } from "../../http/errors.js";
 import { loadEnrollment, loadModule, isModuleUnlocked, type EnrollmentRef } from "../progress/gating.js";
 import { splitContentPages } from "../curriculum/service.js";
-import { gradeSubmission, stripAnswerSignal, type GradableQuestion } from "./grading.js";
+import { gradeSubmission, stripAnswerSignal, shuffleChoices, type GradableQuestion } from "./grading.js";
 
 export interface QuizResult {
   attempt_id: string;
@@ -147,9 +147,9 @@ export class AssessmentService {
   async assembleQuiz(userId: string, moduleId: string): Promise<unknown> {
     const { enrollment } = await this.requireUnlocked(this.pool, userId, moduleId);
     await AssessmentService.requireContentComplete(this.pool, userId, moduleId);
-    const cfg = await one<{ time_limit_sec: number | null; max_attempts: number | null }>(
+    const cfg = await one<{ time_limit_sec: number | null; max_attempts: number | null; quiz_shuffle: boolean }>(
       this.pool,
-      `SELECT time_limit_sec, max_attempts FROM modules WHERE module_id = $1`,
+      `SELECT time_limit_sec, max_attempts, quiz_shuffle FROM modules WHERE module_id = $1`,
       [moduleId],
     );
 
@@ -187,7 +187,13 @@ export class AssessmentService {
     if (rows.length === 0) throw new ApiError("UNPROCESSABLE", "Module has no quiz questions");
     // §5.8: never leak correct-answer signal (legacy correct_answer is already
     // excluded; structured options have their is_correct flags stripped here).
-    const questions = rows.map((q) => ({ ...q, answer_options: stripAnswerSignal(q.answer_options) }));
+    // Then randomize choice order (unless the admin turned quiz_shuffle off) so
+    // the correct answer isn't pinned to one slot — grading is by id/text.
+    const shuffle = cfg.quiz_shuffle !== false;
+    const questions = rows.map((q) => {
+      const stripped = stripAnswerSignal(q.answer_options);
+      return { ...q, answer_options: shuffle ? shuffleChoices(stripped) : stripped };
+    });
     return {
       module_id: moduleId,
       question_count: questions.length,

@@ -643,9 +643,23 @@ paths:
   /admin/levels/{n}/exam:
     put:
       tags: [curriculum]
-      summary: Admin. Configure the level exit exam (pass mark + served question count).
+      summary: Admin. Configure the level exit exam (pass mark, question count, reveal/shuffle flags, and the review→publish state).
       parameters:
         - { name: n, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [required_exam_pass_mark]
+              properties:
+                required_exam_pass_mark: { type: number, minimum: 0, maximum: 100 }
+                exam_question_count: { type: [integer, "null"], minimum: 1 }
+                exam_show_answers: { type: boolean }
+                exam_show_score: { type: boolean }
+                exam_shuffle: { type: boolean, description: Randomize answer-choice order at delivery (default true). }
+                exam_status: { type: string, enum: [review, published], description: "Publish gate — the exam is member-visible/takeable only when 'published'." }
       responses:
         "200": { description: Configured }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
@@ -3340,6 +3354,16 @@ paths:
       summary: All my growth scores + a weighted overall (habits/curriculum/attendance/word/prayer).
       responses:
         "200": { description: Scores }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/levels/{n}/score:
+    get:
+      tags: [progress]
+      summary: My mastery of a level, out of 100 — exam (50) + module quizzes (30) + app participation (20).
+      parameters:
+        - { name: n, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200": { description: "{ level_number, total, band, exam:{score,of:50,raw_pct,passed}, modules:{score,of:30,raw_pct}, participation:{score,of:20,raw_pct} }" }
+        "400": { description: Invalid level number }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/scores/word:
     get:
