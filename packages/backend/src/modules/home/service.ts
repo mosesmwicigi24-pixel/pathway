@@ -473,9 +473,14 @@ export class HomeService {
         ? null
         : await maybeOne<{ module_id: string; title: string }>(
             this.pool,
+            // Exclude the level's exam container — it's not a "continue reading"
+            // lesson. Once every content module is done, this returns null and the
+            // next-action falls through to the Pathway tab, where the member meets
+            // the visible exam row.
             `SELECT m.module_id, m.title
                FROM modules m
               WHERE m.level_number = $2 AND m.status = 'published'
+                AND m.evaluation_kind <> 'exit_exam'
                 AND NOT EXISTS (
                   SELECT 1 FROM module_progress mp
                     JOIN enrollments e ON e.enrollment_id = mp.enrollment_id
