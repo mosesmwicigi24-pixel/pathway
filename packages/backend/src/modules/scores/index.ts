@@ -35,5 +35,16 @@ export function registerScores(ctx: AppContext): Router {
     res.json(await svc.all(requirePrincipal(req).userId));
   }));
 
+  // A level's mastery, out of 100: exam (50) + module quizzes (30) +
+  // app participation (20). The score shown at the end of a level.
+  r.get("/me/levels/:n/score", auth, handler(async (req, res) => {
+    const n = Number.parseInt(req.params.n ?? "", 10);
+    if (!Number.isInteger(n) || n < 1) {
+      res.status(400).json({ error: { code: "BAD_REQUEST", message: "Invalid level number" } });
+      return;
+    }
+    res.json(await svc.levelScore(requirePrincipal(req).userId, n));
+  }));
+
   return r;
 }

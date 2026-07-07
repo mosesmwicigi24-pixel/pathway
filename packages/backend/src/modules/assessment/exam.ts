@@ -8,7 +8,7 @@ import { z } from "zod";
 import { many, maybeOne, one, tx, recordChange, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { loadEnrollment, modulePassedPredicate, entryFloorSeq, type EnrollmentRef } from "../progress/gating.js";
-import { gradeSubmission, stripAnswerSignal, type GradableQuestion } from "./grading.js";
+import { gradeSubmission, stripAnswerSignal, shuffleChoices, type GradableQuestion } from "./grading.js";
 
 export interface ExamResult {
   exam_attempt_id: string;
@@ -37,6 +37,18 @@ export class ExamService {
     if (!enrollment) throw new ApiError("UNPROCESSABLE", "No active enrollment");
     if (levelNumber > enrollment.current_level) {
       throw new ApiError("GATE_LOCKED", "Level is locked", { current_level: enrollment.current_level });
+    }
+    // Publish gate: the exam is only takeable once an admin flips it to
+    // 'published' on the Level Quiz Builder. Until then it is in 'review'.
+    const level = await maybeOne<{ exam_status: string }>(
+      c,
+      `SELECT exam_status FROM levels WHERE level_number = $1`,
+      [levelNumber],
+    );
+    if (level && level.exam_status !== "published") {
+      throw new ApiError("GATE_LOCKED", "This level's exam is not published yet", {
+        reason: "exam_not_published",
+      });
     }
     // Modules before the admin-set entry point are covered by the placement and
     // not required for exam readiness (defaults make the floor 1 — i.e. all).
@@ -81,8 +93,18 @@ export class ExamService {
     await this.requireLevelReady(this.pool, userId, levelNumber);
     const rows = await this.examQuestions(this.pool, levelNumber, false);
     if (rows.length === 0) throw new ApiError("UNPROCESSABLE", "No exam questions for this level");
-    // §5.8: strip correct-answer signal from structured options before serving.
-    const questions = rows.map((q) => ({ ...q, answer_options: stripAnswerSignal(q.answer_options) }));
+    const cfg = await maybeOne<{ exam_shuffle: boolean }>(
+      this.pool,
+      `SELECT exam_shuffle FROM levels WHERE level_number = $1`,
+      [levelNumber],
+    );
+    // §5.8: strip correct-answer signal, then randomize choice order (unless the
+    // admin turned exam_shuffle off) so the answer isn't pinned to one slot.
+    const shuffle = cfg?.exam_shuffle !== false;
+    const questions = rows.map((q) => {
+      const stripped = stripAnswerSignal(q.answer_options);
+      return { ...q, answer_options: shuffle ? shuffleChoices(stripped) : stripped };
+    });
     return { level_number: levelNumber, question_count: questions.length, questions };
   }
 

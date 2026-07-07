@@ -5,7 +5,7 @@
 // leaderboard). This module is the home for all member scores; Word ships first,
 // Prayer / Habits / Curriculum / Attendance / composite follow the same shape.
 import type { Pool } from "pg";
-import { one } from "../../db/db.js";
+import { one, maybeOne } from "../../db/db.js";
 
 const TZ = "Africa/Nairobi"; // EAT day boundary, matches the rhythm engine
 
@@ -240,6 +240,68 @@ export class ScoresService {
       attendance,
       word,
       prayer,
+    };
+  }
+
+  /**
+   * A LEVEL's mastery, out of 100 (owner's model):
+   *   • exam (50): the member's best level-exam score % × 0.5.
+   *   • modules (30): the average of the member's best quiz score in each
+   *     published module of the level × 0.3.
+   *   • participation (20): the member's overall growth score × 0.2 — the
+   *     "other participation in the app" (habits/word/prayer/attendance blend).
+   * The three are server-computed and only ever rendered by the clients.
+   */
+  async levelScore(
+    userId: string,
+    levelNumber: number,
+  ): Promise<{
+    level_number: number;
+    total: number;
+    band: string;
+    exam: { score: number; of: number; raw_pct: number; passed: boolean };
+    modules: { score: number; of: number; raw_pct: number };
+    participation: { score: number; of: number; raw_pct: number };
+  }> {
+    const examRow = await maybeOne<{ best: string | null; passed: boolean | null }>(
+      this.pool,
+      `SELECT MAX(lea.score_achieved) AS best, bool_or(lea.is_passed) AS passed
+         FROM level_exam_attempts lea
+         JOIN enrollments e ON e.enrollment_id = lea.enrollment_id
+        WHERE e.user_id = $1 AND lea.level_number = $2`,
+      [userId, levelNumber],
+    );
+    const modRow = await maybeOne<{ avg_best: string | null }>(
+      this.pool,
+      `SELECT AVG(best_per_module) AS avg_best FROM (
+         SELECT MAX(qa.score_achieved) AS best_per_module
+           FROM quiz_attempts qa
+           JOIN module_progress mp ON mp.progress_id = qa.progress_id
+           JOIN enrollments e ON e.enrollment_id = mp.enrollment_id
+           JOIN modules m ON m.module_id = mp.module_id
+          WHERE e.user_id = $1 AND m.level_number = $2 AND m.is_published
+          GROUP BY m.module_id
+       ) t`,
+      [userId, levelNumber],
+    );
+    const composite = await this.all(userId);
+
+    const examPct = Math.max(0, Math.min(100, Number(examRow?.best ?? 0)));
+    const modulesPct = Math.max(0, Math.min(100, Number(modRow?.avg_best ?? 0)));
+    const participationPct = composite.overall.score;
+
+    const exam50 = Math.round(examPct * 0.5);
+    const modules30 = Math.round(modulesPct * 0.3);
+    const participation20 = Math.round(participationPct * 0.2);
+    const total = exam50 + modules30 + participation20;
+
+    return {
+      level_number: levelNumber,
+      total,
+      band: band(total),
+      exam: { score: exam50, of: 50, raw_pct: Math.round(examPct), passed: examRow?.passed === true },
+      modules: { score: modules30, of: 30, raw_pct: Math.round(modulesPct) },
+      participation: { score: participation20, of: 20, raw_pct: participationPct },
     };
   }
 }
