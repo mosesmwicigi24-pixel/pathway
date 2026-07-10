@@ -1892,6 +1892,7 @@ export const AssistantApi = {
 import type {
   RadioProgram,
   RadioComment,
+  RadioReactionCounts,
   StreamHealth,
   RadioListenerRoster,
   CreateRadioProgramBody,
@@ -1918,6 +1919,7 @@ import type {
 export type {
   RadioProgram,
   RadioComment,
+  RadioReactionCounts,
   StreamHealth,
   RadioListener,
   RadioListenerRoster,
@@ -2024,6 +2026,19 @@ export const RadioApi = {
     api.get<RadioComment[]>(`${R}/programs/${id}/comments`).then((r) => r.data),
   hideComment: (commentId: string) =>
     api.delete<{ ok: true }>(`${R}/comments/${commentId}`).then((r) => r.data),
+  // TRUE aggregate reaction totals across ALL members (server-authoritative;
+  // polled with the comments cadence — the console never invents counts).
+  reactions: (id: string) =>
+    api.get<RadioReactionCounts>(`${R}/programs/${id}/reactions`).then((r) => r.data),
+  // The admin's own reaction — the member /radio/* endpoint (admin JWT accepted,
+  // like listeners). Idempotent per client_event_id; returns the fresh totals.
+  react: (id: string, kind: keyof RadioReactionCounts) =>
+    api
+      .post<{ counts: RadioReactionCounts }>(`/radio/programs/${id}/react`, {
+        kind,
+        client_event_id: crypto.randomUUID(),
+      })
+      .then((r) => r.data.counts),
 
   // Mixer scenes -----------------------------------------------------------
   scenes: () => api.get<MixerScene[]>(`${R}/mixer/scenes`).then((r) => r.data),

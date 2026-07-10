@@ -6,7 +6,10 @@
 // REAL (API-backed, server-authoritative): program list + create + edit + select,
 // the broadcast lifecycle (go-live → status=live, end → status=ended), stream
 // health polling while live, ingest URL + stream key (copy + rotate), listener
-// comments (+ hide moderation), the audio library (tracks CRUD + upload), session
+// comments (+ hide moderation) with real author names/avatars, aggregate reaction
+// totals (heart/amen/fire across ALL members — polled with the comments cadence,
+// admin taps POST /react and take the server's totals), the audio library
+// (tracks CRUD + upload), session
 // playlists (add/remove/reorder/loop via PATCH), scheduled playout (PATCH
 // scheduled_at/repeat), and the quick broadcast settings (PATCH visibility /
 // record_broadcast). ALSO REAL (browser hardware ⇄ server): the Listen panel
@@ -14,11 +17,11 @@
 // hls_url), the audio-source device picker + level meters (getUserMedia → Web
 // Audio), and GO ON MIC (MediaRecorder → /v1/admin/radio/mic-bridge WebSocket
 // → the on-air harbor). LOCAL (client-only UI): waveform decoration, device
-// manager, emergency buttons, reactions drift, playlist live preview (with
-// Media Session lock-screen metadata/controls so audio survives screen-lock).
+// manager, emergency buttons, playlist live preview (with Media Session
+// lock-screen metadata/controls so audio survives screen-lock).
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
-  Activity, ArrowDown, ArrowUp, Bell, CalendarClock, Check, ChevronDown, Copy, Cpu, Disc3, Flame, Gauge,
+  Activity, ArrowDown, ArrowUp, Bell, CalendarClock, Check, ChevronDown, Copy, Cpu, Disc3, Gauge,
   HardDrive, Headphones, Heart, ImagePlus, KeyRound, Laptop, ListMusic, Loader2, Mic, MicOff,
   Music, Pause, Pencil, Play, Plus, QrCode, RefreshCw, Radio as RadioIcon, Repeat, Repeat1,
   Send, ShieldAlert, Signal, SlidersHorizontal, Smartphone, Square, Tablet, Trash2, Upload,
@@ -32,6 +35,7 @@ import {
   getAccessToken,
   type RadioProgram,
   type RadioComment,
+  type RadioReactionCounts,
   type RadioListener,
   type StreamHealth,
   type CreateRadioProgramBody,
@@ -204,10 +208,10 @@ function fmtTarget(target: RadioProgram["record_target"]): string {
   return "Cloud";
 }
 
-// A comment's author label — the admin projection only carries member_id, so we
-// show a short, stable id-tag until member-name enrichment ships server-side.
+// A comment's real author name (users LEFT JOIN server-side) — the bare
+// "Listener" fallback only when the member is gone/null.
 function authorLabel(c: RadioComment): string {
-  return `Listener ${c.member_id.slice(0, 6)}`;
+  return c.author_name ?? "Listener";
 }
 
 function statusLabel(s: RadioProgram["status"]): string {
@@ -356,7 +360,9 @@ export function RadioStudio(): ReactElement {
   // ── local UI state (mic/meters hardware is REAL — see useMicEngine below) ──
   const [connectOpen, setConnectOpen] = useState(false);
   const [killArmed, setKillArmed] = useState(false);
-  const [reactions, setReactions] = useState({ heart: 328, amen: 512, fire: 174 });
+  // TRUE aggregate reaction totals across ALL members (server-authoritative;
+  // GET /admin/radio/programs/:id/reactions, polled with the comments cadence).
+  const [reactions, setReactions] = useState<RadioReactionCounts>({ heart: 0, amen: 0, fire: 0 });
   const [draft, setDraft] = useState("");
   const [previewTitle, setPreviewTitle] = useState<string | null>(null);
 
@@ -482,13 +488,16 @@ export function RadioStudio(): ReactElement {
     setRotatedKey(null);
   }, [selectedId, selected]);
 
-  // ── load comments for the selected program ──
+  // ── load comments + true reaction totals for the selected program ──
   useEffect(() => {
-    if (!selectedId) { setComments([]); return; }
+    if (!selectedId) { setComments([]); setReactions({ heart: 0, amen: 0, fire: 0 }); return; }
     let alive = true;
     RadioApi.comments(selectedId)
       .then((c) => { if (alive) setComments(c); })
       .catch(() => { if (alive) setComments([]); });
+    RadioApi.reactions(selectedId)
+      .then((r) => { if (alive) setReactions(r); })
+      .catch(() => { if (alive) setReactions({ heart: 0, amen: 0, fire: 0 }); });
     return () => { alive = false; };
   }, [selectedId]);
 
@@ -510,11 +519,12 @@ export function RadioStudio(): ReactElement {
     return () => { alive = false; clearInterval(t); };
   }, [phase, selectedId]);
 
-  // ── refresh comments periodically while live ──
+  // ── refresh comments + reaction totals periodically while live ──
   useEffect(() => {
     if (phase !== "live" || !selectedId) return;
     const t = setInterval(() => {
       RadioApi.comments(selectedId).then(setComments).catch(() => {});
+      RadioApi.reactions(selectedId).then(setReactions).catch(() => {});
     }, 6000);
     return () => clearInterval(t);
   }, [phase, selectedId]);
@@ -559,18 +569,12 @@ export function RadioStudio(): ReactElement {
     if (phase === "idle" || phase === "countdown") setKillArmed(false);
   }, [phase]);
 
-  // ── reactions drift while live (local decoration) ──
-  useEffect(() => {
-    if (phase !== "live") return;
-    const t = setInterval(() => {
-      setReactions((r) => ({
-        heart: r.heart + Math.round(Math.random() * 3),
-        amen: r.amen + Math.round(Math.random() * 4),
-        fire: r.fire + Math.round(Math.random() * 2),
-      }));
-    }, 2600);
-    return () => clearInterval(t);
-  }, [phase]);
+  // ── the admin's own reaction — POST /radio/programs/:id/react (idempotent per
+  // client_event_id) and adopt the server's fresh totals; never a local +1.
+  const sendReaction = useCallback((kind: keyof RadioReactionCounts): void => {
+    if (!selectedId) return;
+    RadioApi.react(selectedId, kind).then(setReactions).catch(() => {});
+  }, [selectedId]);
 
   // ── go-live countdown → real go-live call ──
   const beginCountdown = (): void => { setConfirmOpen(false); setPhase("countdown"); setCount(3); };
@@ -1515,13 +1519,14 @@ export function RadioStudio(): ReactElement {
                 </div>
               </Panel>
 
-              {/* Comments & reactions (comments REAL; reactions decorative) */}
+              {/* Comments & reactions (both REAL — authors from the users join,
+                  totals from GET .../reactions across ALL members) */}
               <Panel>
                 <SectionHead icon={Heart} title="Comments & reactions" hint={live ? "Live" : selected ? `${comments.length}` : "—"} />
                 <div className="grid grid-cols-3 gap-2 mb-3">
-                  <ReactChip icon={Heart} color="#FB7185" value={reactions.heart} label="Hearts" onClick={() => setReactions((r) => ({ ...r, heart: r.heart + 1 }))} />
-                  <ReactChip icon={() => <span style={{ fontSize: 15 }}>🙏</span>} color={GOLD} value={reactions.amen} label="Amens" onClick={() => setReactions((r) => ({ ...r, amen: r.amen + 1 }))} />
-                  <ReactChip icon={Flame} color="#FB923C" value={reactions.fire} label="Fire" onClick={() => setReactions((r) => ({ ...r, fire: r.fire + 1 }))} />
+                  <ReactChip icon={() => <span style={{ fontSize: 15 }}>❤️</span>} color="#FB7185" value={reactions.heart} label="Hearts" onClick={() => sendReaction("heart")} />
+                  <ReactChip icon={() => <span style={{ fontSize: 15 }}>🙏</span>} color={GOLD} value={reactions.amen} label="Amens" onClick={() => sendReaction("amen")} />
+                  <ReactChip icon={() => <span style={{ fontSize: 15 }}>🔥</span>} color="#FB923C" value={reactions.fire} label="Fire" onClick={() => sendReaction("fire")} />
                 </div>
                 <div className="flex items-center gap-2 mb-3">
                   <input className="rs-in" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") postComment(); }} placeholder="Say something to listeners…" style={{ flex: 1, minWidth: 0, height: 38, background: "rgba(255,255,255,0.05)", border: `1px solid ${PANEL_BORDER}`, color: TEXT, fontSize: 12.5, outline: "none", borderRadius: 12, padding: "0 12px" }} />
@@ -1542,8 +1547,15 @@ export function RadioStudio(): ReactElement {
                   )}
                   {comments.map((c) => (
                     <div key={c.id} className="rounded-xl px-3 py-2" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}`, opacity: c.hidden ? 0.5 : 1 }}>
-                      <div className="flex items-center justify-between">
-                        <span style={{ fontSize: 12, fontWeight: 700 }}>{authorLabel(c)}</span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                          {c.author_avatar_url ? (
+                            <img src={c.author_avatar_url} alt="" className="rounded-full shrink-0" style={{ width: 22, height: 22, objectFit: "cover" }} />
+                          ) : (
+                            <span className="flex items-center justify-center rounded-full shrink-0" style={{ width: 22, height: 22, background: `linear-gradient(135deg, ${GOLD}, ${GOLD_DEEP})`, color: "#0A1120", fontSize: 8.5, fontWeight: 800 }}>{listenerInitials(c.author_name ?? "")}</span>
+                          )}
+                          <span className="truncate" style={{ fontSize: 12, fontWeight: 700 }}>{authorLabel(c)}</span>
+                        </div>
                         <button onClick={() => hideComment(c.id)} title={c.hidden ? "Hidden" : "Hide comment"} className="rs-btn flex items-center justify-center rounded-md shrink-0" style={{ width: 24, height: 24, background: "rgba(255,255,255,0.05)", color: c.hidden ? DIMMER : DIM }}>
                           <Trash2 size={12} />
                         </button>

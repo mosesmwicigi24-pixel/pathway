@@ -158,6 +158,9 @@ export interface RadioComment {
   hidden: boolean;
   client_event_id: string | null;
   created_at: ISODateTime;
+  /** Comment author's display name (users LEFT JOIN — null when the member is gone). */
+  author_name?: string | null;
+  author_avatar_url?: string | null;
 }
 
 /** One real listener in a live program's roster (server-authoritative presence). */
