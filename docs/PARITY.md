@@ -96,7 +96,7 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | Members | /admin/members (+id, results, enrollment, graduation) | ✅ | ✅ | Parity |
 | Member Detail | /admin/members/{id} (+results, password-reset) | ✅ | ✅ | Parity — incl. **admin password reset** (`POST /admin/members/:id/password-reset`, rank-guarded) on both surfaces as of 2026-07-03 |
 | Reflection Queue | /admin/reflections (+decision, history) | ✅ | ✅ | Parity |
-| **Discipleship Hub** | `/disciples` (+`:id`) — reuses `/chat/dms`·`/reviews/levels/:id/usher`·`/admin/reflections/:id/decision` | ✅ | ❌ | **NEW 2026-07-03** — discipler console: roster triaged by needs-action, per-student dossier (progression, growth scores, engagement band, reflection bodies, recent activity), and inline **message / usher-to-level / reflection-decision** actions in one screen. Instructor cell-scoped (server-authoritative). iPad port pending (**D-11**) |
+| **Discipleship Hub** | `/disciples` (+`:id`) — reuses `/chat/dms`·`/reviews/levels/:id/usher`·`/admin/reflections/:id/decision` | ✅ | ✅ | ~~D-11~~ **RESOLVED 2026-07-04** — iPad console ported section-for-section (triaged roster, dossier, inline message/usher/reflection actions). The port surfaced a web bug: UsherCard passed user_id where the route keys on the ADVANCEMENT id (every web usher 404'd) — fixed on web same day. Known asymmetry: dossier access allows relationship_tree edges OR leader_assignments, but usher scope checks leader_assignments only (edge-only disciplers see 'ready' but can't usher — backend decision pending) |
 | Chat (oversight) | /chat/* + moderation + /assistant/chat | ✅ | ✅ | Parity (iPad mute/archive local-only) |
 | Events | calendar, /admin/events/*, announcements, moments | ✅ | ✅ | Parity (iPad adds client-rendered QR) |
 | Finance (read-only) | /admin/finance/* | ✅ | ✅ | Parity (presentation reimagined on iPad) |
@@ -159,7 +159,7 @@ Shares with admin surfaces: the backend, `@nuru/shared`, and `tokens.ts`.
 | D-08 | iPad presentation pass not on web | Web | **DONE 2026-06-30** | iPad has precedence (§0). Web palette added to `admin-web` CSS (admin-only; mobile untouched). **All 24 admin pages ported** to the iPad design (typecheck 0, Vite build green). Two small follow-ups: (a) **Quiz Builder** — the exam-settings/field/colour asks live in the shared `components/curriculum/ModuleQuizBuilder.tsx` (out of the page-file scope); (b) **Roles** — web has no role-EDIT modal (a feature gap, not a port). |
 | ~~D-10~~ | ~~admin-web `tsc` typecheck broken (851 errors)~~ | Web | ~~tooling~~ | **DONE 2026-06-30** — web-only react-redux/@reduxjs-toolkit resolved React/@types/react peers to the React 19 store copy, poisoning JSX types. Pinned their peers to React 18 via scoped `pnpm.overrides`. admin-web 851→0; mobile still 0; root `pnpm typecheck` green. |
 | D-09 | Terminology mix (Cohort vs Cell) at the wire | Backend | Med | Plan an additive rename; keep old paths until clients migrate |
-| D-11 | Discipleship Hub not on iPad | iPad | Med | Port the discipler console (roster `/disciples` → dossier `/disciples/:id` + inline message/usher/reflection actions) to `pathwayforipad`, matching the web page shipped 2026-07-03 |
+| ~~D-11~~ | ~~Discipleship Hub not on iPad~~ | iPad | ~~Med~~ | **DONE 2026-07-04** — DisciplesView.swift (roster + dossier + actions) under Operations. Bonus: found + fixed the web usher advancement-id 404. Open follow-up: usher scope ignores relationship_tree edges (backend) |
 
 ---
 
