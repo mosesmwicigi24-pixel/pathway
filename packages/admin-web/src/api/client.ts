@@ -2110,8 +2110,17 @@ export const RadioApi = {
       .then((r) => r.data),
 
   // Session loop mode (server-authoritative) -------------------------------
-  setLoop: (programId: string, loopMode: RadioLoopMode) =>
-    api.patch<RadioProgram>(`${R}/programs/${programId}`, { loop_mode: loopMode }).then((r) => r.data),
+  // Optional durationMin rides in the SAME PATCH when activating a loop:
+  // a number = the auto-air sweep auto-ends the broadcast after that many
+  // minutes on air; null = clear it (loop until ended manually); undefined =
+  // leave duration_min untouched (plain mode changes / deactivation).
+  setLoop: (programId: string, loopMode: RadioLoopMode, durationMin?: number | null) =>
+    api
+      .patch<RadioProgram>(`${R}/programs/${programId}`, {
+        loop_mode: loopMode,
+        ...(durationMin !== undefined ? { duration_min: durationMin } : {}),
+      })
+      .then((r) => r.data),
 };
 
 // --- Default single-flight token refresh -----------------------------------

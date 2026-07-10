@@ -141,6 +141,30 @@ function fmtClock(sec: number | null | undefined): string | null {
   return h > 0 ? `${h}:${m.toString().padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
+// Cumulative playlist runtime — the sum of the known track durations. Tracks
+// with no duration are excluded from the sum and the label gets a trailing "+"
+// so it stays honest (e.g. "3:47:12+"). Null when nothing is summable.
+function playlistRuntime(items: RadioPlaylistItem[]): string | null {
+  let total = 0;
+  let unknown = false;
+  for (const it of items) {
+    const d = it.track.duration_sec;
+    if (d != null && Number.isFinite(d) && d > 0) total += d;
+    else unknown = true;
+  }
+  const clock = fmtClock(total);
+  return clock ? `${clock}${unknown ? "+" : ""}` : null;
+}
+
+// Minutes → short airtime label for the loop captions/chips (45 → "45 min",
+// 60 → "1h", 90 → "1h 30m", 120 → "2h").
+function fmtAirtime(min: number): string {
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
 // Human-readable byte size ("31.2 MB").
 function fmtBytes(bytes: number | null | undefined): string | null {
   if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return null;
@@ -2130,9 +2154,27 @@ function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: {
     }
   }, []);
 
+  // ── Loop control + airtime confirmation ──
+  // Activating a loop (from none) first asks how long it should stay on air
+  // before the server auto-ends the broadcast; the answer rides in the SAME
+  // PATCH as loop_mode. Mode changes while already looping, and deactivation,
+  // PATCH loop_mode only (duration_min untouched).
+  const [loopDialog, setLoopDialog] = useState<{ program: RadioProgram; mode: RadioLoopMode } | null>(null);
+  const [loopChoice, setLoopChoice] = useState<number | "manual" | "custom">("manual");
+  const [loopCustom, setLoopCustom] = useState("");
+  const [loopSaving, setLoopSaving] = useState(false);
+
   const cycleLoop = useCallback(async (program: RadioProgram) => {
     const idx = LOOP_MODES.indexOf(program.loop_mode);
     const nextMode = LOOP_MODES[(idx + 1) % LOOP_MODES.length]!;
+    if (program.loop_mode === "none" && nextMode !== "none") {
+      // Turning a loop ON — ask for the airtime first; PATCH happens on confirm.
+      setLoopChoice("manual");
+      setLoopCustom("");
+      setLoopSaving(false);
+      setLoopDialog({ program, mode: nextMode });
+      return;
+    }
     // optimistic
     setSessions((s) => (s ? s.map((p) => (p.id === program.id ? { ...p, loop_mode: nextMode } : p)) : s));
     try {
@@ -2143,6 +2185,30 @@ function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: {
       setErr("Could not change the loop mode.");
     }
   }, []);
+
+  // Custom-minutes validity (only gates confirm while "custom" is selected).
+  const loopCustomMin = Number(loopCustom);
+  const loopCustomValid = Number.isFinite(loopCustomMin) && loopCustomMin > 0;
+
+  const confirmLoop = useCallback(async () => {
+    if (!loopDialog) return;
+    const { program, mode } = loopDialog;
+    const minutes = loopChoice === "manual" ? null : loopChoice === "custom" ? Number(loopCustom) : loopChoice;
+    if (minutes !== null && (!Number.isFinite(minutes) || minutes <= 0)) return;
+    setLoopSaving(true);
+    try {
+      // ONE call: { loop_mode, duration_min } (null clears → until ended manually).
+      const updated = await RadioApi.setLoop(program.id, mode, minutes === null ? null : Math.round(minutes));
+      setSessions((s) => (s ? s.map((p) => (p.id === updated.id ? updated : p)) : s));
+      window.dispatchEvent(new CustomEvent("rs:programs-changed"));
+      setLoopDialog(null);
+    } catch {
+      setErr("Could not turn the loop on.");
+      setLoopDialog(null);
+    } finally {
+      setLoopSaving(false);
+    }
+  }, [loopDialog, loopChoice, loopCustom]);
 
   const addTrack = useCallback(async (programId: string, trackId: string) => {
     try {
@@ -2306,6 +2372,7 @@ function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: {
               : -1;
             const LoopIcon = s.loop_mode === "repeat_one" ? Repeat1 : Repeat;
             const loopOn = s.loop_mode !== "none";
+            const runtime = playlistRuntime(items);
             return (
               <div key={s.id} className="rounded-xl" style={{ background: active ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${active ? RED + "44" : PANEL_BORDER}`, padding: 12 }}>
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
@@ -2314,7 +2381,7 @@ function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: {
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="truncate" style={{ fontSize: 12.5, fontWeight: 700 }}>{s.title}</div>
-                    <div style={{ fontSize: 10, color: DIM }}>{items.length} item{items.length === 1 ? "" : "s"}{s.audio_url ? ` · audio ${fmtClock(s.audio_duration_sec) ?? "✓"}` : ""}{s.is_live ? " · ON AIR" : previewProgram === s.id ? " · PREVIEW" : ""}</div>
+                    <div style={{ fontSize: 10, color: DIM }}>{items.length} item{items.length === 1 ? "" : "s"}{runtime ? ` · ${runtime}` : ""}{s.audio_url ? ` · audio ${fmtClock(s.audio_duration_sec) ?? "✓"}` : ""}{s.is_live ? " · ON AIR" : previewProgram === s.id ? " · PREVIEW" : ""}</div>
                   </div>
                   <button onClick={() => onEdit(s)} title="Edit session" className="rs-btn flex items-center justify-center rounded-lg shrink-0" style={{ width: 26, height: 26, background: "rgba(230,198,110,0.10)", color: GOLD, border: `1px solid ${GOLD}33` }}>
                     <Pencil size={12} />
@@ -2338,6 +2405,20 @@ function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: {
                   )}
                   <button onClick={() => void removeSession(s.id)} title="Delete session" className="rs-btn flex items-center justify-center rounded-lg shrink-0" style={{ width: 26, height: 26, background: "rgba(255,255,255,0.05)", color: DIM }}><X size={12} /></button>
                 </div>
+
+                {/* playback contract — what happens on air (loop + airtime, or one pass + total runtime) */}
+                {(loopOn || runtime) && (
+                  <div className="flex items-center gap-1.5 mb-2" style={{ fontSize: 10, color: loopOn ? "#7BE3A3" : DIMMER }}>
+                    {loopOn ? <LoopIcon size={10} className="shrink-0" /> : <Play size={10} className="shrink-0" />}
+                    <span className="truncate">
+                      {loopOn
+                        ? s.duration_min != null
+                          ? `Loops · ends after ${fmtAirtime(s.duration_min)} on air`
+                          : "Loops until ended manually"
+                        : `Plays once · ${runtime}`}
+                    </span>
+                  </div>
+                )}
 
                 {/* ordered items — "after this, play this" */}
                 <div className="flex flex-col gap-1">
@@ -2373,6 +2454,68 @@ function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: {
           })
         )}
       </div>
+
+      {/* ── Loop airtime dialog — how long the loop plays before the server auto-ends it ── */}
+      {loopDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(5,9,17,0.7)", backdropFilter: "blur(4px)" }} onClick={() => { if (!loopSaving) setLoopDialog(null); }}>
+          <div className="rounded-2xl" style={{ background: PANEL, border: `1px solid ${PANEL_BORDER}`, padding: 26, width: "min(400px, calc(100vw - 32px))", boxShadow: "0 30px 80px rgba(0,0,0,0.6)" }} onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2.5 mb-1">
+              <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 32, height: 32, background: "rgba(123,227,163,0.16)", color: "#7BE3A3" }}>
+                {loopDialog.mode === "repeat_one" ? <Repeat1 size={16} /> : <Repeat size={16} />}
+              </span>
+              <div style={{ fontFamily: SERIF, fontSize: 19, lineHeight: 1.2 }}>How long should the loop play?</div>
+            </div>
+            <div className="truncate" style={{ fontSize: 11.5, color: DIM, marginBottom: 16 }}>{LOOP_LABEL[loopDialog.mode]} · {loopDialog.program.title}</div>
+
+            {/* preset airtimes */}
+            <div className="flex flex-wrap gap-2 mb-2">
+              {[30, 60, 120, 180].map((min) => {
+                const on = loopChoice === min;
+                return (
+                  <button key={min} onClick={() => setLoopChoice(min)} className="rs-btn rounded-lg px-3 py-1.5" style={{ fontSize: 11.5, fontWeight: 700, background: on ? "rgba(230,198,110,0.16)" : "rgba(255,255,255,0.05)", color: on ? GOLD : DIM, border: `1px solid ${on ? GOLD + "66" : PANEL_BORDER}` }}>
+                    {fmtAirtime(min)}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* custom minutes + until-ended-manually */}
+            <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-1.5 rounded-lg px-2" style={{ height: 32, background: loopChoice === "custom" ? "rgba(230,198,110,0.10)" : "rgba(255,255,255,0.05)", border: `1px solid ${loopChoice === "custom" ? GOLD + "66" : PANEL_BORDER}` }}>
+                <input
+                  type="number"
+                  min={1}
+                  value={loopCustom}
+                  onFocus={() => setLoopChoice("custom")}
+                  onChange={(e) => { setLoopCustom(e.target.value); setLoopChoice("custom"); }}
+                  placeholder="Custom"
+                  style={{ width: 64, background: "none", border: "none", outline: "none", color: loopChoice === "custom" ? GOLD : TEXT, fontSize: 11.5, fontWeight: 700 }}
+                />
+                <span style={{ fontSize: 10.5, color: DIM }}>min</span>
+              </div>
+              <button onClick={() => setLoopChoice("manual")} className="rs-btn rounded-lg px-3" style={{ height: 32, fontSize: 11.5, fontWeight: 700, background: loopChoice === "manual" ? "rgba(230,198,110,0.16)" : "rgba(255,255,255,0.05)", color: loopChoice === "manual" ? GOLD : DIM, border: `1px solid ${loopChoice === "manual" ? GOLD + "66" : PANEL_BORDER}` }}>
+                Until ended manually
+              </button>
+            </div>
+
+            <div style={{ fontSize: 11, color: DIMMER, lineHeight: 1.5, marginBottom: 16 }}>
+              The broadcast ends automatically after this long on air (server auto-end).
+            </div>
+
+            <div className="flex gap-2">
+              <button onClick={() => setLoopDialog(null)} disabled={loopSaving} className="rs-btn flex-1 rounded-xl py-2.5" style={{ background: "rgba(255,255,255,0.06)", color: TEXT, fontSize: 12.5, fontWeight: 600, opacity: loopSaving ? 0.6 : 1 }}>Cancel</button>
+              <button
+                onClick={() => void confirmLoop()}
+                disabled={loopSaving || (loopChoice === "custom" && !loopCustomValid)}
+                className="rs-btn flex-1 flex items-center justify-center gap-1.5 rounded-xl py-2.5"
+                style={{ background: GOLD, color: "#0A1120", fontSize: 12.5, fontWeight: 800, opacity: loopSaving || (loopChoice === "custom" && !loopCustomValid) ? 0.55 : 1 }}
+              >
+                {loopSaving && <Loader2 size={13} className="rs-spin" />} Turn loop on
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Panel>
   );
 }
