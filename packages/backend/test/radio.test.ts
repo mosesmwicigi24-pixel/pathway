@@ -403,6 +403,98 @@ describe("radio — uploaded session audio + auto-air (ADDENDUM)", () => {
   });
 });
 
+describe("radio — single live session + schedule overlap (one frequency)", () => {
+  it("go-live 409s while another session is on air (details name the live one)", async () => {
+    const first = await createProgram({ title: "Morning Devotion" });
+    await agent().post(`/v1/admin/radio/programs/${first.id}/go-live`).set(auth(adminTok));
+
+    const second = await createProgram({ title: "Evening Worship" });
+    const res = await agent().post(`/v1/admin/radio/programs/${second.id}/go-live`).set(auth(adminTok));
+    expect(res.status).toBe(409);
+    expect(res.body.error.message).toContain("Morning Devotion");
+    expect(res.body.error.details.live_program_id).toBe(first.id);
+
+    // Ending the first frees the frequency.
+    await agent().post(`/v1/admin/radio/programs/${first.id}/end`).set(auth(adminTok));
+    const retry = await agent().post(`/v1/admin/radio/programs/${second.id}/go-live`).set(auth(adminTok));
+    expect(retry.status).toBe(200);
+  });
+
+  it("auto-air defers a due session while another is live, then airs it once free", async () => {
+    const svc = new RadioService(testPool(), new FakeStreamProvider());
+    const onAir = await createProgram({ title: "Live Now" });
+    await agent().post(`/v1/admin/radio/programs/${onAir.id}/go-live`).set(auth(adminTok));
+
+    const due = await createProgram({
+      title: "Queued Show",
+      scheduled_at: new Date(Date.now() - 60_000).toISOString(),
+      auto_go_live: true,
+    });
+
+    // While Live Now is on air, the sweep must NOT air the due session.
+    const while_live = await svc.airDueEvents();
+    expect(while_live.aired).toBe(0);
+    const still = await agent().get(`/v1/admin/radio/programs/${due.id}`).set(auth(adminTok));
+    expect(still.body.status).toBe("scheduled");
+
+    // The moment the frequency frees, the next tick airs it — automatic late start.
+    await agent().post(`/v1/admin/radio/programs/${onAir.id}/end`).set(auth(adminTok));
+    const after = await svc.airDueEvents();
+    expect(after.aired).toBe(1);
+    const nowLive = await agent().get(`/v1/admin/radio/programs/${due.id}`).set(auth(adminTok));
+    expect(nowLive.body.status).toBe("live");
+    expect(nowLive.body.is_live).toBe(true);
+  });
+
+  it("schedule/conflicts flags an overlapping slot and clears a distinct one", async () => {
+    const base = Date.now() + 24 * 3_600_000; // tomorrow, away from other tests
+    await createProgram({
+      title: "Prayer Hour",
+      scheduled_at: new Date(base).toISOString(),
+      duration_min: 60,
+    });
+
+    // Proposed slot 30 min into Prayer Hour → conflict.
+    const clash = await agent()
+      .get(`/v1/admin/radio/schedule/conflicts`)
+      .query({ scheduled_at: new Date(base + 30 * 60_000).toISOString(), duration_min: 60 })
+      .set(auth(adminTok));
+    expect(clash.status).toBe(200);
+    expect(clash.body.conflicts.map((c: { title: string }) => c.title)).toContain("Prayer Hour");
+
+    // Two hours later → clear.
+    const clear = await agent()
+      .get(`/v1/admin/radio/schedule/conflicts`)
+      .query({ scheduled_at: new Date(base + 120 * 60_000).toISOString(), duration_min: 60 })
+      .set(auth(adminTok));
+    expect(clear.body.conflicts).toEqual([]);
+
+    // Editing Prayer Hour itself is excluded from its own check.
+    const progs = await agent().get(`/v1/admin/radio/programs`).set(auth(adminTok));
+    const prayer = (progs.body as { id: string; title: string }[]).find((p) => p.title === "Prayer Hour");
+    const self = await agent()
+      .get(`/v1/admin/radio/schedule/conflicts`)
+      .query({
+        scheduled_at: new Date(base).toISOString(),
+        duration_min: 60,
+        exclude_id: prayer?.id,
+      })
+      .set(auth(adminTok));
+    expect(self.body.conflicts).toEqual([]);
+  });
+
+  it("a live session's projected window conflicts with a slot inside it", async () => {
+    const live = await createProgram({ title: "Marathon Broadcast", duration_min: 120 });
+    await agent().post(`/v1/admin/radio/programs/${live.id}/go-live`).set(auth(adminTok));
+
+    const clash = await agent()
+      .get(`/v1/admin/radio/schedule/conflicts`)
+      .query({ scheduled_at: new Date(Date.now() + 60 * 60_000).toISOString(), duration_min: 30 })
+      .set(auth(adminTok));
+    expect(clash.body.conflicts.map((c: { title: string }) => c.title)).toContain("Marathon Broadcast");
+  });
+});
+
 describe("radio — audio upload validation", () => {
   it("rejects with 400 when no file is provided", async () => {
     const res = await agent().post("/v1/admin/media/audio/upload").set(auth(adminTok));

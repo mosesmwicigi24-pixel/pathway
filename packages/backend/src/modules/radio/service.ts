@@ -438,6 +438,22 @@ export class RadioService {
         `SELECT ${PROGRAM_COLUMNS} FROM radio_programs WHERE id = $1`,
         [id],
       );
+      // ONE live session at a time — the station has a single frequency. A second
+      // go-live (manual or auto-air) is refused while another program is on air;
+      // the auto-air sweep retries every tick, so an overlapping scheduled session
+      // starts automatically the moment the current one ends.
+      const onAir = await maybeOne<{ id: string; title: string }>(
+        c,
+        `SELECT id, title FROM radio_programs WHERE is_live = true AND id <> $1 LIMIT 1`,
+        [id],
+      );
+      if (onAir) {
+        throw new ApiError(
+          "CONFLICT",
+          `"${onAir.title}" is already live — only one session can be on air. End it first, or let it finish.`,
+          { live_program_id: onAir.id, live_program_title: onAir.title },
+        );
+      }
       this.provider.start({ id: program.id, is_live: program.is_live, peak_listeners: program.peak_listeners });
       return one<RadioProgramRow>(
         c,
@@ -479,11 +495,15 @@ export class RadioService {
     let aired = 0;
     let ended = 0;
 
+    // Earliest-scheduled first; goLive's single-live guard means at most one airs
+    // per tick and an overdue session waits (retrying every tick) until the
+    // current broadcast ends — automatic late start, never two on air.
     const toAir = await many<{ id: string }>(
       this.pool,
       `SELECT id FROM radio_programs
         WHERE status = 'scheduled' AND auto_go_live = true AND is_live = false
-          AND scheduled_at IS NOT NULL AND scheduled_at <= $1`,
+          AND scheduled_at IS NOT NULL AND scheduled_at <= $1
+        ORDER BY scheduled_at ASC`,
       [now],
     );
     for (const { id } of toAir) {
@@ -491,7 +511,7 @@ export class RadioService {
         await this.goLive(id);
         aired += 1;
       } catch {
-        /* one failure must not abort the sweep; next tick retries. */
+        /* one failure (incl. another session on air) must not abort the sweep; next tick retries. */
       }
     }
 
@@ -513,6 +533,41 @@ export class RadioService {
     }
 
     return { aired, ended };
+  }
+
+  /**
+   * Sessions whose air window overlaps a proposed schedule slot — the consoles
+   * call this while the author picks a time, so they can warn "another session
+   * overlaps what you are setting" BEFORE saving. A window is
+   * [start, start + duration); sessions without a duration are assumed 60 min.
+   * Checks other scheduled sessions and the projected window of a live one.
+   */
+  static readonly DEFAULT_WINDOW_MIN = 60;
+  async scheduleConflicts(
+    scheduledAt: Date,
+    durationMin: number | null,
+    excludeId: string | null,
+  ): Promise<Array<Pick<RadioProgramRow, "id" | "title" | "scheduled_at" | "duration_min" | "status" | "is_live">>> {
+    const winMin = durationMin ?? RadioService.DEFAULT_WINDOW_MIN;
+    const end = new Date(scheduledAt.getTime() + winMin * 60_000);
+    return many(
+      this.pool,
+      `SELECT id, title, scheduled_at, duration_min, status, is_live
+         FROM radio_programs
+        WHERE ($3::uuid IS NULL OR id <> $3)
+          AND (
+            (status = 'scheduled' AND scheduled_at IS NOT NULL
+              AND scheduled_at < $2
+              AND scheduled_at + make_interval(mins => COALESCE(duration_min, ${RadioService.DEFAULT_WINDOW_MIN})) > $1)
+            OR
+            (status = 'live' AND is_live = true AND live_started_at IS NOT NULL
+              AND live_started_at < $2
+              AND live_started_at + make_interval(mins => COALESCE(duration_min, ${RadioService.DEFAULT_WINDOW_MIN})) > $1)
+          )
+        ORDER BY scheduled_at ASC NULLS LAST
+        LIMIT 5`,
+      [scheduledAt, end, excludeId],
+    );
   }
 
   async rotateKey(id: string): Promise<{ stream_key: string }> {

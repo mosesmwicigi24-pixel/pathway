@@ -4,6 +4,7 @@
 // Admin sees ingest secrets; member DTOs omit stream_key/ingest_url/ingest_provider.
 // Static admin paths are registered before any param routes so they win in matching.
 import { Router } from "express";
+import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
 import { authenticate, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
@@ -105,6 +106,22 @@ export function registerRadio(
   r.post("/admin/radio/programs", auth, perm("radio", "create"), handler(async (req, res) => {
     const input = parseBody(RadioService.CreateProgram, req.body);
     res.status(201).json(await svc.create(requirePrincipal(req).userId, input));
+  }));
+
+  // Pre-save overlap check: "does this slot collide with another session?" —
+  // the consoles call it while the author picks a time and show the conflict.
+  r.get("/admin/radio/schedule/conflicts", auth, perm("radio", "view"), handler(async (req, res) => {
+    const q = parseBody(
+      z.object({
+        scheduled_at: z.string().datetime(),
+        duration_min: z.coerce.number().int().min(1).max(24 * 60).optional(),
+        exclude_id: z.string().uuid().optional(),
+      }),
+      req.query,
+    );
+    res.json({
+      conflicts: await svc.scheduleConflicts(new Date(q.scheduled_at), q.duration_min ?? null, q.exclude_id ?? null),
+    });
   }));
 
   // Program sub-actions (static suffix, before the bare /:id).

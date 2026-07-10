@@ -4146,7 +4146,7 @@ paths:
   /admin/radio/programs/{id}/go-live:
     post:
       tags: [radio]
-      summary: Go live — status=live, is_live=true; provider.start. Gated by radio:edit.
+      summary: Go live — status=live, is_live=true; provider.start. Gated by radio:edit. Only ONE session can be on air — 409 (with live_program_id/title in details) while another is live; the auto-air sweep retries, so a scheduled session starts automatically when the current one ends.
       parameters: [{ $ref: "#/components/parameters/IdPath" }]
       responses:
         "200":
@@ -4157,6 +4157,38 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Another session is already live (details carry live_program_id + live_program_title) }
+  /admin/radio/schedule/conflicts:
+    get:
+      tags: [radio]
+      summary: Pre-save overlap check for a proposed schedule slot — other scheduled sessions (and a live one's projected window) that intersect [scheduled_at, scheduled_at + duration_min). Sessions without a duration are assumed 60 min. Gated by radio:view.
+      parameters:
+        - { name: scheduled_at, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: duration_min, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 1440 } }
+        - { name: exclude_id, in: query, required: false, schema: { type: string, format: uuid }, description: The program being edited (excluded from its own check) }
+      responses:
+        "200":
+          description: Overlapping sessions (empty = the slot is clear)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conflicts]
+                properties:
+                  conflicts:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, title, status, is_live]
+                      properties:
+                        id: { type: string, format: uuid }
+                        title: { type: string }
+                        scheduled_at: { type: [string, "null"], format: date-time }
+                        duration_min: { type: [integer, "null"] }
+                        status: { type: string, enum: [draft, scheduled, live, ended] }
+                        is_live: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/radio/programs/{id}/end:
     post:
       tags: [radio]
