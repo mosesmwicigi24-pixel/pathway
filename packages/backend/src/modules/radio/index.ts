@@ -137,6 +137,11 @@ export function registerRadio(
   r.get("/admin/radio/programs/:id/health", auth, perm("radio", "view"), handler(async (req, res) => {
     res.json(await svc.health(idOf(req)));
   }));
+  // Aggregate reaction totals (all members, all time for the program) — the
+  // consoles' Listener interactions panel polls this alongside comments.
+  r.get("/admin/radio/programs/:id/reactions", auth, perm("radio", "view"), handler(async (req, res) => {
+    res.json(await svc.reactionCountsPublic(idOf(req)));
+  }));
   r.get("/admin/radio/programs/:id/comments", auth, perm("radio", "view"), handler(async (req, res) => {
     res.json(await svc.listCommentsAdmin(idOf(req)));
   }));

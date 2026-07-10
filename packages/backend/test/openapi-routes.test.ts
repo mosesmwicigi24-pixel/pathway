@@ -46,8 +46,13 @@ describe("OpenAPI ↔ route parity (§3.7)", () => {
     const spec = openapiPaths();
     const routeSet = new Set(routes);
 
+    // Documented paths that are deliberately NOT Express routes: WebSocket
+    // upgrade endpoints attach to the HTTP server (server.on("upgrade")), so
+    // they never appear in the router but belong in the spec.
+    const WEBSOCKET_PATHS = new Set(["/admin/radio/mic-bridge"]);
+
     const undocumented = [...routeSet].filter((p) => !spec.has(p));
-    const unimplemented = [...spec].filter((p) => !routeSet.has(p));
+    const unimplemented = [...spec].filter((p) => !routeSet.has(p) && !WEBSOCKET_PATHS.has(p));
 
     expect({ undocumented, unimplemented }).toEqual({ undocumented: [], unimplemented: [] });
   });

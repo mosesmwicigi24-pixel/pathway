@@ -293,6 +293,23 @@ describe("radio — real listener presence (heartbeat + roster)", () => {
   });
 });
 
+describe("radio — admin aggregate reaction counts", () => {
+  it("returns totals across all members for the program", async () => {
+    const prog = await createProgram({ visibility: "public" });
+    const m1 = await createUser({ congregationId: cong, role: "Student", email: "r1@dev.local" });
+    const m2 = await createUser({ congregationId: cong, role: "Student", email: "r2@dev.local" });
+    for (const [m, kind, ev] of [[m1, "heart", "e1"], [m2, "heart", "e2"], [m2, "fire", "e3"]] as const) {
+      await agent()
+        .post(`/v1/radio/programs/${prog.id}/react`)
+        .set(auth(bearer({ sub: m.user_id, role: "Student", cong })))
+        .send({ kind, client_event_id: ev });
+    }
+    const res = await agent().get(`/v1/admin/radio/programs/${prog.id}/reactions`).set(auth(adminTok));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ heart: 2, amen: 0, fire: 1 });
+  });
+});
+
 describe("radio — comments create + moderation hide", () => {
   it("member posts a comment (idempotent), admin hides it, member no longer sees it", async () => {
     const prog = await createProgram({ visibility: "public" });

@@ -4143,6 +4143,26 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/radio/programs/{id}/reactions:
+    get:
+      tags: [radio]
+      summary: Aggregate reaction totals for a program (all members) — heart/amen/fire counts for the console's interactions panel. Gated by radio:view.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Totals
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [heart, amen, fire]
+                properties:
+                  heart: { type: integer }
+                  amen: { type: integer }
+                  fire: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/radio/programs/{id}/go-live:
     post:
       tags: [radio]
