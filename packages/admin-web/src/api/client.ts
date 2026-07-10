@@ -1950,6 +1950,18 @@ export type {
 import type { MixerEqBand as EqBand, MixerLiveEqBody as EqBody } from "@nuru/shared";
 export type MixerEqBusGains = Partial<Record<EqBand, number>>;
 
+// One overlapping session returned by GET /admin/radio/schedule/conflicts.
+// Windows are [start, start+duration); sessions without a duration are assumed
+// 60 min server-side; a LIVE session's window projects from live_started_at.
+export interface RadioScheduleConflict {
+  id: string;
+  title: string;
+  scheduled_at: string;
+  duration_min: number | null;
+  status: RadioProgramStatus;
+  is_live: boolean;
+}
+
 const R = "/admin/radio";
 export const RadioApi = {
   // Programs ---------------------------------------------------------------
@@ -1966,6 +1978,20 @@ export const RadioApi = {
     api.patch<RadioProgram>(`${R}/programs/${id}`, body).then((r) => r.data),
   deleteProgram: (id: string) =>
     api.delete<{ ok: true }>(`${R}/programs/${id}`).then((r) => r.data),
+  // Schedule-overlap check for the create/edit form. ADVISORY only — saving an
+  // overlapping slot is allowed; the auto-air worker airs sessions sequentially
+  // and defers overlapping ones until the frequency frees. Pass the program id
+  // as excludeId when editing so a session never conflicts with itself.
+  scheduleConflicts: (scheduledAt: string, durationMin?: number | null, excludeId?: string) =>
+    api
+      .get<{ conflicts: RadioScheduleConflict[] }>(`${R}/schedule/conflicts`, {
+        params: {
+          scheduled_at: scheduledAt,
+          ...(durationMin != null ? { duration_min: durationMin } : {}),
+          ...(excludeId ? { exclude_id: excludeId } : {}),
+        },
+      })
+      .then((r) => r.data),
 
   // Uploaded session audio (self-hosted disk; mirrors the video upload) -----
   // Bytes go to our own /media store; returns { url, duration_sec }. The axios

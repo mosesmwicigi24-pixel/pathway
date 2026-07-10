@@ -37,6 +37,7 @@ import {
   type RadioPlaylistItem,
   type RadioLoopMode,
   type CreateRadioTrackBody,
+  type RadioScheduleConflict,
 } from "../../api/client";
 
 /* ── studio palette (Figma make) ── */
@@ -225,6 +226,18 @@ function healthWord(h: StreamHealth | null): string {
   return "Fair";
 }
 
+// Server error envelope ({error:{code,message}}) → human message, else fallback.
+// Used so a go-live 409 CONFLICT surfaces the server's message (it names the
+// session that is currently live) instead of a generic failure line.
+function apiErrMessage(e: unknown, fallback: string): string {
+  if (e instanceof AxiosError) {
+    const data = e.response?.data as { error?: { message?: string } } | undefined;
+    const msg = data?.error?.message;
+    if (typeof msg === "string" && msg.trim()) return msg;
+  }
+  return fallback;
+}
+
 // Read an audio file's duration client-side (best-effort) for upload hints.
 function probeAudioDuration(file: File): Promise<number | undefined> {
   return new Promise((resolve) => {
@@ -370,6 +383,9 @@ export function RadioStudio(): ReactElement {
   const [artworkErr, setArtworkErr] = useState<string | null>(null);
   const [uploadingAudio, setUploadingAudio] = useState(false);
   const [audioErr, setAudioErr] = useState<string | null>(null);
+  // Schedule-overlap advisory for the slot in the form (never blocks saving).
+  const [conflicts, setConflicts] = useState<RadioScheduleConflict[]>([]);
+  const conflictSeq = useRef(0);
   const formRef = useRef<HTMLDivElement>(null);
   // Attach audio / artwork to an already-created (selected) program.
   const [attachingAudio, setAttachingAudio] = useState(false);
@@ -431,6 +447,36 @@ export function RadioStudio(): ReactElement {
     window.addEventListener("rs:programs-changed", h);
     return () => window.removeEventListener("rs:programs-changed", h);
   }, [refresh]);
+
+  // ── auto-air freshness: every 30s (matching the worker's tick) nudge every
+  // panel to silently re-fetch the program list, so a session the worker flips
+  // live — or defers past an overlap — shows up without a manual reload. The
+  // event fans out to this component's refresh() plus the Sessions/library
+  // panels; it only refreshes list/selected DISPLAY state, never form state.
+  useEffect(() => {
+    const t = setInterval(() => window.dispatchEvent(new CustomEvent("rs:programs-changed")), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // ── schedule-overlap check (advisory) — whenever the form's scheduled_at is
+  // set/changed (or duration changes while scheduled), debounce ~500ms then ask
+  // the server for overlapping sessions. exclude_id = the session being edited.
+  // A sequence counter drops stale responses so rapid edits can't race.
+  useEffect(() => {
+    const seq = ++conflictSeq.current;
+    if (!form.scheduled_at) { setConflicts([]); return; }
+    const at = new Date(form.scheduled_at);
+    if (Number.isNaN(at.getTime())) { setConflicts([]); return; }
+    const dur = Number(form.duration_min);
+    const durationMin = form.duration_min && Number.isFinite(dur) && dur > 0 ? dur : null;
+    const excludeId = editingId ?? undefined;
+    const t = setTimeout(() => {
+      RadioApi.scheduleConflicts(at.toISOString(), durationMin, excludeId)
+        .then((res) => { if (conflictSeq.current === seq) setConflicts(res.conflicts); })
+        .catch(() => { if (conflictSeq.current === seq) setConflicts([]); });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [form.scheduled_at, form.duration_min, editingId]);
 
   // ── mirror the selected program's live state into the phase machine ──
   useEffect(() => {
@@ -553,8 +599,9 @@ export function RadioStudio(): ReactElement {
       setPhase("live");
       setElapsed(0);
       window.dispatchEvent(new CustomEvent("rs:programs-changed"));
-    } catch {
-      setActionErr("Could not go live. Please try again.");
+    } catch (e: unknown) {
+      // 409 CONFLICT = another session is live — the server message names it.
+      setActionErr(apiErrMessage(e, "Could not go live. Please try again."));
       setPhase("idle");
     } finally {
       setBusy(false);
@@ -1309,6 +1356,24 @@ export function RadioStudio(): ReactElement {
                   <Field label="Timezone">
                     <input className="rs-in" value={form.timezone} onChange={(e) => setForm((f) => ({ ...f, timezone: e.target.value }))} placeholder="Africa/Nairobi" style={inputStyle} />
                   </Field>
+
+                  {/* Schedule-overlap advisory (non-blocking — saving is allowed;
+                      the auto-air worker airs overlapping sessions sequentially) */}
+                  {conflicts.length > 0 && (
+                    <div className="rs-reveal rounded-xl px-3 py-2.5" style={{ gridColumn: "1 / -1", background: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.45)" }}>
+                      {conflicts.slice(0, 3).map((c) => (
+                        <div key={c.id} style={{ fontSize: 11.5, fontWeight: 600, color: "#FCD34D", lineHeight: 1.6 }}>
+                          ⚠ Overlaps «{c.title}» — {fmtSchedule(c.scheduled_at)} · {c.duration_min ?? 60} min
+                        </div>
+                      ))}
+                      {conflicts.length > 3 && (
+                        <div style={{ fontSize: 11, color: "#FCD34D", opacity: 0.8, lineHeight: 1.6 }}>…and {conflicts.length - 3} more</div>
+                      )}
+                      <div style={{ fontSize: 11, color: "rgba(253,230,138,0.75)", marginTop: 4, lineHeight: 1.5 }}>
+                        Only one session can be live; this one will start automatically when the frequency frees.
+                      </div>
+                    </div>
+                  )}
 
                   {/* Auto-air toggle (auto_go_live) */}
                   <div style={{ gridColumn: "1 / -1", marginTop: 2 }}>
@@ -2098,12 +2163,14 @@ function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: {
     if (!items || items.length === 0) { setErr("This session has no tracks to play."); return; }
     setErr(null);
     // Server-authoritative go-live (best effort — preview runs regardless).
+    // A 409 CONFLICT (another session already live) surfaces the server message,
+    // which names the live session, in the panel's inline error.
     RadioApi.goLive(program.id)
       .then((updated) => {
         setSessions((s) => (s ? s.map((p) => (p.id === updated.id ? updated : p)) : s));
         window.dispatchEvent(new CustomEvent("rs:programs-changed"));
       })
-      .catch(() => {});
+      .catch((e: unknown) => setErr(apiErrMessage(e, "Could not go live. Please try again.")));
     playAt(program.id, 0);
   }, [playlists, playAt]);
 
