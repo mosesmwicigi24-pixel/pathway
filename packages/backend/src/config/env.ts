@@ -128,6 +128,10 @@ const EnvSchema = z.object({
   // files live — jingle pushes must send host paths, not container paths. ---
   LIQUIDSOAP_HOST: z.string().optional(),
   LIQUIDSOAP_PORT: z.string().default("1234"),
+  // Harbor = the live mix's mic input (Icecast SOURCE protocol). The web mic
+  // bridge dials LIQUIDSOAP_HOST:HARBOR_PORT and pushes browser audio to MOUNT.
+  LIQUIDSOAP_HARBOR_PORT: z.string().default("8005"),
+  LIQUIDSOAP_HARBOR_MOUNT: z.string().default("/mic"),
   LIQUIDSOAP_MEDIA_DIR: z.string().default("/var/www/pathway-media"),
 });
 

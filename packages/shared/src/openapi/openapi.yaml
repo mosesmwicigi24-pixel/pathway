@@ -4158,6 +4158,17 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: Another session is already live (details carry live_program_id + live_program_title) }
+  /admin/radio/mic-bridge:
+    get:
+      tags: [radio]
+      summary: "WebSocket upgrade (not plain HTTP): browser mic broadcasting. The console captures the mic (getUserMedia → MediaRecorder) and streams encoded chunks (binary frames) here; the server performs the Icecast SOURCE handshake against the liquidsoap harbor /mic input and pipes bytes through. Auth: ?token=<access JWT> (WS can't set headers) + radio:edit. ?ct= declares the encoding (audio/webm default; audio/mp4 for Safari). First server frame after the harbor accepts is {ok:true,mount}. Close codes: 4001 bad token · 4003 no permission · 4004 not configured · 4008 engine unreachable/no live session · 4409 mic input busy (someone already on mic)."
+      security: []
+      parameters:
+        - { name: token, in: query, required: true, schema: { type: string }, description: Access JWT (header auth is unavailable on WebSocket upgrades) }
+        - { name: ct, in: query, required: false, schema: { type: string, enum: [audio/webm, audio/mp4, audio/aac, audio/mpeg, audio/ogg] } }
+      responses:
+        "101": { description: Switching Protocols — WebSocket session established }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /admin/radio/schedule/conflicts:
     get:
       tags: [radio]

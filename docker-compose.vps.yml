@@ -36,6 +36,8 @@ services:
       # Live-mix engine (liquidsoap on the host) — mixer/live/* endpoints.
       LIQUIDSOAP_HOST: ${LIQUIDSOAP_HOST:-}
       LIQUIDSOAP_PORT: ${LIQUIDSOAP_PORT:-1234}
+      LIQUIDSOAP_HARBOR_PORT: ${LIQUIDSOAP_HARBOR_PORT:-8005}
+      LIQUIDSOAP_HARBOR_MOUNT: ${LIQUIDSOAP_HARBOR_MOUNT:-/mic}
       LIQUIDSOAP_MEDIA_DIR: ${LIQUIDSOAP_MEDIA_DIR:-/var/www/pathway-media}
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}

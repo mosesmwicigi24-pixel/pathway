@@ -7,6 +7,7 @@ import { loadEnv } from "./config/env.js";
 import { createPools, closePools } from "./db/pool.js";
 import { createApp } from "./http/app.js";
 import { buildRedis } from "./redis.js";
+import { attachMicBridge } from "./modules/radio/micbridge.js";
 
 function main(): void {
   const env = loadEnv();
@@ -18,6 +19,8 @@ function main(): void {
   const server = app.listen(env.PORT, () => {
     log.info({ port: env.PORT, region: env.AWS_REGION, env: env.NODE_ENV }, "nuru backend up");
   });
+  // Web mic broadcasting: WebSocket → liquidsoap harbor bridge (radio module).
+  attachMicBridge(server, { env, db: db.replica, log });
 
   const shutdown = (signal: string): void => {
     log.info({ signal }, "shutting down");
