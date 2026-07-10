@@ -487,7 +487,16 @@ function UsherCard({
     setBusy(true);
     setErr(null);
     try {
-      await CurriculumApi.usherLevel(studentId, note);
+      // /reviews/levels/:id/usher keys on the ADVANCEMENT id, not the member —
+      // resolve it from the awaiting-review queue for this student first.
+      const reviews = await CurriculumApi.levelReviews();
+      const row = reviews.find((r) => r.user_id === studentId && r.level_number === awaitingLevel)
+        ?? reviews.find((r) => r.user_id === studentId);
+      if (!row) {
+        setErr("No pending advancement found for this disciple — they may already have been ushered.");
+        return;
+      }
+      await CurriculumApi.usherLevel(row.id, note);
       onDone(awaitingLevel);
     } catch (e) {
       setErr(errorMessage(e, "Could not usher this disciple. Please try again."));
