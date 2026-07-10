@@ -165,24 +165,27 @@ export class RadioService {
 
   static readonly CreateProgram = z
     .object({
+      // Clearable optionals are .nullable(): the consoles PATCH explicit null
+      // to clear a field (e.g. detach audio, unset the schedule) — undefined
+      // means "leave unchanged", null means "clear".
       title: z.string().min(1).max(300),
-      description: z.string().max(4000).optional(),
+      description: z.string().max(4000).nullable().optional(),
       category: z.enum(["Sermon", "Worship", "Prayer", "Bible Study", "Conference"]),
-      speaker: z.string().max(200).optional(),
-      location: z.string().max(200).optional(),
-      artwork_url: z.string().max(2000).optional(),
+      speaker: z.string().max(200).nullable().optional(),
+      location: z.string().max(200).nullable().optional(),
+      artwork_url: z.string().max(2000).nullable().optional(),
       tags: z.array(z.string().max(60)).max(30).optional(),
       visibility: z.enum(["public", "members", "private"]).optional(),
-      scheduled_at: z.string().datetime().optional(),
-      duration_min: z.number().int().positive().max(1440).optional(),
-      repeat: z.string().max(30).optional(),
+      scheduled_at: z.string().datetime().nullable().optional(),
+      duration_min: z.number().int().positive().max(1440).nullable().optional(),
+      repeat: z.string().max(30).nullable().optional(),
       timezone: z.string().max(60).optional(),
       loop_mode: z.enum(["none", "loop_all", "repeat_one"]).optional(),
-      audio_url: z.string().max(2000).optional(),
-      audio_duration_sec: z.number().int().positive().optional(),
+      audio_url: z.string().max(2000).nullable().optional(),
+      audio_duration_sec: z.number().int().positive().nullable().optional(),
       auto_go_live: z.boolean().optional(),
       record_broadcast: z.boolean().optional(),
-      record_target: z.enum(["cloud", "local", "both"]).optional(),
+      record_target: z.enum(["cloud", "local", "both"]).nullable().optional(),
     })
     .strict();
 
@@ -405,7 +408,20 @@ export class RadioService {
     if (input.artwork_url !== undefined) set("artwork_url", input.artwork_url);
     if (input.tags !== undefined) set("tags", input.tags);
     if (input.visibility !== undefined) set("visibility", input.visibility);
-    if (input.scheduled_at !== undefined) set("scheduled_at", input.scheduled_at);
+    if (input.scheduled_at !== undefined) {
+      set("scheduled_at", input.scheduled_at);
+      // Keep status in sync with the schedule unless the caller sets it
+      // explicitly: scheduling a draft/ended program arms it for auto-air
+      // (the sweep requires status='scheduled'); clearing the schedule
+      // disarms a scheduled one. Live programs are never touched.
+      if (input.status === undefined) {
+        sets.push(
+          input.scheduled_at === null
+            ? `status = CASE WHEN status = 'scheduled' THEN 'draft' ELSE status END`
+            : `status = CASE WHEN status IN ('draft','ended') THEN 'scheduled' ELSE status END`,
+        );
+      }
+    }
     if (input.duration_min !== undefined) set("duration_min", input.duration_min);
     if (input.repeat !== undefined) set("repeat", input.repeat);
     if (input.timezone !== undefined) set("timezone", input.timezone);

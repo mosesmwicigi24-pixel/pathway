@@ -403,6 +403,48 @@ describe("radio — uploaded session audio + auto-air (ADDENDUM)", () => {
   });
 });
 
+describe("radio — edit with explicit nulls + schedule/status sync", () => {
+  it("PATCH accepts null to clear optional fields (the consoles' clear semantics)", async () => {
+    const prog = await createProgram({
+      description: "temp", speaker: "Someone",
+      audio_url: "http://localhost:8080/media/x.mp3", audio_duration_sec: 60,
+    });
+    const res = await agent()
+      .patch(`/v1/admin/radio/programs/${prog.id}`)
+      .set(auth(adminTok))
+      .send({
+        title: "Edited Title",
+        description: null, speaker: null, location: null, artwork_url: null,
+        audio_url: null, audio_duration_sec: null, record_target: null,
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.title).toBe("Edited Title");
+    expect(res.body.description).toBeNull();
+    expect(res.body.audio_url).toBeNull();
+    expect(res.body.audio_duration_sec).toBeNull();
+  });
+
+  it("scheduling a draft via PATCH arms it (status → scheduled); clearing disarms (→ draft)", async () => {
+    const prog = await createProgram(); // draft
+    const when = new Date(Date.now() + 3_600_000).toISOString();
+
+    const armed = await agent()
+      .patch(`/v1/admin/radio/programs/${prog.id}`)
+      .set(auth(adminTok))
+      .send({ scheduled_at: when });
+    expect(armed.status).toBe(200);
+    expect(armed.body.status).toBe("scheduled"); // auto-air sweep requires this
+
+    const disarmed = await agent()
+      .patch(`/v1/admin/radio/programs/${prog.id}`)
+      .set(auth(adminTok))
+      .send({ scheduled_at: null });
+    expect(disarmed.status).toBe(200);
+    expect(disarmed.body.status).toBe("draft");
+    expect(disarmed.body.scheduled_at).toBeNull();
+  });
+});
+
 describe("radio — single live session + schedule overlap (one frequency)", () => {
   it("go-live 409s while another session is on air (details name the live one)", async () => {
     const first = await createProgram({ title: "Morning Devotion" });
