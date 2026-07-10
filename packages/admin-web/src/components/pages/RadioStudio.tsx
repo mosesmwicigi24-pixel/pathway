@@ -9,10 +9,13 @@
 // comments (+ hide moderation), the audio library (tracks CRUD + upload), session
 // playlists (add/remove/reorder/loop via PATCH), scheduled playout (PATCH
 // scheduled_at/repeat), and the quick broadcast settings (PATCH visibility /
-// record_broadcast). LOCAL (client-only hardware/UI): audio-source select, mic
-// controls, gain, meters, waveform, live-listener roster, device manager,
-// emergency controls, reactions drift, playlist live preview (with Media
-// Session lock-screen metadata/controls so audio survives screen-lock).
+// record_broadcast). ALSO REAL (browser hardware ⇄ server): the Listen panel
+// (live mount playback — broadcast / on-air monitor / cue, derived from
+// hls_url), the audio-source device picker + level meters (getUserMedia → Web
+// Audio), and GO ON MIC (MediaRecorder → /v1/admin/radio/mic-bridge WebSocket
+// → the on-air harbor). LOCAL (client-only UI): waveform decoration, device
+// manager, emergency buttons, reactions drift, playlist live preview (with
+// Media Session lock-screen metadata/controls so audio survives screen-lock).
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
   Activity, ArrowDown, ArrowUp, Bell, CalendarClock, Check, ChevronDown, Copy, Cpu, Disc3, Flame, Gauge,
@@ -26,6 +29,7 @@ import {
   RadioApi,
   OpsApi,
   uploadToCloudinary,
+  getAccessToken,
   type RadioProgram,
   type RadioComment,
   type RadioListener,
@@ -66,16 +70,6 @@ type Phase = "idle" | "countdown" | "live" | "paused";
 
 const CATEGORIES = ["Sermon", "Worship", "Prayer", "Bible Study", "Conference"] as const;
 type Category = (typeof CATEGORIES)[number];
-
-const AUDIO_SOURCES = [
-  { key: "internal", label: "Internal Microphone", icon: Mic, status: "Connected", signal: 4 },
-  { key: "usb", label: "USB Microphone", icon: Mic, status: "Connected", signal: 5 },
-  { key: "mixer", label: "Mixer", icon: SlidersHorizontal, status: "Disconnected", signal: 0 },
-  { key: "interface", label: "Audio Interface", icon: Headphones, status: "Connected", signal: 3 },
-  { key: "phone", label: "Another Phone", icon: Smartphone, status: "Standby", signal: 2 },
-  { key: "computer", label: "Another Computer", icon: Laptop, status: "Standby", signal: 2 },
-  { key: "tablet", label: "Tablet", icon: Tablet, status: "Standby", signal: 1 },
-] as const;
 
 /* Track-kind chrome exactly as the make: MUSIC green, PREACHING gold, AUDIO blue. */
 const KIND_META: Record<RadioTrackKind, { label: string; color: string }> = {
@@ -359,15 +353,7 @@ export function RadioStudio(): ReactElement {
   const [count, setCount] = useState(3);
   const [elapsed, setElapsed] = useState(0);
 
-  // ── local hardware / UI state ──
-  const [muted, setMuted] = useState(false);
-  const [monitor, setMonitor] = useState(true);
-  const [noise, setNoise] = useState(true);
-  const [echo, setEcho] = useState(true);
-  const [compressor, setCompressor] = useState(true);
-  const [limiter, setLimiter] = useState(false);
-  const [gain, setGain] = useState(62);
-  const [source, setSource] = useState("usb");
+  // ── local UI state (mic/meters hardware is REAL — see useMicEngine below) ──
   const [connectOpen, setConnectOpen] = useState(false);
   const [killArmed, setKillArmed] = useState(false);
   const [reactions, setReactions] = useState({ heart: 328, amen: 512, fire: 174 });
@@ -401,10 +387,13 @@ export function RadioStudio(): ReactElement {
   const selected = programs?.find((p) => p.id === selectedId) ?? null;
   const live = phase === "live";
 
-  // waveform + meters (client-simulated hardware)
+  // REAL mic engine — device picker, capture graph, meters, mic-bridge WS.
+  // The bridge's harbor exists only while a session is live on the frequency.
+  const anyLive = programs?.some((p) => p.is_live) ?? false;
+  const mic = useMicEngine(anyLive);
+
+  // waveform (client-simulated decoration; the L/R meters are REAL — useMicEngine)
   const [bars, setBars] = useState<number[]>(() => Array.from({ length: 56 }, () => 0.08));
-  const [meterL, setMeterL] = useState(0.1);
-  const [meterR, setMeterR] = useState(0.1);
 
   // ── load programs ──
   const load = useCallback(() => {
@@ -552,21 +541,18 @@ export function RadioStudio(): ReactElement {
     return () => clearInterval(t);
   }, [phase]);
 
-  // ── animated waveform + meters (local) ──
+  // ── animated waveform (decorative; reacts to the real mute/boost) ──
   useEffect(() => {
-    const active = phase === "live" && !muted;
+    const active = phase === "live" && !mic.muted;
     const int = setInterval(() => {
       setBars((prev) => prev.map((_, i) => {
         if (!active) return 0.05 + Math.random() * 0.04;
         const center = 1 - Math.abs(i - prev.length / 2) / (prev.length / 2);
-        return Math.min(1, 0.12 + Math.random() * 0.9 * (0.4 + center * 0.6) * (gain / 100 + 0.4));
+        return Math.min(1, 0.12 + Math.random() * 0.9 * (0.4 + center * 0.6) * (mic.gainPct / 100 + 0.4));
       }));
-      const base = active ? 0.35 + (gain / 100) * 0.5 : 0.06;
-      setMeterL(Math.min(1, base + Math.random() * (active ? 0.35 : 0.03)));
-      setMeterR(Math.min(1, base + Math.random() * (active ? 0.35 : 0.03)));
     }, 110);
     return () => clearInterval(int);
-  }, [phase, muted, gain]);
+  }, [phase, mic.muted, mic.gainPct]);
 
   // ── disarm the emergency-kill confirm once the broadcast is no longer live ──
   useEffect(() => {
@@ -1128,7 +1114,7 @@ export function RadioStudio(): ReactElement {
                 <div className="flex items-center justify-center gap-[3px]" style={{ height: 120, padding: "6px 2px" }}>
                   {bars.map((b, i) => {
                     const hue = b > 0.85 ? RED : b > 0.6 ? GOLD : GOLD_DEEP;
-                    return <div key={i} style={{ flex: 1, height: `${Math.max(4, b * 100)}%`, minWidth: 2, borderRadius: 3, background: `linear-gradient(180deg, ${hue}, ${hue}55)`, transition: "height .11s linear", opacity: live && !muted ? 1 : 0.4 }} />;
+                    return <div key={i} style={{ flex: 1, height: `${Math.max(4, b * 100)}%`, minWidth: 2, borderRadius: 3, background: `linear-gradient(180deg, ${hue}, ${hue}55)`, transition: "height .11s linear", opacity: live && !mic.muted ? 1 : 0.4 }} />;
                   })}
                 </div>
               </Panel>
@@ -1166,57 +1152,100 @@ export function RadioStudio(): ReactElement {
                 )}
               </Panel>
 
-              {/* Audio source + meters (local hardware) */}
+              {/* Listen — REAL live mount playback (broadcast / monitor / cue) */}
+              <ListenPanel program={selected} micOnAir={mic.onAir} />
+
+              {/* Audio source + meters — REAL hardware (getUserMedia → Web Audio) */}
               <div className="grid gap-4 sm:gap-5 grid-cols-1 sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
                 <Panel>
-                  <SectionHead icon={Mic} title="Audio source" />
-                  <div className="flex flex-col gap-1.5" style={{ maxHeight: 214, overflowY: "auto" }}>
-                    {AUDIO_SOURCES.map((s) => {
-                      const Icon = s.icon;
-                      const sel = source === s.key;
-                      const connected = s.status === "Connected";
-                      return (
-                        <button key={s.key} onClick={() => setSource(s.key)} className="rs-btn flex items-center gap-3 rounded-xl px-3 py-2.5 text-left" style={{ background: sel ? "rgba(230,198,110,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${sel ? GOLD + "66" : PANEL_BORDER}` }}>
-                          <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 32, height: 32, background: sel ? GOLD : "rgba(255,255,255,0.06)", color: sel ? "#0A1120" : DIM }}><Icon size={15} /></span>
-                          <span style={{ flex: 1, minWidth: 0 }}>
-                            <span className="block truncate" style={{ fontSize: 12.5, fontWeight: 600 }}>{s.label}</span>
-                            <span style={{ fontSize: 10.5, color: connected ? GREEN : s.status === "Disconnected" ? "#FCA5A5" : DIMMER }}>{s.status}</span>
-                          </span>
-                          <span className="flex items-end gap-0.5 shrink-0" style={{ height: 16 }}>
-                            {[1, 2, 3, 4, 5].map((n) => (
-                              <span key={n} style={{ width: 3, height: `${n * 3 + 2}px`, borderRadius: 1, background: n <= s.signal ? (sel ? GOLD : GREEN) : "rgba(255,255,255,0.12)" }} />
-                            ))}
-                          </span>
+                  <SectionHead icon={Mic} title="Audio source" hint={mic.onAir ? "Live capture" : mic.ready ? "Monitoring" : "Off"} />
+                  {!mic.supported ? (
+                    <div style={{ fontSize: 12, color: DIM, lineHeight: 1.55, padding: "6px 0" }}>
+                      This browser can't capture audio — use a current Chrome, Edge or Safari over HTTPS.
+                    </div>
+                  ) : (
+                    <>
+                      {!mic.ready && (
+                        <button onClick={mic.enable} className="rs-btn w-full flex items-center justify-center gap-2 rounded-xl mb-3" style={{ height: 40, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px dashed ${GOLD}66`, fontSize: 12.5, fontWeight: 700 }}>
+                          <Mic size={15} /> Enable microphone
                         </button>
-                      );
-                    })}
-                  </div>
+                      )}
+                      <select
+                        value={mic.deviceId ?? ""}
+                        onChange={(e) => mic.pickDevice(e.target.value || null)}
+                        aria-label="Microphone device"
+                        style={inputStyle}
+                      >
+                        <option value="" style={optStyle}>System default microphone</option>
+                        {mic.devices.map((d, i) => (
+                          <option key={d.deviceId} value={d.deviceId} style={optStyle}>{d.label || `Microphone ${i + 1}`}</option>
+                        ))}
+                      </select>
+                      <div style={{ fontSize: 11, color: DIM, marginTop: 8, lineHeight: 1.5 }}>
+                        Any mic or audio interface your computer recognizes appears here — including DAWs routed through a loopback device (BlackHole, Loopback, VB-Cable). New devices appear the moment the OS sees them.
+                      </div>
+                    </>
+                  )}
                 </Panel>
 
                 <Panel>
-                  <SectionHead icon={Activity} title="Audio meters" />
+                  <SectionHead icon={Activity} title="Audio meters" hint={mic.ready ? "Live input" : "Idle"} />
                   <div className="flex items-end justify-center gap-6" style={{ height: 200 }}>
-                    <Meter label="L" level={muted ? 0.02 : meterL} />
-                    <Meter label="R" level={muted ? 0.02 : meterR} />
+                    <Meter label="L" level={Math.max(0.02, mic.meter)} />
+                    <Meter label="R" level={Math.max(0.02, mic.meter)} />
                   </div>
                 </Panel>
               </div>
 
-              {/* Microphone controls (local) */}
+              {/* Microphone — REAL capture → mic-bridge WebSocket → on-air harbor */}
               <Panel>
-                <SectionHead icon={SlidersHorizontal} title="Microphone controls" />
-                <div className="flex flex-wrap gap-2 mb-4">
-                  <Toggle active={muted} onClick={() => setMuted((v) => !v)} icon={muted ? MicOff : Mic} label={muted ? "Muted" : "Mute"} danger={muted} />
-                  <Toggle active={monitor} onClick={() => setMonitor((v) => !v)} icon={Headphones} label="Monitor" />
-                  <Toggle active={noise} onClick={() => setNoise((v) => !v)} icon={Activity} label="Noise Suppression" />
-                  <Toggle active={echo} onClick={() => setEcho((v) => !v)} icon={Volume2} label="Echo Cancellation" />
-                  <Toggle active={compressor} onClick={() => setCompressor((v) => !v)} icon={SlidersHorizontal} label="Compressor" />
-                  <Toggle active={limiter} onClick={() => setLimiter((v) => !v)} icon={Gauge} label="Limiter" />
+                <div className="flex items-center justify-between mb-3.5 flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <SlidersHorizontal size={15} style={{ color: GOLD }} />
+                    <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: "0.01em" }}>Microphone</span>
+                  </div>
+                  {mic.onAir ? (
+                    <span className="inline-flex items-center gap-2 rounded-full px-3 py-1" style={{ background: "rgba(239,68,68,0.15)", border: `1px solid ${RED}66`, color: "#FCA5A5", fontSize: 11, fontWeight: 800, letterSpacing: "0.06em" }}>
+                      <span className="rs-live-dot rounded-full" style={{ width: 7, height: 7, background: RED }} /> ON AIR
+                      <span className="rs-tnum" style={{ fontFamily: MONO, fontWeight: 700 }}>{fmtDuration(mic.elapsed)}</span>
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: 11, color: DIM }}>{mic.connecting ? "Connecting…" : "Off mic"}</span>
+                  )}
                 </div>
+
+                {mic.micErr && <div className="rs-reveal" style={{ fontSize: 11.5, color: "#FCA5A5", marginBottom: 10 }}>{mic.micErr}</div>}
+
+                <div className="flex items-center gap-3 mb-4 flex-wrap">
+                  {mic.onAir || mic.connecting ? (
+                    <button onClick={mic.offMic} className="rs-btn flex items-center gap-2 rounded-2xl px-6" style={{ height: 48, background: `linear-gradient(135deg, ${RED}, #B91C1C)`, color: "#fff", fontSize: 14, fontWeight: 800, border: "none", boxShadow: "0 12px 28px -12px rgba(239,68,68,0.7)" }}>
+                      <MicOff size={17} /> Off mic
+                    </button>
+                  ) : (
+                    <button onClick={mic.goOnMic} disabled={!selected?.is_live || !mic.supported} className="rs-btn flex items-center gap-2 rounded-2xl px-6" style={{ height: 48, background: `linear-gradient(135deg, ${GREEN}, #15803D)`, color: "#fff", fontSize: 14, fontWeight: 800, border: "none", opacity: selected?.is_live && mic.supported ? 1 : 0.45, cursor: selected?.is_live && mic.supported ? "pointer" : "default" }}>
+                      <Mic size={17} /> Go on mic
+                    </button>
+                  )}
+                  {!selected?.is_live && <span style={{ fontSize: 11, color: DIM }}>Take a session live to go on mic.</span>}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 mb-4">
+                  <Toggle active={mic.muted} onClick={mic.toggleMute} icon={mic.muted ? MicOff : Mic} label={mic.muted ? "Muted" : "Mute"} danger={mic.muted} />
+                  <div className="flex flex-wrap gap-2" style={mic.onAir || mic.connecting ? { opacity: 0.45, pointerEvents: "none" } : undefined}>
+                    <Toggle active={mic.noise} onClick={() => mic.toggleFlag("noise")} icon={Activity} label="Noise Suppression" />
+                    <Toggle active={mic.echo} onClick={() => mic.toggleFlag("echo")} icon={Volume2} label="Echo Cancellation" />
+                    <Toggle active={mic.agc} onClick={() => mic.toggleFlag("agc")} icon={Gauge} label="Auto Gain" />
+                  </div>
+                  {(mic.onAir || mic.connecting) && <span style={{ fontSize: 10.5, color: DIMMER }}>Input processing locks while on air.</span>}
+                </div>
+
                 <div className="flex items-center gap-3">
-                  <span style={{ fontSize: 11, color: DIM, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, width: 44 }}>Gain</span>
-                  <input type="range" min={0} max={100} value={gain} onChange={(e) => setGain(Number(e.target.value))} style={{ flex: 1, accentColor: GOLD_DEEP }} />
-                  <span className="rs-tnum" style={{ fontFamily: MONO, fontSize: 13, color: GOLD, width: 42, textAlign: "right" }}>{gain}%</span>
+                  <span style={{ fontSize: 11, color: DIM, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700, width: 44 }}>Boost</span>
+                  <input type="range" min={0} max={100} value={mic.gainPct} onChange={(e) => mic.changeGain(Number(e.target.value))} aria-label="Mic boost" style={{ flex: 1, accentColor: GOLD_DEEP }} />
+                  <span className="rs-tnum" style={{ fontFamily: MONO, fontSize: 13, color: GOLD, width: 64, textAlign: "right" }}>+{(20 * Math.log10(boostToGain(mic.gainPct))).toFixed(1)} dB</span>
+                </div>
+                <div style={{ fontSize: 11, color: DIM, marginTop: 10, lineHeight: 1.5 }}>
+                  Compression and limiting run in the server-side mixer — your mic is sent clean.
                 </div>
               </Panel>
 
@@ -2348,6 +2377,673 @@ function AddTrackSelect({ tracks, onPick }: { tracks: RadioTrack[]; onPick: (tra
       <option value="" style={optStyle}>+ Add track to this session…</option>
       {tracks.map((t) => <option key={t.id} value={t.id} style={optStyle}>{KIND_META[t.kind].label} · {t.title}</option>)}
     </select>
+  );
+}
+
+/* ═══════════ REAL live listen + mic capture (Web Audio / mic bridge) ═══════════ */
+
+// Persisted studio hardware/listen preferences.
+const MIC_DEVICE_KEY = "rs.mic.device";
+const MIC_GAIN_KEY = "rs.mic.gain";
+const LISTEN_VOL_KEY = "rs.listen.volume";
+
+function lsRead(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function lsReadNum(key: string, fallback: number): number {
+  const raw = lsRead(key);
+  if (raw == null) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+function lsWrite(key: string, value: string | null): void {
+  try {
+    if (value == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch { /* storage unavailable (private mode) */ }
+}
+
+// 0–100 boost display → 1.0–8.0 linear gain (≈ 0 to +18 dB).
+function boostToGain(pct: number): number {
+  return 1 + (Math.min(100, Math.max(0, pct)) / 100) * 7;
+}
+
+// Friendly messages for the mic bridge's application close codes.
+const MIC_CLOSE_MSG: Record<number, string> = {
+  4001: "Session expired — reload the page and sign in again.",
+  4003: "You don't have permission to use the studio mic.",
+  4004: "The mic bridge isn't configured on the server.",
+  4008: "No live session — take one live first.",
+  4409: "Someone is already on mic (maybe the iPad).",
+};
+
+type MicPhase = "idle" | "ready" | "connecting" | "live";
+
+interface MicEngine {
+  supported: boolean;
+  devices: MediaDeviceInfo[];
+  deviceId: string | null;
+  pickDevice: (id: string | null) => void;
+  ready: boolean;
+  connecting: boolean;
+  onAir: boolean;
+  elapsed: number;
+  meter: number;
+  muted: boolean;
+  toggleMute: () => void;
+  noise: boolean;
+  echo: boolean;
+  agc: boolean;
+  toggleFlag: (k: "noise" | "echo" | "agc") => void;
+  gainPct: number;
+  changeGain: (pct: number) => void;
+  micErr: string | null;
+  enable: () => void;
+  goOnMic: () => void;
+  offMic: () => void;
+}
+
+// Real microphone engine: device enumeration + getUserMedia capture with
+// broadcast constraints, a Web Audio boost/meter graph, and the MediaRecorder →
+// mic-bridge WebSocket transport. The capture path is
+//   source → gain (boost) → analyser (meter) → MediaStreamDestination,
+// and the recorder records the DESTINATION stream — so boost applies live and
+// device hot-swaps never interrupt an on-air recorder.
+function useMicEngine(canGoLive: boolean): MicEngine {
+  const supported =
+    typeof navigator !== "undefined" &&
+    !!navigator.mediaDevices &&
+    typeof MediaRecorder !== "undefined" &&
+    typeof AudioContext !== "undefined";
+
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState<string | null>(() => lsRead(MIC_DEVICE_KEY));
+  const [phase, setPhase] = useState<MicPhase>("idle");
+  const [muted, setMuted] = useState(false);
+  // Broadcast default: all input processing OFF — the raw signal goes out.
+  const [noise, setNoise] = useState(false);
+  const [echo, setEcho] = useState(false);
+  const [agc, setAgc] = useState(false);
+  const [gainPct, setGainPct] = useState<number>(() => Math.min(100, Math.max(0, lsReadNum(MIC_GAIN_KEY, 30))));
+  const [meter, setMeter] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+  const [micErr, setMicErr] = useState<string | null>(null);
+
+  // Refs mirror whatever the stable callbacks need (no stale closures).
+  const phaseRef = useRef<MicPhase>("idle");
+  const deviceIdRef = useRef<string | null>(deviceId);
+  const flagsRef = useRef({ noise: false, echo: false, agc: false });
+  const gainPctRef = useRef(gainPct);
+  const mutedRef = useRef(false);
+
+  // Web Audio graph.
+  const streamRef = useRef<MediaStream | null>(null);
+  const ctxRef = useRef<AudioContext | null>(null);
+  const srcRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const destRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const rafRef = useRef(0);
+
+  // Transport.
+  const wsRef = useRef<WebSocket | null>(null);
+  const recRef = useRef<MediaRecorder | null>(null);
+  const queueRef = useRef<ArrayBuffer[]>([]);
+  const ackedRef = useRef(false);
+  const stoppingRef = useRef(false);
+  const reconnectedRef = useRef(false);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectRef = useRef<(() => void) | null>(null);
+  const acquireRef = useRef<((id: string | null, n: boolean, e: boolean, a: boolean) => Promise<boolean>) | null>(null);
+
+  const setPhaseBoth = useCallback((p: MicPhase): void => {
+    phaseRef.current = p;
+    setPhase(p);
+  }, []);
+
+  // ~30 fps RMS meter off the analyser (post-boost; keeps running while muted).
+  const startMeter = useCallback((): void => {
+    const analyser = analyserRef.current;
+    if (!analyser) return;
+    cancelAnimationFrame(rafRef.current);
+    const data = new Uint8Array(analyser.fftSize);
+    let last = 0;
+    const tick = (t: number): void => {
+      rafRef.current = requestAnimationFrame(tick);
+      if (t - last < 33) return;
+      last = t;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = ((data[i] ?? 128) - 128) / 128;
+        sum += v * v;
+      }
+      setMeter(Math.min(1, Math.sqrt(sum / data.length) * 2.8));
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  // Acquire (or re-acquire) the input stream with explicit constraints and plug
+  // it into the persistent gain→analyser→destination tail.
+  const acquire = useCallback(async (id: string | null, n: boolean, e: boolean, a: boolean): Promise<boolean> => {
+    if (!supported) return false;
+    setMicErr(null);
+    try {
+      const base: MediaTrackConstraints = {
+        echoCancellation: e,
+        noiseSuppression: n,
+        autoGainControl: a,
+        channelCount: 1,
+        sampleRate: 48000,
+      };
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: id ? { ...base, deviceId: { exact: id } } : base });
+      } catch (err) {
+        if (!id) throw err;
+        // Chosen device vanished — auto-fallback to the system default.
+        stream = await navigator.mediaDevices.getUserMedia({ audio: base });
+        deviceIdRef.current = null;
+        setDeviceId(null);
+        lsWrite(MIC_DEVICE_KEY, null);
+      }
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = stream;
+      let ctx = ctxRef.current;
+      if (!ctx) {
+        ctx = new AudioContext();
+        ctxRef.current = ctx;
+        const g = ctx.createGain();
+        const an = ctx.createAnalyser();
+        an.fftSize = 1024;
+        an.smoothingTimeConstant = 0.5;
+        const dest = ctx.createMediaStreamDestination();
+        g.connect(an);
+        if (!mutedRef.current) an.connect(dest);
+        gainNodeRef.current = g;
+        analyserRef.current = an;
+        destRef.current = dest;
+      }
+      void ctx.resume().catch(() => {});
+      srcRef.current?.disconnect();
+      const src = ctx.createMediaStreamSource(stream);
+      src.connect(gainNodeRef.current!);
+      srcRef.current = src;
+      gainNodeRef.current!.gain.value = boostToGain(gainPctRef.current);
+      // If the device is unplugged mid-run, fall back to the default input
+      // without dropping the destination stream (the recorder keeps rolling).
+      const track = stream.getAudioTracks()[0];
+      track?.addEventListener("ended", () => {
+        if (stoppingRef.current || streamRef.current !== stream) return;
+        const f = flagsRef.current;
+        void acquireRef.current?.(null, f.noise, f.echo, f.agc);
+      });
+      startMeter();
+      if (phaseRef.current === "idle") setPhaseBoth("ready");
+      return true;
+    } catch {
+      setMicErr("Could not access the microphone — check the browser's mic permission.");
+      return false;
+    }
+  }, [supported, startMeter, setPhaseBoth]);
+  useEffect(() => { acquireRef.current = acquire; });
+
+  const refreshDevices = useCallback(async (): Promise<void> => {
+    if (!supported) return;
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const inputs = all.filter((d) => d.kind === "audioinput" && d.deviceId);
+      setDevices(inputs);
+      const cur = deviceIdRef.current;
+      if (cur && !inputs.some((d) => d.deviceId === cur)) {
+        deviceIdRef.current = null;
+        setDeviceId(null);
+        lsWrite(MIC_DEVICE_KEY, null);
+      }
+    } catch { /* enumeration unavailable */ }
+  }, [supported]);
+
+  // Plug-and-play: re-enumerate the moment the OS sees a device come or go.
+  useEffect(() => {
+    void refreshDevices();
+    if (!supported) return;
+    const h = (): void => { void refreshDevices(); };
+    navigator.mediaDevices.addEventListener("devicechange", h);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", h);
+  }, [refreshDevices, supported]);
+
+  // First user gesture: unlock permission + device labels, start monitoring.
+  const enable = useCallback((): void => {
+    const f = flagsRef.current;
+    void acquire(deviceIdRef.current, f.noise, f.echo, f.agc).then((ok) => {
+      if (ok) void refreshDevices(); // labels are only revealed post-permission
+    });
+  }, [acquire, refreshDevices]);
+
+  const pickDevice = useCallback((id: string | null): void => {
+    deviceIdRef.current = id;
+    setDeviceId(id);
+    lsWrite(MIC_DEVICE_KEY, id);
+    if (phaseRef.current !== "idle") {
+      const f = flagsRef.current;
+      void acquire(id, f.noise, f.echo, f.agc); // hot-swap — safe even on air
+    }
+  }, [acquire]);
+
+  // Noise/echo/AGC need a re-acquire to apply; they lock while on air.
+  const toggleFlag = useCallback((k: "noise" | "echo" | "agc"): void => {
+    if (phaseRef.current === "live" || phaseRef.current === "connecting") return;
+    const f = { ...flagsRef.current, [k]: !flagsRef.current[k] };
+    flagsRef.current = f;
+    setNoise(f.noise);
+    setEcho(f.echo);
+    setAgc(f.agc);
+    if (phaseRef.current === "ready") void acquire(deviceIdRef.current, f.noise, f.echo, f.agc);
+  }, [acquire]);
+
+  // Mute detaches the analyser→destination hop: the broadcast goes silent but
+  // the meter (fed upstream of the destination) keeps showing the live input.
+  const toggleMute = useCallback((): void => {
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setMuted(next);
+    const an = analyserRef.current;
+    const dest = destRef.current;
+    if (!an || !dest) return;
+    try {
+      if (next) an.disconnect(dest);
+      else an.connect(dest);
+    } catch { /* already in the requested state */ }
+  }, []);
+
+  // Boost applies live — including on air (the recorder sits after the gain).
+  const changeGain = useCallback((pct: number): void => {
+    gainPctRef.current = pct;
+    setGainPct(pct);
+    lsWrite(MIC_GAIN_KEY, String(pct));
+    const g = gainNodeRef.current;
+    if (g) g.gain.value = boostToGain(pct);
+  }, []);
+
+  const stopRecorder = useCallback((): void => {
+    const rec = recRef.current;
+    recRef.current = null;
+    if (rec && rec.state !== "inactive") {
+      try { rec.stop(); } catch { /* already stopped */ }
+    }
+  }, []);
+
+  // Open the mic-bridge WebSocket + a fresh MediaRecorder over the destination
+  // stream. Encoded frames queue until the server's {ok:true} ack, then flush.
+  const connectAndRecord = useCallback((): void => {
+    const dest = destRef.current;
+    if (!dest) return;
+    const token = getAccessToken(); // read at connect time — post any refresh
+    if (!token) {
+      setMicErr("Session expired — reload the page and sign in again.");
+      setPhaseBoth("ready");
+      return;
+    }
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/mp4";
+    const proto = window.location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(
+      `${proto}://${window.location.host}/v1/admin/radio/mic-bridge?token=${encodeURIComponent(token)}&ct=${encodeURIComponent(mime)}`,
+    );
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
+    ackedRef.current = false;
+    queueRef.current = [];
+    setPhaseBoth("connecting");
+
+    ws.onmessage = (ev: MessageEvent): void => {
+      if (typeof ev.data !== "string" || wsRef.current !== ws) return;
+      try {
+        const msg = JSON.parse(ev.data) as { ok?: boolean };
+        if (msg.ok) {
+          ackedRef.current = true;
+          for (const buf of queueRef.current) ws.send(buf);
+          queueRef.current = [];
+          setMicErr(null);
+          setPhaseBoth("live");
+        }
+      } catch { /* non-JSON frame — ignore */ }
+    };
+
+    ws.onclose = (ev: CloseEvent): void => {
+      if (wsRef.current !== ws) return; // superseded / user-stopped
+      wsRef.current = null;
+      stopRecorder();
+      if (stoppingRef.current) return;
+      const friendly = MIC_CLOSE_MSG[ev.code];
+      if (friendly) {
+        setMicErr(friendly);
+        setPhaseBoth("ready");
+        return;
+      }
+      // Unexpected drop — rebuild the recorder + socket once after 2s (the
+      // capture graph is still alive; a MediaRecorder can't resume, so rebuild).
+      if (!reconnectedRef.current) {
+        reconnectedRef.current = true;
+        setMicErr("Mic link dropped — reconnecting…");
+        setPhaseBoth("connecting");
+        reconnectTimer.current = setTimeout(() => {
+          reconnectTimer.current = null;
+          if (!stoppingRef.current && streamRef.current) connectRef.current?.();
+          else setPhaseBoth(streamRef.current ? "ready" : "idle");
+        }, 2000);
+      } else {
+        setMicErr("The mic link was lost. Go on mic again to continue.");
+        setPhaseBoth("ready");
+      }
+    };
+
+    let rec: MediaRecorder;
+    try {
+      rec = new MediaRecorder(dest.stream, { mimeType: mime, audioBitsPerSecond: 128_000 });
+    } catch {
+      setMicErr("This browser can't encode mic audio for the bridge.");
+      wsRef.current = null;
+      try { ws.close(1000); } catch { /* noop */ }
+      setPhaseBoth("ready");
+      return;
+    }
+    recRef.current = rec;
+    rec.ondataavailable = (e: BlobEvent): void => {
+      if (!e.data || e.data.size === 0) return;
+      void e.data.arrayBuffer().then((buf) => {
+        const sock = wsRef.current;
+        if (ackedRef.current && sock && sock.readyState === WebSocket.OPEN) sock.send(buf);
+        else if (!ackedRef.current) queueRef.current.push(buf);
+      });
+    };
+    rec.start(250);
+  }, [setPhaseBoth, stopRecorder]);
+  useEffect(() => { connectRef.current = connectAndRecord; });
+
+  const goOnMic = useCallback((): void => {
+    if (!supported || !canGoLive) return;
+    if (phaseRef.current === "live" || phaseRef.current === "connecting") return;
+    setMicErr(null);
+    stoppingRef.current = false;
+    reconnectedRef.current = false;
+    setElapsed(0);
+    if (streamRef.current) {
+      connectAndRecord();
+    } else {
+      const f = flagsRef.current;
+      void acquire(deviceIdRef.current, f.noise, f.echo, f.agc).then((ok) => {
+        if (!ok) return;
+        void refreshDevices();
+        connectAndRecord();
+      });
+    }
+  }, [supported, canGoLive, acquire, refreshDevices, connectAndRecord]);
+
+  const offMic = useCallback((): void => {
+    stoppingRef.current = true;
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
+    stopRecorder();
+    const ws = wsRef.current;
+    wsRef.current = null;
+    if (ws) {
+      try { ws.close(1000); } catch { /* already closed */ }
+    }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    srcRef.current?.disconnect();
+    srcRef.current = null;
+    cancelAnimationFrame(rafRef.current);
+    setMeter(0);
+    setPhaseBoth("idle");
+  }, [stopRecorder, setPhaseBoth]);
+
+  // On-air elapsed readout.
+  useEffect(() => {
+    if (phase !== "live") return;
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(t);
+  }, [phase]);
+
+  // The live session ended under us — release the mic (the harbor is gone).
+  useEffect(() => {
+    if (!canGoLive && (phaseRef.current === "live" || phaseRef.current === "connecting")) {
+      offMic();
+      setMicErr("The live session ended — mic is off.");
+    }
+  }, [canGoLive, offMic]);
+
+  // Full teardown on unmount.
+  useEffect(() => () => {
+    stoppingRef.current = true;
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    const rec = recRef.current;
+    if (rec && rec.state !== "inactive") { try { rec.stop(); } catch { /* noop */ } }
+    try { wsRef.current?.close(1000); } catch { /* noop */ }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    cancelAnimationFrame(rafRef.current);
+    void ctxRef.current?.close().catch(() => {});
+  }, []);
+
+  return {
+    supported,
+    devices,
+    deviceId,
+    pickDevice,
+    ready: phase !== "idle",
+    connecting: phase === "connecting",
+    onAir: phase === "live",
+    elapsed,
+    meter,
+    muted,
+    toggleMute,
+    noise,
+    echo,
+    agc,
+    toggleFlag,
+    gainPct,
+    changeGain,
+    micErr,
+    enable,
+    goOnMic,
+    offMic,
+  };
+}
+
+/* ── Listen panel — REAL playback of the live mounts ── */
+
+type ListenFeed = "broadcast" | "monitor" | "cue";
+const LISTEN_FEEDS: ListenFeed[] = ["broadcast", "monitor", "cue"];
+const FEED_META: Record<ListenFeed, { label: string; caption: string }> = {
+  broadcast: { label: "Broadcast", caption: "Exactly what listeners hear (~6 s behind)." },
+  monitor: { label: "Monitor", caption: "Full on-air mix minus the mic — follows presets/ducking." },
+  cue: { label: "Cue", caption: "Pre-fader music, always full." },
+};
+
+// Live mounts derive from the program's hls_url ("…/listen/s_<id>.mp3"):
+// broadcast = as-is · monitor = "mon_<id>" · cue = "cue_<id>". The mounts only
+// exist while the session is live.
+function liveFeedUrl(hlsUrl: string, feed: ListenFeed): string {
+  if (feed === "broadcast") return hlsUrl;
+  const prefix = feed === "monitor" ? "mon_" : "cue_";
+  return hlsUrl.replace(/\/s_([^/]*)$/, `/${prefix}$1`);
+}
+
+function ListenPanel({ program, micOnAir }: { program: RadioProgram | null; micOnAir: boolean }): ReactElement {
+  const [feed, setFeed] = useState<ListenFeed>("broadcast");
+  const [playing, setPlaying] = useState(false);
+  const [volume, setVolume] = useState<number>(() => Math.min(1, Math.max(0, lsReadNum(LISTEN_VOL_KEY, 0.9))));
+  const [note, setNote] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const intentRef = useRef(false);
+  const retriesRef = useRef(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastUrlRef = useRef<string | null>(null);
+  const playingProgramRef = useRef<string | null>(null);
+  const feedRef = useRef<ListenFeed>("broadcast");
+  useEffect(() => { feedRef.current = feed; }, [feed]);
+
+  // One shared audio element for all three feeds; chips swap `src` live.
+  const getAudio = useCallback((): HTMLAudioElement => {
+    let el = audioRef.current;
+    if (!el) {
+      el = new Audio();
+      el.preload = "none";
+      audioRef.current = el;
+    }
+    return el;
+  }, []);
+
+  const stop = useCallback((keepNote?: boolean): void => {
+    intentRef.current = false;
+    if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
+    const el = audioRef.current;
+    if (el) { el.pause(); el.removeAttribute("src"); el.load(); }
+    setPlaying(false);
+    setUnavailable(false);
+    if (!keepNote) setNote(null);
+    clearMediaSession();
+  }, []);
+
+  // Auto-retry lite: on error/ended while intent is "playing", retry after 2s
+  // up to 3 times, then show the inline "stream unavailable" note.
+  useEffect(() => {
+    const el = getAudio();
+    const onFail = (): void => {
+      if (!intentRef.current || retryTimer.current) return;
+      if (retriesRef.current < 3) {
+        retriesRef.current += 1;
+        retryTimer.current = setTimeout(() => {
+          retryTimer.current = null;
+          const url = lastUrlRef.current;
+          if (!intentRef.current || !url) return;
+          el.src = url;
+          void el.play().catch(() => onFail());
+        }, 2000);
+      } else {
+        intentRef.current = false;
+        setPlaying(false);
+        setUnavailable(true);
+        setMediaPlaybackState("none");
+      }
+    };
+    const onPlaying = (): void => { retriesRef.current = 0; setUnavailable(false); };
+    el.addEventListener("error", onFail);
+    el.addEventListener("ended", onFail);
+    el.addEventListener("playing", onPlaying);
+    return () => {
+      el.removeEventListener("error", onFail);
+      el.removeEventListener("ended", onFail);
+      el.removeEventListener("playing", onPlaying);
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+      el.pause();
+      el.removeAttribute("src");
+    };
+  }, [getAudio]);
+
+  const start = useCallback((f: ListenFeed): void => {
+    if (!program?.is_live || !program.hls_url) return;
+    // Feedback guard: BROADCAST/MONITOR contain (or accompany) the mic.
+    if (micOnAir && f !== "cue") {
+      setNote("Paused to prevent feedback — use CUE while on mic.");
+      return;
+    }
+    const el = getAudio();
+    if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
+    const url = liveFeedUrl(program.hls_url, f);
+    lastUrlRef.current = url;
+    playingProgramRef.current = program.id;
+    intentRef.current = true;
+    retriesRef.current = 0;
+    setFeed(f);
+    setPlaying(true);
+    setUnavailable(false);
+    setNote(null);
+    el.volume = volume;
+    el.src = url;
+    setMediaSession(el, `${program.title} — ${FEED_META[f].label}`, "Nuru Radio", program.artwork_url);
+    void el.play().catch(() => {
+      // Some failures reject without an `error` event — nudge the retry path.
+      el.dispatchEvent(new Event("error"));
+    });
+  }, [program, micOnAir, volume, getAudio]);
+
+  // Mic went on air — kill the feedback-prone feeds (CUE stays allowed).
+  useEffect(() => {
+    if (micOnAir && intentRef.current && feedRef.current !== "cue") {
+      stop(true);
+      setNote("Paused to prevent feedback — use CUE while on mic.");
+    }
+  }, [micOnAir, stop]);
+
+  // Selected program switched or went off air — the old mount is gone; stop.
+  const liveKey = program?.is_live && program.hls_url ? program.id : null;
+  useEffect(() => {
+    if (intentRef.current && playingProgramRef.current !== liveKey) stop();
+  }, [liveKey, stop]);
+
+  const changeVolume = useCallback((v: number): void => {
+    const clamped = Math.min(1, Math.max(0, v));
+    setVolume(clamped);
+    lsWrite(LISTEN_VOL_KEY, String(clamped));
+    const el = audioRef.current;
+    if (el) el.volume = clamped;
+  }, []);
+
+  const canListen = !!(program?.is_live && program.hls_url);
+
+  return (
+    <Panel>
+      <SectionHead icon={Headphones} title="Listen" hint={canListen ? (playing ? `Playing · ${FEED_META[feed].label}` : "Live feeds") : "Off air"} />
+      <div style={!canListen ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
+        <div className="flex gap-2 flex-wrap mb-2">
+          {LISTEN_FEEDS.map((f) => {
+            const on = feed === f;
+            const blocked = micOnAir && f !== "cue";
+            return (
+              <button
+                key={f}
+                onClick={() => {
+                  if (playing) start(f);
+                  else if (blocked) setNote("Use CUE while on mic — the other feeds would feed back.");
+                  else { setFeed(f); setNote(null); }
+                }}
+                className="rs-btn rounded-lg px-3 py-1.5"
+                style={{ fontSize: 11.5, fontWeight: 700, background: on ? GOLD : "rgba(255,255,255,0.05)", color: on ? "#0A1120" : blocked ? DIMMER : DIM, border: `1px solid ${on ? GOLD : PANEL_BORDER}` }}
+              >
+                {FEED_META[f].label}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: DIM, marginBottom: 12, lineHeight: 1.5 }}>{FEED_META[feed].caption}</div>
+
+        {note && <div className="rs-reveal" style={{ fontSize: 11.5, color: GOLD, marginBottom: 10 }}>{note}</div>}
+        {unavailable && <div className="rs-reveal" style={{ fontSize: 11.5, color: "#FCA5A5", marginBottom: 10 }}>Stream unavailable — check that the session is on air, then press play again.</div>}
+
+        <div className="flex items-center gap-3 flex-wrap">
+          {playing ? (
+            <button onClick={() => stop()} className="rs-btn flex items-center gap-2 rounded-xl px-4" style={{ height: 40, background: "rgba(239,68,68,0.14)", color: "#FCA5A5", border: `1px solid ${RED}55`, fontSize: 12.5, fontWeight: 700 }}>
+              <Square size={14} /> Stop
+            </button>
+          ) : (
+            <button onClick={() => start(feed)} disabled={!canListen} className="rs-btn flex items-center gap-2 rounded-xl px-4" style={{ height: 40, background: `linear-gradient(135deg, ${GOLD}, ${GOLD_DEEP})`, color: "#0A1120", fontSize: 12.5, fontWeight: 800, border: "none" }}>
+              <Play size={14} /> Play
+            </button>
+          )}
+          <div className="flex items-center gap-2" style={{ flex: 1, minWidth: 150 }}>
+            <Volume2 size={14} style={{ color: DIM }} />
+            <input type="range" min={0} max={100} value={Math.round(volume * 100)} onChange={(e) => changeVolume(Number(e.target.value) / 100)} aria-label="Listen volume" style={{ flex: 1, accentColor: GOLD_DEEP }} />
+            <span className="rs-tnum" style={{ fontFamily: MONO, fontSize: 11.5, color: DIM, width: 34, textAlign: "right" }}>{Math.round(volume * 100)}%</span>
+          </div>
+        </div>
+      </div>
+      {!canListen && <div style={{ fontSize: 11, color: DIM, marginTop: 10 }}>Take a session live to listen.</div>}
+    </Panel>
   );
 }
 
