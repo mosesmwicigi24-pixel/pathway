@@ -4,7 +4,7 @@ import {
   BookOpen, LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
   TrendingUp, MessageSquare, MessagesSquare, Video, Star, HelpCircle, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
-  Radio, SlidersVertical, UserCheck, HeartHandshake, type LucideIcon,
+  Radio, SlidersVertical, ListMusic, UserCheck, HeartHandshake, type LucideIcon,
 } from "lucide-react";
 
 export interface NavItem { path: string; label: string; icon: LucideIcon }
@@ -34,6 +34,7 @@ export const navGroups: NavGroup[] = [
       { path: "/video-library", label: "Video Library", icon: Video },
       { path: "/radio", label: "Radio Studio", icon: Radio },
       { path: "/mixer", label: "Audio Mixer", icon: SlidersVertical },
+      { path: "/uploads-sessions", label: "Uploads & Sessions", icon: ListMusic },
     ],
   },
   {
@@ -100,6 +101,7 @@ export const pageTitles: Record<string, string> = {
   "/badges": "Badges Catalog",
   "/radio": "Radio Studio",
   "/mixer": "Audio Mixer",
+  "/uploads-sessions": "Uploads & Sessions",
   "/intelligence": "Member Intelligence",
   "/proximity": "Suggested Pairings",
   "/users": "System Users",

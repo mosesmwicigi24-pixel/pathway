@@ -8,9 +8,10 @@ describe("portal nav model", () => {
     expect(navGroups.map((g) => g.label)).toEqual(["Portal", "Curriculum", "Media", "Operations", "Communication", "System", "Settings"]);
   });
 
-  it("exposes the Media section (Video Library, Radio Studio, Audio Mixer)", () => {
+  it("exposes the Media section (Video Library, Radio Studio, Audio Mixer, Uploads & Sessions)", () => {
     const media = navGroups.find((g) => g.label === "Media");
-    expect(media?.items.map((i) => i.path)).toEqual(["/video-library", "/radio", "/mixer"]);
+    expect(media?.items.map((i) => i.path)).toEqual(["/video-library", "/radio", "/mixer", "/uploads-sessions"]);
+    expect(titleFor("/uploads-sessions")).toBe("Uploads & Sessions");
   });
 
   it("exposes Communication (Chat) and Settings (Users, Roles, Congregations, Countries, Languages)", () => {
