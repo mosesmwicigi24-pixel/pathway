@@ -366,6 +366,74 @@ paths:
       responses:
         "201": { description: "{ url }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/letters:
+    get:
+      tags: [progress]
+      summary: My Sunday Letters (AI-composed weekly pastoral letters), newest first.
+      responses:
+        "200": { description: "{ data: [{ letter_id, week_of, body, scripture_ref, created_at, read_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/letters/latest:
+    get:
+      tags: [progress]
+      summary: My most recent Sunday Letter (or letter:null before the first one).
+      responses:
+        "200": { description: "{ letter: {...} | null }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/letters/{id}/read:
+    post:
+      tags: [progress]
+      summary: Mark one of my Sunday Letters read (idempotent).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ letter_id, read_at }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Not my letter }
+  /me/ai:
+    get:
+      tags: [auth]
+      summary: My AI-personalization consent state.
+      responses:
+        "200": { description: "{ opt_out: boolean }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/ai/consent:
+    post:
+      tags: [auth]
+      summary: Set my AI-personalization consent. Opting out stops the model from ever reading my written content (reflections/posts), deletes my story, and pauses Sunday Letters.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [opt_out]
+              properties:
+                opt_out: { type: boolean }
+      responses:
+        "200": { description: "{ opt_out }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/intelligence/reindex:
+    post:
+      tags: [admin]
+      summary: Admin. Rebuild the AI content-grounding index over curriculum/plans/devotionals.
+      responses:
+        "200": { description: "{ sources, chunks }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/intelligence/stories/rebuild:
+    post:
+      tags: [admin]
+      summary: Admin. Rebuild Member Stories (all active members, or one user_id).
+      responses:
+        "200": { description: "{ rebuilt }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/intelligence/letters/run:
+    post:
+      tags: [admin]
+      summary: Admin. Run the Sunday Letter batch now (all eligible members, or one user_id). Idempotent per user+week.
+      responses:
+        "200": { description: "{ week_of, written, skipped }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/onboarding:
     post:
       tags: [auth]

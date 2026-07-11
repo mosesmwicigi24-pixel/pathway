@@ -9,6 +9,14 @@ import { z } from "zod";
 import { many } from "../../db/db.js";
 import { ChatService } from "../chat/service.js";
 import type { AiProvider } from "./provider.js";
+import { companionGrounding } from "../intelligence/prompts.js";
+
+/** Member Story + own-teaching retrieval, injected by registerAssistant. All
+ *  grounding is best-effort: a failure must never block the member's chat. */
+export interface AssistantGrounding {
+  forUser(userId: string): Promise<{ narrative: string; factsLine: string } | null>;
+  search(query: string, k: number): Promise<Array<{ title: string; ref: string | null; body: string }>>;
+}
 
 const NURU_SYSTEM = `You are Nuru, a warm, encouraging AI companion inside the Nuru Place discipleship app.
 You help members of a church grow: summarize a conversation, draft an encouragement, surface prayer requests, or help plan a quiet time.
@@ -20,6 +28,7 @@ export class AssistantService {
     private readonly pool: Pool,
     private readonly provider: AiProvider,
     private readonly chatSvc = new ChatService(pool),
+    private readonly grounding?: AssistantGrounding,
   ) {}
 
   static readonly Chat = z.object({
@@ -50,6 +59,19 @@ export class AssistantService {
         `Read these last ${recent.length} message(s) (oldest→newest) and let them guide your reply. ` +
         `Ground everything ONLY in this transcript — do not invent anything beyond it:\n${transcript}\n\n` +
         `If asked to suggest or draft a reply, respond with a single natural message the member could send next — no preamble, no quotes, no options list.`;
+    }
+    // Story-aware grounding (intelligence layer): the member's own story +
+    // relevant excerpts of Nuru Place's own teaching. Opt-out → forUser()
+    // returns null and nothing personal is injected. Best-effort by design.
+    if (this.grounding) {
+      try {
+        const me = await this.grounding.forUser(userId);
+        const lastUserText = [...input.messages].reverse().find((m) => m.role === "user")?.text ?? "";
+        const chunks = lastUserText.length >= 8 ? await this.grounding.search(lastUserText, 3) : [];
+        system += companionGrounding(me?.narrative ?? "", me?.factsLine ?? "", chunks);
+      } catch {
+        /* grounding must never block the chat */
+      }
     }
     const reply = await this.provider.complete({ system, messages: input.messages });
     // Persist this exchange so the Nuru thread is retrievable across sessions
