@@ -16,6 +16,8 @@ import { StoryService } from "./story.js";
 import { LettersService } from "./letters.js";
 import { SignalsService } from "./signals.js";
 import { LearningService, EXPLAIN_STYLES, type ExplainStyle } from "./learning.js";
+import { LiturgyService } from "./liturgy.js";
+import { CommunityService, type BlessingKind } from "./community.js";
 import { ApiError } from "../../http/errors.js";
 
 export const intelligenceRouter: Router = Router();
@@ -28,6 +30,8 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   const letters = new LettersService(ctx.db.primary, provider, story, content, notifications);
   const signals = new SignalsService(ctx.db.primary, provider, story, notifications);
   const learning = new LearningService(ctx.db.primary, provider);
+  const liturgy = new LiturgyService(ctx.db.primary, provider);
+  const community = new CommunityService(ctx.db.primary, notifications);
   const auth = authenticate(ctx.env);
   const r = intelligenceRouter;
 
@@ -120,6 +124,31 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
 
   r.get("/growth/memory-verses/due", auth, handler(async (req, res) => {
     res.json({ data: await learning.dueVerses(requirePrincipal(req).userId) });
+  }));
+
+  // --- The liturgy Home + community intelligence (Phase 4) ---
+  r.get("/home/liturgy", auth, handler(async (req, res) => {
+    const me = await ctx.db.primary.query(`SELECT congregation_id FROM users WHERE user_id = $1`, [
+      requirePrincipal(req).userId,
+    ]);
+    res.json(await liturgy.current(me.rows[0]?.congregation_id ?? null));
+  }));
+
+  r.get("/community/moments", auth, handler(async (req, res) => {
+    res.json({ data: await community.list(requirePrincipal(req).userId) });
+  }));
+
+  r.post("/community/moments/:id/bless", auth, handler(async (req, res) => {
+    const input = parseBody(z.object({ kind: z.enum(["amen", "heart", "fire"]) }), req.body ?? {});
+    res.json(await community.bless(requirePrincipal(req).userId, String(req.params.id ?? ""), input.kind as BlessingKind));
+  }));
+
+  r.post("/admin/intelligence/liturgy/run", auth, requireRole("Admin"), handler(async (_req, res) => {
+    res.json({ composed: await liturgy.composeAll() });
+  }));
+
+  r.post("/admin/intelligence/moments/scan", auth, requireRole("Admin"), handler(async (_req, res) => {
+    res.json({ inserted: await community.scanMoments() });
   }));
 
   return r;

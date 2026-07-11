@@ -30,6 +30,8 @@ import { ContentIndexService } from "./modules/intelligence/content.js";
 import { StoryService } from "./modules/intelligence/story.js";
 import { LettersService } from "./modules/intelligence/letters.js";
 import { SignalsService } from "./modules/intelligence/signals.js";
+import { LiturgyService } from "./modules/intelligence/liturgy.js";
+import { CommunityService } from "./modules/intelligence/community.js";
 
 function main(): void {
   const env = loadEnv();
@@ -90,6 +92,8 @@ function main(): void {
   const intelNotifications = new NotificationService(db.primary);
   const letters = new LettersService(db.primary, aiProvider, memberStory, contentIndex, intelNotifications);
   const pulse = new SignalsService(db.primary, aiProvider, memberStory, intelNotifications);
+  const liturgy = new LiturgyService(db.primary, aiProvider);
+  const communityIntel = new CommunityService(db.primary, intelNotifications);
 
   const tasks = [
     cron.schedule("0 2 * * *", safe("engagement recompute", () => engagement.runRecompute())),
@@ -111,6 +115,20 @@ function main(): void {
     cron.schedule("0 16 * * 6", safe("flock briefs", async () => {
       const out = await pulse.composeBriefs();
       log.info(out, "flock briefs written");
+    })),
+    // Phase 4 — the liturgy Home + community intelligence.
+    // 01:00 UTC = 04:00 EAT: today's liturgy is ready before the first riser.
+    cron.schedule("0 1 * * *", safe("daily liturgy", async () => {
+      const n = await liturgy.composeAll();
+      log.info({ composed: n }, "daily liturgy composed");
+    })),
+    cron.schedule("45 0 * * *", safe("community moments scan", async () => {
+      const n = await communityIntel.scanMoments();
+      log.info({ inserted: n }, "community moments detected");
+    })),
+    cron.schedule("*/15 * * * *", safe("prayer chains", async () => {
+      const n = await communityIntel.scanPrayerChains();
+      if (n > 0) log.info({ nudged: n }, "prayer chain invitations sent");
     })),
     cron.schedule("0 3 * * *", safe("partition maintenance", () => partitions.run())),
     cron.schedule("0 4 * * *", safe("is_minor refresh", () => refreshMinorFlags(db.primary))),

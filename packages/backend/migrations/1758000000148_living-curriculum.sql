@@ -8,6 +8,7 @@
 -- Verse spaced-repetition needs no schema: due-ness is computed from
 -- memory_verse_progress (status, best_match_pct, updated_at).
 
+-- Up Migration
 CREATE TABLE IF NOT EXISTS module_explanations (
   module_id  UUID NOT NULL REFERENCES modules(module_id) ON DELETE CASCADE,
   style      TEXT NOT NULL CHECK (style IN ('simple', 'swahili', 'story')),

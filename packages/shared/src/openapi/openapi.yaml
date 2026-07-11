@@ -502,6 +502,53 @@ paths:
       responses:
         "200": { description: "{ week_of, written, skipped }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /home/liturgy:
+    get:
+      tags: [growth]
+      summary: The liturgy line for RIGHT NOW (EAT clock) — part (morning|midday|evening|night), church season, Sunday flag. AI-composed once per congregation per day; deterministic fallback when the model is down.
+      responses:
+        "200": { description: "{ part, season, is_sunday, line, scripture_ref }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /community/moments:
+    get:
+      tags: [community]
+      summary: My congregation's recent celebrations (14 days) — server-detected milestones with blessing counts and my own blessing.
+      responses:
+        "200": { description: "{ data: [{ moment_id, user_id, full_name, avatar_url, kind, title, occurred_at, amen_count, heart_count, fire_count, my_blessing }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /community/moments/{id}/bless:
+    post:
+      tags: [community]
+      summary: One-tap blessing on a celebration (kind = amen | heart | fire). One per member per moment; repeat switches kind. Congregation-scoped (403 outside).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind: { type: string, enum: [amen, heart, fire] }
+      responses:
+        "200": { description: "{ blessed, kind }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: FORBIDDEN_SCOPE — outside my congregation }
+  /admin/intelligence/liturgy/run:
+    post:
+      tags: [admin]
+      summary: Admin. Compose today's liturgy for every congregation now. Cached per congregation+day.
+      responses:
+        "200": { description: "{ composed }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/intelligence/moments/scan:
+    post:
+      tags: [admin]
+      summary: Admin. Detect fresh celebration moments now (module/level/verse/plan). Idempotent — replays insert nothing.
+      responses:
+        "200": { description: "{ inserted }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/onboarding:
     post:
       tags: [auth]

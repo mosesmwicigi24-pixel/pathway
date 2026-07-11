@@ -9,6 +9,7 @@
 -- full text; leaders already see reflections via the review queue (§5.4), so
 -- no new exposure is created — only attention.
 
+-- Up Migration
 CREATE TABLE IF NOT EXISTS signals (
   signal_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id         UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
