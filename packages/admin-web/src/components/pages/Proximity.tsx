@@ -36,7 +36,7 @@ const monogram: React.CSSProperties = {
   fontSize: 11, fontWeight: 700, color: "#fff", background: "var(--nuru-navy-gradient, " + NAVY_INK + ")",
 };
 
-const RADII = [1, 2, 3, 5, 10] as const;
+const RADII = [10, 20, 30, 50] as const;
 
 // Per-cluster create state.
 type RunState =
@@ -46,8 +46,11 @@ type RunState =
   | { phase: "done"; cellId: string; assigned: number; failed: number; cellName: string }
   | { phase: "error"; message: string };
 
+type GroupBy = "radius" | "city" | "country";
+
 export function Proximity(): ReactElement {
-  const [radiusKm, setRadiusKm] = useState<number>(3);
+  const [groupBy, setGroupBy] = useState<GroupBy>("radius");
+  const [radiusKm, setRadiusKm] = useState<number>(10);
   const [clusters, setClusters] = useState<ProximityCluster[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
@@ -55,12 +58,12 @@ export function Proximity(): ReactElement {
   // Keyed by cluster index (clusters are server-ordered, stable within a load).
   const [runs, setRuns] = useState<Record<number, RunState>>({});
 
-  const load = useCallback((r: number) => {
+  const load = useCallback((r: number, g: GroupBy = "radius") => {
     setLoading(true);
     setForbidden(false);
     setErr(null);
     setRuns({});
-    AdminApi.proximity(r)
+    AdminApi.proximity(r, g)
       .then((d) => setClusters(d.clusters))
       .catch((e: unknown) => {
         const status = e instanceof AxiosError ? e.response?.status : undefined;
@@ -71,7 +74,7 @@ export function Proximity(): ReactElement {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(radiusKm); }, [load, radiusKm]);
+  useEffect(() => { load(radiusKm, groupBy); }, [load, radiusKm, groupBy]);
 
   // Create a cell from a cluster, then assign each member to it (human-approved).
   const createCellFrom = useCallback(async (idx: number, cluster: ProximityCluster, name: string) => {
@@ -137,12 +140,32 @@ export function Proximity(): ReactElement {
             <Compass size={16} style={{ color: "var(--tint-navy-fg)" }} />
           </span>
           <div>
-            <h2 style={{ fontSize: 15, fontWeight: 700, color: NAVY_INK, lineHeight: 1.2 }}>Search radius</h2>
-            <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 1 }}>How close members must be to cluster together</div>
+            <h2 style={{ fontSize: 15, fontWeight: 700, color: NAVY_INK, lineHeight: 1.2 }}>Group members by</h2>
+            <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 1 }}>
+              {groupBy === "radius" ? "How close members must be to cluster together"
+                : groupBy === "city" ? "Nearest town or city — coarse labels, never coordinates"
+                : "The congregation's country"}
+            </div>
+          </div>
+          <div className="flex items-center gap-1" style={{ marginLeft: "auto", background: "var(--muted)", borderRadius: 999, padding: 3 }}>
+            {([["radius", "Distance"], ["city", "City"], ["country", "Country"]] as const).map(([key, label]) => {
+              const on = groupBy === key;
+              return (
+                <button key={key} type="button" disabled={loading} onClick={() => setGroupBy(key)}
+                  style={{
+                    padding: "6px 14px", borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: loading ? "default" : "pointer",
+                    border: "none", background: on ? "#fff" : "transparent",
+                    color: on ? NAVY_INK : "var(--muted-foreground)",
+                    boxShadow: on ? "0 1px 3px rgba(11,31,51,0.12)" : "none", transition: "all .12s ease",
+                  }}>
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {RADII.map((r) => {
+          {groupBy === "radius" && RADII.map((r) => {
             const active = r === radiusKm;
             return (
               <button
@@ -169,7 +192,7 @@ export function Proximity(): ReactElement {
             </span>
           ) : clusters ? (
             <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted-foreground)" }}>
-              {clusters.length} {clusters.length === 1 ? "group" : "groups"} within {radiusKm} km
+              {clusters.length} {clusters.length === 1 ? "group" : "groups"}{groupBy === "radius" ? ` within ${radiusKm} km` : groupBy === "city" ? " by city" : " by country"}
             </span>
           ) : null}
         </div>
