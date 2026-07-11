@@ -36,3 +36,7 @@ CREATE TABLE IF NOT EXISTS flock_briefs (
   UNIQUE (leader_user_id, week_of)
 );
 CREATE INDEX IF NOT EXISTS idx_flock_briefs_leader ON flock_briefs (leader_user_id, week_of DESC);
+
+-- Down Migration
+DROP TABLE IF EXISTS flock_briefs;
+DROP TABLE IF EXISTS signals;

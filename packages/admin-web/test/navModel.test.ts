@@ -21,9 +21,9 @@ describe("portal nav model", () => {
     expect(settings?.items.map((i) => i.path)).toEqual(["/users", "/roles", "/congregations", "/countries", "/languages"]);
   });
 
-  it("exposes the System section (Member Intelligence, Suggested Pairings)", () => {
+  it("exposes the System section (Member Intelligence, Flock Brief, Suggested Pairings)", () => {
     const system = navGroups.find((g) => g.label === "System");
-    expect(system?.items.map((i) => i.path)).toEqual(["/intelligence", "/proximity"]);
+    expect(system?.items.map((i) => i.path)).toEqual(["/intelligence", "/flock-brief", "/proximity"]);
   });
 
   it("every nav item has a unique path", () => {
