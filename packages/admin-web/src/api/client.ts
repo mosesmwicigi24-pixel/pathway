@@ -393,10 +393,13 @@ export const AdminApi = {
   // Coarse proximity suggestions for human-in-the-loop cell pairing. Adults are
   // visible to coach-tier; minors only to Admin/SuperAdmin (gated server-side).
   // 403 → caller surfaces a "no access" state. Never returns coordinates.
-  async proximity(radiusKm?: number): Promise<{ clusters: ProximityCluster[] }> {
+  async proximity(radiusKm?: number, groupBy?: "radius" | "city" | "country"): Promise<{ clusters: ProximityCluster[] }> {
+    const params: Record<string, string | number> = {};
+    if (radiusKm != null) params.radius_km = radiusKm;
+    if (groupBy && groupBy !== "radius") params.group_by = groupBy;
     const { data } = await api.get<{ clusters: ProximityCluster[] }>(
       "/admin/members/proximity",
-      radiusKm != null ? { params: { radius_km: radiusKm } } : undefined,
+      Object.keys(params).length ? { params } : undefined,
     );
     return data;
   },

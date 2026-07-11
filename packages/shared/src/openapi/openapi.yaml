@@ -681,7 +681,12 @@ paths:
         - name: radius_km
           in: query
           required: false
-          schema: { type: number, minimum: 1, maximum: 50, default: 3 }
+          schema: { type: number, minimum: 1, maximum: 50, default: 10 }
+        - name: group_by
+          in: query
+          required: false
+          description: radius (default) clusters by distance; city snaps to the nearest gazetteer town (offline, coarse); country groups by the congregation's country.
+          schema: { type: string, enum: [radius, city, country], default: radius }
       responses:
         "200":
           description: Clusters

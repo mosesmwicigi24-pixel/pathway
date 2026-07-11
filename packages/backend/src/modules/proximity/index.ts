@@ -44,12 +44,13 @@ export function registerProximity(ctx: AppContext): Router {
   // Adults to coach-tier (members:proximity); minors only to the coarse Admin role.
   const RadiusQuery = z.object({
     radius_km: z.coerce.number().min(1).max(50).optional(),
+    group_by: z.enum(["radius", "city", "country"]).optional(),
   });
   r.get("/admin/members/proximity", auth, perm("members", "proximity"), handler(async (req, res) => {
-    const { radius_km } = parseBody(RadiusQuery, req.query);
+    const { radius_km, group_by } = parseBody(RadiusQuery, req.query);
     const principal = requirePrincipal(req);
     const includeMinors = principal.role === "Admin" || principal.role === "SuperAdmin";
-    res.json(await svc.suggestions({ radiusKm: radius_km ?? 3, includeMinors }));
+    res.json(await svc.suggestions({ radiusKm: radius_km ?? 10, includeMinors, groupBy: group_by }));
   }));
 
   return r;

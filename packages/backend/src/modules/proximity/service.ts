@@ -15,6 +15,7 @@ import { z } from "zod";
 import { many, maybeOne, tx, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { encodeGeohash, geohashCenter, haversineKm } from "./geo.js";
+import { nearestTown } from "./towns.js";
 
 export interface ProximityMember {
   user_id: string;
@@ -24,11 +25,13 @@ export interface ProximityMember {
 }
 
 export interface ProximityCluster {
-  area: string; // coarse label, e.g. "≈ -1.286, 36.817" cell center (rounded)
+  area: string; // coarse label: nearest town, country name, or "≈ lat, lng"
   member_count: number;
   approx_radius_km: number;
   members: ProximityMember[];
 }
+
+export type ProximityGroupBy = "radius" | "city" | "country";
 
 interface LocationRow {
   user_id: string;
@@ -175,7 +178,11 @@ export class ProximityService {
    *
    * NEVER returns geohash6 or coordinates.
    */
-  async suggestions(opts: { radiusKm: number; includeMinors: boolean }): Promise<{ clusters: ProximityCluster[] }> {
+  async suggestions(opts: {
+    radiusKm: number;
+    includeMinors: boolean;
+    groupBy?: ProximityGroupBy | undefined;
+  }): Promise<{ clusters: ProximityCluster[] }> {
     const radiusKm = opts.radiusKm;
     const rows = await many<LocationRow>(
       this.pool,
@@ -194,6 +201,30 @@ export class ProximityService {
     // Filter minors out for non-Admin requesters BEFORE clustering, so coach-tier
     // never sees minor presence in any form.
     const eligible = opts.includeMinors ? rows : rows.filter((r) => !r.is_minor);
+
+    // City / country tiers: bucket by a coarse label instead of distance math.
+    // City = the member's geohash center snapped to the nearest gazetteer town
+    // (offline, deterministic; unmatched areas keep the ≈lat,lng label).
+    // Country = the member's congregation's country (church structure, not GPS).
+    if (opts.groupBy === "city") {
+      return { clusters: this.bucketBy(eligible, (r) => {
+        const c = geohashCenter(r.geohash6);
+        return nearestTown(c)?.name ?? `≈ ${c.lat.toFixed(2)}, ${c.lng.toFixed(2)}`;
+      }) };
+    }
+    if (opts.groupBy === "country") {
+      const codes = await many<{ user_id: string; label: string }>(
+        this.pool,
+        `SELECT u.user_id, COALESCE(k.name, cg.country, 'Unknown') AS label
+           FROM users u
+           LEFT JOIN congregations cg ON cg.congregation_id = u.congregation_id
+           LEFT JOIN countries k ON k.code = cg.country
+          WHERE u.user_id = ANY($1::uuid[])`,
+        [eligible.map((r) => r.user_id)],
+      );
+      const byUser = new Map(codes.map((c) => [c.user_id, c.label]));
+      return { clusters: this.bucketBy(eligible, (r) => byUser.get(r.user_id) ?? "Unknown") };
+    }
 
     // Greedy single-linkage clustering: seed a cluster per ungrouped member,
     // absorb any member whose geohash center is within radius of the seed center.
@@ -241,5 +272,39 @@ export class ProximityService {
     // Most-populated clusters first — the actionable pairing opportunities.
     clusters.sort((a, b) => b.member_count - a.member_count);
     return { clusters };
+  }
+
+  /** Bucket members by a label; spread = max pairwise distance from the first
+   *  member's geohash center (coarse, never a coordinate in the response). */
+  private bucketBy(rows: LocationRow[], labelOf: (r: LocationRow) => string): ProximityCluster[] {
+    const buckets = new Map<string, LocationRow[]>();
+    for (const r of rows) {
+      const label = labelOf(r);
+      const b = buckets.get(label) ?? [];
+      b.push(r);
+      buckets.set(label, b);
+    }
+    const clusters: ProximityCluster[] = [];
+    for (const [area, group] of buckets) {
+      const seed = geohashCenter(group[0]!.geohash6);
+      let spread = 0;
+      for (const m of group) {
+        const d = haversineKm(seed, geohashCenter(m.geohash6));
+        if (d > spread) spread = d;
+      }
+      clusters.push({
+        area,
+        member_count: group.length,
+        approx_radius_km: Math.round(spread * 10) / 10,
+        members: group.map((m) => ({
+          user_id: m.user_id,
+          full_name: m.full_name,
+          is_minor: m.is_minor,
+          cell_group_id: m.cell_group_id,
+        })),
+      });
+    }
+    clusters.sort((a, b) => b.member_count - a.member_count);
+    return clusters;
   }
 }

@@ -175,7 +175,7 @@ describe("proximity — admin suggestions (clustering, radius, RBAC, minor visib
     await agent().post("/v1/me/location").set(auth(bearer({ sub: c.user_id, role: "Student", cong }))).send(FAR);
   }
 
-  it("clusters near members together and separates far ones (3 km default)", async () => {
+  it("clusters near members together and separates far ones (10 km default)", async () => {
     await seedTwoNearOneFar();
     const admin = await createUser({ congregationId: cong, role: "Admin", email: "adm4@dev.local" });
     const adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
@@ -202,6 +202,36 @@ describe("proximity — admin suggestions (clustering, radius, RBAC, minor visib
     expect(res.status).toBe(200);
     // 1 km < the ~1.2 km separation, so all three are singletons.
     expect(res.body.clusters).toHaveLength(3);
+  });
+
+  it("group_by=city snaps clusters to the nearest gazetteer town (offline)", async () => {
+    await seedTwoNearOneFar();
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "admC@dev.local" });
+    const adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const res = await agent().get("/v1/admin/members/proximity?group_by=city").set(auth(adminTok));
+    expect(res.status).toBe(200);
+    const clusters = res.body.clusters as { area: string; member_count: number }[];
+    expect(clusters).toHaveLength(2);
+    expect(clusters[0].area).toBe("Nairobi"); // CBD + NEAR snap to Nairobi
+    expect(clusters[0].member_count).toBe(2);
+    expect(clusters[1].area).toBe("Thika"); // FAR is Thika's own coordinates
+    expect(JSON.stringify(res.body)).not.toMatch(/geohash|"lat"|"lng"/);
+  });
+
+  it("group_by=country groups by the congregation's country", async () => {
+    await seedTwoNearOneFar(); // three KE members
+    const congUg = await createCongregation("Kampala Branch", "UG");
+    const u = await createUser({ congregationId: congUg, fullName: "Ugandan", email: "ug@dev.local" });
+    await agent().post("/v1/me/location").set(auth(bearer({ sub: u.user_id, role: "Student", cong: congUg }))).send({ lat: 0.3476, lng: 32.5825 });
+
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "admK@dev.local" });
+    const adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const res = await agent().get("/v1/admin/members/proximity?group_by=country").set(auth(adminTok));
+    expect(res.status).toBe(200);
+    const clusters = res.body.clusters as { area: string; member_count: number }[];
+    expect(clusters).toHaveLength(2);
+    expect(clusters[0].member_count).toBe(3); // Kenya
+    expect(clusters[1].member_count).toBe(1); // Uganda
   });
 
   it("requires the members:proximity permission (no permission → 403)", async () => {
