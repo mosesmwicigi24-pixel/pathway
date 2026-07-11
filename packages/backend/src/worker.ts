@@ -29,6 +29,7 @@ import { buildAiProvider } from "./modules/assistant/provider.js";
 import { ContentIndexService } from "./modules/intelligence/content.js";
 import { StoryService } from "./modules/intelligence/story.js";
 import { LettersService } from "./modules/intelligence/letters.js";
+import { SignalsService } from "./modules/intelligence/signals.js";
 
 function main(): void {
   const env = loadEnv();
@@ -86,7 +87,9 @@ function main(): void {
   const aiProvider = buildAiProvider(env);
   const contentIndex = new ContentIndexService(db.primary);
   const memberStory = new StoryService(db.primary, aiProvider);
-  const letters = new LettersService(db.primary, aiProvider, memberStory, contentIndex, new NotificationService(db.primary));
+  const intelNotifications = new NotificationService(db.primary);
+  const letters = new LettersService(db.primary, aiProvider, memberStory, contentIndex, intelNotifications);
+  const pulse = new SignalsService(db.primary, aiProvider, memberStory, intelNotifications);
 
   const tasks = [
     cron.schedule("0 2 * * *", safe("engagement recompute", () => engagement.runRecompute())),
@@ -98,6 +101,16 @@ function main(): void {
     cron.schedule("0 13 * * 0", safe("sunday letters", async () => {
       const out = await letters.runWeekly();
       log.info(out, "sunday letters written");
+    })),
+    // Shepherd's Pulse: nightly drift + emotion scan (after stories), and the
+    // leaders' Flock Brief on Saturday 16:00 UTC (19:00 EAT — read before Sunday).
+    cron.schedule("30 0 * * *", safe("shepherds pulse scan", async () => {
+      const out = await pulse.runNightly();
+      log.info(out, "pulse signals scanned");
+    })),
+    cron.schedule("0 16 * * 6", safe("flock briefs", async () => {
+      const out = await pulse.composeBriefs();
+      log.info(out, "flock briefs written");
     })),
     cron.schedule("0 3 * * *", safe("partition maintenance", () => partitions.run())),
     cron.schedule("0 4 * * *", safe("is_minor refresh", () => refreshMinorFlags(db.primary))),

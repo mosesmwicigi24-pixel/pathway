@@ -14,6 +14,7 @@ import { NotificationService } from "../notifications/service.js";
 import { ContentIndexService } from "./content.js";
 import { StoryService } from "./story.js";
 import { LettersService } from "./letters.js";
+import { SignalsService } from "./signals.js";
 
 export const intelligenceRouter: Router = Router();
 
@@ -21,7 +22,9 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   const provider = providerOverride ?? buildAiProvider(ctx.env);
   const content = new ContentIndexService(ctx.db.primary);
   const story = new StoryService(ctx.db.primary, provider);
-  const letters = new LettersService(ctx.db.primary, provider, story, content, new NotificationService(ctx.db.primary));
+  const notifications = new NotificationService(ctx.db.primary);
+  const letters = new LettersService(ctx.db.primary, provider, story, content, notifications);
+  const signals = new SignalsService(ctx.db.primary, provider, story, notifications);
   const auth = authenticate(ctx.env);
   const r = intelligenceRouter;
 
@@ -77,6 +80,28 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   r.post("/admin/intelligence/letters/run", auth, requireRole("Admin"), handler(async (req, res) => {
     const input = parseBody(z.object({ user_id: z.string().uuid().optional() }), req.body ?? {});
     res.json(await letters.runWeekly(input.user_id ? { userIds: [input.user_id] } : {}));
+  }));
+
+  // --- Shepherd's Pulse (Phase 2): leader-scoped signals + the Flock Brief ---
+  r.get("/admin/intelligence/signals", auth, requireRole("Instructor"), handler(async (req, res) => {
+    const since = Math.min(Math.max(Number(req.query.since_days ?? 14) || 14, 1), 60);
+    res.json({ data: await signals.listFor(requirePrincipal(req), since) });
+  }));
+
+  r.post("/admin/intelligence/signals/:id/ack", auth, requireRole("Instructor"), handler(async (req, res) => {
+    res.json(await signals.acknowledge(requirePrincipal(req), String(req.params.id ?? "")));
+  }));
+
+  r.get("/admin/intelligence/flock-brief", auth, requireRole("Instructor"), handler(async (req, res) => {
+    res.json({ brief: await signals.myBrief(requirePrincipal(req).userId) });
+  }));
+
+  r.post("/admin/intelligence/signals/scan", auth, requireRole("Admin"), handler(async (_req, res) => {
+    res.json(await signals.runNightly());
+  }));
+
+  r.post("/admin/intelligence/flock-brief/run", auth, requireRole("Admin"), handler(async (_req, res) => {
+    res.json(await signals.composeBriefs());
   }));
 
   return r;

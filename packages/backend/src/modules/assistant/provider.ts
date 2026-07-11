@@ -188,6 +188,21 @@ export class FakeAiProvider implements AiProvider {
         "Scripture: Philippians 1:6\n\nDear friend, I watched your week — the lessons you finished and the quiet days too. He who began a good work in you will carry it on to completion. Keep walking; your cell is walking with you.\n— Nuru Place",
       );
     }
+    if (/emotion classifier/i.test(input.system)) {
+      const text = [...input.messages].reverse().find((m) => m.role === "user")?.text ?? "";
+      if (/suicid|kill myself|end my life|no reason to live|want to die/i.test(text)) {
+        return Promise.resolve('{"tone":"despairing","summary":"They expressed deep despair about living.","crisis":true}');
+      }
+      if (/(tired|weary|heavy|exhausted|struggle|struggling)/i.test(text)) {
+        return Promise.resolve('{"tone":"weary","summary":"They sound stretched thin but are pressing on.","crisis":false}');
+      }
+      return Promise.resolve('{"tone":"thankful","summary":"They are grateful for what God is doing.","crisis":false}');
+    }
+    if (/flock brief/i.test(input.system)) {
+      return Promise.resolve(
+        "Your flock held steady this week. Celebrate: Ada Grace finished another module. Watch: one member's rhythm slipped. Reach out first: the member carrying the heaviest signal — a simple 'thinking of you, can we talk this week?' opener.",
+      );
+    }
     if (/pastoral memory/i.test(input.system)) {
       return Promise.resolve(
         "They are walking steadily through their current level, showing up most days, and their recent reflections carry a hunger to grow. This season they may need encouragement to keep their prayer rhythm.",
