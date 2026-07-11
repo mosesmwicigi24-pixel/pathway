@@ -434,6 +434,46 @@ paths:
       responses:
         "200": { description: "{ week_of, written, skipped }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/intelligence/signals:
+    get:
+      tags: [admin]
+      summary: Instructor+. Care signals for MY flock (cells I lead + my disciples; Admin+ sees all) — drift/emotion/crisis, newest first.
+      parameters:
+        - { name: since_days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 60, default: 14 } }
+      responses:
+        "200": { description: "{ data: [{ signal_id, user_id, member_name, kind, severity, summary, source, created_at, acknowledged_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/intelligence/signals/{id}/ack:
+    post:
+      tags: [admin]
+      summary: Instructor+. Acknowledge a signal in my flock (idempotent; 404 outside my scope).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ signal_id, acknowledged_at }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Not in my flock }
+  /admin/intelligence/flock-brief:
+    get:
+      tags: [admin]
+      summary: Instructor+. My latest weekly Flock Brief (or brief:null before the first).
+      responses:
+        "200": { description: "{ brief: { brief_id, week_of, body, created_at } | null }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/intelligence/signals/scan:
+    post:
+      tags: [admin]
+      summary: Admin. Run the nightly Shepherd's Pulse scan now (drift rules + emotion/crisis reads). Idempotent per user+kind+day.
+      responses:
+        "200": { description: "{ drift, read, flagged, crises }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/intelligence/flock-brief/run:
+    post:
+      tags: [admin]
+      summary: Admin. Compose this week's Flock Briefs for every leader now. Idempotent per leader+week.
+      responses:
+        "200": { description: "{ week_of, written, skipped }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/onboarding:
     post:
       tags: [auth]

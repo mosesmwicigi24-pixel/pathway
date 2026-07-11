@@ -30,6 +30,7 @@ import { MemberProfile } from "./components/pages/MemberProfile";
 import { Profile } from "./components/pages/Profile";
 import { Notifications } from "./components/pages/Notifications";
 import { MemberIntelligence } from "./components/pages/MemberIntelligence";
+import { FlockBrief } from "./components/pages/FlockBrief";
 import { Proximity } from "./components/pages/Proximity";
 import { RadioStudio } from "./components/pages/RadioStudio";
 import { MixerStudio } from "./components/pages/MixerStudio";
@@ -75,6 +76,7 @@ const router = createBrowserRouter([
       { path: "mixer", element: <MixerStudio /> },
       { path: "uploads-sessions", element: <UploadsSessions /> },
       { path: "intelligence", element: <MemberIntelligence /> },
+      { path: "flock-brief", element: <FlockBrief /> },
       { path: "proximity", element: <Proximity /> },
       { path: "users", element: <Users /> },
       { path: "roles", element: <Roles /> },

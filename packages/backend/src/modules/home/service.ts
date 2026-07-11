@@ -101,6 +101,17 @@ export class HomeService {
                 (SELECT count(*)::int FROM devotional_reflections WHERE user_id = $1) AS reflections`,
         [userId, TZ],
       );
+      // Shepherd's Pulse: the freshest emotion signal (48h) lets the morning
+      // word meet the member where they actually are. Consented-only by
+      // construction — signals are only ever created from consented content.
+      const heart = await maybeOne<{ summary: string }>(
+        this.pool,
+        `SELECT summary FROM signals
+          WHERE user_id = $1 AND kind IN ('emotion', 'crisis')
+            AND created_at >= now() - interval '48 hours'
+          ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      );
       const system =
         "You are Nuru, a warm discipleship companion in a church app. Write ONE short blessing or " +
         "exhortation (max 22 words) spoken DIRECTLY to this member and addressed by their first name — " +
@@ -116,6 +127,7 @@ export class HomeService {
         sig.active_days > 0 ? `Active ${sig.active_days} of the last 7 days` : `Has been quiet this week`,
         sig.prayers > 0 ? `Prayed ${sig.prayers} time(s) this week` : null,
         sig.reflections > 0 ? `Has written ${sig.reflections} reflection(s)` : null,
+        heart?.summary ? `Where their heart seems to be right now (be gentle with this): ${heart.summary}` : null,
       ].filter(Boolean);
       const raw = (await this.provider.complete({ system, messages: [{ role: "user", text: bits.join(". ") + "." }] })).trim();
       const text = raw.replace(/^["']|["']$/g, "").slice(0, 240);

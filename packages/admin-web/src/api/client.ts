@@ -347,10 +347,48 @@ export interface ProximityCluster {
   members: ProximityMember[];
 }
 
+// ── Shepherd's Pulse (intelligence Phase 2) ─────────────────────────────────
+export interface PulseSignal {
+  signal_id: string;
+  user_id: string;
+  member_name: string;
+  kind: "drift_risk" | "emotion" | "crisis";
+  severity: "info" | "watch" | "urgent";
+  summary: string;
+  source: string | null;
+  created_at: string;
+  acknowledged_at: string | null;
+}
+export interface FlockBrief {
+  brief_id: string;
+  week_of: string;
+  body: string;
+  created_at: string;
+}
+
 export const AdminApi = {
   async intelligence(): Promise<MemberIntelligence> {
     const { data } = await api.get<MemberIntelligence>("/admin/analytics/intelligence");
     return data;
+  },
+  async pulseSignals(sinceDays = 14): Promise<PulseSignal[]> {
+    const { data } = await api.get<{ data: PulseSignal[] }>(`/admin/intelligence/signals?since_days=${sinceDays}`);
+    return data.data;
+  },
+  async ackSignal(signalId: string): Promise<void> {
+    await api.post(`/admin/intelligence/signals/${signalId}/ack`, {});
+  },
+  async flockBrief(): Promise<FlockBrief | null> {
+    const { data } = await api.get<{ brief: FlockBrief | null }>("/admin/intelligence/flock-brief");
+    return data.brief;
+  },
+  async runPulseScan(): Promise<{ drift: number; read: number; flagged: number; crises: number }> {
+    const { data } = await api.post("/admin/intelligence/signals/scan", {});
+    return data as { drift: number; read: number; flagged: number; crises: number };
+  },
+  async runFlockBriefs(): Promise<{ week_of: string; written: number; skipped: number }> {
+    const { data } = await api.post("/admin/intelligence/flock-brief/run", {});
+    return data as { week_of: string; written: number; skipped: number };
   },
   // Coarse proximity suggestions for human-in-the-loop cell pairing. Adults are
   // visible to coach-tier; minors only to Admin/SuperAdmin (gated server-side).

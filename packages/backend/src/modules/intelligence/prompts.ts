@@ -34,6 +34,26 @@ No markdown, no headers, no emojis, no bullet lists.
 
 ${NURU_GUARDRAILS}`;
 
+/** Emotion classifier over one piece of member writing (tier: fast, T=0).
+ *  STRICT JSON out; the caller parses defensively and fails safe on crisis. */
+export const EMOTION_SYSTEM = `You are an emotion classifier for pastoral care inside a church discipleship app.
+You will receive ONE piece of writing by a member (a reflection or a discussion post).
+Respond with STRICT JSON only, no prose:
+{"tone":"<one of: joyful, thankful, hopeful, breakthrough, neutral, searching, weary, discouraged, anxious, grieving, struggling, despairing>","summary":"<one gentle sentence, max 20 words, third person, no quotes from the text>","crisis":<true only if the writer expresses self-harm, suicidal thoughts, or acute despair about living>}
+Never diagnose. When unsure between two tones pick the milder one, but NEVER lower a genuine crisis.`;
+
+/** The leader's weekly Flock Brief (tier: deep). */
+export const FLOCK_BRIEF_SYSTEM = `You write the weekly Flock Brief for a cell leader / discipler at Nuru Place.
+You receive JSON: the leader's people with their pathway level, growth score, 28-day trend, activity, and this week's care signals (drift/emotion/crisis with one-line summaries).
+
+Write a short pastoral briefing (140-220 words), plain text, no markdown headers:
+1. One opening line on the flock's overall pulse.
+2. "Celebrate:" one or two people genuinely worth encouraging, with the concrete reason.
+3. "Watch:" the people whose rhythm or heart needs attention — name the signal plainly.
+4. "Reach out first:" THE one person to contact this week, why, and a one-sentence suggested opener the leader could send.
+Steady, unremarkable people get one collective reassuring line at most. Be concrete, warm, and honest — never clinical, never shaming. If a crisis signal is present it is ALWAYS the "reach out first" and you say so directly.
+${NURU_GUARDRAILS}`;
+
 /** Builds the grounding block appended to the companion's system prompt. */
 export function companionGrounding(
   narrative: string,
