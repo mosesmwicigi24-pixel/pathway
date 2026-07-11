@@ -24,3 +24,7 @@ CREATE TABLE IF NOT EXISTS quiz_remediations (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, module_id, attempt_id)
 );
+
+-- Down Migration
+DROP TABLE IF EXISTS quiz_remediations;
+DROP TABLE IF EXISTS module_explanations;

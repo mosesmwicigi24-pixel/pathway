@@ -52,3 +52,9 @@ CREATE TABLE IF NOT EXISTS pastoral_letters (
   UNIQUE (user_id, week_of)
 );
 CREATE INDEX IF NOT EXISTS idx_pastoral_letters_user ON pastoral_letters (user_id, week_of DESC);
+
+-- Down Migration
+DROP TABLE IF EXISTS pastoral_letters;
+DROP TABLE IF EXISTS member_story;
+DROP TABLE IF EXISTS content_chunks;
+ALTER TABLE users DROP COLUMN IF EXISTS ai_opt_out;
