@@ -600,6 +600,78 @@ export class HomeService {
       candidates.push({ ...weak, priority: 45 });
     }
 
+    // Living curriculum (P3): a failed quiz worth conquering — review with Nuru, retry.
+    const failedQuiz = await maybeOne<{ module_id: string; title: string }>(
+      this.pool,
+      `SELECT m.module_id, m.title
+         FROM quiz_attempts qa
+         JOIN module_progress mp ON mp.progress_id = qa.progress_id
+         JOIN enrollments e ON e.enrollment_id = mp.enrollment_id
+         JOIN modules m ON m.module_id = mp.module_id
+        WHERE e.user_id = $1 AND qa.is_passed = FALSE
+          AND NOT EXISTS (SELECT 1 FROM quiz_attempts qa2 WHERE qa2.progress_id = qa.progress_id AND qa2.is_passed)
+        ORDER BY qa.attempted_at DESC LIMIT 1`,
+      [userId],
+    );
+    if (failedQuiz) {
+      candidates.push({
+        id: "quiz_retry",
+        title: `Let's conquer: ${failedQuiz.title}`,
+        body: "Review what tripped you with Nuru, then try the quiz again — you're close.",
+        cta_label: "Review & retry",
+        route: "module",
+        params: { moduleId: failedQuiz.module_id },
+        accent: "gold",
+        priority: 62,
+      });
+    }
+
+    // Spaced repetition (mirrors LearningService.dueVerses): a fading verse.
+    const dueVerse = await maybeOne<{ reference: string }>(
+      this.pool,
+      `SELECT mv.reference
+         FROM memory_verse_progress p
+         JOIN memory_verses mv ON mv.memory_verse_id = p.memory_verse_id AND mv.is_active
+        WHERE p.user_id = $1
+          AND ((p.status = 'learning' AND p.best_match_pct < 50 AND p.updated_at < now() - interval '1 day') OR
+               (p.status = 'learning' AND p.best_match_pct >= 50 AND p.best_match_pct < 80 AND p.updated_at < now() - interval '3 days') OR
+               (p.status = 'learning' AND p.best_match_pct >= 80 AND p.updated_at < now() - interval '7 days') OR
+               (p.status = 'mastered' AND p.updated_at < now() - interval '21 days'))
+        ORDER BY p.best_match_pct ASC, p.updated_at ASC LIMIT 1`,
+      [userId],
+    );
+    if (dueVerse) {
+      candidates.push({
+        id: "verse_review",
+        title: "A verse is ready for review",
+        body: `“${dueVerse.reference}” is fading — say it once today and keep it hidden in your heart.`,
+        cta_label: "Review verse",
+        route: "memoryVerses",
+        accent: "success",
+        priority: 58,
+      });
+    }
+
+    // Shepherd's Pulse tie-in: a fresh drift signal and no activity today —
+    // the gentlest possible door back in (grace-first, never guilt).
+    const drifting = await maybeOne(
+      this.pool,
+      `SELECT 1 FROM signals WHERE user_id = $1 AND kind = 'drift_risk' AND created_at >= now() - interval '3 days'`,
+      [userId],
+    );
+    if (drifting && !ctx.any_today) {
+      candidates.push({
+        id: "gentle_return",
+        title: "We saved your place",
+        body: "No pressure — one small step today is enough. Grace covers the gap.",
+        cta_label: "Take one step",
+        route: nextModule ? "module" : "pathway",
+        ...(nextModule ? { params: { moduleId: nextModule.module_id } } : {}),
+        accent: "navy",
+        priority: 84,
+      });
+    }
+
     // Always-available affirmation so the hero is never empty.
     candidates.push({
       id: "affirm",

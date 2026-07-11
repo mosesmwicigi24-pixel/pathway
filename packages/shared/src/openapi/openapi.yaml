@@ -467,6 +467,34 @@ paths:
       responses:
         "200": { description: "{ drift, read, flagged, crises }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /modules/{id}/explain:
+    get:
+      tags: [progress]
+      summary: The lesson rendered differently (style = simple | swahili | story). Cached per module+style; §1.9 gated like the lesson itself.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: style, in: query, required: false, schema: { type: string, enum: [simple, swahili, story], default: simple } }
+      responses:
+        "200": { description: "{ style, body, cached }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: GATE_LOCKED }
+  /modules/{id}/quiz/remediation:
+    post:
+      tags: [progress]
+      summary: '"Review with Nuru" for my latest FAILED quiz attempt on this module — re-teaches missed concepts from the lesson (never the answer key). Cached per attempt.'
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ attempt_id, body, missed, cached }" }
+        "400": { description: No failed attempt to review }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /growth/memory-verses/due:
+    get:
+      tags: [growth]
+      summary: My memory verses due for spaced-repetition review (weakest + stalest first, max 5).
+      responses:
+        "200": { description: "{ data: [{ memory_verse_id, reference, verse_text, best_match_pct, status, days_since }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /admin/intelligence/flock-brief/run:
     post:
       tags: [admin]
