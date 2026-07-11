@@ -16,6 +16,7 @@
 --     no letters/narratives are generated for them. Behavioral aggregates
 --     (counts, scores) still power the deterministic UI exactly as today.
 
+-- Up Migration
 ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_opt_out BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS content_chunks (

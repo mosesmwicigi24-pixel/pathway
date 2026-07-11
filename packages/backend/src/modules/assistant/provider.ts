@@ -193,6 +193,14 @@ export class FakeAiProvider implements AiProvider {
       if (/parable/i.test(input.system)) return Promise.resolve("Once, in a busy Kayole market, a trader learned that faithfulness in small things opens greater doors. The lesson: God honors steady obedience (Luke 16:10).");
       return Promise.resolve("Here is the lesson in simple words: God keeps His promises. When we trust Him daily, our faith grows strong. (Hebrews 10:23)");
     }
+    if (/daily liturgy/i.test(input.system)) {
+      return Promise.resolve(JSON.stringify({
+        morning: { line: "Rise — his mercies are new for you this morning; meet him before the day meets you.", scripture: "Lamentations 3:22-23" },
+        midday: { line: "Pause one breath — the Lord is near, even in the middle of the noise.", scripture: "Philippians 4:5" },
+        evening: { line: "Look back over today with honesty and grace; he was in every hour of it.", scripture: "Psalm 139:23-24" },
+        night: { line: "Lie down in peace tonight — he who keeps you neither slumbers nor sleeps.", scripture: "Psalm 4:8" },
+      }));
+    }
     if (/quiz coach/i.test(input.system)) {
       return Promise.resolve("Failing a quiz is part of learning — well done for coming back. Look again at what the lesson says about God's covenant faithfulness; the answer lives there. You are ready — try again.");
     }
