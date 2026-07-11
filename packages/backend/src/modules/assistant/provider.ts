@@ -188,6 +188,14 @@ export class FakeAiProvider implements AiProvider {
         "Scripture: Philippians 1:6\n\nDear friend, I watched your week — the lessons you finished and the quiet days too. He who began a good work in you will carry it on to completion. Keep walking; your cell is walking with you.\n— Nuru Place",
       );
     }
+    if (/rendering an existing lesson/i.test(input.system)) {
+      if (/Kiswahili/i.test(input.system)) return Promise.resolve("Somo hili kwa ufupi: Mungu ni mwaminifu, na Neno lake ni taa ya miguu yetu. Endelea kutembea naye kila siku.");
+      if (/parable/i.test(input.system)) return Promise.resolve("Once, in a busy Kayole market, a trader learned that faithfulness in small things opens greater doors. The lesson: God honors steady obedience (Luke 16:10).");
+      return Promise.resolve("Here is the lesson in simple words: God keeps His promises. When we trust Him daily, our faith grows strong. (Hebrews 10:23)");
+    }
+    if (/quiz coach/i.test(input.system)) {
+      return Promise.resolve("Failing a quiz is part of learning — well done for coming back. Look again at what the lesson says about God's covenant faithfulness; the answer lives there. You are ready — try again.");
+    }
     if (/emotion classifier/i.test(input.system)) {
       const text = [...input.messages].reverse().find((m) => m.role === "user")?.text ?? "";
       if (/suicid|kill myself|end my life|no reason to live|want to die/i.test(text)) {

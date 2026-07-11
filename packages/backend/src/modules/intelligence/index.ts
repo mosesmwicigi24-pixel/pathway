@@ -15,6 +15,8 @@ import { ContentIndexService } from "./content.js";
 import { StoryService } from "./story.js";
 import { LettersService } from "./letters.js";
 import { SignalsService } from "./signals.js";
+import { LearningService, EXPLAIN_STYLES, type ExplainStyle } from "./learning.js";
+import { ApiError } from "../../http/errors.js";
 
 export const intelligenceRouter: Router = Router();
 
@@ -25,6 +27,7 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   const notifications = new NotificationService(ctx.db.primary);
   const letters = new LettersService(ctx.db.primary, provider, story, content, notifications);
   const signals = new SignalsService(ctx.db.primary, provider, story, notifications);
+  const learning = new LearningService(ctx.db.primary, provider);
   const auth = authenticate(ctx.env);
   const r = intelligenceRouter;
 
@@ -102,6 +105,21 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
 
   r.post("/admin/intelligence/flock-brief/run", auth, requireRole("Admin"), handler(async (_req, res) => {
     res.json(await signals.composeBriefs());
+  }));
+
+  // --- Living curriculum (Phase 3) ---
+  r.get("/modules/:id/explain", auth, handler(async (req, res) => {
+    const style = String(req.query.style ?? "simple") as ExplainStyle;
+    if (!EXPLAIN_STYLES.includes(style)) throw new ApiError("VALIDATION_FAILED", "style must be simple | swahili | story");
+    res.json(await learning.explain(requirePrincipal(req).userId, String(req.params.id ?? ""), style));
+  }));
+
+  r.post("/modules/:id/quiz/remediation", auth, handler(async (req, res) => {
+    res.json(await learning.remediate(requirePrincipal(req).userId, String(req.params.id ?? "")));
+  }));
+
+  r.get("/growth/memory-verses/due", auth, handler(async (req, res) => {
+    res.json({ data: await learning.dueVerses(requirePrincipal(req).userId) });
   }));
 
   return r;
