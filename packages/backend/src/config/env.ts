@@ -78,11 +78,17 @@ const EnvSchema = z.object({
   // Public base URL used to build links in emails (e.g. the password-reset page).
   APP_PUBLIC_URL: z.string().url().default("https://pathway.nuruplace.org"),
 
-  // --- Nuru AI assistant (free tier: Google AI Studio / Gemini). Key by name
-  // only (§5.10); absent → a deterministic offline fake responder is used. ---
+  // --- Nuru AI (§5.10: keys by name only; absent → offline fake responder). ---
+  // Anthropic (Claude) — preferred; tiered models power the intelligence layer
+  // (fast = nightly story batch, standard = companion chat, deep = Sunday Letter).
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_MODEL_FAST: z.string().default("claude-haiku-4-5-20251001"),
+  ANTHROPIC_MODEL: z.string().default("claude-sonnet-5"),
+  ANTHROPIC_MODEL_DEEP: z.string().default("claude-opus-4-8"),
+  // Google AI Studio / Gemini (free-tier fallback).
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
-  // Groq — free tier, no billing; preferred when set. Open models (Llama 3.3).
+  // Groq — free tier, no billing. Open models (Llama 3.3).
   GROQ_API_KEY: z.string().optional(),
   GROQ_MODEL: z.string().default("llama-3.3-70b-versatile"),
 

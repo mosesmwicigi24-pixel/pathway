@@ -14,11 +14,71 @@ export interface AiTurn {
 export interface AiCompletion {
   system: string;
   messages: AiTurn[];
+  /** Cost/quality tier — mapped to a concrete model by providers that support
+   *  it (Anthropic). "fast" = cheap batch work (nightly story narratives),
+   *  "standard" = daily member-facing generation (companion chat), "deep" =
+   *  the weekly Sunday Letter. Providers without tiers ignore it. */
+  tier?: "fast" | "standard" | "deep";
+  maxTokens?: number;
+  temperature?: number;
 }
 
 export interface AiProvider {
   readonly name: string;
   complete(input: AiCompletion): Promise<string>;
+}
+
+/** Anthropic (Claude) — the preferred provider. Tiered models keep the nightly
+ *  batch cheap while the weekly letter gets the strongest writer. Plain fetch
+ *  (no SDK): one dependency fewer, explicit timeout, transparent errors. */
+class AnthropicProvider implements AiProvider {
+  readonly name = "anthropic";
+  constructor(
+    private readonly apiKey: string,
+    private readonly models: { fast: string; standard: string; deep: string },
+  ) {}
+
+  async complete(input: AiCompletion): Promise<string> {
+    const model = this.models[input.tier ?? "standard"];
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45_000);
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": this.apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model,
+          system: input.system,
+          messages: input.messages.map((m) => ({ role: m.role, content: m.text })),
+          max_tokens: input.maxTokens ?? 600,
+          temperature: input.temperature ?? 0.6,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        console.error(`[nuru-ai] anthropic ${res.status}: ${detail.slice(0, 300)}`);
+        throw new ApiError("UPSTREAM_UNAVAILABLE", "The assistant is unavailable right now");
+      }
+      const json = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
+      const text = json.content
+        ?.filter((b) => b.type === "text")
+        .map((b) => b.text ?? "")
+        .join("")
+        .trim();
+      if (!text) throw new ApiError("UPSTREAM_UNAVAILABLE", "The assistant had nothing to say");
+      return text;
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      throw new ApiError("UPSTREAM_UNAVAILABLE", "The assistant is unavailable right now");
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 /** Google Gemini (generativelanguage REST). Maps assistant→model roles. */
@@ -37,7 +97,7 @@ class GeminiProvider implements AiProvider {
         role: m.role === "assistant" ? "model" : "user",
         parts: [{ text: m.text }],
       })),
-      generationConfig: { maxOutputTokens: 600, temperature: 0.6 },
+      generationConfig: { maxOutputTokens: input.maxTokens ?? 600, temperature: input.temperature ?? 0.6 },
     };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20_000);
@@ -90,8 +150,8 @@ class GroqProvider implements AiProvider {
             { role: "system", content: input.system },
             ...input.messages.map((m) => ({ role: m.role, content: m.text })),
           ],
-          max_tokens: 600,
-          temperature: 0.6,
+          max_tokens: input.maxTokens ?? 600,
+          temperature: input.temperature ?? 0.6,
         }),
         signal: controller.signal,
       });
@@ -121,6 +181,18 @@ class GroqProvider implements AiProvider {
 export class FakeAiProvider implements AiProvider {
   readonly name = "fake";
   complete(input: AiCompletion): Promise<string> {
+    // Intelligence-layer prompts get deterministic, contract-shaped outputs so
+    // the letter parser + story pipeline are testable offline.
+    if (/sunday letter/i.test(input.system)) {
+      return Promise.resolve(
+        "Scripture: Philippians 1:6\n\nDear friend, I watched your week — the lessons you finished and the quiet days too. He who began a good work in you will carry it on to completion. Keep walking; your cell is walking with you.\n— Nuru Place",
+      );
+    }
+    if (/pastoral memory/i.test(input.system)) {
+      return Promise.resolve(
+        "They are walking steadily through their current level, showing up most days, and their recent reflections carry a hunger to grow. This season they may need encouragement to keep their prayer rhythm.",
+      );
+    }
     const last = [...input.messages].reverse().find((m) => m.role === "user")?.text ?? "";
     const t = last.toLowerCase();
     if (/(summar|cohort|catch|recap)/.test(t)) {
@@ -148,10 +220,18 @@ export class FakeAiProvider implements AiProvider {
 }
 
 export function buildAiProvider(env: Env): AiProvider {
-  // Prefer Groq (free, no billing), then Gemini. When a key is configured we use
-  // the LIVE provider directly — a failure surfaces as an error (and is logged),
-  // rather than silently degrading to canned text. The offline responder is used
-  // only when no key is set (local dev / tests).
+  // Prefer Anthropic (Claude — tiered models power the intelligence layer),
+  // then Groq (free), then Gemini. When a key is configured we use the LIVE
+  // provider directly — a failure surfaces as an error (and is logged), rather
+  // than silently degrading to canned text. The offline responder is used only
+  // when no key is set (local dev / tests).
+  if (env.ANTHROPIC_API_KEY) {
+    return new AnthropicProvider(env.ANTHROPIC_API_KEY, {
+      fast: env.ANTHROPIC_MODEL_FAST,
+      standard: env.ANTHROPIC_MODEL,
+      deep: env.ANTHROPIC_MODEL_DEEP,
+    });
+  }
   if (env.GROQ_API_KEY) return new GroqProvider(env.GROQ_API_KEY, env.GROQ_MODEL);
   if (env.GEMINI_API_KEY) return new GeminiProvider(env.GEMINI_API_KEY, env.GEMINI_MODEL);
   return new FakeAiProvider();

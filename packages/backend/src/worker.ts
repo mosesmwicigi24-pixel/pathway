@@ -25,6 +25,10 @@ import { buildPaymentGateway } from "./modules/financial/gateway.js";
 import { buildMobileMoneyProviders } from "./modules/financial/providers.js";
 import { RadioService } from "./modules/radio/service.js";
 import { buildStreamProvider } from "./modules/radio/provider.js";
+import { buildAiProvider } from "./modules/assistant/provider.js";
+import { ContentIndexService } from "./modules/intelligence/content.js";
+import { StoryService } from "./modules/intelligence/story.js";
+import { LettersService } from "./modules/intelligence/letters.js";
 
 function main(): void {
   const env = loadEnv();
@@ -75,8 +79,26 @@ function main(): void {
   const safe = (label: string, fn: () => Promise<unknown>) => () =>
     void fn().catch((err) => log.error({ err }, `${label} failed`));
 
+  // Intelligence layer (AI Phase 1): nightly content reindex + Member Story
+  // rebuild (03:00 EAT), and the Sunday Letter run (Sunday 16:00 EAT). Every
+  // job is idempotent (wipe+refill index; story upsert; letters UNIQUE per
+  // user+week), and a missing AI key degrades to the offline fake provider.
+  const aiProvider = buildAiProvider(env);
+  const contentIndex = new ContentIndexService(db.primary);
+  const memberStory = new StoryService(db.primary, aiProvider);
+  const letters = new LettersService(db.primary, aiProvider, memberStory, contentIndex, new NotificationService(db.primary));
+
   const tasks = [
     cron.schedule("0 2 * * *", safe("engagement recompute", () => engagement.runRecompute())),
+    cron.schedule("0 0 * * *", safe("intelligence reindex + story rebuild", async () => {
+      await contentIndex.reindexAll();
+      const { rebuilt } = await memberStory.rebuildAll();
+      log.info({ rebuilt }, "member stories rebuilt");
+    })),
+    cron.schedule("0 13 * * 0", safe("sunday letters", async () => {
+      const out = await letters.runWeekly();
+      log.info(out, "sunday letters written");
+    })),
     cron.schedule("0 3 * * *", safe("partition maintenance", () => partitions.run())),
     cron.schedule("0 4 * * *", safe("is_minor refresh", () => refreshMinorFlags(db.primary))),
     cron.schedule("0 4 * * *", safe("streak recompute", () => gamification.recomputeActiveStreaks())),

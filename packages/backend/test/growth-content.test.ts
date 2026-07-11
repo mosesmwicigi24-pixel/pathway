@@ -52,7 +52,7 @@ describe("Word score", () => {
     expect(after.body.score).toBeGreaterThan(0);
     expect(after.body.components).toHaveProperty("memorization");
     expect(after.body.detail.verses_mastered).toBe(1);
-    expect(after.body.detail.active_days_14).toBeGreaterThanOrEqual(1); // practice emitted a 'word' event
+    expect(after.body.detail.active_days).toBeGreaterThanOrEqual(1); // practice emitted a 'word' event (28d window)
 
     // practising Scripture now ticks the daily "word" rhythm
     const rhythm = await agent().get("/v1/me/rhythm/today").set(auth(meTok));
