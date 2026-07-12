@@ -18,6 +18,7 @@ import { SignalsService } from "./signals.js";
 import { LearningService, EXPLAIN_STYLES, type ExplainStyle } from "./learning.js";
 import { LiturgyService } from "./liturgy.js";
 import { CommunityService, type BlessingKind } from "./community.js";
+import { EchoesService } from "./echoes.js";
 import { ApiError } from "../../http/errors.js";
 
 export const intelligenceRouter: Router = Router();
@@ -32,6 +33,7 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   const learning = new LearningService(ctx.db.primary, provider);
   const liturgy = new LiturgyService(ctx.db.primary, provider);
   const community = new CommunityService(ctx.db.primary, notifications);
+  const echoes = new EchoesService(ctx.db.primary);
   const auth = authenticate(ctx.env);
   const r = intelligenceRouter;
 
@@ -127,6 +129,10 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   }));
 
   // --- The liturgy Home + community intelligence (Phase 4) ---
+  r.get("/home/echo", auth, handler(async (req, res) => {
+    res.json({ echo: await echoes.today(requirePrincipal(req).userId) });
+  }));
+
   r.get("/home/liturgy", auth, handler(async (req, res) => {
     const me = await ctx.db.primary.query(`SELECT congregation_id FROM users WHERE user_id = $1`, [
       requirePrincipal(req).userId,

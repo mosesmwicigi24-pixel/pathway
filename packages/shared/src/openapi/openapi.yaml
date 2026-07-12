@@ -502,6 +502,13 @@ paths:
       responses:
         "200": { description: "{ week_of, written, skipped }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /home/echo:
+    get:
+      tags: [growth]
+      summary: Today's companion echo — ONE per member per EAT day, stable across refetches, AI-free. Priorities — welcome_back (≥4 quiet days, 7-day cooldown), reflection_echo (the member's own words from 6–10 days ago, each echoes once ever), anniversary (a module finished exactly 30 days ago). Null when nothing true and specific exists ("specificity or silence").
+      responses:
+        "200": { description: "{ echo: { kind, body, quote, ref } | null }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /home/liturgy:
     get:
       tags: [growth]
