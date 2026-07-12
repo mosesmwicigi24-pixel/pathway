@@ -22,8 +22,12 @@
 // Listen panel (live mount playback — broadcast / on-air monitor / cue, derived
 // from hls_url), the audio-source device picker + level meters (getUserMedia →
 // Web Audio), and GO ON MIC (MediaRecorder → /v1/admin/radio/mic-bridge
-// WebSocket → the on-air harbor). LOCAL (client-only UI): waveform decoration,
-// device manager, emergency buttons.
+// WebSocket → the on-air harbor) — including the INSTANT MIC BROADCAST: with
+// no live session, GO ON MIC finds/creates the standing "Live Microphone"
+// session, takes it live, waits out the transmitter boot (4008 closes retry
+// for ~45s) and goes on air; going off mic then offers to end the broadcast.
+// LOCAL (client-only UI): waveform decoration, device manager, emergency
+// buttons.
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
@@ -118,6 +122,13 @@ export function RadioStudio(): ReactElement {
   const [count, setCount] = useState(3);
   const [elapsed, setElapsed] = useState(0);
 
+  // ── instant mic broadcast ("click the mic, it goes live") ──
+  const [instantConfirmOpen, setInstantConfirmOpen] = useState(false);
+  const [offMicConfirmOpen, setOffMicConfirmOpen] = useState(false);
+  // The live session THIS console started from the mic button. While set,
+  // going off mic offers to end the broadcast too (mic-only broadcast).
+  const [micBroadcastId, setMicBroadcastId] = useState<string | null>(null);
+
   // ── local UI state (mic/meters hardware is REAL — see useMicEngine below) ──
   const [connectOpen, setConnectOpen] = useState(false);
   const [killArmed, setKillArmed] = useState(false);
@@ -157,6 +168,14 @@ export function RadioStudio(): ReactElement {
   // The bridge's harbor exists only while a session is live on the frequency.
   const anyLive = programs?.some((p) => p.is_live) ?? false;
   const mic = useMicEngine(anyLive);
+
+  // The mic-started broadcast ended elsewhere (kill switch, another console,
+  // auto-air worker) — drop the flag so OFF MIC is a plain disconnect again.
+  useEffect(() => {
+    if (micBroadcastId && programs && !programs.some((p) => p.id === micBroadcastId && p.is_live)) {
+      setMicBroadcastId(null);
+    }
+  }, [micBroadcastId, programs]);
 
   // waveform (client-simulated decoration; the L/R meters are REAL — useMicEngine)
   const [bars, setBars] = useState<number[]>(() => Array.from({ length: 56 }, () => 0.08));
@@ -388,6 +407,114 @@ export function RadioStudio(): ReactElement {
       setBusy(false);
     }
   }, [selectedId]);
+
+  // ── INSTANT MIC BROADCAST — the mic goes live without a prepared session ──
+  // Find-or-create the standing "Live Microphone" session, take it live, wait
+  // for the transmitter (harbor) to boot, then put the mic on air. On a 409
+  // (another session raced us live) the mic simply joins that session.
+  const startInstantBroadcast = async (): Promise<void> => {
+    setInstantConfirmOpen(false);
+    setBusy(true);
+    setActionErr(null);
+    let targetId: string | null = null;
+    let startedHere = false;
+    try {
+      // a. Standing session: reuse a non-live "Live Microphone", else create it.
+      let target = programs?.find((p) => p.title === "Live Microphone" && !p.is_live) ?? null;
+      if (!target) {
+        target = await RadioApi.createProgram({
+          title: "Live Microphone",
+          category: "Sermon",
+          visibility: "public",
+          description: "Live microphone broadcast",
+        });
+      }
+      targetId = target.id;
+      // b. Take it live — 409 means another session won the frequency; join it.
+      try {
+        const updated = await RadioApi.goLive(target.id);
+        startedHere = true;
+        targetId = updated.id;
+        setPrograms((ps) => {
+          const list = ps ?? [];
+          return list.some((p) => p.id === updated.id)
+            ? list.map((p) => (p.id === updated.id ? updated : p))
+            : [updated, ...list];
+        });
+      } catch (e: unknown) {
+        const status = e instanceof AxiosError ? e.response?.status : undefined;
+        if (status !== 409) throw e;
+        const list = await RadioApi.programs();
+        setPrograms(list);
+        const liveNow = list.find((p) => p.is_live);
+        if (!liveNow) throw e; // 409 with nothing live — surface the error
+        targetId = liveNow.id;
+      }
+      // d. Select the live session so the LIVE UI (status band, health,
+      //    listeners) lights up, and let the other panels refresh.
+      setSelectedId(targetId);
+      setPhase("live");
+      setElapsed(0);
+      setMicBroadcastId(startedHere ? targetId : null);
+      window.dispatchEvent(new CustomEvent("rs:programs-changed"));
+    } catch (e: unknown) {
+      setActionErr(apiErrMessage(e, "Could not start the mic broadcast. Please try again."));
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    if (!targetId) return;
+
+    // c. Transmitter boot wait — the engine retries 4008 closes for ~45s.
+    const result = await mic.goOnMicBoot();
+    if (result === "live" || result === "cancelled") return; // on air / user already decided
+    if (result === "occupied" || !startedHere) {
+      setMicBroadcastId(null); // session is someone else's (or in use) — leave it live
+      return;
+    }
+    // The transmitter never came up (or the mic hard-failed) — end the session
+    // we started so no headless live broadcast remains. micErr explains why.
+    setMicBroadcastId(null);
+    try {
+      const ended = await RadioApi.end(targetId);
+      setPrograms((ps) => (ps ? ps.map((p) => (p.id === ended.id ? ended : p)) : ps));
+    } catch { /* leave it — End Broadcast is one click away */ }
+    setHealth(null);
+    window.dispatchEvent(new CustomEvent("rs:programs-changed"));
+  };
+
+  // OFF MIC — when this console's mic started the broadcast, confirm whether
+  // to end it too; otherwise it's a plain disconnect (the session stays live).
+  const offMicRequest = (): void => {
+    if (micBroadcastId) setOffMicConfirmOpen(true);
+    else mic.offMic();
+  };
+
+  const offMicEnd = async (): Promise<void> => {
+    setOffMicConfirmOpen(false);
+    const id = micBroadcastId;
+    setMicBroadcastId(null);
+    mic.offMic();
+    if (!id) return;
+    setBusy(true);
+    setActionErr(null);
+    try {
+      const ended = await RadioApi.end(id);
+      setPrograms((ps) => (ps ? ps.map((p) => (p.id === ended.id ? ended : p)) : ps));
+      if (selectedId === id) { setPhase("idle"); setElapsed(0); setHealth(null); }
+      window.dispatchEvent(new CustomEvent("rs:programs-changed"));
+    } catch {
+      setActionErr("Could not end the broadcast. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const offMicKeep = (): void => {
+    setOffMicConfirmOpen(false);
+    setMicBroadcastId(null); // from here on, off mic is a plain disconnect
+    mic.offMic();
+  };
 
   const rotateKey = useCallback(async () => {
     if (!selectedId) return;
@@ -848,7 +975,7 @@ export function RadioStudio(): ReactElement {
                         <span className="rs-tnum" style={{ fontFamily: MONO, fontWeight: 700 }}>{fmtDuration(mic.elapsed)}</span>
                       </span>
                     ) : (
-                      <span style={{ fontSize: 11, color: DIM }}>{mic.connecting ? "Connecting…" : "Off mic"}</span>
+                      <span style={{ fontSize: 11, color: DIM }}>{mic.booting ? "Starting the transmitter…" : mic.connecting ? "Connecting…" : "Off mic"}</span>
                     )}
                   </div>
 
@@ -856,15 +983,15 @@ export function RadioStudio(): ReactElement {
 
                   <div className="flex items-center gap-3 mb-4 flex-wrap">
                     {mic.onAir || mic.connecting ? (
-                      <button onClick={mic.offMic} className="rs-btn flex items-center gap-2 rounded-2xl px-6" style={{ height: 48, background: `linear-gradient(135deg, ${RED}, #B91C1C)`, color: "#fff", fontSize: 14, fontWeight: 800, border: "none", boxShadow: "0 12px 28px -12px rgba(239,68,68,0.7)" }}>
-                        <MicOff size={17} /> Off mic
+                      <button onClick={offMicRequest} className="rs-btn flex items-center gap-2 rounded-2xl px-6" style={{ height: 48, background: `linear-gradient(135deg, ${RED}, #B91C1C)`, color: "#fff", fontSize: 14, fontWeight: 800, border: "none", boxShadow: "0 12px 28px -12px rgba(239,68,68,0.7)" }}>
+                        {mic.booting ? <Loader2 size={17} className="rs-spin" /> : <MicOff size={17} />} {mic.booting ? "Starting the transmitter…" : "Off mic"}
                       </button>
                     ) : (
-                      <button onClick={mic.goOnMic} disabled={!selected?.is_live || !mic.supported} className="rs-btn flex items-center gap-2 rounded-2xl px-6" style={{ height: 48, background: `linear-gradient(135deg, ${GREEN}, #15803D)`, color: "#fff", fontSize: 14, fontWeight: 800, border: "none", opacity: selected?.is_live && mic.supported ? 1 : 0.45, cursor: selected?.is_live && mic.supported ? "pointer" : "default" }}>
+                      <button onClick={() => { if (anyLive) mic.goOnMic(); else setInstantConfirmOpen(true); }} disabled={!mic.supported || busy} className="rs-btn flex items-center gap-2 rounded-2xl px-6" style={{ height: 48, background: `linear-gradient(135deg, ${GREEN}, #15803D)`, color: "#fff", fontSize: 14, fontWeight: 800, border: "none", opacity: mic.supported && !busy ? 1 : 0.45, cursor: mic.supported && !busy ? "pointer" : "default" }}>
                         <Mic size={17} /> Go on mic
                       </button>
                     )}
-                    {!selected?.is_live && <span style={{ fontSize: 11, color: DIM }}>Take a session live to go on mic.</span>}
+                    {!anyLive && !mic.onAir && !mic.connecting && <span style={{ fontSize: 11, color: DIM }}>Goes live instantly — mic-only broadcast.</span>}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -1444,6 +1571,36 @@ export function RadioStudio(): ReactElement {
         </div>
       )}
 
+      {/* ── Instant mic broadcast confirm ── */}
+      {instantConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(5,9,17,0.7)", backdropFilter: "blur(4px)" }} onClick={() => setInstantConfirmOpen(false)}>
+          <div className="rounded-2xl text-center" style={{ background: PANEL, border: `1px solid ${PANEL_BORDER}`, padding: "30px 32px", width: "min(380px, calc(100vw - 32px))", boxShadow: "0 30px 80px rgba(0,0,0,0.6)" }} onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto flex items-center justify-center rounded-full mb-4" style={{ width: 60, height: 60, background: "rgba(34,197,94,0.14)", color: GREEN }}><Mic size={28} /></div>
+            <div style={{ fontFamily: SERIF, fontSize: 22 }}>Go live now?</div>
+            <div style={{ fontSize: 12.5, color: DIM, marginTop: 8, lineHeight: 1.55 }}>Mic-only broadcast — listeners hear you immediately.</div>
+            <div className="flex gap-2 mt-6">
+              <button onClick={() => setInstantConfirmOpen(false)} className="rs-btn flex-1 rounded-xl py-3" style={{ background: "rgba(255,255,255,0.06)", color: TEXT, fontSize: 13, fontWeight: 600 }}>Not yet</button>
+              <button onClick={() => void startInstantBroadcast()} className="rs-btn flex-1 rounded-xl py-3" style={{ background: `linear-gradient(135deg, ${GREEN}, #15803D)`, color: "#fff", fontSize: 13, fontWeight: 800 }}>Go live</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Off-mic confirm (this mic started the broadcast) ── */}
+      {offMicConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: "rgba(5,9,17,0.7)", backdropFilter: "blur(4px)" }} onClick={() => setOffMicConfirmOpen(false)}>
+          <div className="rounded-2xl text-center" style={{ background: PANEL, border: `1px solid ${PANEL_BORDER}`, padding: "30px 32px", width: "min(380px, calc(100vw - 32px))", boxShadow: "0 30px 80px rgba(0,0,0,0.6)" }} onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto flex items-center justify-center rounded-full mb-4" style={{ width: 60, height: 60, background: "rgba(239,68,68,0.14)", color: RED }}><MicOff size={28} /></div>
+            <div style={{ fontFamily: SERIF, fontSize: 22 }}>Go off mic?</div>
+            <div style={{ fontSize: 12.5, color: DIM, marginTop: 8, lineHeight: 1.55 }}>Going off mic will end the live broadcast.</div>
+            <div className="flex gap-2 mt-6">
+              <button onClick={() => void offMicEnd()} className="rs-btn flex-1 rounded-xl py-3" style={{ background: `linear-gradient(135deg, ${RED}, #B91C1C)`, color: "#fff", fontSize: 13, fontWeight: 800 }}>End broadcast</button>
+              <button onClick={offMicKeep} className="rs-btn flex-1 rounded-xl py-3" style={{ background: "rgba(255,255,255,0.06)", color: TEXT, fontSize: 13, fontWeight: 600 }}>Keep broadcasting</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Countdown overlay ── */}
       {phase === "countdown" && (
         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center" style={{ background: "rgba(5,9,17,0.88)", backdropFilter: "blur(6px)" }}>
@@ -1527,6 +1684,21 @@ const MIC_CLOSE_MSG: Record<number, string> = {
 
 type MicPhase = "idle" | "ready" | "connecting" | "live";
 
+// Result of the boot-tolerant connect (goOnMicBoot — the instant mic broadcast):
+//   live      — acked by the bridge, mic is on air.
+//   cancelled — the user (or a session flip) stopped the mic mid-boot; the
+//               off-mic confirm already decided the session's fate — no action.
+//   occupied  — 4409: someone else is on mic (e.g. the iPad raced us); the
+//               session is genuinely in use — surface the error, keep it live.
+//   failed    — timeout or a hard error; the caller ends the session it started
+//               so no headless live session remains.
+type MicBootResult = "live" | "cancelled" | "occupied" | "failed";
+
+// The engine boots the on-air harbor ~10–20s after go-live; retry the bridge
+// every 3s for up to ~45s — a 4008 close in that window is EXPECTED.
+const MIC_BOOT_WINDOW_MS = 45_000;
+const MIC_BOOT_RETRY_MS = 3_000;
+
 interface MicEngine {
   supported: boolean;
   devices: MediaDeviceInfo[];
@@ -1548,6 +1720,10 @@ interface MicEngine {
   micErr: string | null;
   enable: () => void;
   goOnMic: () => void;
+  // Instant mic broadcast: connect while the transmitter (harbor) is still
+  // booting — retries 4008 closes within MIC_BOOT_WINDOW_MS, then gives up.
+  booting: boolean;
+  goOnMicBoot: () => Promise<MicBootResult>;
   offMic: () => void;
 }
 
@@ -1576,6 +1752,7 @@ function useMicEngine(canGoLive: boolean): MicEngine {
   const [meter, setMeter] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [micErr, setMicErr] = useState<string | null>(null);
+  const [booting, setBooting] = useState(false);
 
   // Refs mirror whatever the stable callbacks need (no stale closures).
   const phaseRef = useRef<MicPhase>("idle");
@@ -1603,10 +1780,23 @@ function useMicEngine(canGoLive: boolean): MicEngine {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectRef = useRef<(() => void) | null>(null);
   const acquireRef = useRef<((id: string | null, n: boolean, e: boolean, a: boolean) => Promise<boolean>) | null>(null);
+  // Transmitter-boot window (instant mic broadcast). While bootDeadlineRef is
+  // set, 4008 closes retry instead of erroring; the promise settles once.
+  const bootDeadlineRef = useRef<number | null>(null);
+  const bootResolveRef = useRef<((r: MicBootResult) => void) | null>(null);
 
   const setPhaseBoth = useCallback((p: MicPhase): void => {
     phaseRef.current = p;
     setPhase(p);
+  }, []);
+
+  // Settle the pending boot promise (no-op when no boot is in flight).
+  const settleBoot = useCallback((result: MicBootResult): void => {
+    bootDeadlineRef.current = null;
+    setBooting(false);
+    const resolve = bootResolveRef.current;
+    bootResolveRef.current = null;
+    resolve?.(result);
   }, []);
 
   // ~30 fps RMS meter off the analyser (post-boost; keeps running while muted).
@@ -1790,6 +1980,7 @@ function useMicEngine(canGoLive: boolean): MicEngine {
     if (!token) {
       setMicErr("Session expired — reload the page and sign in again.");
       setPhaseBoth("ready");
+      settleBoot("failed");
       return;
     }
     const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/mp4";
@@ -1813,6 +2004,7 @@ function useMicEngine(canGoLive: boolean): MicEngine {
           queueRef.current = [];
           setMicErr(null);
           setPhaseBoth("live");
+          settleBoot("live"); // transmitter is up — instant broadcast succeeded
         }
       } catch { /* non-JSON frame — ignore */ }
     };
@@ -1822,10 +2014,31 @@ function useMicEngine(canGoLive: boolean): MicEngine {
       wsRef.current = null;
       stopRecorder();
       if (stoppingRef.current) return;
+      // Transmitter boot window: 4008 ("no live session") is EXPECTED while
+      // the harbor spins up (~10–20s after go-live) — keep retrying every 3s.
+      if (ev.code === 4008 && bootDeadlineRef.current != null) {
+        if (Date.now() < bootDeadlineRef.current) {
+          setPhaseBoth("connecting");
+          reconnectTimer.current = setTimeout(() => {
+            reconnectTimer.current = null;
+            if (!stoppingRef.current && streamRef.current) connectRef.current?.();
+            else settleBoot("cancelled");
+          }, MIC_BOOT_RETRY_MS);
+          return;
+        }
+        // Window expired — the harbor never came up.
+        setMicErr("The transmitter didn't start — try again.");
+        setPhaseBoth("ready");
+        settleBoot("failed");
+        return;
+      }
       const friendly = MIC_CLOSE_MSG[ev.code];
       if (friendly) {
         setMicErr(friendly);
         setPhaseBoth("ready");
+        // Mid-boot hard close: 4409 = the session is in use by another mic
+        // (keep it live); anything else fails the boot (caller cleans up).
+        settleBoot(ev.code === 4409 ? "occupied" : "failed");
         return;
       }
       // Unexpected drop — rebuild the recorder + socket once after 2s (the
@@ -1842,6 +2055,7 @@ function useMicEngine(canGoLive: boolean): MicEngine {
       } else {
         setMicErr("The mic link was lost. Go on mic again to continue.");
         setPhaseBoth("ready");
+        settleBoot("failed");
       }
     };
 
@@ -1853,6 +2067,7 @@ function useMicEngine(canGoLive: boolean): MicEngine {
       wsRef.current = null;
       try { ws.close(1000); } catch { /* noop */ }
       setPhaseBoth("ready");
+      settleBoot("failed");
       return;
     }
     recRef.current = rec;
@@ -1865,7 +2080,7 @@ function useMicEngine(canGoLive: boolean): MicEngine {
       });
     };
     rec.start(250);
-  }, [setPhaseBoth, stopRecorder]);
+  }, [setPhaseBoth, stopRecorder, settleBoot]);
   useEffect(() => { connectRef.current = connectAndRecord; });
 
   const goOnMic = useCallback((): void => {
@@ -1887,8 +2102,37 @@ function useMicEngine(canGoLive: boolean): MicEngine {
     }
   }, [supported, canGoLive, acquire, refreshDevices, connectAndRecord]);
 
+  // Instant mic broadcast connect: the caller has JUST taken a session live, so
+  // don't gate on canGoLive (the prop lags the server) — connect and tolerate
+  // 4008 closes while the transmitter boots. Resolves once (see MicBootResult).
+  const goOnMicBoot = useCallback((): Promise<MicBootResult> => {
+    if (!supported) return Promise.resolve("failed");
+    if (phaseRef.current === "live") return Promise.resolve("live");
+    if (phaseRef.current === "connecting") return Promise.resolve("cancelled"); // already in flight
+    return new Promise<MicBootResult>((resolve) => {
+      bootResolveRef.current = resolve;
+      bootDeadlineRef.current = Date.now() + MIC_BOOT_WINDOW_MS;
+      setBooting(true);
+      setMicErr(null);
+      stoppingRef.current = false;
+      reconnectedRef.current = false;
+      setElapsed(0);
+      if (streamRef.current) {
+        connectAndRecord();
+      } else {
+        const f = flagsRef.current;
+        void acquire(deviceIdRef.current, f.noise, f.echo, f.agc).then((ok) => {
+          if (!ok) { settleBoot("failed"); return; }
+          void refreshDevices();
+          connectAndRecord();
+        });
+      }
+    });
+  }, [supported, acquire, refreshDevices, connectAndRecord, settleBoot]);
+
   const offMic = useCallback((): void => {
     stoppingRef.current = true;
+    settleBoot("cancelled"); // a boot in flight was stopped by the user/session flip
     if (reconnectTimer.current) {
       clearTimeout(reconnectTimer.current);
       reconnectTimer.current = null;
@@ -1906,7 +2150,7 @@ function useMicEngine(canGoLive: boolean): MicEngine {
     cancelAnimationFrame(rafRef.current);
     setMeter(0);
     setPhaseBoth("idle");
-  }, [stopRecorder, setPhaseBoth]);
+  }, [stopRecorder, setPhaseBoth, settleBoot]);
 
   // On-air elapsed readout.
   useEffect(() => {
@@ -1956,6 +2200,8 @@ function useMicEngine(canGoLive: boolean): MicEngine {
     micErr,
     enable,
     goOnMic,
+    booting,
+    goOnMicBoot,
     offMic,
   };
 }
