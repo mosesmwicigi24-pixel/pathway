@@ -330,6 +330,26 @@ export interface MemberIntelligence {
     active_trend: { week: string; active: number }[];       // 12 weeks, oldest→newest
     active_days: { bucket: string; members: number }[];     // 5 buckets, fixed order: "1"|"2-3"|"4-7"|"8-15"|"16+"
   };
+  // Additive: formation & companion intelligence (waves 1-3 + spiritual growth).
+  formation?: {
+    totals: {
+      verses_mastered: number; verses_learning: number; plans_completed: number; plans_active: number;
+      badges_awarded: number; reading_hours_all_time: number; readers_7d: number;
+    };
+    weekly: { week: string; modules: number; reflections: number; verses: number; readers: number }[];
+    reflections: { total: number; last_7d: number; avg_length: number;
+      latest: { first_name: string; module_title: string; excerpt: string; submitted_at: string }[] };
+    companion: { echoes_7d: number; welcome_backs_7d: number; reflection_echoes_7d: number;
+      anniversaries_7d: number; moments_7d: number; blessings_7d: number };
+    voice_notes: { congregation: string; notes: number; voices: number; coverage_pct: number; latest_at: string }[];
+    cells_reading: { cell: string; members: number; reading_7d: number }[];
+    exams: { level_number: number; attempts: number; passes: number; avg_pass_score: number }[];
+  };
+}
+
+// One event on a member's walk (Wave 3) — the same thread the member sees.
+export interface WalkEvent {
+  kind: string; title: string; detail: string | null; quote: string | null; occurred_at: string;
 }
 
 // Proximity / suggested pairings (#4 Phase 3). Privacy-first: the endpoint
@@ -1235,6 +1255,7 @@ export const OpsApi = {
   ) => api.get<{ data: MemberRow[]; next_cursor: string | null }>("/admin/members", { params: q }).then((r) => r.data),
   memberDetail: (userId: string) => api.get<MemberDetail>(`/admin/members/${userId}`).then((r) => r.data),
   memberResults: (userId: string) => api.get<MemberResults>(`/admin/members/${userId}/results`).then((r) => r.data),
+  memberWalk: (userId: string) => api.get<{ data: WalkEvent[] }>(`/admin/members/${userId}/walk`).then((r) => r.data.data),
   // Manual reset: the server mints the temporary password and returns it ONCE.
   resetMemberPassword: (userId: string) =>
     api.post<{ temporary_password: string; full_name: string }>(`/admin/members/${userId}/password-reset`, {}).then((r) => r.data),

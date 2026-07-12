@@ -237,6 +237,102 @@ export class AdminOpsService {
          FROM users WHERE deleted_at IS NULL GROUP BY 1 ORDER BY members DESC LIMIT 8`,
     );
 
+    // --- Formation & companion intelligence (waves 1-3 + spiritual growth) --
+    // Everything counted from real member activity, so leadership decisions
+    // rest on what actually happened, not impressions.
+    const formationWeekly = await many<Record<string, string>>(
+      this.replica,
+      `WITH weeks AS (
+         SELECT generate_series(date_trunc('week', now()) - interval '7 weeks',
+                                date_trunc('week', now()), interval '1 week') AS wk
+       )
+       SELECT to_char(w.wk, 'DD Mon') AS week,
+              (SELECT count(*) FROM module_progress mp WHERE mp.is_completed
+                 AND mp.completed_at >= w.wk AND mp.completed_at < w.wk + interval '1 week') AS modules,
+              (SELECT count(*) FROM module_reflections mr
+                 WHERE mr.submitted_at >= w.wk AND mr.submitted_at < w.wk + interval '1 week') AS reflections,
+              (SELECT count(*) FROM memory_verse_progress mvp WHERE mvp.status = 'mastered'
+                 AND mvp.updated_at >= w.wk AND mvp.updated_at < w.wk + interval '1 week') AS verses,
+              (SELECT count(DISTINCT me.user_id) FROM module_engagement me
+                 WHERE me.updated_at >= w.wk AND me.updated_at < w.wk + interval '1 week') AS readers
+         FROM weeks w ORDER BY w.wk`,
+    );
+
+    const reflectionStats = await one<Record<string, string>>(
+      this.replica,
+      `SELECT count(*) AS total,
+              count(*) FILTER (WHERE submitted_at >= now() - interval '7 days') AS last_7d,
+              COALESCE(round(avg(length(trim(body)))), 0) AS avg_length
+         FROM module_reflections WHERE length(trim(body)) >= 10`,
+    );
+    const latestReflections = await many<Record<string, string>>(
+      this.replica,
+      `SELECT split_part(u.full_name, ' ', 1) AS first_name, m.title AS module_title,
+              left(trim(mr.body), 160) || CASE WHEN length(trim(mr.body)) > 160 THEN '…' ELSE '' END AS excerpt,
+              mr.submitted_at
+         FROM module_reflections mr
+         JOIN users u ON u.user_id = mr.user_id AND u.deleted_at IS NULL
+         JOIN modules m ON m.module_id = mr.module_id
+        WHERE length(trim(mr.body)) >= 25
+        ORDER BY mr.submitted_at DESC LIMIT 8`,
+    );
+
+    const companion = await one<Record<string, string>>(
+      this.replica,
+      `SELECT
+         (SELECT count(*) FROM echo_log WHERE day_date >= current_date - 7)                          AS echoes_7d,
+         (SELECT count(*) FROM echo_log WHERE kind = 'welcome_back' AND day_date >= current_date - 7) AS welcome_backs_7d,
+         (SELECT count(*) FROM echo_log WHERE kind = 'reflection_echo' AND day_date >= current_date - 7) AS reflection_echoes_7d,
+         (SELECT count(*) FROM echo_log WHERE kind = 'anniversary' AND day_date >= current_date - 7) AS anniversaries_7d,
+         (SELECT count(*) FROM community_moments WHERE occurred_at >= now() - interval '7 days')     AS moments_7d,
+         (SELECT count(*) FROM moment_blessings WHERE created_at >= now() - interval '7 days')       AS blessings_7d`,
+    );
+
+    const voiceNotes = await many<Record<string, string>>(
+      this.replica,
+      `SELECT c.name AS congregation, count(*) AS notes,
+              count(DISTINCT vn.author_user_id) AS voices,
+              round(100.0 * count(*) / GREATEST((SELECT count(*) FROM modules WHERE status = 'published'), 1)) AS coverage_pct,
+              max(vn.created_at) AS latest_at
+         FROM module_voice_notes vn
+         JOIN congregations c ON c.congregation_id = vn.congregation_id
+        GROUP BY c.name ORDER BY notes DESC LIMIT 10`,
+    );
+
+    const cellsReading = await many<Record<string, string>>(
+      this.replica,
+      `SELECT cg.name AS cell,
+              count(DISTINCT u.user_id) AS members,
+              count(DISTINCT me.user_id) FILTER (WHERE me.updated_at >= now() - interval '7 days') AS reading_7d
+         FROM cell_groups cg
+         JOIN users u ON u.cell_group_id = cg.cell_group_id AND u.deleted_at IS NULL
+         LEFT JOIN module_engagement me ON me.user_id = u.user_id
+        GROUP BY cg.name
+        HAVING count(DISTINCT u.user_id) > 0
+        ORDER BY count(DISTINCT me.user_id) FILTER (WHERE me.updated_at >= now() - interval '7 days') DESC,
+                 cg.name LIMIT 12`,
+    );
+
+    const examStats = await many<Record<string, string>>(
+      this.replica,
+      `SELECT level_number, count(*) AS attempts,
+              count(*) FILTER (WHERE is_passed) AS passes,
+              COALESCE(round(avg(score_achieved) FILTER (WHERE is_passed)), 0) AS avg_pass_score
+         FROM level_exam_attempts GROUP BY level_number ORDER BY level_number`,
+    );
+
+    const formationTotals = await one<Record<string, string>>(
+      this.replica,
+      `SELECT
+         (SELECT count(*) FROM memory_verse_progress WHERE status = 'mastered')                       AS verses_mastered,
+         (SELECT count(*) FROM memory_verse_progress WHERE status = 'learning')                       AS verses_learning,
+         (SELECT count(*) FROM reading_plan_progress WHERE completed_at IS NOT NULL)                  AS plans_completed,
+         (SELECT count(*) FROM reading_plan_progress WHERE completed_at IS NULL)                      AS plans_active,
+         (SELECT count(*) FROM user_badges WHERE revoked_at IS NULL)                                  AS badges_awarded,
+         (SELECT COALESCE(round(sum(reading_seconds) / 3600.0, 1), 0) FROM module_engagement)         AS reading_hours_all_time,
+         (SELECT count(DISTINCT user_id) FROM module_engagement WHERE updated_at >= now() - interval '7 days') AS readers_7d`,
+    );
+
     return {
       generated_at: new Date().toISOString(),
       kpis: num(kpiRow),
@@ -289,6 +385,32 @@ export class AdminOpsService {
         by_city: byCity.map((r) => ({ city: r.city, members: Number(r.members) })),
         by_country: byCountry.map((r) => ({ country_code: r.country_code, members: Number(r.members) })),
         geo_capture: false, // no lat/lng — proximity grouping unlocks once location tagging ships
+      },
+      formation: {
+        totals: num(formationTotals),
+        weekly: formationWeekly.map((r) => ({
+          week: r.week, modules: Number(r.modules), reflections: Number(r.reflections),
+          verses: Number(r.verses), readers: Number(r.readers),
+        })),
+        reflections: {
+          ...num(reflectionStats),
+          latest: latestReflections.map((r) => ({
+            first_name: r.first_name, module_title: r.module_title,
+            excerpt: r.excerpt, submitted_at: r.submitted_at,
+          })),
+        },
+        companion: num(companion),
+        voice_notes: voiceNotes.map((r) => ({
+          congregation: r.congregation, notes: Number(r.notes), voices: Number(r.voices),
+          coverage_pct: Number(r.coverage_pct), latest_at: r.latest_at,
+        })),
+        cells_reading: cellsReading.map((r) => ({
+          cell: r.cell, members: Number(r.members), reading_7d: Number(r.reading_7d),
+        })),
+        exams: examStats.map((r) => ({
+          level_number: Number(r.level_number), attempts: Number(r.attempts),
+          passes: Number(r.passes), avg_pass_score: Number(r.avg_pass_score),
+        })),
       },
     };
   }

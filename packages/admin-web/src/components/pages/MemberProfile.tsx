@@ -9,7 +9,7 @@ import {
   Award, BookOpen, CalendarDays, CheckCircle2, ChevronRight, Droplets, Flag,
   Heart, Mail, MessageSquare, ShieldAlert, Sparkles, Sunrise, Flame, X, GraduationCap, Activity,
 } from "lucide-react";
-import { OpsApi, SystemApi, type MemberDetail, type Country, type Programme } from "../../api/client";
+import { OpsApi, SystemApi, type MemberDetail, type Country, type Programme, type WalkEvent } from "../../api/client";
 import { errorMessage } from "../../util/error";
 
 const PROGRAMME_LABELS: Record<Programme, string> = {
@@ -73,10 +73,12 @@ export function MemberProfile(): ReactElement {
   const [consentOpen, setConsentOpen] = useState(false);
   const [countries, setCountries] = useState<Country[]>([]);
   const [gradBusy, setGradBusy] = useState(false);
+  const [walk, setWalk] = useState<WalkEvent[] | null>(null);
 
   useEffect(() => {
     if (!id) { setError("No member selected."); return; }
     OpsApi.memberDetail(id).then(setM).catch((e) => setError(errorMessage(e, "Could not load member.")));
+    OpsApi.memberWalk(id).then(setWalk).catch(() => setWalk([]));
   }, [id]);
   useEffect(() => { void SystemApi.countries().then(setCountries).catch(() => {}); }, []);
 
@@ -275,6 +277,37 @@ export function MemberProfile(): ReactElement {
                     <div key={b.code} className="flex items-center gap-3 rounded-xl p-2.5" style={{ background: "var(--secondary, var(--input-background))" }}>
                       <div className="rounded-full flex items-center justify-center shrink-0" style={{ width: 36, height: 36, background: "#fff", color: "#A87616" }}><Flame size={18} /></div>
                       <div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)" }}>{b.name}</div><div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{b.description}</div></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Their Walk — the same gold-thread journey the member sees in the
+                app (Wave 3). Reflection text is not shown here (§5.4 page
+                stance) — only that a reflection happened. */}
+            <div className="rounded-2xl p-6" style={{ background: "#fff", border: "1px solid var(--border)" }}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2"><Flag size={15} style={{ color: "var(--nuru-gold)" }} /><span style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)" }}>Their walk</span></div>
+                <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{walk ? `${walk.length} moments` : "…"}</span>
+              </div>
+              {!walk ? <p style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>Loading…</p>
+                : walk.length === 0 ? <p style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>Their walk begins with the first lesson they open.</p>
+                : (
+                <div className="flex flex-col" style={{ maxHeight: 420, overflowY: "auto" }}>
+                  {walk.map((e, i) => (
+                    <div key={i} className="flex gap-3" style={{ position: "relative", paddingBottom: i === walk.length - 1 ? 0 : 16 }}>
+                      <div className="flex flex-col items-center" style={{ width: 22 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: 99, marginTop: 4, flexShrink: 0,
+                          background: ["level", "certificate", "began"].includes(e.kind) ? "var(--nuru-gold)" : "#fff",
+                          border: "2px solid var(--nuru-gold)" }} />
+                        {i < walk.length - 1 && <span style={{ width: 2, flex: 1, background: "rgba(200,155,60,0.3)", marginTop: 2 }} />}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--muted-foreground)", letterSpacing: "0.06em" }}>{fmtDate(e.occurred_at)}</div>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--foreground)", lineHeight: 1.35 }}>{e.title}</div>
+                        {e.detail && <div style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}>{e.detail}</div>}
+                      </div>
                     </div>
                   ))}
                 </div>

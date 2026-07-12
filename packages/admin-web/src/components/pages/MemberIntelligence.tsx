@@ -814,6 +814,145 @@ export function MemberIntelligence(): ReactElement {
         </Grid>
       </Section>
 
+      {/* ── Formation & companion — waves 1-3 + spiritual growth, all counted ── */}
+      {d.formation && (
+        <Section icon={Sparkles} title="Formation & companion"
+                 hint="What members actually did — reading, reflecting, memorising — plus the companion layer meeting them (echoes, voice notes, celebrations). All real rows.">
+          <Strip cols={6}>
+            <Kpi icon={BookOpen} label="Read this week" value={d.formation.totals.readers_7d} tint="navy" small />
+            <Kpi icon={Clock} label="Reading hours (all time)" value={d.formation.totals.reading_hours_all_time} tint="gold" small />
+            <Kpi icon={BadgeCheck} label="Verses mastered" value={d.formation.totals.verses_mastered} tint="green" small />
+            <Kpi icon={Hourglass} label="Verses in training" value={d.formation.totals.verses_learning} tint="teal" small />
+            <Kpi icon={CalendarCheck} label="Plans completed" value={d.formation.totals.plans_completed} tint="violet" small />
+            <Kpi icon={Trophy} label="Badges awarded" value={d.formation.totals.badges_awarded} tint="gold" small />
+          </Strip>
+
+          <Grid>
+            <GridCell span={12}>
+              <SubCard icon={TrendingUp} title="Eight weeks of formation" hint="modules finished · reflections written · verses mastered · distinct readers">
+                <ResponsiveContainer width="100%" height={240}>
+                  <AreaChart data={d.formation.weekly} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="week" tick={{ fontSize: 10.5 }} />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 10.5 }} />
+                    <Tooltip contentStyle={tip} />
+                    <Legend wrapperStyle={{ fontSize: 11.5 }} />
+                    <Area type="monotone" dataKey="readers" name="Readers" stroke={NAVY} fill={NAVY} fillOpacity={0.12} strokeWidth={2} />
+                    <Area type="monotone" dataKey="modules" name="Modules" stroke={GREEN} fill={GREEN} fillOpacity={0.12} strokeWidth={2} />
+                    <Area type="monotone" dataKey="reflections" name="Reflections" stroke={GOLD} fill={GOLD} fillOpacity={0.14} strokeWidth={2} />
+                    <Area type="monotone" dataKey="verses" name="Verses" stroke={VIOLET} fill={VIOLET} fillOpacity={0.1} strokeWidth={2} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </SubCard>
+            </GridCell>
+
+            <GridCell span={6}>
+              <SubCard icon={Sparkles} title="The companion at work" hint="last 7 days">
+                {[
+                  { label: "Echoes served", value: d.formation.companion.echoes_7d },
+                  { label: "Members welcomed back", value: d.formation.companion.welcome_backs_7d },
+                  { label: "Reflections echoed", value: d.formation.companion.reflection_echoes_7d },
+                  { label: "Month anniversaries", value: d.formation.companion.anniversaries_7d },
+                  { label: "Milestones celebrated", value: d.formation.companion.moments_7d },
+                  { label: "Blessings given", value: d.formation.companion.blessings_7d },
+                ].map((r) => (
+                  <div key={r.label} className="flex items-center justify-between" style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                    <span style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>{r.label}</span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: NAVY_INK, fontVariantNumeric: "tabular-nums" }}>{r.value}</span>
+                  </div>
+                ))}
+                <p style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 10, lineHeight: 1.5 }}>
+                  "Members welcomed back" = returned after 4+ quiet days and were met with grace, not guilt — a shepherding signal worth watching.
+                </p>
+              </SubCard>
+            </GridCell>
+
+            <GridCell span={6}>
+              <SubCard icon={BookOpen} title="Voices of the flock" hint={`${d.formation.reflections.total} reflections · ${d.formation.reflections.last_7d} this week · avg ${d.formation.reflections.avg_length} chars`}>
+                {d.formation.reflections.latest.length === 0 ? <Empty text="No reflections written yet." /> : (
+                  <div className="flex flex-col gap-3">
+                    {d.formation.reflections.latest.map((r, i) => (
+                      <div key={i} style={{ padding: "10px 12px", background: "var(--secondary)", borderRadius: 10, borderLeft: `3px solid ${GOLD}` }}>
+                        <div style={{ fontSize: 12.5, color: NAVY_INK, fontStyle: "italic", lineHeight: 1.5 }}>“{r.excerpt}”</div>
+                        <div style={{ fontSize: 11, color: "var(--muted-foreground)", marginTop: 5 }}>
+                          {r.first_name} · after "{r.module_title}" · {new Date(r.submitted_at).toLocaleDateString()}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </SubCard>
+            </GridCell>
+
+            <GridCell span={6}>
+              <SubCard icon={Users} title="Cells reading together" hint="members who opened a lesson in the last 7 days">
+                {d.formation.cells_reading.length === 0 ? <Empty text="No cells yet." /> : (
+                  <div className="flex flex-col gap-2.5">
+                    {d.formation.cells_reading.map((c) => {
+                      const p = c.members > 0 ? Math.round((100 * c.reading_7d) / c.members) : 0;
+                      return (
+                        <div key={c.cell}>
+                          <div className="flex items-center justify-between" style={{ marginBottom: 3 }}>
+                            <span style={{ fontSize: 12.5, fontWeight: 600, color: NAVY_INK }}>{c.cell}</span>
+                            <span style={{ fontSize: 11.5, color: "var(--muted-foreground)", fontVariantNumeric: "tabular-nums" }}>{c.reading_7d}/{c.members} · {p}%</span>
+                          </div>
+                          <div style={{ height: 7, background: "var(--secondary)", borderRadius: 99 }}>
+                            <div style={{ width: `${p}%`, height: 7, borderRadius: 99, background: p >= 60 ? GREEN : p >= 30 ? GOLD : RED, transition: "width .3s" }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </SubCard>
+            </GridCell>
+
+            <GridCell span={6}>
+              <SubCard icon={Radio} title="A word from the discipler" hint="voice notes on lessons, by congregation">
+                {d.formation.voice_notes.length === 0 ? (
+                  <Empty text="No voice notes yet — leaders can record one atop any module in the app." />
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr style={{ textAlign: "left" }}>
+                      <th style={{ ...thBase, padding: "6px 0" }}>Congregation</th>
+                      <th style={{ ...thBase, padding: "6px 0", textAlign: "right" }}>Notes</th>
+                      <th style={{ ...thBase, padding: "6px 0", textAlign: "right" }}>Voices</th>
+                      <th style={{ ...thBase, padding: "6px 0", textAlign: "right" }}>Coverage</th>
+                    </tr></thead>
+                    <tbody>
+                      {d.formation.voice_notes.map((v) => (
+                        <tr key={v.congregation} style={{ borderTop: "1px solid var(--border)" }}>
+                          <td style={{ ...tdBase, padding: "9px 0", fontWeight: 600, color: NAVY_INK }}>{v.congregation}</td>
+                          <td style={{ ...tdR, padding: "9px 0" }}>{v.notes}</td>
+                          <td style={{ ...tdR, padding: "9px 0" }}>{v.voices}</td>
+                          <td style={{ ...tdR, padding: "9px 0" }}>{v.coverage_pct}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </SubCard>
+            </GridCell>
+
+            <GridCell span={6}>
+              <SubCard icon={BadgeCheck} title="Level exams" hint="attempts · passes · average passing score">
+                {d.formation.exams.length === 0 ? <Empty text="No exam attempts yet." /> : (
+                  <BarList
+                    rows={d.formation.exams.map((e, i) => ({
+                      label: `Level ${e.level_number}`,
+                      value: e.passes,
+                      display: `${e.passes}/${e.attempts} passed · avg ${e.avg_pass_score}%`,
+                      color: BRAND_TINTS[i % BRAND_TINTS.length],
+                    }))}
+                    emptyText="No exam attempts yet."
+                  />
+                )}
+              </SubCard>
+            </GridCell>
+          </Grid>
+        </Section>
+      )}
+
       {/* Footer */}
       <p style={{ fontSize: 11, color: "var(--muted-foreground)", textAlign: "center", padding: "4px 0 12px" }}>
         <Lock size={11} style={{ display: "inline", verticalAlign: "-1px", marginRight: 4 }} />

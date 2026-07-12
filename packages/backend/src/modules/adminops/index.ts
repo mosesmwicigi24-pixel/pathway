@@ -7,6 +7,7 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { AdminOpsService } from "./service.js";
+import { WalkService } from "../intelligence/walk.js";
 
 export const adminOpsRouter: Router = Router();
 
@@ -113,6 +114,13 @@ export function registerAdminOps(ctx: AppContext): Router {
   }));
 
   // Member results dossier: levels/modules scores, level exams, badges, certificates.
+  // The member's whole journey (Wave 3 WalkService) for the profile page —
+  // same thread the member sees in the app, so shepherd and sheep look at
+  // one truth.
+  r.get("/admin/members/:id/walk", auth, perm("members", "view"), handler(async (req, res) => {
+    res.json({ data: await new WalkService(ctx.db.replica).yourWalk(String(req.params.id ?? "")) });
+  }));
+
   r.get("/admin/members/:id/results", auth, perm("members", "view"), handler(async (req, res) => {
     res.json(await svc.memberResults(req.params.id ?? ""));
   }));
