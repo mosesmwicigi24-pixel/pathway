@@ -5,81 +5,64 @@ UPDATE modules SET module_sequence_number = 900 WHERE level_number = 1 AND evalu
 
 -- ===== Level 1 · Module 1: God & His Nature =====
 INSERT INTO modules (level_number, module_sequence_number, title, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
-VALUES (1, 1, $NT$God & His Nature$NT$, $NB$Lesson 1: Knowing God the Father, the Son, the Holy Spirit—and Me (John 1:1–18)
+VALUES (1, 1, $NT$God & His Nature$NT$, $NB$# Module 1: Knowing God the Father, the Son, the Holy Spirit—and Me (John 1:1–18)
 
-1) Who Is God?
+## Topic Outline
+- Who Is God?
+- The Nature of God (What God is like)
+- The Trinity (Father, Son, Holy Spirit)
+- Why couldn’t God just forgive sin?
+- Who is Jesus Christ?
+- Who is the Holy Spirit?
+- Who am I?
+- Simple class takeaway
+
+## Who Is God?
 God is not a product of creation. He is the One who created creation. The Bible opens by saying, “In the beginning God created the heavens and the earth” (Genesis 1:1). That means everything that exists depends on Him, but He depends on nothing.
 
-God did not “start” the way we start. When God introduced Himself to Moses, He said, “I AM WHO I AM” (Exodus 3:14). In simple terms: God has no origin story. He simply is.
+God did not “start” the way we start. When God introduced Himself to Moses, He said, “I AM WHO I AM” (Exodus 3:14). In simple terms: **God has no origin story. He simply is.**
 
 And God is not distant. He is present everywhere. He says nothing is hidden from Him and He fills all things (Jeremiah 23:23–24; Ephesians 4:6).
 
-2) The Nature of God (What God is like)
+## The Nature of God (What God is like)
 God’s nature helps you trust Him. Here are the key things Scripture shows us:
 
-God is loving, relational and absolutely faithful. Everything He does is out of love. His justice is not cold. He is steady, consistent, and keeps His word. “Love and faithfulness go before you” (Psalm 89:14). And He does not change. “I the LORD do not change” (Malachi 3:6).
+- **God is loving, relational and absolutely faithful.** Everything He does is out of love. His justice is not cold. He is steady, consistent, and keeps His word. “Love and faithfulness go before you” (Psalm 89:14). And He does not change. “I the LORD do not change” (Malachi 3:6).
+- **God is eternal.** He has no beginning and no end. “From everlasting to everlasting you are God” (Psalm 90:2). That means God does not age, weaken, or run out.
+- **God is righteous.** He is morally perfect. He never does wrong, and He sets the standard for what is right. “Righteousness… is the foundation of your throne” (Psalm 89:14).
+- **God is just.** He is perfectly fair. He does not ignore evil or pretend sin is small. “Righteousness and justice are the foundation of your throne” (Psalm 89:14). So when God judges, He is never biased or mistaken.
 
-God is eternal. He has no beginning and no end. “From everlasting to everlasting you are God” (Psalm 90:2). That means God does not age, weaken, or run out.
-
-God is righteous. He is morally perfect. He never does wrong, and He sets the standard for what is right. “Righteousness… is the foundation of your throne” (Psalm
-
-89:14).
-
-God is just. He is perfectly fair. He does not ignore evil or pretend sin is small.
-
-“Righteousness and justice are the foundation of your throne” (Psalm 89:14). So when
-
-God judges, He is never biased or mistaken.
-
-3) The Trinity (Father, Son, Holy
-
-Spirit)
-The Bible teaches one true God, who exists eternally as three distinct Persons: Father,
-
-Son, and Holy Spirit. Jesus commanded baptism “in the name of the Father and of the Son and of the Holy Spirit” (Matthew 28:19). One name—three Persons.
+## The Trinity (Father, Son, Holy Spirit)
+The Bible teaches one true God, who exists eternally as three distinct Persons: Father, Son, and Holy Spirit. Jesus commanded baptism “in the name of the Father and of the Son and of the Holy Spirit” (Matthew 28:19). **One name—three Persons.**
 
 This matters because God didn’t save us by accident. Father, Son, and Spirit work together in one saving plan (2 Corinthians 13:14).
 
-4) Why couldn’t God just forgive sin?
+## Why couldn’t God just forgive sin?
 Because God is not only loving—He is also just. If a judge ignores evil, that judge becomes unjust. In the same way, God cannot pretend sin is fine. Sin must be judged truthfully because justice is part of who God is (Psalm 89:14).
 
-This is why salvation is not God “overlooking” sin, but God dealing with sin through
+This is why salvation is not God “overlooking” sin, but God dealing with sin through Jesus.
 
-Jesus.
-
-5) Who is Jesus Christ?
-John 1 answers this clearly: Jesus is not merely a prophet or teacher. He is the eternal
-
-Word. “In the beginning was the Word… and the Word was God” (John 1:1). He is also Creator: “Through him all things were made” (John 1:3). Then comes the shock of the gospel: “The Word became flesh” (John 1:14). God stepped into our human world to rescue us.
+## Who is Jesus Christ?
+John 1 answers this clearly: Jesus is not merely a prophet or teacher. He is the eternal Word. “In the beginning was the Word… and the Word was God” (John 1:1). He is also Creator: “Through him all things were made” (John 1:3). Then comes the shock of the gospel: “The Word became flesh” (John 1:14). God stepped into our human world to rescue us.
 
 Jesus asked, “Who do you say I am?” (Matthew 16:15). And Scripture shows that knowing Jesus truly is not just intelligence—it is revelation from God (Matthew 16:17).
 
-6) Who is the Holy Spirit?
+## Who is the Holy Spirit?
 The Holy Spirit is not a force. He is God, and He is personal. In Acts 5, Peter says lying to the Holy Spirit is lying to God (Acts 5:3–4). Jesus also calls Him the Spirit of truth who guides believers (John 16:13).
 
-The Holy Spirit lives in believers, leads them into truth, and points them to Jesus (John
+The Holy Spirit lives in believers, leads them into truth, and points them to Jesus (John 14:17; John 15:26; John 16:13–14).
 
-14:17; John 15:26; John 16:13–14).
-
-7) Who am I?
-When you receive Christ, you are not just “trying to be better.” You become part of
-
-God’s family. “To all who did receive him… he gave the right to become children of
-
-God” (John 1:12–13).
+## Who am I?
+When you receive Christ, you are not just “trying to be better.” You become part of God’s family. “To all who did receive him… he gave the right to become children of God” (John 1:12–13).
 
 You are saved by mercy and made new by the Spirit (Titus 3:5–7). You are not left to fight alone; you are led by the Spirit as God’s child (Romans 8:14).
-Simple class takeaway
 
-  ●​ God is the eternal Creator (Genesis 1:1; Exodus 3:14).
-
-  ●​ God is righteous, just, loving, and faithful (Psalm 89:14; Malachi 3:6).
-
-  ●​ God is one—Father, Son, Spirit (Matthew 28:19).
-
-  ●​ Sin must be judged, so salvation required Jesus (Psalm 89:14; John 1:14).
-
-  ●​ In Christ, you become a child of God (John 1:12–13).$NB$, 'quiz', 8, 70, 'published')
+## Simple class takeaway
+- God is the eternal Creator (Genesis 1:1; Exodus 3:14).
+- God is righteous, just, loving, and faithful (Psalm 89:14; Malachi 3:6).
+- God is one—Father, Son, Spirit (Matthew 28:19).
+- Sin must be judged, so salvation required Jesus (Psalm 89:14; John 1:14).
+- In Christ, you become a child of God (John 1:12–13).$NB$, 'quiz', 8, 70, 'published')
 ON CONFLICT (level_number, module_sequence_number) DO UPDATE SET
   title = EXCLUDED.title, lesson_content = EXCLUDED.lesson_content, evaluation_kind = EXCLUDED.evaluation_kind,
   estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
@@ -118,200 +101,152 @@ SELECT module_id, 'multiple_choice', $NQ$The module teaches that the Trinity mat
 
 -- ===== Level 1 · Module 2: God's Plan for Humanity =====
 INSERT INTO modules (level_number, module_sequence_number, title, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
-VALUES (1, 2, $NT$God's Plan for Humanity$NT$, $NB$HUMANITY (Creation → Fall → Rescue)
+VALUES (1, 2, $NT$God's Plan for Humanity$NT$, $NB$# Module 2: HUMANITY → (Creation → Fall → Rescue)
 
-The Original Plan
+## Topic Outline
+- The Original Plan
+- The Image of God
+- What is sin?
+- The Fall of Man
+- Why Jesus Came
+- The Restoration Plan
+- The Great Exchange (Part 1)
+
+## The Original Plan
 
 The original plan of God was to make a man that would share the intricate beauty of God’s glory as a friend. God desired to extend His glorious heavenly presence to earth—having a man to reflect Him, fellowship with Him, and also administrate over His creation.
-      Catch this: God did not create man for distance—He created man for divine friendship and kingdom function.
 
-​
+> **Catch this:** God did not create man for distance — He created man for divine friendship and kingdom function.
 
-In simple words: Man was designed to carry God’s presence and represent God’s authority on the earth.
+In simple words: **Man was designed to carry God’s presence and represent God’s authority on the earth.**
 
-2 Corinthians 5:20 (KJV)​
+> “Now then we are ambassadors for Christ, as though God did beseech you by us: we pray you in Christ’s stead, be ye reconciled to God.” — **2 Corinthians 5:20 (KJV)**
 
-“Now then we are ambassadors for Christ, as though God did beseech you by us: we pray you in Christ’s stead, be ye reconciled to God.”
+## The Image of God
 
-The Image of God
-
-Genesis 1:26 (KJV)​
-
-“And God said, Let us make man in our image, after our likeness: and let them have dominion over the fish of the sea, and over the fowl of the air, and over the cattle, and over all the earth, and over every creeping thing that creepeth upon the earth.”
+> “And God said, Let us make man in our image, after our likeness: and let them have dominion over the fish of the sea, and over the fowl of the air, and over the cattle, and over all the earth, and over every creeping thing that creepeth upon the earth.” — **Genesis 1:26 (KJV)**
 
 The Image of God inbuilt in man as highlighted in the above scripture underscores the embodiment of the likeness of God in man. In other words, man was created with the full capacity to reflect God. This entails His holiness, His mind, and His way of dealings.
-       Catch this: Image is identity; likeness is capacity; dominion is assignment.
 
-​
+> **Catch this:** Image is identity; likeness is capacity; dominion is assignment.
 
-So man was not merely made to exist—man was made to mirror God and manage what God made.
+So man was not merely made to exist—man was made to mirror God and manage what God made. For example, in 1 Peter 1:15, the Bible pictures the possibility of mirroring the holiness of God in the recreated human spirit.
 
-For example, in 1 Peter 1:15, the Bible pictures the possibility of mirroring the holiness of God in the recreated human spirit.
+> “But as he which hath called you is holy, so be ye holy in all manner of conversation; Because it is written, Be ye holy; for I am holy.” — **1 Peter 1:15–16 (KJV)**
 
-1 Peter 1:15–16 (KJV)​
+## What is sin?
 
-“But as he which hath called you is holy, so be ye holy in all manner of conversation;​
+Sin is the degenerated state of a man from the image of the Father. This degenerated, corrupted state produces the fruits of sin—these are the inward and outward corrupt dealings inconsistent with the nature of God.
 
-Because it is written, Be ye holy; for I am holy.”
+It is this state that causes a created being to desire independence from God, standing in rebellion against His will and ways.
 
-What is sin?
+> **Catch this:** Sin is not only what you do—sin is what you became when you disconnected from the Source.
 
-Sin is the degenerated state of a man from the image of the Father. This degenerated, corrupted state produces the fruits of sin—these are the inward and outward corrupt dealings inconsistent with the nature of
-
-God.
-It is this state that causes a created being to desire independence from
-
-God, standing in rebellion against His will and ways.
-
-       Catch this: Sin is not only what you do—sin is what you became when you disconnected from the Source.
-
-​
-
-Sin is nature before it becomes behavior, and identity corruption before it becomes actions.
+**Sin is nature before it becomes behavior, and identity corruption before it becomes actions.**
 
 The first created being to embody sin was Lucifer, when he showed extreme pride and rebellion, desiring to exalt himself above God and usurp His authority, leading to his expulsion from heaven.
 
-    Isaiah 14:12–15 (KJV)
+> “How art thou fallen from heaven, O Lucifer, son of the morning! how art thou cut down to the ground, which didst weaken the nations! For thou hast said in thine heart, I will ascend into heaven, I will exalt my throne above the stars of God: I will sit also upon the mount of the congregation, in the sides of the north: I will ascend above the heights of the clouds; I will be like the most High. Yet thou shalt be brought down to hell, to the sides of the pit.” — **Isaiah 14:12–15 (KJV)**
 
-“How art thou fallen from heaven, O Lucifer, son of the morning! how art thou cut down to the ground, which didst weaken the nations!​
+## The Fall of Man
 
-For thou hast said in thine heart, I will ascend into heaven, I will exalt my throne above the stars of God: I will sit also upon the mount of the congregation, in the sides of the north:
+Man was given a choice: to choose to follow God’s word of not eating the fruit or to eat. In the beginning, that was not hard until Satan, through his choice of self-will, chose to disobey God, and took advantage of the self-choice of man and tricked Adam into sinning. The man attracted the penalty of God’s righteous judgement and the consequence resulted into a fallen nature of man.
 
-​
-
-I will ascend above the heights of the clouds; I will be like the most High.​
-
-Yet thou shalt be brought down to hell, to the sides of the pit.”
-
-The Fall of Man
-Man was given a choice: to choose to follow God’s word of not eating the fruit or to eat. In the beginning, that was not hard until Satan, through his choice of self-will, chose to disobey God, and took advantage of the self-choice of man and tricked Adam into sinning.
-
-The man attracted the penalty of God’s righteous judgement and the consequence resulted into a fallen nature of man.
-
-Catch this: A wrong choice did not only produce a wrong action—it produced a wrong nature.​
+> **Catch this:** A wrong choice did not only produce a wrong action—it produced a wrong nature.
 
 His nature was deformed by sin and he became laden with a degenerated DNA of sin.
 
-    Romans 5:12–14 (KJV)
+> “Wherefore, as by one man sin entered into the world, and death by sin; and so death passed upon all men, for that all have sinned: (For until the law sin was in the world: but sin is not imputed when there is no law. Nevertheless death reigned from Adam to Moses, even over them that had not sinned after the similitude of Adam’s transgression, who is the figure of him that was to come.)” — **Romans 5:12–14 (KJV)**
 
-“Wherefore, as by one man sin entered into the world, and death by sin; and so death passed upon all men, for that all have sinned:​ (For until the law sin was in the world: but sin is not imputed when there is no law.
+*Have you noticed how children are inclined to tell lies or do mischievous things yet no one has taught them these things? This points to the inherent nature of sin passed to all men following the rebellion of the first man, Adam.*
 
-​
-
-Nevertheless death reigned from Adam to Moses, even over them that had not sinned after the similitude of Adam’s transgression, who is the figure of him that was to come.)”
-
-Have you noticed how children are inclined to tell lies or do mischievous things yet no one has taught them these things? This points
-to the inherent nature of sin passed to all men following the rebellion of the first man, Adam.
-
-Catch this: Nobody teaches a child to be selfish—selfishness is the evidence of the inherited fall.​
+> **Catch this:** Nobody teaches a child to be selfish—selfishness is the evidence of the inherited fall.
 
 That is why this problem is deeper than morals: it is spiritual DNA.
 
-Why Jesus Came
+## Why Jesus Came
 
-Jesus came to cure the nature of sin in man by replacing the degenerated DNA of sin in man by generating a new state of righteousness in God through Christ. Christ reintroduced the choice: if a man chooses to turn himself to Christ and be healed, allowing Jesus
+Jesus came to cure the nature of sin in man by replacing the degenerated DNA of sin in man by generating a new state of righteousness in God through Christ. Christ reintroduced the choice: if a man chooses to turn himself to Christ and be healed, allowing Jesus Christ to regenerate his nature, he gets restored to the original plan of God — which is to receive the gift of God’s nature (righteousness) and host His glory.
 
-Christ to regenerate his nature, he gets restored to the original plan of
+> **Catch this:** Jesus did not come to manage sin—He came to remove it at the root.
 
-God—which is to receive the gift of God’s nature (righteousness) and host His glory.
+**He did not come to improve the old man — He came to replace the old nature with a new nature.**
 
-      Catch this: Jesus did not come to manage sin—He came to remove it at the root.
+> “For God sent not his Son into the world to condemn the world; but that the world through him might be saved.” — **John 3:17 (KJV)**
 
-​
-
-He did not come to improve the old man—He came to replace the old nature with a new nature.
-John 3:17 (KJV)​
-
-“For God sent not his Son into the world to condemn the world; but that the world through him might be saved.”
-
-The Restoration Plan
+## The Restoration Plan
 
 The restoration plan was made very simple: just as a man made a self-choice to look away from God towards Satan’s coaction of sinning, he can also choose to look away from Satan and look up on Christ and receive the gift of God.
 
-     Catch this: The door that choice opened in Eden, choice can close at the Cross.
+> **Catch this:** The door that choice opened in Eden, choice can close at the Cross.
 
-​
+**You are not forced into restoration—you are invited into it.**
 
-You are not forced into restoration—you are invited into it.
-
-Romans 10:9–10 (KJV)​
-
-“That if thou shalt confess with thy mouth the Lord Jesus, and shalt believe in thine heart that God hath raised him from the dead, thou shalt be saved.
-​
-
-For with the heart man believeth unto righteousness; and with the mouth confession is made unto salvation.”
+> “That if thou shalt confess with thy mouth the Lord Jesus, and shalt believe in thine heart that God hath raised him from the dead, thou shalt be saved. For with the heart man believeth unto righteousness; and with the mouth confession is made unto salvation.” — **Romans 10:9–10 (KJV)**
 
 (Regenerated to full life from the deformed nature of sin.)
 
-    The Great Exchange (Part 1)
+## The Great Exchange (Part 1)
 
-“The moment your debt became His, and His righteousness became yours.”
+> “The moment your debt became His, and His righteousness became yours.”
 
-2 Corinthians 5:21 (KJV)​
-
-“For he hath made him to be sin for us, who knew no sin; that we might be made the righteousness of God in him.”
+> “For he hath made him to be sin for us, who knew no sin; that we might be made the righteousness of God in him.” — **2 Corinthians 5:21 (KJV)**
 
 Salvation is not just a powerful moment—it is a permanent change of position. Many people feel the excitement of being saved, then life returns to normal and doubt whispers, “Did anything really change?”
 
 Yes. Something changed—not only your feelings, but your spiritual state before God. Salvation is not a feeling to maintain; it is a fact to believe and a reality to live from.
 
-The core idea is simple: you did not turn over a new leaf—you received a new life. Christianity is not self-help. It is resurrection. Not a bad person trying harder, but a dead person being made alive by the Holy Spirit. If you treat faith like a renovation project, you will keep getting
-disappointed by yourself. But if you understand it as a total replacement, you will stand on grace, not performance.
+The core idea is simple: **you did not turn over a new leaf—you received a new life.** Christianity is not self-help. It is resurrection. Not a bad person trying harder, but a dead person being made alive by the Holy Spirit. If you treat faith like a renovation project, you will keep getting disappointed by yourself. But if you understand it as a total replacement, you will stand on grace, not performance.
 
 The Great Exchange is what happened at the cross. Jesus did not ignore sin—He paid for it. A divine trade took place: your sin and debt were placed on Him, and His righteousness was placed on you. Your old history was closed, and a new history began. That is why you can stand before a holy God with confidence—because your standing is based on Christ’s finished work, not your daily consistency.
 
-     Catch this:
+> **Catch this:**
+> - Not guilt-managed—debt-cancelled.
+> - Not covered-up—legally exchanged.
+> - Not improved—reborn.
+> - Not a second chance—an entirely new creation.
 
-        ●​ Not guilt-managed—debt-cancelled.
+### Key Scriptural Anchors (and what they mean)
 
-        ●​ Not covered-up—legally exchanged.
-
-        ●​ Not improved—reborn.
-
-        ●​ Not a second chance—an entirely new creation.
-
-Key Scriptural Anchors (and what they mean)
-  1) New Creation — 2 Corinthians 5:17
+### New Creation — 2 Corinthians 5:17
 
 You are not a repaired version of your old self. You are new. The old record, the old nature, the old spiritual DNA—replaced. God did not patch you up; He recreated you in Christ.
-2 Corinthians 5:17 (KJV)​
 
-“Therefore if any man be in Christ, he is a new creature: old things are passed away; behold, all things are become new.”
+> “Therefore if any man be in Christ, he is a new creature: old things are passed away; behold, all things are become new.” — **2 Corinthians 5:17 (KJV)**
 
-2) Legal Trade — 2 Corinthians 5:21
+### Legal Trade — 2 Corinthians 5:21
 
 This is the exchange: Jesus took your judgment, and you received His righteousness. He was treated as if He lived your life, so you can be treated as if you lived His. This is not a spiritual cover-up—it is a legal reality.
 
-3) Adoption — John 1:12
+### Adoption — John 1:12
 
 You did not join a religious club. You became a child of God. A member can be removed, but a son has a place by birth. You now have authority to call God Father.
 
-John 1:12 (KJV)​
+> “But as many as received him, to them gave he power to become the sons of God, even to them that believe on his name:” — **John 1:12 (KJV)**
 
-“But as many as received him, to them gave he power to become the sons of God, even to them that believe on his name:”
-
-What Changed
+### What Changed
 
 Keep these as clear pillars—not feelings, not guesses, not vibes—pillars:
-   1.​ Regeneration (Heart Change): The Holy Spirit gave you new life.
 
-      New desires, new hunger for truth, new conviction—this is not just behavior change, it is nature change.
+1. **Regeneration (Heart Change):** The Holy Spirit gave you new life.
 
-   2.​ Justification (Status Change): God does not only forgive you; He declares you righteous because Jesus satisfied justice. Your standing is secure.
+   New desires, new hunger for truth, new conviction—this is not just behavior change, it is nature change.
 
-   3.​ Reconciliation (Relationship Change): The war ended. The wall fell. You were brought back to God—peace is not a trick; it is a restored relationship.
+2. **Justification (Status Change):** God does not only forgive you; He declares you righteous because Jesus satisfied justice. Your standing is secure.
 
-Catch this: Regeneration changes your inside. Justification changes your standing. Reconciliation changes your access.
+3. **Reconciliation (Relationship Change):** The war ended. The wall fell. You were brought back to God—peace is not a trick; it is a restored relationship.
 
-Reflection & Action
+> **Catch this:** Regeneration changes your inside. Justification changes your standing. Reconciliation changes your access.
 
-Reflect: When you don’t feel new, why does God still call you new?
+### Reflection & Action
+
+**Reflect:** When you don’t feel new, why does God still call you new?
 
 Because feelings often follow last, but truth stands first.
 
-Action: Write three past burdens you still carry. Next to each one write:
+**Action:** Write three past burdens you still carry. Next to each one write:
 
-PAID IN FULL (2 Corinthians 5:21). If Jesus carried it, you are not supposed to keep carrying it.$NB$, 'quiz', 11, 70, 'published')
+**PAID IN FULL** (2 Corinthians 5:21). If Jesus carried it, you are not supposed to keep carrying it.$NB$, 'quiz', 11, 70, 'published')
 ON CONFLICT (level_number, module_sequence_number) DO UPDATE SET
   title = EXCLUDED.title, lesson_content = EXCLUDED.lesson_content, evaluation_kind = EXCLUDED.evaluation_kind,
   estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
@@ -350,300 +285,217 @@ SELECT module_id, 'multiple_choice', $NQ$Under 'What Changed,' the module lists 
 
 -- ===== Level 1 · Module 3: Salvation by Grace =====
 INSERT INTO modules (level_number, module_sequence_number, title, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
-VALUES (1, 3, $NT$Salvation by Grace$NT$, $NB$1) Understanding Salvation
+VALUES (1, 3, $NT$Salvation by Grace$NT$, $NB$# Module 3: Understanding Salvation
 
-Salvation is the helpless and dying receiving help to live again.
+## Topic Outline
+- Understanding Salvation
+- Salvation by Grace
+- Repentance and Faith
+- The New Birth
+- The Great Exchange and Righteousness by Grace
+- Eternal Life
+- Commitment
+- The First Walk of the Saved Man
+- What Changed
+- Reflection & Action
+- Simple Class Takeaway
+
+## Understanding Salvation
+**Salvation is the helpless and dying receiving help to live again.**
 
 In the Bible, salvation is the gracious and undeserved gift of deliverance from the penalty, the power, and the future presence of sin, resulting in eternal life. It is achieved solely through faith in Jesus Christ’s sacrificial death and resurrection—not by human works. It reconciles man back to God.
 
-Jonah 2:9 (KJV)​
+> “But I will sacrifice unto thee with the voice of thanksgiving; I will pay that that I have vowed. Salvation is of the Lord.” — **Jonah 2:9 (KJV)**
 
-“But I will sacrifice unto thee with the voice of thanksgiving; I will pay that that I have vowed. Salvation is of the Lord.”
-
-Catch this: Salvation is not man climbing toward God by effort—salvation is God rescuing man by grace.
+> **Catch this:** Salvation is not man climbing toward God by effort—salvation is God rescuing man by grace.
 
 A drowning man does not first need advice. He needs rescue. In the same way, the sinner does not first need inspiration, religion, or moral polishing. He needs salvation.
 
-Acts 4:12 (KJV)​
+> “Neither is there salvation in any other: for there is none other name under heaven given among men, whereby we must be saved.” — **Acts 4:12 (KJV)**
 
-“Neither is there salvation in any other: for there is none other name under heaven given among men, whereby we must be saved.”
+**In simple words:**
 
-In simple words:
+- Salvation is God’s rescue plan for a fallen man.
+- Salvation is found only in Jesus Christ.
+- Salvation is not earned by works.
 
-   ●​ Salvation is God’s rescue plan for a fallen man.
+## Salvation by Grace
+**Salvation by grace is when you receive the gift of life that you could not buy / afford.**
 
-   ●​ Salvation is found only in Jesus Christ.
-    ●​ Salvation is not earned by works.
+Grace means God gives what man could never earn. It is the mercy and kindness of God extended toward the undeserving. Grace is not a reward for effort. Grace is not wages for good conduct. Grace is the gift of God to the man who could never pay for life, righteousness, or acceptance.
 
-2) Salvation by Grace
+> “For by grace are ye saved through faith; and that not of yourselves: it is the gift of God: Not of works, lest any man should boast.” — **Ephesians 2:8–9 (KJV)**
 
-Salvation by grace is when you receive the gift of life that you could not buy / afford.
-
-Grace means God gives what man could never earn. It is the mercy and kindness of
-
-God extended toward the undeserving. Grace is not a reward for effort. Grace is not wages for good conduct. Grace is the gift of God to the man who could never pay for life, righteousness, or acceptance.
-
-Ephesians 2:8–9 (KJV)​
-
-“For by grace are ye saved through faith; and that not of yourselves: it is the gift of
-
-God:​
-
-Not of works, lest any man should boast.”
-
-Catch this: What you could never afford, grace placed into your hands as a gift.
+> **Catch this:** What you could never afford, grace placed into your hands as a gift.
 
 Grace does not mean sin was small. Grace means the problem of sin was so deep and so costly that only the death and resurrection of Jesus Christ could deal with it fully.
 
 If salvation could be earned, Christ would not have needed to die. But because man could not save himself, grace made a way.
 
-Titus 3:5 (KJV)​
+> “Not by works of righteousness which we have done, but according to his mercy he saved us, by the washing of regeneration, and renewing of the Holy Ghost;” — **Titus 3:5 (KJV)**
 
-“Not by works of righteousness which we have done, but according to his mercy he saved us, by the washing of regeneration, and renewing of the Holy Ghost;”
+**In simple words:**
 
-In simple words:
-   ●​ Salvation is a gift, not a salary.
+- Salvation is a gift, not a salary.
+- Grace means God gave what man could not earn.
+- No man can boast before God concerning salvation.
 
-   ●​ Grace means God gave what man could not earn.
-
-   ●​ No man can boast before God concerning salvation.
-
-3) Repentance and Faith
-
-Repentance is being sorry of one’s sin and turning away from the sin to not do them.
+## Repentance and Faith
+**Repentance is being sorry of one’s sin and turning away from the sin to not do them.**
 
 Biblically, repentance is more than emotion. It is more than regret. It is a change of mind, heart, and direction toward God. Repentance happens when a man stops excusing sin, agrees with God about it, and turns away from it toward Christ.
 
 Faith is the hand that receives what grace has provided. Repentance turns away from sin. Faith turns toward Jesus Christ.
 
-Mark 1:15 (KJV)​
+> “And saying, The time is fulfilled, and the kingdom of God is at hand: repent ye, and believe the gospel.” — **Mark 1:15 (KJV)**
 
-“And saying, The time is fulfilled, and the kingdom of God is at hand: repent ye, and believe the gospel.”
-
-Catch this: Repentance is not only tears—it is a turn. Faith is not only agreement—it is a receiving.
+> **Catch this:** Repentance is not only tears—it is a turn. Faith is not only agreement—it is a receiving.
 
 A man may feel bad and still remain unchanged. But when repentance is real, there is a turning. When faith is real, there is a receiving of Christ and a resting in His finished work.
 
-Acts 20:21 (KJV)​
+> “Testifying both to the Jews, and also to the Greeks, repentance toward God, and faith toward our Lord Jesus Christ.” — **Acts 20:21 (KJV)**
 
-“Testifying both to the Jews, and also to the Greeks, repentance toward God, and faith toward our Lord Jesus Christ.”
+**In simple words:**
 
-In simple words:
+- Repentance means turning away from sin.
+- Faith means turning toward Jesus Christ.
+- True repentance and faith lead to conversion.
 
-   ●​ Repentance means turning away from sin.
-
-   ●​ Faith means turning toward Jesus Christ.
-   ●​ True repentance and faith lead to conversion.
-
-4) The New Birth
-
-Salvation is not only forgiveness. It is new birth.
+## The New Birth
+**Salvation is not only forgiveness. It is new birth.**
 
 A man who comes to Christ is not merely excused and then left the same. He is born again. God does not only cancel a debt; He gives new life. He does not only remove guilt; He regenerates the inner man.
 
-John 3:3 (KJV)​
+> “Jesus answered and said unto him, Verily, verily, I say unto thee, Except a man be born again, he cannot see the kingdom of God.” — **John 3:3 (KJV)**
 
-“Jesus answered and said unto him, Verily, verily, I say unto thee, Except a man be born again, he cannot see the kingdom of God.”
+> **Catch this:** God does not only forgive the sinner—He regenerates the man.
 
-Catch this: God does not only forgive the sinner—He regenerates the man.
+Christianity is not a bad man trying harder. It is a dead man being made alive by God. It is not simply a second chance. It is the beginning of a new life-source.
 
-Christianity is not a bad man trying harder. It is a dead man being made alive by
+> “Being born again, not of corruptible seed, but of incorruptible, by the word of God, which liveth and abideth for ever.” — **1 Peter 1:23 (KJV)**
 
-God. It is not simply a second chance. It is the beginning of a new life-source.
+**In simple words:**
 
-1 Peter 1:23 (KJV)​
+- Salvation gives more than forgiveness.
+- Salvation gives new life.
+- New birth is the inward miracle of salvation.
 
-“Being born again, not of corruptible seed, but of incorruptible, by the word of God, which liveth and abideth for ever.”
+## The Great Exchange and Righteousness by Grace
+**At the cross, a divine exchange took place.**
 
-In simple words:
-
-   ●​ Salvation gives more than forgiveness.
-
-   ●​ Salvation gives new life.
-
-   ●​ New birth is the inward miracle of salvation.
-
-5) The Great Exchange and Righteousness by Grace
-At the cross, a divine exchange took place.
 Jesus did not merely sympathize with man’s pain. He stood in man’s place. He took sin, guilt, judgment, and condemnation upon Himself so that the believer could receive righteousness, acceptance, peace, and access to God.
 
-2 Corinthians 5:21 (KJV)​
+> “For he hath made him to be sin for us, who knew no sin; that we might be made the righteousness of God in him.” — **2 Corinthians 5:21 (KJV)**
 
-“For he hath made him to be sin for us, who knew no sin; that we might be made the righteousness of God in him.”
+> **Catch this:** Your debt became His, and His righteousness became yours.
 
-Catch this: Your debt became His, and His righteousness became yours.
-
-Righteousness by grace is when your righteousness does not depend on your works but by His finished “work” on the cross.
+**Righteousness by grace is when your righteousness does not depend on your works but by His finished “work” on the cross.**
 
 This means a believer stands accepted before God, not because he has performed well enough, but because Jesus Christ finished the work. Our standing before God is based on Christ’s obedience, sacrifice, and victory.
 
-Romans 5:1 (KJV)​
+> “Therefore being justified by faith, we have peace with God through our Lord Jesus Christ:” — **Romans 5:1 (KJV)**
 
-“Therefore being justified by faith, we have peace with God through our Lord Jesus
+> “And be found in him, not having mine own righteousness, which is of the law, but that which is through the faith of Christ, the righteousness which is of God by faith:” — **Philippians 3:9 (KJV)**
 
-Christ:”
+**In simple words:**
 
-Philippians 3:9 (KJV)​
+- Jesus took our sin and judgment.
+- We received righteousness and peace through Him.
+- Our standing with God rests on Christ, not on self-effort.
 
-“And be found in him, not having mine own righteousness, which is of the law, but that which is through the faith of Christ, the righteousness which is of God by faith:”
-
-In simple words:
-
-   ●​ Jesus took our sin and judgment.
-    ●​ We received righteousness and peace through Him.
-
-    ●​ Our standing with God rests on Christ, not on self-effort.
-
-6) Eternal Life
-
-Eternal life is the life of God which has no end becoming our life.
+## Eternal Life
+**Eternal life is the life of God which has no end becoming our life.**
 
 Eternal life is not only endless existence. It is the very life of God shared with the believer through Christ. It begins now and continues forever. So when a man is saved, he does not only receive a better future—he receives a new life now.
 
-John 5:24 (KJV)​
+> “Verily, verily, I say unto you, He that heareth my word, and believeth on him that sent me, hath everlasting life, and shall not come into condemnation; but is passed from death unto life.” — **John 5:24 (KJV)**
 
-“Verily, verily, I say unto you, He that heareth my word, and believeth on him that sent me, hath everlasting life, and shall not come into condemnation; but is passed from death unto life.”
-
-Catch this: Eternal life is not only a future promise—it is a present possession in Christ.
+> **Catch this:** Eternal life is not only a future promise—it is a present possession in Christ.
 
 A believer is not merely waiting to live later. He has already passed from death unto life.
 
-1 John 5:11–12 (KJV)​
+> “And this is the record, that God hath given to us eternal life, and this life is in his Son. He that hath the Son hath life; and he that hath not the Son of God hath not life.” — **1 John 5:11–12 (KJV)**
 
-“And this is the record, that God hath given to us eternal life, and this life is in his Son.​
+**In simple words:**
 
-He that hath the Son hath life; and he that hath not the Son of God hath not life.”
+- Eternal life is in the Son.
+- If you have Christ, you have life.
+- Eternal life begins now and continues forever.
 
-In simple words:
-
-    ●​ Eternal life is in the Son.
-
-    ●​ If you have Christ, you have life.
-
-    ●​ Eternal life begins now and continues forever.
-
-7) Commitment
-
-Commitment is your resolve empowered by God to live the life of God every day as it is called NOW.
+## Commitment
+**Commitment is your resolve empowered by God to live the life of God every day as it is called NOW.**
 
 Commitment is not the price a man pays to be saved. Commitment is the fruit of a life that has truly encountered salvation. Grace saves freely, but grace never produces careless living. Grace teaches, shapes, and leads a man into daily obedience.
 
-Luke 9:23 (KJV)​
+> “And he said to them all, If any man will come after me, let him deny himself, and take up his cross daily, and follow me.” — **Luke 9:23 (KJV)**
 
-“And he said to them all, If any man will come after me, let him deny himself, and take up his cross daily, and follow me.”
+> **Catch this:** Commitment is not how you buy salvation—commitment is how salvation begins to show itself.
 
-Catch this: Commitment is not how you buy salvation—commitment is how salvation begins to show itself.
+A truly saved man begins to walk with God. He begins to obey. He begins to hunger for truth. He begins to live differently—not to earn salvation, but because the life of God is now at work in him.
 
-A truly saved man begins to walk with God. He begins to obey. He begins to hunger for truth. He begins to live differently—not to earn salvation, but because the life of
+> “For the grace of God that bringeth salvation hath appeared to all men, Teaching us that, denying ungodliness and worldly lusts, we should live soberly, righteously, and godly, in this present world;” — **Titus 2:11–12 (KJV)**
 
-God is now at work in him.
+**In simple words:**
 
-Titus 2:11–12 (KJV)​
+- Commitment is the fruit of salvation.
+- Grace teaches the believer how to live.
+- A saved man begins to follow God daily.
 
-“For the grace of God that bringeth salvation hath appeared to all men,​
-
-Teaching us that, denying ungodliness and worldly lusts, we should live soberly, righteously, and godly, in this present world;”
-
-In simple words:
-
-   ●​ Commitment is the fruit of salvation.
-
-   ●​ Grace teaches the believer how to live.
-
-   ●​ A saved man begins to follow God daily.
-
-8) The First Walk of the Saved Man
-
-The man who enters Christ must not remain unattended.
+## The First Walk of the Saved Man
+**The man who enters Christ must not remain unattended.**
 
 Salvation is the door, but discipleship is the road. A man who has been saved must be taught, grounded, guided, and established in the faith. The New Testament pattern is not just a decision, but a continued life in doctrine, fellowship, prayer, and obedience.
 
-Matthew 28:19–20 (KJV)​
+> “Go ye therefore, and teach all nations, baptizing them in the name of the Father, and of the Son, and of the Holy Ghost: Teaching them to observe all things whatsoever I have commanded you: and, lo, I am with you alway, even unto the end of the world. Amen.” — **Matthew 28:19–20 (KJV)**
 
-“Go ye therefore, and teach all nations, baptizing them in the name of the Father, and of the Son, and of the Holy Ghost:​
-
-Teaching them to observe all things whatsoever I have commanded you: and, lo, I am with you alway, even unto the end of the world. Amen.”
-
-Catch this: Salvation is the beginning of the journey, not the end of the story.
+> **Catch this:** Salvation is the beginning of the journey, not the end of the story.
 
 This is why the believer must not stay isolated. He must grow in the Word, in prayer, in fellowship, and in faithful Christian living.
 
-Acts 2:41–42 (KJV)​
+> “Then they that gladly received his word were baptized: and the same day there were added unto them about three thousand souls. And they continued stedfastly in the apostles’ doctrine and fellowship, and in breaking of bread, and in prayers.” — **Acts 2:41–42 (KJV)**
 
-“Then they that gladly received his word were baptized: and the same day there were added unto them about three thousand souls.​
+**In simple words:**
 
-And they continued stedfastly in the apostles’ doctrine and fellowship, and in breaking of bread, and in prayers.”
+- Salvation is the door.
+- Discipleship is the road.
+- A believer must continue in truth, fellowship, and obedience.
 
-In simple words:
-
-   ●​ Salvation is the door.
-
-   ●​ Discipleship is the road.
-
-   ●​ A believer must continue in truth, fellowship, and obedience.
-
-9) What Changed
-
+## What Changed
 Keep these as clear pillars:
 
-   1.​ Rescue — You were delivered from sin and judgment.
+1. **Rescue** — You were delivered from sin and judgment.
+2. **Grace** — You received what you could not buy / afford.
+3. **Repentance** — You turned from sin toward God.
+4. **Faith** — You received Christ and His finished work.
+5. **New Birth** — You received new life from above.
+6. **Righteousness** — You now stand right before God in Christ.
+7. **Eternal Life** — The life of God became your life.
+8. **Commitment** — Grace now teaches you to walk with God.
+9. **Discipleship** — You must continue in truth, fellowship, and obedience.
 
-   2.​ Grace — You received what you could not buy / afford.
+> **Catch this:** Not improved—reborn. Not tolerated—accepted in Christ. Not self-made—grace-made. Not left alone—called to follow.
 
-   3.​ Repentance — You turned from sin toward God.
+## Reflection & Action
+**Reflect:** Have you treated salvation as a moment only, or have you understood it as rescue, grace, new birth, right standing, and a new walk?
 
-   4.​ Faith — You received Christ and His finished work.
+**Action:** Write these lines and pray through them:
 
-   5.​ New Birth — You received new life from above.
+- I am saved by grace through faith in Jesus Christ.
+- I turn away from sin and turn toward God.
+- I have been born again by the Spirit of God.
+- My righteousness is in Christ, not in myself.
+- Eternal life is now at work in me.
+- By the help of the Holy Spirit, I will walk with God daily.
 
-   6.​ Righteousness — You now stand right before God in Christ.
-
-   7.​ Eternal Life — The life of God became your life.
-
-   8.​ Commitment — Grace now teaches you to walk with God.
-
-   9.​ Discipleship — You must continue in truth, fellowship, and obedience.
-
-Catch this: Not improved—reborn. Not tolerated—accepted in Christ. Not self-made—grace-made. Not left alone—called to follow.
-
-Reflection & Action
-
-Reflect:​
-
-Have you treated salvation as a moment only, or have you understood it as rescue, grace, new birth, right standing, and a new walk?
-
-Action:​
-
-Write these lines and pray through them:
-
-   ●​ I am saved by grace through faith in Jesus Christ.
-
-   ●​ I turn away from sin and turn toward God.
-
-   ●​ I have been born again by the Spirit of God.
-
-   ●​ My righteousness is in Christ, not in myself.
-  ●​ Eternal life is now at work in me.
-
-  ●​ By the help of the Holy Spirit, I will walk with God daily.
-
-Simple Class Takeaway
-
-  ●​ Salvation is the helpless and dying receiving help to live again.
-
-  ●​ Salvation by grace is when you receive the gift of life that you could not buy / afford.
-
-  ●​ Repentance and faith are man’s true response to the gospel.
-
-  ●​ The new birth is the inward miracle of salvation.
-
-  ●​ Righteousness by grace means our standing with God rests on Christ’s finished work.
-
-  ●​ Eternal life is the life of God becoming our life.
-
-  ●​ Commitment is the daily, God-empowered walk that flows from true salvation.
-
-  ●​ Discipleship is the road every truly saved man must walk.$NB$, 'quiz', 13, 70, 'published')
+## Simple Class Takeaway
+- Salvation is the helpless and dying receiving help to live again.
+- Salvation by grace is when you receive the gift of life that you could not buy / afford.
+- Repentance and faith are man’s true response to the gospel.
+- The new birth is the inward miracle of salvation.
+- Righteousness by grace means our standing with God rests on Christ’s finished work.
+- Eternal life is the life of God becoming our life.
+- Commitment is the daily, God-empowered walk that flows from true salvation.
+- Discipleship is the road every truly saved man must walk.$NB$, 'quiz', 13, 70, 'published')
 ON CONFLICT (level_number, module_sequence_number) DO UPDATE SET
   title = EXCLUDED.title, lesson_content = EXCLUDED.lesson_content, evaluation_kind = EXCLUDED.evaluation_kind,
   estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
@@ -682,343 +534,263 @@ SELECT module_id, 'multiple_choice', $NQ$The 'What Changed' summary ends with a 
 
 -- ===== Level 1 · Module 4: Identity in Christ =====
 INSERT INTO modules (level_number, module_sequence_number, title, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
-VALUES (1, 4, $NT$Identity in Christ$NT$, $NB$New Creation Foundations
+VALUES (1, 4, $NT$Identity in Christ$NT$, $NB$# Module 4: New Creation Foundations
 
-Lesson Objective
-By the end of this lesson, the disciple should be able to:
+## Topic Outline
+- Lesson Objective
+- Introduction: From Salvation to Identity
+- Who Am I in Christ?
+- The New Creation in Christ
+- What It Means to Be in Christ
+- Man Is Spirit, Soul, and Body
+- In Christ, You Have a Restored Place of Authority
+- In Christ, You Are Free from Condemnation
+- What Happens When a Christian Sins?
+- Foundation of a New Believer
+- Integrated Identity Summary
+- Reflection and Action
+- Simple Class Takeaway
 
-   ●​ understand what happened to him when he came to Christ,
+## Lesson Objective
+By the end of this lesson, the disciple should be able to:
 
-   ●​ explain what it means to be a new creation,
+- understand what happened to him when he came to Christ,
+- explain what it means to be a new creation,
+- know the difference between spirit, soul, and body,
+- walk free from condemnation,
+- stand in Christ-given authority,
+- and begin to live daily from his new identity in Christ.
 
-   ●​ know the difference between spirit, soul, and body,
-
-   ●​ walk free from condemnation,
-
-   ●​ stand in Christ-given authority,
-
-   ●​ and begin to live daily from his new identity in Christ.
-
-Introduction: From Salvation to Identity
-
+## Introduction: From Salvation to Identity
 Module 1 revealed who God is: righteous, just, loving, faithful, and eternal. Module 2 showed God’s plan for humanity, the fall of man, and the need for rescue. Module 3 explained salvation by grace: how Christ saves, gives new birth, grants righteousness, and brings eternal life. Now Module 4 answers the next question: Who am I now that I am in Christ?
 
 Many believers know they are forgiven, but they still think of themselves using the language of the old life. They still speak from guilt, fear, weakness, and past failure.
 
 But Scripture does not present salvation as a mere clean-up of the old man.
 
-Scripture presents salvation as entry into a new life, a new standing, a new family, and a new creation in Christ. John 1:12–13 says those who receive Christ are given the right to become children of God, and 2 Corinthians 5:17 says that if any man is in
+Scripture presents salvation as entry into a new life, a new standing, a new family, and a new creation in Christ. John 1:12–13 says those who receive Christ are given the right to become children of God, and 2 Corinthians 5:17 says that if any man is in Christ, he is a new creature.
 
-Christ, he is a new creature.
+> **Now you know:** Salvation did not only change your destination. It changed your identity.
 
-Now you know: Salvation did not only change your destination. It changed your identity.
+### Quick Truths
+- You are not who you were before Christ.
+- You are not defined by your old history.
+- You are not trying to become accepted.
+- In Christ, you have been brought into a new life.
 
-Quick Truths
-   ●​ You are not who you were before Christ.
-
-   ●​ You are not defined by your old history.
-
-   ●​ You are not trying to become accepted.
-
-   ●​ In Christ, you have been brought into a new life.
-
-Who Am I in Christ?
-
+## Who Am I in Christ?
 What does Scripture say about my identity in Christ?
 
-I am a child of God
-
+### I am a child of God
 John 1:12–13 teaches that those who receive and believe in Jesus Christ are given the right to become children of God. This sonship is not produced by natural birth, human effort, or religious activity. It is received through faith in Christ.
 
-I was chosen and set apart in Christ
+### I was chosen and set apart in Christ
+Scripture speaks of believers as chosen, sanctified, and called according to God’s purpose. Ephesians 1:4–5 shows that God chose us in Christ and predestined us unto adoption, while passages such as Romans 8:29–30 and 2 Thessalonians 2:13 show God’s saving initiative and sanctifying work. This does not make the believer proud; it makes him grateful.
 
-Scripture speaks of believers as chosen, sanctified, and called according to God’s purpose. Ephesians 1:4–5 shows that God chose us in Christ and predestined us unto adoption, while passages such as Romans 8:29–30 and 2 Thessalonians 2:13 show
-
-God’s saving initiative and sanctifying work. This does not make the believer proud; it makes him grateful.
-
-I am part of a royal priesthood
-
+### I am part of a royal priesthood
 1 Peter 2:9 describes believers as a chosen generation, a royal priesthood, a holy nation, and a people belonging to God. This means your life now carries divine purpose. You are no longer merely part of the crowd. You have been called out of darkness into God’s marvelous light.
 
-I am of heaven here on earth
-The believer still lives on earth, but his source, identity, and citizenship are now rooted in Christ. He is no longer defined by the old order of sin and separation. He belongs to God and must now live from above while walking on the earth.
+### I am of heaven here on earth
+The believer still lives on earth, but his source, identity, and citizenship are now rooted in Christ. He is no longer defined by the old order of sin and separation. He belongs to God and must now live from above while walking on the earth.
 
-Now you know: Identity in Christ is not built from your feelings, your past, your tribe, your wounds, or your failures. It is received from God.
+> **Now you know:** Identity in Christ is not built from your feelings, your past, your tribe, your wounds, or your failures. It is received from God.
 
-The New Creation in Christ
+## The New Creation in Christ
 
-In Christ, you become new
+### In Christ, you become new
+2 Corinthians 5:17 says:
 
-2 Corinthians 5:17 says:​
-
-“Therefore if any man be in Christ, he is a new creature: old things are passed away; behold, all things are become new.”
+> “Therefore if any man be in Christ, he is a new creature: old things are passed away; behold, all things are become new.”
 
 Many Christians think being born again means only that sins are forgiven. That is true, but it is not the whole matter. Salvation includes forgiveness, but it also includes a real inward change. The believer is brought into a new creation reality in Christ. The old order of sin no longer has the final word over him. Romans 6 teaches that the old man was crucified with Christ, and now the believer must no longer think of himself as still chained to the former life.
 
 This is why a Christian must stop speaking as though the old self is still his deepest truth. When someone says, “I am just short-tempered,” “I have always been like this,” or “That is simply who I am,” he is often speaking from an identity Christ has already judged at the Cross.
 
 Your new nature is fashioned after Christ. That does not mean your maturity is complete in one day. It means your identity has changed before your growth is complete.
-Now you know: You are not an old man trying to improve. In Christ, you are new, and now you must learn to live from that newness.
 
-Quick Truths
+> **Now you know:** You are not an old man trying to improve. In Christ, you are new, and now you must learn to live from that newness.
 
-   ●​ The old life is no longer your master.
+### Quick Truths
+- The old life is no longer your master.
+- Your past is not your deepest identity.
+- The believer’s new life is rooted in union with Christ.
+- Growth is progressive, but identity is settled in Christ.
 
-   ●​ Your past is not your deepest identity.
-
-   ●​ The believer’s new life is rooted in union with Christ.
-
-   ●​ Growth is progressive, but identity is settled in Christ.
-
-What It Means to Be in Christ
-
+## What It Means to Be in Christ
 To be in Christ is to be joined to Him. It means that what Christ accomplished becomes the ground of your standing before God. You are accepted in Him, made alive in Him, justified in Him, and brought near in Him.
 
-What it means to be in Christ:
+**What it means to be in Christ:**
 
-   ●​ Not condemned, but set free. Romans 8:1–2 declares that there is now no condemnation to those who are in Christ Jesus.
+- **Not condemned, but set free.** Romans 8:1–2 declares that there is now no condemnation to those who are in Christ Jesus.
+- **Possessor of eternal life.** The believer does not merely wait for life later; he has life in the Son now.
+- **Of heaven here on earth.** The believer’s deepest source is no longer the fallen order. He now belongs to God.
+- **Brought into God’s family.** He is not just forgiven from a distance; he is received as a son.
 
-   ●​ Possessor of eternal life. The believer does not merely wait for life later; he has life in the Son now.
+> **Now you know:** Christianity is not merely following Christ from outside. It is being joined to Him.
 
-   ●​ Of heaven here on earth. The believer’s deepest source is no longer the fallen order. He now belongs to God.
-
-   ●​ Brought into God’s family. He is not just forgiven from a distance; he is received as a son.
-
-Now you know: Christianity is not merely following Christ from outside. It is being joined to Him.
-Man Is Spirit, Soul, and Body
-
+## Man Is Spirit, Soul, and Body
 1 Thessalonians 5:23 shows that man has three dimensions:
 
-   ●​ Spirit
+- Spirit
+- Soul
+- Body
 
-   ●​ Soul
+**What these mean:**
 
-   ●​ Body
-
-       What these mean:
-
-   ●​ The body is the outward man.
-
-   ●​ The soul is the mind, will, and emotions.
-
-   ●​ The spirit is the inner man.
+- **The body** is the outward man.
+- **The soul** is the mind, will, and emotions.
+- **The spirit** is the inner man.
 
 This is important because many believers become confused about salvation when they do not understand where the new birth happens first. They expect instant visible change in every area, and when they do not see it, they begin to question whether anything happened at all.
 
-But the new birth is spiritual before it becomes visible in conduct.
+**But the new birth is spiritual before it becomes visible in conduct.**
 
-Now you know: Salvation is instant in the spirit, then worked out progressively in the soul, and finally completed fully even in the body.
+> **Now you know:** Salvation is instant in the spirit, then worked out progressively in the soul, and finally completed fully even in the body.
 
-The Change Happens in the Spirit
-
+### The Change Happens in the Spirit
 Salvation does not first change your body. It does not first perfect your soul. The part made alive and made new is the spirit. That is why outward appearance alone cannot tell you whether someone is born again. There is no automatic change in skin, height, weight, or physical structure. The new birth is a spiritual work of God.
-It is also true that salvation does not instantaneously complete the renewal of the soul. The mind, emotions, and will must be sanctified and trained by the Word of
 
-God. John 17:17 says, “Sanctify them through thy truth: thy word is truth,” and
-
-Romans 12:2 calls believers to be transformed by the renewing of their minds. Acts 20 also speaks of the Word of God’s grace as able to build believers up.
+It is also true that salvation does not instantaneously complete the renewal of the soul. The mind, emotions, and will must be sanctified and trained by the Word of God. John 17:17 says, “Sanctify them through thy truth: thy word is truth,” and Romans 12:2 calls believers to be transformed by the renewing of their minds. Acts 20 also speaks of the Word of God’s grace as able to build believers up.
 
 So when a believer still struggles in thought patterns, emotional wounds, or learned habits, that does not prove the new birth is false. It proves that sanctification is now needed. Being born again is instantaneous. Renewal and purification in daily living are progressive.
 
 Therefore:
 
-   ●​ Your spirit was made new at salvation.
+- Your spirit was made new at salvation.
+- Your soul now needs renewal by the Word.
+- Your daily life must catch up with what God already did in your spirit.
 
-   ●​ Your soul now needs renewal by the Word.
+> **Now you know:** The recreated spirit begins the new life. The renewed mind learns how to live it.
 
-   ●​ Your daily life must catch up with what God already did in your spirit.
+### Before Salvation, Man Was Spiritually Dead
+Ephesians 2:1 says:
 
-Now you know: The recreated spirit begins the new life. The renewed mind learns how to live it.
-
-Before Salvation, Man Was Spiritually Dead
-
-Ephesians 2:1 says: “And you hath he quickened, who were dead in trespasses and sins.”
+> “And you hath he quickened, who were dead in trespasses and sins.”
 
 Spiritual death means separation from the life of God. It is not the end of existence; it is the condition of being cut off from God. Fallen man may be active outwardly, but inwardly he is dead toward God.
-This matches what Modules 2 and 3 already established. Sin was not merely wrong behavior. It was a fallen condition. Therefore, man did not just need advice, instruction, or discipline. He needed life.
 
-Now you know: A dead man does not first need motivation. He needs life.
+This matches what Modules 2 and 3 already established. Sin was not merely wrong behavior. It was a fallen condition. Therefore, man did not just need advice, instruction, or discipline. He needed life.
 
-Salvation Makes the Spirit Alive Again
+> **Now you know:** A dead man does not first need motivation. He needs life.
 
-When a person comes to Christ, the spirit is made alive and becomes new. Galatians
-
-4:6 says that because we are sons, God has sent forth the Spirit of His Son into our hearts, crying, “Abba, Father.” John 1:12 again shows that believers are brought into sonship through faith in Christ.
+### Salvation Makes the Spirit Alive Again
+When a person comes to Christ, the spirit is made alive and becomes new. Galatians 4:6 says that because we are sons, God has sent forth the Spirit of His Son into our hearts, crying, “Abba, Father.” John 1:12 again shows that believers are brought into sonship through faith in Christ.
 
 The Christian life is then the lifelong learning of how to live outwardly from what God has already done inwardly.
 
-Now you know:
+> **Now you know:** When you are in Christ, your spirit becomes new. The rest of your growth is learning to live from that new identity.
 
-When you are in Christ, your spirit becomes new.​
-
-The rest of your growth is learning to live from that new identity.
-
-In Christ, You Have a Restored Place of Authority
-
+## In Christ, You Have a Restored Place of Authority
 As new creations in Christ, our place of authority over darkness is restored. This means the devil no longer has lawful dominion over the believer. Christ has delivered us from the power of darkness and translated us into the kingdom of His dear Son.
 
-Ephesians 2:6 says we have been raised up together and made to sit together in heavenly places in Christ Jesus. Ephesians 1:20–23 shows Christ far above principality,
-power, might, and dominion. Colossians 1:13–14 declares deliverance from the power of darkness.
+Ephesians 2:6 says we have been raised up together and made to sit together in heavenly places in Christ Jesus. Ephesians 1:20–23 shows Christ far above principality, power, might, and dominion. Colossians 1:13–14 declares deliverance from the power of darkness.
 
 Mark 16:17–18 shows signs that follow those who believe in the name of Jesus. This includes authority over demons and the exercise of Christ’s power in ministry. But this authority is not self-generated. It is exercised in Christ’s name, under Christ’s lordship, and by faith in what He accomplished.
 
 Therefore:
 
-   ●​ The believer is no longer under Satan’s rule.
+- The believer is no longer under Satan’s rule.
+- The believer stands in the name of Jesus.
+- The believer must be conscious of his place in Christ.
+- Authority must be exercised in line with the will of God.
 
-   ●​ The believer stands in the name of Jesus.
+> **Now you know:** You do not fight for Christ’s victory as though He has not won. You stand in His victory and enforce what He achieved.
 
-   ●​ The believer must be conscious of his place in Christ.
+## In Christ, You Are Free from Condemnation
+Romans 8:1–2 says:
 
-   ●​ Authority must be exercised in line with the will of God.
-
-Now you know: You do not fight for Christ’s victory as though He has not won. You stand in His victory and enforce what He achieved.
-
-In Christ, You Are Free from Condemnation
-
-Romans 8:1–2 says:​
-
-“There is therefore now no condemnation to them which are in Christ Jesus… For the law of the Spirit of life in Christ Jesus hath made me free from the law of sin and death.”
+> “There is therefore now no condemnation to them which are in Christ Jesus… For the law of the Spirit of life in Christ Jesus hath made me free from the law of sin and death.”
 
 This means the believer is free from God’s judicial condemnation. He has moved from guilt to justification, from separation to peace, and from death to life in Christ.
-One of the enemy’s sharpest weapons against Christians is guilt. He keeps replaying old failures to keep the believer weak, ashamed, and distant from God. A Christian may still carry guilt over sins that God already forgave when they were confessed.
+
+One of the enemy’s sharpest weapons against Christians is guilt. He keeps replaying old failures to keep the believer weak, ashamed, and distant from God. A Christian may still carry guilt over sins that God already forgave when they were confessed.
 
 1 John 1:9 teaches that if we confess our sins, God is faithful and just to forgive us and to cleanse us from all unrighteousness. 2 Corinthians 5:18–19 shows the ministry of reconciliation: God reconciling us to Himself in Christ.
 
-Learn this difference:
+**Learn this difference:**
 
-   ●​ The devil guilts.
+- **The devil guilts.**
+- **The Holy Spirit convicts.**
 
-   ●​ The Holy Spirit convicts.
+Guilt pushes you away from God. Conviction draws you back to God. Guilt isolates. Conviction restores fellowship.
 
-Guilt pushes you away from God. Conviction draws you back to God. Guilt isolates.
+> **Now you know:** God does not correct you so He can throw you away. He deals with you so He can restore you.
 
-Conviction restores fellowship.
-
-Now you know: God does not correct you so He can throw you away. He deals with you so He can restore you.
-
-What Happens When a Christian Sins?
-
+## What Happens When a Christian Sins?
 When a Christian sins, that sin does not become his identity, but it does contradict his new identity. Sin does not erase sonship, but it disrupts fellowship, grieves the Spirit, damages witness, and opens room for unnecessary bondage and consequences.
 
-The believer must never use “identity in Christ” as an excuse for careless living.
+**The believer must never use “identity in Christ” as an excuse for careless living.**
 
 Your original note said, “The sin disfigures the image of God in us.” The safer and clearer way to teach it is this: sin contradicts the life and nature now at work in the believer. If it is tolerated, it produces destructive fruit. If it is confessed, God forgives and cleanses. The Spirit of God guides us away from sin and into obedience.
-Therefore:
 
-   ●​ Sin is serious.
+Therefore:
 
-   ●​ The believer must not excuse it.
+- Sin is serious.
+- The believer must not excuse it.
+- Confession restores fellowship.
+- The Holy Spirit leads the believer away from sin.
+- Identity in Christ must produce holy living, not careless living.
 
-   ●​ Confession restores fellowship.
-
-   ●​ The Holy Spirit leads the believer away from sin.
-
-   ●​ Identity in Christ must produce holy living, not careless living.
-
-Now you know: Sin may interrupt fellowship, but it is not the truth of your new identity.
+> **Now you know:** Sin may interrupt fellowship, but it is not the truth of your new identity.
 
 Return quickly to God and walk again in the light.
 
-Foundation of a New Believer
-
+## Foundation of a New Believer
 These are the foundational truths a new believer must know:
 
-   ●​ Changed from death in sin and made alive in Jesus Christ​
+- **Changed from death in sin and made alive in Jesus Christ** — You were dead, but now alive in Him.
+- **The old is gone, the new has come** — Your former identity is no longer your deepest truth.
+- **We walk by the Spirit of God** — The Christian life is lived by the Spirit, not by bare human effort.
+- **He is a child of God** — This must be settled in the heart of every believer.
 
-       You were dead, but now alive in Him.
+## Integrated Identity Summary
+So then, who are you in Christ?
 
-   ●​ The old is gone, the new has come​
+- You are a child of God.
+- You are a new creation.
+- You are no longer spiritually dead.
+- You have been made alive in Christ.
+- You are not condemned.
+- You have been brought near to God.
+- You have access to the Father.
+- You have authority in the name of Jesus.
+- You have eternal life now.
+- You are being renewed by the Word.
+- You are called to walk in the Spirit.
+- You are part of a royal priesthood and a holy nation.
 
-       Your former identity is no longer your deepest truth.
+> **Now you know:** Your growth may still be progressing, but your identity in Christ is already established.
 
-   ●​ We walk by the Spirit of God​
+## Reflection and Action
 
-       The Christian life is lived by the Spirit, not by bare human effort.
+### Reflect
+- Have you been speaking about yourself using old labels that Christ has already judged?
+- Have you reduced salvation to forgiveness only and ignored new creation?
+- Have you mistaken slow growth in the soul for absence of life in the spirit?
+- Have you allowed condemnation to speak louder than Scripture?
 
-   ●​ He is a child of God​
-
-       This must be settled in the heart of every believer.
-
-Integrated Identity Summary
-So then, who are you in Christ?
-
-   ●​ You are a child of God.
-
-   ●​ You are a new creation.
-
-   ●​ You are no longer spiritually dead.
-
-   ●​ You have been made alive in Christ.
-
-   ●​ You are not condemned.
-
-   ●​ You have been brought near to God.
-
-   ●​ You have access to the Father.
-
-   ●​ You have authority in the name of Jesus.
-
-   ●​ You have eternal life now.
-
-   ●​ You are being renewed by the Word.
-
-   ●​ You are called to walk in the Spirit.
-
-   ●​ You are part of a royal priesthood and a holy nation.
-
-Now you know: Your growth may still be progressing, but your identity in Christ is already established.
-
-Reflection and Action
-
-Reflect
-
-   ●​ Have you been speaking about yourself using old labels that Christ has already judged?
-
-   ●​ Have you reduced salvation to forgiveness only and ignored new creation?
-
-   ●​ Have you mistaken slow growth in the soul for absence of life in the spirit?
-
-   ●​ Have you allowed condemnation to speak louder than Scripture?
-
-Action
-
+### Action
 Write these lines and pray through them:
- ●​ I am in Christ; therefore I am a new creation.
 
- ●​ I am a child of God through Jesus Christ.
+- I am in Christ; therefore I am a new creation.
+- I am a child of God through Jesus Christ.
+- I have been made alive from spiritual death.
+- I am not under condemnation in Christ.
+- I have been delivered from the authority of darkness.
+- My mind is being renewed by the Word of God.
+- I will live from my new identity and not from my old history.
+- When I fail, I will return to God quickly and walk again in truth.
 
- ●​ I have been made alive from spiritual death.
-
- ●​ I am not under condemnation in Christ.
-
- ●​ I have been delivered from the authority of darkness.
-
- ●​ My mind is being renewed by the Word of God.
-
- ●​ I will live from my new identity and not from my old history.
-
- ●​ When I fail, I will return to God quickly and walk again in truth.
-
-Simple Class Takeaway
-
- ●​ Identity in Christ answers the question: Who am I now that I am saved?
-
- ●​ The believer is a new creation in Christ.
-
- ●​ The new birth happens first in the spirit.
-
- ●​ The soul must be renewed by the Word of God.
-
- ●​ The believer has been made alive, brought into sonship, and set in a new standing before God.
-
- ●​ In Christ, the believer has a restored place of authority.
-
- ●​ In Christ, the believer is free from condemnation.
-
- ●​ When a Christian sins, he must not hide; he must return to God in confession and continue walking in the light.
-
- ●​ Christian growth is learning to live outwardly from what God already did inwardly.$NB$, 'quiz', 17, 70, 'published')
+## Simple Class Takeaway
+- Identity in Christ answers the question: Who am I now that I am saved?
+- The believer is a new creation in Christ.
+- The new birth happens first in the spirit.
+- The soul must be renewed by the Word of God.
+- The believer has been made alive, brought into sonship, and set in a new standing before God.
+- In Christ, the believer has a restored place of authority.
+- In Christ, the believer is free from condemnation.
+- When a Christian sins, he must not hide; he must return to God in confession and continue walking in the light.
+- Christian growth is learning to live outwardly from what God already did inwardly.$NB$, 'quiz', 17, 70, 'published')
 ON CONFLICT (level_number, module_sequence_number) DO UPDATE SET
   title = EXCLUDED.title, lesson_content = EXCLUDED.lesson_content, evaluation_kind = EXCLUDED.evaluation_kind,
   estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
@@ -1057,385 +829,333 @@ SELECT module_id, 'multiple_choice', $NQ$The lesson repeatedly contrasts identit
 
 -- ===== Level 1 · Module 5: The Word of God =====
 INSERT INTO modules (level_number, module_sequence_number, title, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
-VALUES (1, 5, $NT$The Word of God$NT$, $NB$Truth + Confidence
-Lesson Objective
+VALUES (1, 5, $NT$The Word of God$NT$, $NB$# Module 5: Truth + Confidence
+
+## Topic Outline
+- Lesson Objective
+- Introduction: Why the Word Matters
+- The Word and Jesus Christ
+- The Word of Truth
+- Truth Sets the Believer Free
+- The Integrity of God’s Word
+- Understanding the Bible
+- Structure and Divisions of the Bible
+- Classifications of the Old Testament Books
+- Classifications of the New Testament Books
+- Learning the Language: Prayer and Scripture
+- How to Build a Word Culture
+- Key Priorities in Gaining Knowledge
+- Reflection and Action
+- Quick Class Takeaway
+
+## Lesson Objective
 
 By the end of this lesson, the disciple should be able to:
 
-   ●​ understand what the Bible means by the Word of God,
+- understand what the Bible means by the Word of God,
+- know the relationship between Jesus and the Word,
+- explain why God’s Word is truth,
+- trust the integrity and reliability of Scripture,
+- understand the basic structure and classification of the Bible,
+- and begin building a daily culture of prayer and Scripture.
 
-   ●​ know the relationship between Jesus and the Word,
-
-   ●​ explain why God’s Word is truth,
-
-   ●​ trust the integrity and reliability of Scripture,
-
-   ●​ understand the basic structure and classification of the Bible,
-
-   ●​ and begin building a daily culture of prayer and Scripture.
-
-Introduction: Why the Word Matters
+## Introduction: Why the Word Matters
 
 Module 1 taught us about God and His nature. Module 2 showed us God’s plan for humanity and the fall of man. Module 3 explained salvation by grace. Module 4 established our identity in Christ. Now Module 5 answers another vital question:
 
-How does the believer grow in truth, stability, and confidence after salvation?
+**How does the believer grow in truth, stability, and confidence after salvation?**
 
-The answer is the Word of God.
+**The answer is the Word of God.**
 
-A believer cannot live strongly without the Word. He may be sincere, emotional, gifted, or zealous, but if he is not grounded in the Word, he will remain unstable. The
-
-Word of God is not an optional extra for serious Christians. It is the foundation of spiritual life, growth, clarity, discernment, and confidence.
+A believer cannot live strongly without the Word. He may be sincere, emotional, gifted, or zealous, but if he is not grounded in the Word, he will remain unstable. The Word of God is not an optional extra for serious Christians. It is the foundation of spiritual life, growth, clarity, discernment, and confidence.
 
 God does not intend for His people to live on guesswork. He intends for them to live by truth.
 
-Now you know: The Christian life is not sustained by feelings alone. It is built and strengthened by the Word of God.
-Quick Truths
+> **Now you know:** The Christian life is not sustained by feelings alone. It is built and strengthened by the Word of God.
 
-   ●​ The Word of God is essential for growth.
+**Quick Truths**
 
-   ●​ Truth produces confidence.
+- The Word of God is essential for growth.
+- Truth produces confidence.
+- A believer without the Word becomes unstable.
+- God grows His people through truth.
 
-   ●​ A believer without the Word becomes unstable.
-
-   ●​ God grows His people through truth.
-
-The Word and Jesus Christ
+## The Word and Jesus Christ
 
 The Bible shows us that Jesus is not separate from the Word. He is revealed as the eternal Word.
 
-John 1:1–2 says:​
+John 1:1–2 says:
 
-“In the beginning was the Word, and the Word was with God, and the Word was
-
-God. He was with God in the beginning.”
+> “In the beginning was the Word, and the Word was with God, and the Word was God. He was with God in the beginning.”
 
 John 1 continues by showing that through Him all things were made, and later declares that the Word became flesh. This means Jesus is not merely a messenger who brought truth. He is Himself the eternal Word revealed.
 
-This matters deeply because the believer must never think of Scripture as dry information detached from Christ. The written Word reveals the living Word. The
+This matters deeply because the believer must never think of Scripture as dry information detached from Christ. The written Word reveals the living Word. The Scriptures bear witness to Christ, and Christ is made known through the Scriptures.
 
-Scriptures bear witness to Christ, and Christ is made known through the Scriptures.
+John 17:17 says:
 
-John 17:17 says:​
-
-“Sanctify them through thy truth: thy word is truth.”
+> “Sanctify them through thy truth: thy word is truth.”
 
 That means the Word of God is not opinion, suggestion, or mere inspiration. It is truth.
 
 And because it is truth, it sanctifies, cleanses, corrects, builds, and stabilizes the believer.
-Now you know: To know the Word rightly is to be led into the knowledge of Christ, and to know Christ truly is to love His Word.
 
-Quick Truths
+> **Now you know:** To know the Word rightly is to be led into the knowledge of Christ, and to know Christ truly is to love His Word.
 
-   ●​ Jesus is the eternal Word.
+**Quick Truths**
 
-   ●​ The written Word reveals the living Word.
+- Jesus is the eternal Word.
+- The written Word reveals the living Word.
+- God’s Word is truth.
+- Truth sanctifies the believer.
 
-   ●​ God’s Word is truth.
-
-   ●​ Truth sanctifies the believer.
-
-The Word of Truth
+## The Word of Truth
 
 The phrase “word of truth” in Scripture refers to the Gospel and, by extension, the whole counsel of God given in Scripture. It is the message by which men are saved, taught, corrected, established, and set free.
 
 The Bible describes the Word as:
 
-   ●​ holy,
+- holy,
+- active,
+- life-giving,
+- foundational,
+- and liberating.
 
-   ●​ active,
+Ephesians 1:13 calls the gospel “the word of truth.”
 
-   ●​ life-giving,
-
-   ●​ foundational,
-
-   ●​ and liberating.
-
-Ephesians 1:13 calls the gospel “the word of truth.”​
-
-James 1:18 says we are brought forth by “the word of truth.”​
+James 1:18 says we are brought forth by “the word of truth.”
 
 2 Timothy 2:15 instructs the believer to rightly divide or rightly handle “the word of truth.”
 
 This means truth is not merely something to admire. It must be received, understood, handled correctly, and lived.
-A man may be passionate and still be wrong. A man may be loud and still be empty. But a believer anchored in the Word of truth becomes stable, accurate, and fruitful.
 
-Now you know: The Word of truth does not only inform the mind. It shapes the life.
+A man may be passionate and still be wrong. A man may be loud and still be empty. But a believer anchored in the Word of truth becomes stable, accurate, and fruitful.
 
-Key verses on the Word of Truth
+> **Now you know:** The Word of truth does not only inform the mind. It shapes the life.
 
-    ●​ John 17:17 — “Sanctify them in the truth; your word is truth.”
+**Key verses on the Word of Truth**
 
-    ●​ Psalm 119:160 — “The entirety of your word is truth, and every righteous rule endures forever.”
+- **John 17:17** — “Sanctify them in the truth; your word is truth.”
+- **Psalm 119:160** — “The entirety of your word is truth, and every righteous rule endures forever.”
+- **Ephesians 1:13** — “…the word of truth, the gospel of your salvation…”
+- **2 Timothy 2:15** — “…rightly handling the word of truth.”
+- **Hebrews 4:12** — “For the word of God is living and active…”
+- **James 1:18** — “Of his own will he brought us forth by the word of truth…”
 
-    ●​ Ephesians 1:13 — “…the word of truth, the gospel of your salvation…”
+## Truth Sets the Believer Free
 
-    ●​ 2 Timothy 2:15 — “…rightly handling the word of truth.”
+Jesus said in John 8:32:
 
-    ●​ Hebrews 4:12 — “For the word of God is living and active…”
-
-    ●​ James 1:18 — “Of his own will he brought us forth by the word of truth…”
-
-Truth Sets the Believer Free
-
-Jesus said in John 8:32:​
-
-“And you will know the truth, and the truth will set you free.”
+> “And you will know the truth, and the truth will set you free.”
 
 Freedom in Scripture is not produced by ignorance, hype, or emotional excitement.
 
 Freedom is tied to truth. Where truth is absent, bondage thrives. Where truth enters, light enters. And where light enters, deception begins to lose its grip.
-This is why the Word of God is so central to discipleship. A disciple must be taught the truth until his thoughts, responses, choices, and convictions are shaped by God’s mind.
 
-Jesus also said in John 14:6:​
+This is why the Word of God is so central to discipleship. A disciple must be taught the truth until his thoughts, responses, choices, and convictions are shaped by God’s mind.
 
-“I am the way, the truth, and the life…”
+Jesus also said in John 14:6:
+
+> “I am the way, the truth, and the life…”
 
 Truth is not merely a system of ideas. Truth is fully embodied in Christ and faithfully revealed in His Word.
 
-Psalm 119:105 says:​
+Psalm 119:105 says:
 
-“Your word is a lamp to my feet and a light to my path.”
+> “Your word is a lamp to my feet and a light to my path.”
 
 That means the Word gives direction. It shows the next step. It exposes danger. It keeps the believer from wandering blindly.
 
-Now you know: Truth is not a decoration for the Christian life. It is the light by which the believer walks.
+> **Now you know:** Truth is not a decoration for the Christian life. It is the light by which the believer walks.
 
-Quick Truths
+**Quick Truths**
 
-   ●​ Truth exposes deception.
+- Truth exposes deception.
+- Truth produces freedom.
+- Truth gives direction.
+- Truth keeps the believer steady.
 
-   ●​ Truth produces freedom.
-
-   ●​ Truth gives direction.
-
-   ●​ Truth keeps the believer steady.
-
-The Integrity of God’s Word
+## The Integrity of God’s Word
 
 One of the greatest foundations of confidence in the Christian life is this: God’s Word can be trusted fully.
 
-Psalm 119:89 says:​
+Psalm 119:89 says:
 
-“For ever, O LORD, thy word is settled in heaven.”
-This means God’s Word is fixed, established, and not subject to the instability of man.
+> “For ever, O LORD, thy word is settled in heaven.”
 
-Numbers 23:19 says that God is not a man that He should lie, nor a son of man that
+This means God’s Word is fixed, established, and not subject to the instability of man.
 
-He should repent. If He has spoken, He will act. If He has said it, He will bring it to pass.
+Numbers 23:19 says that God is not a man that He should lie, nor a son of man that He should repent. If He has spoken, He will act. If He has said it, He will bring it to pass.
 
-Isaiah 40:8 says:​
+Isaiah 40:8 says:
 
-“The grass withers, the flower fades, but the word of our God will stand forever.”
+> “The grass withers, the flower fades, but the word of our God will stand forever.”
 
 Hebrews 4:12 says the Word of God is living and powerful, sharper than any two-edged sword. Psalm 119:140 says God’s Word is very pure.
 
 This means the Word of God is:
 
-   ●​ unchanging,
+- unchanging,
+- trustworthy,
+- active,
+- piercing,
+- and pure.
 
-   ●​ trustworthy,
+The believer therefore approaches Scripture with confidence, not suspicion. God’s Word does not decay. It does not expire. It does not weaken with time. It stands.
 
-   ●​ active,
+> **Now you know:** You can build your life on the Word of God without fear of collapse.
 
-   ●​ piercing,
+**Quick Truths**
 
-   ●​ and pure.
+- God’s Word is settled.
+- God’s Word does not lie.
+- God’s Word stands forever.
+- God’s Word is living and pure.
 
-The believer therefore approaches Scripture with confidence, not suspicion. God’s
-
-Word does not decay. It does not expire. It does not weaken with time. It stands.
-
-Now you know: You can build your life on the Word of God without fear of collapse.
-
-Quick Truths
-
-   ●​ God’s Word is settled.
-
-   ●​ God’s Word does not lie.
-
-   ●​ God’s Word stands forever.
-
-   ●​ God’s Word is living and pure.
-Understanding the Bible
+## Understanding the Bible
 
 The Bible is a collection of 66 books written over time by human authors under divine inspiration. It is divided into two main testaments:
 
-   ●​ Old Testament — 39 books
+- **Old Testament** — 39 books
+- **New Testament** — 27 books
 
-   ●​ New Testament — 27 books
-
-The Old Testament was written primarily in Hebrew and covers creation, the patriarchs, Israel’s history, the law, wisdom literature, and the prophets. The New
-
-Testament was written in Greek and covers the life of Jesus, the early church, apostolic teaching, and prophecy concerning the end and the victory of God.
+The Old Testament was written primarily in Hebrew and covers creation, the patriarchs, Israel’s history, the law, wisdom literature, and the prophets. The New Testament was written in Greek and covers the life of Jesus, the early church, apostolic teaching, and prophecy concerning the end and the victory of God.
 
 The Bible is not arranged strictly in chronological order. It is arranged largely by type, genre, and function.
 
-This is important because many believers feel overwhelmed when they open the
+This is important because many believers feel overwhelmed when they open the Bible simply because they do not understand how it is arranged.
 
-Bible simply because they do not understand how it is arranged.
+> **Now you know:** The Bible is one divine story revealed through many books, genres, and writers.
 
-Now you know: The Bible is one divine story revealed through many books, genres, and writers.
+## Structure and Divisions of the Bible
 
-Structure and Divisions of the Bible
-
-The Old Testament
+### The Old Testament
 
 The Old Testament contains 39 books and covers:
 
-   ●​ creation,
+- creation,
+- the fall,
+- the patriarchs,
+- the covenant with Israel,
+- the law,
+- Israel’s history,
+- wisdom literature,
+- and the prophets.
 
-   ●​ the fall,
-   ●​ the patriarchs,
-
-   ●​ the covenant with Israel,
-
-   ●​ the law,
-
-   ●​ Israel’s history,
-
-   ●​ wisdom literature,
-
-   ●​ and the prophets.
-
-The New Testament
+### The New Testament
 
 The New Testament contains 27 books and covers:
 
-   ●​ the life, death, and resurrection of Jesus Christ,
+- the life, death, and resurrection of Jesus Christ,
+- the birth and growth of the early church,
+- apostolic teaching to believers,
+- and prophetic revelation concerning the end.
 
-   ●​ the birth and growth of the early church,
+**Quick Truths**
 
-   ●​ apostolic teaching to believers,
+- The Bible has 66 books.
+- The Old Testament has 39 books.
+- The New Testament has 27 books.
+- The Bible is arranged by kind of writing and purpose, not only by timeline.
 
-   ●​ and prophetic revelation concerning the end.
-
-Quick Truths
-
-   ●​ The Bible has 66 books.
-
-   ●​ The Old Testament has 39 books.
-
-   ●​ The New Testament has 27 books.
-
-   ●​ The Bible is arranged by kind of writing and purpose, not only by timeline.
-
-Classifications of the Old Testament Books
+## Classifications of the Old Testament Books
 
 The Old Testament books can be grouped into major sections:
 
-The Law
+### The Law
 
 Also called the Pentateuch or Torah:
-   ●​ Genesis
 
-   ●​ Exodus
+- Genesis
+- Exodus
+- Leviticus
+- Numbers
+- Deuteronomy
 
-   ●​ Leviticus
+These books cover creation, the patriarchs, the beginning of God’s dealings with Israel, and the giving of the law through Moses.
 
-   ●​ Numbers
-
-   ●​ Deuteronomy
-
-These books cover creation, the patriarchs, the beginning of God’s dealings with
-
-Israel, and the giving of the law through Moses.
-
-History
+### History
 
 These books run from Joshua to Esther. They record Israel’s history in the land, the judges, the kings, the division of the kingdom, exile, and return.
 
-Wisdom and Poetry
+### Wisdom and Poetry
 
 These books are:
 
-   ●​ Job
-
-   ●​ Psalms
-
-   ●​ Proverbs
-
-   ●​ Ecclesiastes
-
-   ●​ Song of Solomon
+- Job
+- Psalms
+- Proverbs
+- Ecclesiastes
+- Song of Solomon
 
 They give wisdom, worship, reflection, practical instruction, and insight into the human experience before God.
 
-Major Prophets
+### Major Prophets
 
 These are:
 
-   ●​ Isaiah
-
-   ●​ Jeremiah
-
-   ●​ Lamentations
-   ●​ Ezekiel
-
-   ●​ Daniel
+- Isaiah
+- Jeremiah
+- Lamentations
+- Ezekiel
+- Daniel
 
 They are called “major” because of their length and scope, not because they are more inspired than the others.
 
-Minor Prophets
+### Minor Prophets
 
 These are the twelve shorter prophetic books from Hosea to Malachi.
 
-Now you know: Every part of the Old Testament contributes to God’s unfolding plan and prepares the way for Christ.
+> **Now you know:** Every part of the Old Testament contributes to God’s unfolding plan and prepares the way for Christ.
 
-Classifications of the New Testament Books
+## Classifications of the New Testament Books
 
 The New Testament books can also be grouped clearly:
 
-The Gospels
+### The Gospels
 
-   ●​ Matthew
-
-   ●​ Mark
-
-   ●​ Luke
-
-   ●​ John
+- Matthew
+- Mark
+- Luke
+- John
 
 These reveal the life, ministry, death, and resurrection of Jesus Christ.
 
-History
+### History
 
-   ●​ Acts of the Apostles
-Acts records the birth, growth, and spread of the early Church by the power of the
+- Acts of the Apostles
 
-Holy Spirit.
+Acts records the birth, growth, and spread of the early Church by the power of the Holy Spirit.
 
-Pauline Epistles
+### Pauline Epistles
 
 These are the letters written by Paul, from Romans to Philemon. They teach doctrine, correction, church life, grace, faith, holiness, and practical Christian living.
 
-General Epistles
+### General Epistles
 
 These run from Hebrews to Jude. They are letters written to believers more broadly by other leaders and servants of God.
 
-Prophecy / Apocalyptic
+### Prophecy / Apocalyptic
 
-    ●​ Revelation
+- Revelation
 
-This book reveals the triumph of Christ, the judgment of evil, and the final victory of
+This book reveals the triumph of Christ, the judgment of evil, and the final victory of God.
 
-God.
+> **Now you know:** The New Testament shows Christ revealed, Christ preached, Christ explained, and Christ victorious.
 
-Now you know: The New Testament shows Christ revealed, Christ preached, Christ explained, and Christ victorious.
-
-Learning the Language: Prayer and Scripture
+## Learning the Language: Prayer and Scripture
 
 God is explicit about the importance of believers cultivating a Word culture. He desires that His people be filled with the Word because it is the material by which they are built up and led into their inheritance in Christ.
-Acts 20:32 says:​
 
-“And now, brethren, I commend you to God, and to the word of his grace, which is able to build you up, and to give you an inheritance among all them which are sanctified.”
+Acts 20:32 says:
+
+> “And now, brethren, I commend you to God, and to the word of his grace, which is able to build you up, and to give you an inheritance among all them which are sanctified.”
 
 That verse is powerful. It shows that the Word:
 
-   ●​ builds the believer,
-
-   ●​ strengthens the believer,
-
-   ●​ and leads the believer into his inheritance.
+- builds the believer,
+- strengthens the believer,
+- and leads the believer into his inheritance.
 
 So the question becomes: How do we cultivate a Word culture?
 
@@ -1443,137 +1163,107 @@ Many believers want to read the Bible, but they struggle with consistency. Some 
 
 The answer is not to turn Bible reading into a burden. The answer is to build a living habit of prayer and Scripture.
 
-Now you know: A strong believer is not merely inspired occasionally. He is built steadily by prayer and the Word.
+> **Now you know:** A strong believer is not merely inspired occasionally. He is built steadily by prayer and the Word.
 
-How to Build a Word Culture
+## How to Build a Word Culture
 
 There is no single rigid formula for studying the Bible, but there are wise patterns that help a believer grow.
 
-How to read
-   ●​ Read daily, even if you begin with small portions.
+### How to read
 
-   ●​ Read prayerfully, not mechanically.
+- Read daily, even if you begin with small portions.
+- Read prayerfully, not mechanically.
+- Read with the intention to understand.
+- Read in context, not just in fragments.
+- Read consistently enough for the Word to shape your thinking.
 
-   ●​ Read with the intention to understand.
+### How to pray
 
-   ●​ Read in context, not just in fragments.
+- Ask the Lord for understanding.
+- Pray the Scriptures back to God.
+- Respond to what you read with worship, repentance, thanksgiving, and obedience.
+- Let prayer and Scripture work together, not separately.
 
-   ●​ Read consistently enough for the Word to shape your thinking.
+### How to grow daily
 
-How to pray
-
-   ●​ Ask the Lord for understanding.
-
-   ●​ Pray the Scriptures back to God.
-
-   ●​ Respond to what you read with worship, repentance, thanksgiving, and obedience.
-
-   ●​ Let prayer and Scripture work together, not separately.
-
-How to grow daily
-
-   ●​ Return to the Word every day.
-
-   ●​ Meditate on what God has said.
-
-   ●​ Speak the truth over your life.
-
-   ●​ Obey what you understand.
-
-   ●​ Stay teachable and consistent.
+- Return to the Word every day.
+- Meditate on what God has said.
+- Speak the truth over your life.
+- Obey what you understand.
+- Stay teachable and consistent.
 
 A believer grows not merely by touching the Bible occasionally, but by living in contact with the Word continually.
 
-Now you know: Growth in the Word is not built by random passion. It is built by daily contact, prayerful attention, and obedience.
+> **Now you know:** Growth in the Word is not built by random passion. It is built by daily contact, prayerful attention, and obedience.
 
-Quick Truths
+**Quick Truths**
 
-   ●​ Read the Word daily.
+- Read the Word daily.
+- Pray with the Word open.
+- Ask questions and seek understanding.
+- Obey what God shows you.
+- Consistency is stronger than occasional intensity.
 
-   ●​ Pray with the Word open.
-
-   ●​ Ask questions and seek understanding.
-   ●​ Obey what God shows you.
-
-   ●​ Consistency is stronger than occasional intensity.
-
-Key Priorities in Gaining Knowledge
+## Key Priorities in Gaining Knowledge
 
 Not all Bible reading produces equal growth. A disciple must approach the Word with the right priorities.
 
-Know God, not just information
+### Know God, not just information
 
 The goal of Scripture is not to make you merely informed. It is to bring you into the knowledge of God.
 
-Grow in truth, not error
+### Grow in truth, not error
 
 The believer must handle the Word carefully and correctly. Wrong handling produces confusion. Right handling produces health.
 
-Build confidence through revelation
+### Build confidence through revelation
 
 Confidence in the Christian life grows when truth becomes settled in the heart.
 
-Let the Word shape conduct
+### Let the Word shape conduct
 
 Knowledge that does not affect life has not yet matured properly. The Word must move from hearing to believing to doing.
 
-Stay in the Word long enough to be changed
+### Stay in the Word long enough to be changed
 
 The Word does not always transform a man in one sitting. But over time it renews the mind, purifies the heart, strengthens faith, and changes conduct.
-Now you know: The goal is not to visit the Word occasionally. The goal is to become a man or woman shaped by it.
 
-Reflection and Action
+> **Now you know:** The goal is not to visit the Word occasionally. The goal is to become a man or woman shaped by it.
 
-Reflect
+## Reflection and Action
 
-   ●​ Do I treat the Word as essential or optional?
+### Reflect
 
-   ●​ Do I read Scripture to know God or only to solve problems?
+- Do I treat the Word as essential or optional?
+- Do I read Scripture to know God or only to solve problems?
+- Am I building a steady Word culture or living on spiritual leftovers?
+- Is the truth of God’s Word shaping my confidence and daily choices?
 
-   ●​ Am I building a steady Word culture or living on spiritual leftovers?
-
-   ●​ Is the truth of God’s Word shaping my confidence and daily choices?
-
-Action
+### Action
 
 Write these lines and pray through them:
 
-   ●​ God’s Word is truth.
+- God’s Word is truth.
+- Jesus is revealed through the Word.
+- The Word of God builds me up.
+- The Word of God gives me light and direction.
+- I will grow in daily Scripture and prayer.
+- I will handle the Word carefully and truthfully.
+- I will let the Word shape my mind, my speech, and my walk.
+- By the grace of God, I will build a strong Word culture.
 
-   ●​ Jesus is revealed through the Word.
+## Quick Class Takeaway
 
-   ●​ The Word of God builds me up.
-
-   ●​ The Word of God gives me light and direction.
-
-   ●​ I will grow in daily Scripture and prayer.
-
-   ●​ I will handle the Word carefully and truthfully.
-
-   ●​ I will let the Word shape my mind, my speech, and my walk.
-
-   ●​ By the grace of God, I will build a strong Word culture.
-
-Quick Class Takeaway
-   ●​ The Word of God is truth.
-
-   ●​ Jesus is the eternal Word revealed.
-
-   ●​ The Word of truth brings salvation, sanctification, stability, and freedom.
-
-   ●​ Truth sets the believer free.
-
-   ●​ God’s Word is settled, pure, living, and unchanging.
-
-   ●​ The Bible has 66 books divided into Old and New Testaments.
-
-   ●​ The Bible is arranged by genre and purpose.
-
-   ●​ The believer must learn the structure of Scripture so he can handle it with confidence.
-
-   ●​ Prayer and Scripture must work together in daily Christian living.
-
-   ●​ A Word culture is built by consistency, prayer, understanding, and obedience.$NB$, 'quiz', 17, 70, 'published')
+- The Word of God is truth.
+- Jesus is the eternal Word revealed.
+- The Word of truth brings salvation, sanctification, stability, and freedom.
+- Truth sets the believer free.
+- God’s Word is settled, pure, living, and unchanging.
+- The Bible has 66 books divided into Old and New Testaments.
+- The Bible is arranged by genre and purpose.
+- The believer must learn the structure of Scripture so he can handle it with confidence.
+- Prayer and Scripture must work together in daily Christian living.
+- A Word culture is built by consistency, prayer, understanding, and obedience.$NB$, 'quiz', 17, 70, 'published')
 ON CONFLICT (level_number, module_sequence_number) DO UPDATE SET
   title = EXCLUDED.title, lesson_content = EXCLUDED.lesson_content, evaluation_kind = EXCLUDED.evaluation_kind,
   estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
@@ -1612,418 +1302,287 @@ SELECT module_id, 'multiple_choice', $NQ$The lesson on building a Word culture c
 
 -- ===== Level 1 · Module 6: The Fellowship =====
 INSERT INTO modules (level_number, module_sequence_number, title, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
-VALUES (1, 6, $NT$The Fellowship$NT$, $NB$(Shared Life with God and His People)​
+VALUES (1, 6, $NT$The Fellowship$NT$, $NB$# Module 6: Shared Life with God and His People
 
-Key Scripture: Acts 2:42
+> “And they continued steadfastly in the apostles’ doctrine and fellowship, in the breaking of bread, and in prayers.” — *Acts 2:42 (NKJV)*
 
-Acts 2:42 (NKJV)​
+## Topic Outline
+- Definition
+- First Mention
+- Types of Fellowship
+- The Nature of Fellowship
+- The Purpose of Fellowship
+- Benefits of Fellowship
+- Common Misunderstandings and Abuse of Fellowship
+- Final Understanding
+- Simple Class Takeaway
+- Reflection & Action
 
-“And they continued steadfastly in the apostles’ doctrine and fellowship, in the breaking of bread, and in prayers.”
-Topic Outline
-
-   ●​ Definition
-
-   ●​ First Mention
-
-   ●​ Types of Fellowship
-
-   ●​ The Nature of Fellowship
-
-   ●​ The Purpose of Fellowship
-
-   ●​ The Benefits of Fellowship
-
-   ●​ Common Misunderstandings and Abuse of Fellowship
-
-1) Definition
-
-Fellowship signifies a deep, spiritual, and communal participation, often called
-
-Koinonia—a shared life.
+## Definition
+Fellowship signifies a deep, spiritual, and communal participation, often called **Koinonia**—a shared life.
 
 It is more than companionship. It is more than being in the same room. It is more than friendship in the natural sense. Fellowship is sharing in common, communion, and participation in the life of God and in the life of His people.
 
 Fellowship can be described as:
 
-   ●​ companionship
-
-   ●​ communion
-
-   ●​ participation
-
-   ●​ a company of equals or friends
-
-   ●​ shared life in Christ
+- companionship
+- communion
+- participation
+- a company of equals or friends
+- shared life in Christ
 
 In simple terms, fellowship has a twofold and inseparable relationship:
 
-   1.​ A vertical connection with God
+1. A vertical connection with God
+2. A horizontal unity among believers
 
-   2.​ A horizontal unity among believers
-True fellowship is characterized by shared faith, mutual encouragement, love, prayer, truth, and shared resources.
+True fellowship is characterized by shared faith, mutual encouragement, love, prayer, truth, and shared resources.
 
-Catch this: Fellowship is not just gathering together—it is sharing life in God together.
+> **Catch this:** Fellowship is not just gathering together—it is sharing life in God together.
 
-Fellowship is not merely social interaction. It is spiritual participation. It is the life of
+Fellowship is not merely social interaction. It is spiritual participation. It is the life of God flowing between God and man, and then among men who belong to God.
 
-God flowing between God and man, and then among men who belong to God.
+**In simple words:**
 
-In simple words:
+- Fellowship is shared life.
+- Fellowship is communion with God and with believers.
+- Fellowship is deeper than friendship; it is spiritual participation.
 
-   ●​ Fellowship is shared life.
-
-   ●​ Fellowship is communion with God and with believers.
-
-   ●​ Fellowship is deeper than friendship; it is spiritual participation.
-
-2) First Mention
-
+## First Mention
 The first man the Bible explicitly presents as living in fellowship with God is Enoch.
 
-Genesis 5:22–24 (NLT)​
-
-“After the birth of Methuselah, Enoch lived in close fellowship with God for another
-
-300 years, and he had other sons and daughters. Enoch lived 365 years, walking in close fellowship with God. Then one day he disappeared, because God took him.”
+> “After the birth of Methuselah, Enoch lived in close fellowship with God for another 300 years, and he had other sons and daughters. Enoch lived 365 years, walking in close fellowship with God. Then one day he disappeared, because God took him.” — **Genesis 5:22–24 (NLT)**
 
 With Adam, fellowship with God is implied in Genesis 3:8, where the voice of the Lord is heard in the garden. But with Enoch, the Bible states it clearly and intentionally: he walked with God.
 
-This shows that fellowship is not a casual event. It is a walk. It is daily. It is relational. It is intentional. Enoch did not only know about God—he lived in close relationship with
+This shows that fellowship is not a casual event. It is a walk. It is daily. It is relational. It is intentional. Enoch did not only know about God—he lived in close relationship with God.
 
-God.
+> **Catch this:** Fellowship is not an occasional visit with God—it is a walk with God.
 
-Catch this: Fellowship is not an occasional visit with God—it is a walk with God.
-In the New Testament, fellowship is also seen in the ministry of Jesus with His disciples.
+In the New Testament, fellowship is also seen in the ministry of Jesus with His disciples.
 
 The Lord did not merely teach them from a distance. He lived with them, corrected them, ate with them, prayed with them, and shared life with them.
 
-John 13:8 (KJV)​
-
-“Peter saith unto him, Thou shalt never wash my feet. Jesus answered him, If I wash thee not, thou hast no part with me.”
+> “Peter saith unto him, Thou shalt never wash my feet. Jesus answered him, If I wash thee not, thou hast no part with me.” — **John 13:8 (KJV)**
 
 Here, the Lord was speaking of shared participation, communion, and belonging.
 
 Fellowship involves having a part with Christ.
 
-In simple words:
+**In simple words:**
 
-   ●​ Enoch is the first man explicitly shown in close fellowship with God.
+- Enoch is the first man explicitly shown in close fellowship with God.
+- Fellowship is a walk, not just a meeting.
+- In Christ, fellowship becomes deeper and more personal.
 
-   ●​ Fellowship is a walk, not just a meeting.
+## Types of Fellowship
+There are three major types of fellowship in the Christian life.
 
-   ●​ In Christ, fellowship becomes deeper and more personal.
+### Vertical Fellowship: Between God and Man
+This is the believer’s communion with God. It is the personal relationship of man with God in prayer, worship, obedience, and communion.
 
-3) Types of Fellowship
+> “After the birth of Methuselah, Enoch lived in close fellowship with God for another 300 years, and he had other sons and daughters.” — **Genesis 5:22 (NLT)**
 
-There are three major types of fellowship in the Christian life. i.) Vertical Fellowship: Between God and Man
+> “My servant Moses is not so, who is faithful in all mine house. With him will I speak mouth to mouth, even apparently, and not in dark speeches; and the similitude of the Lord shall he behold…” — **Numbers 12:7–8 (KJV)**
 
-This is the believer’s communion with God. It is the personal relationship of man with
+Vertical fellowship is seen in men like Enoch, Moses, David, and the prophets—men who walked with God, heard God, and lived in His presence.
 
-God in prayer, worship, obedience, and communion.
-
-Genesis 5:22 (NLT)​
-
-“After the birth of Methuselah, Enoch lived in close fellowship with God for another
-
-300 years, and he had other sons and daughters.”
-
-Numbers 12:7–8 (KJV)​
-
-“My servant Moses is not so, who is faithful in all mine house. With him will I speak
-mouth to mouth, even apparently, and not in dark speeches; and the similitude of the Lord shall he behold…”
-
-Vertical fellowship is seen in men like Enoch, Moses, David, and the prophets—men who walked with God, heard God, and lived in His presence. ii.) Horizontal Fellowship: Among the Brethren
-
+### Horizontal Fellowship: Among the Brethren
 This is fellowship among believers. It is the shared life of the church in doctrine, prayer, encouragement, love, correction, and mutual care.
 
-Acts 2:42 (NKJV)​
+> “And they continued steadfastly in the apostles’ doctrine and fellowship, in the breaking of bread, and in prayers.” — **Acts 2:42 (NKJV)**
 
-“And they continued steadfastly in the apostles’ doctrine and fellowship, in the breaking of bread, and in prayers.”
+> “And let us not neglect our meeting together, as some people do, but encourage one another, especially now that the day of his return is drawing near.” — **Hebrews 10:25 (NLT)**
 
-Hebrews 10:25 (NLT)​
+> “So we are lying if we say we have fellowship with God but go on living in spiritual darkness; we are not practicing the truth. But if we are living in the light, as God is in the light, then we have fellowship with each other, and the blood of Jesus, his Son, cleanses us from all sin.” — **1 John 1:6–7 (NLT)**
 
-“And let us not neglect our meeting together, as some people do, but encourage one another, especially now that the day of his return is drawing near.”
+This shows that true fellowship with God should produce true fellowship with one another.
 
-1 John 1:6–7 (NLT)​
-
-“So we are lying if we say we have fellowship with God but go on living in spiritual darkness; we are not practicing the truth. But if we are living in the light, as God is in the light, then we have fellowship with each other, and the blood of Jesus, his Son, cleanses us from all sin.”
-
-This shows that true fellowship with God should produce true fellowship with one another. iii.) Corporate Fellowship: The Church with Christ
-
+### Corporate Fellowship: The Church with Christ
 This is when the people of God come together before the Lord to minister to Him and hear from Him together. This is both vertical and corporate.
-Acts 13:2–3 (NKJV)​
 
-“As they ministered to the Lord and fasted, the Holy Spirit said, ‘Now separate to Me
+> “As they ministered to the Lord and fasted, the Holy Spirit said, ‘Now separate to Me Barnabas and Saul for the work to which I have called them.’ Then, having fasted and prayed, and laid hands on them, they sent them away.” — **Acts 13:2–3 (NKJV)**
 
-Barnabas and Saul for the work to which I have called them.’ Then, having fasted and prayed, and laid hands on them, they sent them away.”
-
-Deuteronomy 10:8 (NKJV)​
-
-“At that time the Lord separated the tribe of Levi to bear the ark of the covenant of the Lord, to stand before the Lord to minister to Him and to bless in His name, to this day.”
+> “At that time the Lord separated the tribe of Levi to bear the ark of the covenant of the Lord, to stand before the Lord to minister to Him and to bless in His name, to this day.” — **Deuteronomy 10:8 (NKJV)**
 
 This kind of fellowship is not man-centered. It is gathered worship, prayer, listening, and response before the Lord.
 
-Catch this: Fellowship is personal, mutual, and corporate. It is you with God, believers with one another, and the church before the Lord.
+> **Catch this:** Fellowship is personal, mutual, and corporate. It is you with God, believers with one another, and the church before the Lord.
 
-In simple words:
+**In simple words:**
 
-   ●​ Vertical fellowship is between God and man.
+- Vertical fellowship is between God and man.
+- Horizontal fellowship is among believers.
+- Corporate fellowship is the church ministering to the Lord together.
 
-   ●​ Horizontal fellowship is among believers.
+## The Nature of Fellowship
+Fellowship takes different expressions, but its nature remains spiritual, relational, and Christ-centered.
 
-   ●​ Corporate fellowship is the church ministering to the Lord together.
-
-4) The Nature of Fellowship
-
-Fellowship takes different expressions, but its nature remains spiritual, relational, and
-
-Christ-centered. a.) Interpersonal Fellowship
-
+### Interpersonal Fellowship
 This is when believers speak to one another in the fear of God and stir one another toward faithfulness.
-Malachi 3:16–18 (NLT)​
 
-“Then those who feared the Lord spoke with each other, and the Lord listened to what they said. In his presence, a scroll of remembrance was written to record the names of those who feared him and always thought about the honor of his name.
+> “Then those who feared the Lord spoke with each other, and the Lord listened to what they said. In his presence, a scroll of remembrance was written to record the names of those who feared him and always thought about the honor of his name.
+>
+> ‘They will be my people,’ says the Lord of Heaven’s Armies. ‘On the day when I act in judgment, they will be my own special treasure. I will spare them as a father spares an obedient child. Then you will again see the difference between the righteous and the wicked, between those who serve God and those who do not.’” — **Malachi 3:16–18 (NLT)**
 
-‘They will be my people,’ says the Lord of Heaven’s Armies. ‘On the day when I act in judgment, they will be my own special treasure. I will spare them as a father spares an obedient child. Then you will again see the difference between the righteous and the wicked, between those who serve God and those who do not.’”
+This shows that godly conversation is not small before God. He listens to it. He values it.
 
-This shows that godly conversation is not small before God. He listens to it. He values it. b.) House Fellowship
-
+### House Fellowship
 Fellowship can take place in homes. The early church met from house to house, sharing meals, prayer, and joy together.
 
-Acts 2:46 (NLT)​
+> “They worshiped together at the Temple each day, met in homes for the Lord’s Supper, and shared their meals with great joy and generosity—” — **Acts 2:46 (NLT)**
 
-“They worshiped together at the Temple each day, met in homes for the Lord’s
+House fellowship is intimate, relational, and practical. It allows believers to grow closely together.
 
-Supper, and shared their meals with great joy and generosity—”
-
-House fellowship is intimate, relational, and practical. It allows believers to grow closely together. c.) Small Bible Studies
-
+### Small Bible Studies
 Fellowship also happens in smaller teaching settings where believers are grounded in truth.
 
-Acts 19:9–10 (NLT)​
+> “But some became stubborn, rejecting his message and publicly speaking against the Way. So Paul left the synagogue and took the believers with him. Then he held daily discussions at the lecture hall of Tyrannus. This went on for the next two years, so that people throughout the province of Asia—both Jews and Greeks—heard the word of the Lord.” — **Acts 19:9–10 (NLT)**
 
-“But some became stubborn, rejecting his message and publicly speaking against the Way. So Paul left the synagogue and took the believers with him. Then he held daily discussions at the lecture hall of Tyrannus. This went on for the next two years, so
-that people throughout the province of Asia—both Jews and Greeks—heard the word of the Lord.”
+This shows that fellowship includes learning, discussion, and sustained teaching.
 
-This shows that fellowship includes learning, discussion, and sustained teaching. d.) Church Services
-
+### Church Services
 Fellowship also happens in gathered church meetings, where the body ministers before the Lord and to one another.
 
-1 Corinthians 14:26 (AMP)​
+> “What then is the right course, believers? When you meet together, each one has a psalm, a teaching, a revelation, a tongue, or an interpretation. Let everything be constructive and edifying and done for the good of all the church.” — **1 Corinthians 14:26 (AMP)**
 
-“What then is the right course, believers? When you meet together, each one has a psalm, a teaching, a revelation, a tongue, or an interpretation. Let everything be constructive and edifying and done for the good of all the church.”
+> **Catch this:** Fellowship is not confined to one place. It can happen in personal conversation, in homes, in small studies, and in church gatherings.
 
-Catch this: Fellowship is not confined to one place. It can happen in personal conversation, in homes, in small studies, and in church gatherings.
+**In simple words:**
 
-In simple words:
+- Fellowship is relational.
+- Fellowship is spiritual.
+- Fellowship can happen in homes, small groups, and church services.
 
-   ●​ Fellowship is relational.
+## The Purpose of Fellowship
+Fellowship has clear spiritual purposes. It is not an empty religious activity.
 
-   ●​ Fellowship is spiritual.
-
-   ●​ Fellowship can happen in homes, small groups, and church services.
-
-5) The Purpose of Fellowship
-
-Fellowship has clear spiritual purposes. It is not an empty religious activity. a.) Ministering to the Lord
-
+### Ministering to the Lord
 One major purpose of fellowship is to minister to the Lord.
-Acts 13:2–3 (NKJV)​
 
-“As they ministered to the Lord and fasted, the Holy Spirit said, ‘Now separate to Me
+> “As they ministered to the Lord and fasted, the Holy Spirit said, ‘Now separate to Me Barnabas and Saul for the work to which I have called them.’ Then, having fasted and prayed, and laid hands on them, they sent them away.” — **Acts 13:2–3 (NKJV)**
 
-Barnabas and Saul for the work to which I have called them.’ Then, having fasted and prayed, and laid hands on them, they sent them away.”
-
-1 Chronicles 25:1–3 (NIV)​
-
-“David, together with the commanders of the army, set apart some of the sons of
-
-Asaph, Heman and Jeduthun for the ministry of prophesying, accompanied by harps, lyres and cymbals… under the supervision of their father Jeduthun, who prophesied, using the harp in thanking and praising the Lord.”
+> “David, together with the commanders of the army, set apart some of the sons of Asaph, Heman and Jeduthun for the ministry of prophesying, accompanied by harps, lyres and cymbals… under the supervision of their father Jeduthun, who prophesied, using the harp in thanking and praising the Lord.” — **1 Chronicles 25:1–3 (NIV)**
 
 Ministering to the Lord includes thanksgiving, praise, worship, prayer, reverence, and yielded service before Him.
 
-How to Minister to the Lord
+**How to Minister to the Lord**
 
 It can be personal or congregational. The Lord is ministered to through:
 
-   ●​ thanksgiving
+- thanksgiving
+- praise
+- prayer
+- songs
+- music
+- offerings and sacrificial giving
+- obedience and reverence
 
-   ●​ praise
+> “What then is the right course, believers? When you meet together, each one has a psalm, a teaching, a revelation…” — **1 Corinthians 14:26 (AMP)**
 
-   ●​ prayer
-
-   ●​ songs
-
-   ●​ music
-
-   ●​ offerings and sacrificial giving
-
-   ●​ obedience and reverence
-
-1 Corinthians 14:26 (AMP)​
-
-“What then is the right course, believers? When you meet together, each one has a psalm, a teaching, a revelation…”
-
-Ecclesiastes 5:1–2 (AMP)​
-
-“Guard your steps and focus on what you are doing as you go to the house of God
-and draw near to listen rather than to offer the careless or irreverent sacrifice of fools… Do not be hasty with your mouth…”
+> “Guard your steps and focus on what you are doing as you go to the house of God and draw near to listen rather than to offer the careless or irreverent sacrifice of fools… Do not be hasty with your mouth…” — **Ecclesiastes 5:1–2 (AMP)**
 
 This teaches that ministering to the Lord is not casual. It must be reverent, truthful, and acceptable before Him.
 
-Catch this: Fellowship is not only for receiving from God. It is also for ministering to
+> **Catch this:** Fellowship is not only for receiving from God. It is also for ministering to God.
 
-God. b.) Provision for Spiritual and Physical Interpersonal Needs
-
+### Provision for Spiritual and Physical Interpersonal Needs
 Fellowship also exists so that believers may strengthen and care for one another.
 
 This includes:
 
-   ●​ breaking of bread
+- breaking of bread
+- prayer and supplication
+- companionship
+- encouragement
+- impartation
+- sharing and meeting one another’s physical needs
 
-   ●​ prayer and supplication
-
-   ●​ companionship
-
-   ●​ encouragement
-
-   ●​ impartation
-
-   ●​ sharing and meeting one another’s physical needs
-
-Acts 2:44–45 (NLT)​
-
-“And all the believers met together in one place and shared everything they had.
-
-They sold their property and possessions and shared the money with those in need.”
+> “And all the believers met together in one place and shared everything they had. They sold their property and possessions and shared the money with those in need.” — **Acts 2:44–45 (NLT)**
 
 True fellowship does not only talk. It serves. It does not only gather. It gives.
 
-In simple words:
+**In simple words:**
 
-   ●​ Fellowship ministers to the Lord.
+- Fellowship ministers to the Lord.
+- Fellowship strengthens believers.
+- Fellowship provides spiritual and practical support.
 
-   ●​ Fellowship strengthens believers.
-
-   ●​ Fellowship provides spiritual and practical support.
-
-6) Benefits of Fellowship
-
+## Benefits of Fellowship
 Fellowship brings many blessings to the believer and to the church.
 
-Benefits of Fellowship
+**Benefits of Fellowship**
 
-   1.​ Enhanced intimacy with God​
+1. **Enhanced intimacy with God** — Fellowship sharpens our awareness of God’s presence.
+2. **Spiritual impartation** — God often strengthens, stirs, and deposits grace through fellowship.
+3. **Spiritual growth** — Believers grow through truth, correction, and encouragement.
+4. **Correction and restoration** — Fellowship helps expose blind spots and restore the weak.
+5. **Guardrails against deception** — Isolation often breeds error; fellowship provides balance and safety.
+6. **Encouragement and comfort** — Fellowship strengthens weary hearts.
+7. **Spiritual vibrancy** — It keeps believers alive, active, and responsive in the things of God.
+8. **A platform for service** — Fellowship creates room for gifts, ministry, and practical care.
 
-      Fellowship sharpens our awareness of God’s presence.
+> **Catch this:** What isolation weakens, true fellowship strengthens.
 
-   2.​ Spiritual impartation​
+**In simple words:**
 
-      God often strengthens, stirs, and deposits grace through fellowship.
+- Fellowship helps believers grow.
+- Fellowship protects believers from drifting.
+- Fellowship gives strength, correction, and encouragement.
 
-   3.​ Spiritual growth​
-
-      Believers grow through truth, correction, and encouragement.
-
-   4.​ Correction and restoration​
-
-      Fellowship helps expose blind spots and restore the weak.
-
-   5.​ Guardrails against deception​
-
-      Isolation often breeds error; fellowship provides balance and safety.
-
-   6.​ Encouragement and comfort​
-
-      Fellowship strengthens weary hearts.
-
-   7.​ Spiritual vibrancy​
-
-      It keeps believers alive, active, and responsive in the things of God.
-
-   8.​ A platform for service​
-
-      Fellowship creates room for gifts, ministry, and practical care.
-
-Catch this: What isolation weakens, true fellowship strengthens.
-
-In simple words:
-
-   ●​ Fellowship helps believers grow.
-
-   ●​ Fellowship protects believers from drifting.
-
-   ●​ Fellowship gives strength, correction, and encouragement.
-
-7) Common Misunderstandings and Abuse of
-
-Fellowship
-
+## Common Misunderstandings and Abuse of Fellowship
 Like many good things, fellowship can be misunderstood or abused if it loses its spiritual center.
 
-Common Misunderstandings and Abuse a.) When prayer is treated as a means for material gain only
+**Common Misunderstandings and Abuse**
 
-Prayer must not be reduced to a tool for comfort, personal gain, or self-centered desires. Fellowship is not a marketplace for greed. b.) When the coming together of believers becomes gossip and rumor
+### When prayer is treated as a means for material gain only
+Prayer must not be reduced to a tool for comfort, personal gain, or self-centered desires. Fellowship is not a marketplace for greed.
 
-Fellowship is not for gossip, rumor-mongering, or idle talk. When gatherings become fleshly, the purpose of fellowship is damaged. c.) When spiritual functions are used to harm rather than bless
+### When the coming together of believers becomes gossip and rumor
+Fellowship is not for gossip, rumor-mongering, or idle talk. When gatherings become fleshly, the purpose of fellowship is damaged.
 
-Spiritual gatherings must never be used for manipulation, control, intimidation, or harm. What is meant to bless must not be turned into a weapon. d.) When church worship services become performance
+### When spiritual functions are used to harm rather than bless
+Spiritual gatherings must never be used for manipulation, control, intimidation, or harm. What is meant to bless must not be turned into a weapon.
 
-Church gatherings must not become stages for display rather than places of genuine spiritual encounter. Worship is not entertainment. Ministry is not performance. e.) When duty substitutes obedience
-A person may attend meetings and perform religious activity while living far from
+### When church worship services become performance
+Church gatherings must not become stages for display rather than places of genuine spiritual encounter. Worship is not entertainment. Ministry is not performance.
 
-God in the heart. Fellowship must remain sincere, living, and obedient.
+### When duty substitutes obedience
+A person may attend meetings and perform religious activity while living far from God in the heart. Fellowship must remain sincere, living, and obedient.
 
-Catch this: Fellowship dies when form remains but God is no longer at the center.
+> **Catch this:** Fellowship dies when form remains but God is no longer at the center.
 
-In simple words:
+**In simple words:**
 
-   ●​ Fellowship is not gossip.
+- Fellowship is not gossip.
+- Fellowship is not performance.
+- Fellowship is not manipulation.
+- Fellowship must remain centered on God and truth.
 
-   ●​ Fellowship is not performance.
-
-   ●​ Fellowship is not manipulation.
-
-   ●​ Fellowship must remain centered on God and truth.
-
-8) Final Understanding
-
+## Final Understanding
 Fellowship is one of the great strengths of the Christian life. It joins the believer to God and also joins believers to one another in truth, love, prayer, and shared life. It is one of God’s ways of building strong believers and strong churches.
 
 A believer who avoids fellowship will often grow weak, isolated, and vulnerable. But a believer who lives in true fellowship with God and with the brethren will grow stronger, steadier, and more fruitful.
 
-Catch this: Fellowship is not optional to a healthy Christian life. It is part of how God keeps believers alive, grounded, and growing.
+> **Catch this:** Fellowship is not optional to a healthy Christian life. It is part of how God keeps believers alive, grounded, and growing.
 
-Simple Class Takeaway
+## Simple Class Takeaway
+- Fellowship means shared life in God.
+- Fellowship is both vertical and horizontal.
+- Enoch is the first man explicitly shown walking in fellowship with God.
+- Fellowship happens in homes, among believers, in Bible study, and in gathered church life.
+- Fellowship exists to minister to the Lord and to meet the needs of believers.
+- Fellowship brings growth, protection, encouragement, and spiritual strength.
+- Fellowship must not be reduced to gossip, performance, or selfish gain.
 
-   ●​ Fellowship means shared life in God.
+## Reflection & Action
+**Reflect:** Are you truly living in fellowship with God and His people, or are you only attending gatherings without shared life?
 
-   ●​ Fellowship is both vertical and horizontal.
-   ●​ Enoch is the first man explicitly shown walking in fellowship with God.
+**Action:** This week, do these three things:
 
-   ●​ Fellowship happens in homes, among believers, in Bible study, and in gathered church life.
-
-   ●​ Fellowship exists to minister to the Lord and to meet the needs of believers.
-
-   ●​ Fellowship brings growth, protection, encouragement, and spiritual strength.
-
-   ●​ Fellowship must not be reduced to gossip, performance, or selfish gain.
-
-Reflection & Action
-
-Reflect:​
-
-Are you truly living in fellowship with God and His people, or are you only attending gatherings without shared life?
-
-Action:​
-
-This week, do these three things:
-
-   1.​ Set apart personal time to fellowship with God.
-
-   2.​ Intentionally encourage one believer in truth and prayer.
-
-   3.​ Join a gathering of believers with the purpose to minister to the Lord and strengthen others.$NB$, 'quiz', 16, 70, 'published')
+1. Set apart personal time to fellowship with God.
+2. Intentionally encourage one believer in truth and prayer.
+3. Join a gathering of believers with the purpose to minister to the Lord and strengthen others.$NB$, 'quiz', 16, 70, 'published')
 ON CONFLICT (level_number, module_sequence_number) DO UPDATE SET
   title = EXCLUDED.title, lesson_content = EXCLUDED.lesson_content, evaluation_kind = EXCLUDED.evaluation_kind,
   estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
