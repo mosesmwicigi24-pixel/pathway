@@ -50,6 +50,9 @@ HAVE_LIQ = shutil.which("liquidsoap") is not None
 LIQ_TEMPLATE = """\
 settings.init.allow_root := true
 settings.log.stdout := true
+settings.log.file := true
+settings.log.file.path := "/run/pathway-playout/liq.log"
+settings.log.level := 4
 settings.server.telnet := true
 settings.server.telnet.bind_addr := "0.0.0.0"
 settings.server.telnet.port := {telnet_port}
@@ -98,7 +101,10 @@ end
 
 jq = request.queue(id="jingles")
 
-mic = input.harbor("mic", port={harbor_port}, password="{password}")
+# Explicit low buffering: default input.harbor buffers ~12s before the source
+# turns ready (a broadcast-killing wait) and pegs at max, dropping overflow.
+# 1s ready threshold, 8s ceiling — mic reaches the mix ~1s after connect.
+mic = input.harbor("mic", port={harbor_port}, password="{password}", buffer=1., max=8.)
 # Voice chain: EQ then a gentle broadcast compressor (evens the presenter out).
 mic = eq3(eq_mic_low, eq_mic_mid, eq_mic_high, mic)
 mic = compress(attack=5., release=80., ratio=3., threshold=-18., mic)
