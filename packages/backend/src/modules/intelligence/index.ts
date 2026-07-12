@@ -19,6 +19,7 @@ import { LearningService, EXPLAIN_STYLES, type ExplainStyle } from "./learning.j
 import { LiturgyService } from "./liturgy.js";
 import { CommunityService, type BlessingKind } from "./community.js";
 import { EchoesService } from "./echoes.js";
+import { WalkService } from "./walk.js";
 import { ApiError } from "../../http/errors.js";
 
 export const intelligenceRouter: Router = Router();
@@ -147,6 +148,17 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   r.post("/community/moments/:id/bless", auth, handler(async (req, res) => {
     const input = parseBody(z.object({ kind: z.enum(["amen", "heart", "fire"]) }), req.body ?? {});
     res.json(await community.bless(requirePrincipal(req).userId, String(req.params.id ?? ""), input.kind as BlessingKind));
+  }));
+
+  // --- Footprints + Your Walk (Wave 3): counted, not guessed ---
+  const walk = new WalkService(ctx.db.replica);
+
+  r.get("/modules/:id/footprints", auth, handler(async (req, res) => {
+    res.json(await walk.footprints(requirePrincipal(req).userId, String(req.params.id ?? "")));
+  }));
+
+  r.get("/me/walk", auth, handler(async (req, res) => {
+    res.json({ data: await walk.yourWalk(requirePrincipal(req).userId) });
   }));
 
   // --- Discipler voice notes on modules (Wave 2) ---

@@ -537,6 +537,22 @@ paths:
       responses:
         "200": { description: "{ count, names, scope }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /modules/{id}/footprints:
+    get:
+      tags: [community]
+      summary: "Footprints on the trail — cell-mates (congregation when cell-less) who already completed this module: up to five faces, when they finished, and the total. The member is never the first to walk alone."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ count, scope, footprints: [{ first_name, avatar_url, completed_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/walk:
+    get:
+      tags: [community]
+      summary: "Your Walk — the member's whole journey as one descending thread: began the pathway, modules finished, reflections written (140-char excerpts), levels passed, certificates, verses mastered, plans completed, badges. Real rows and timestamps, no AI, capped at 80."
+      responses:
+        "200": { description: "{ data: [{ kind, title, detail, quote, occurred_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /home/echo:
     get:
       tags: [growth]
