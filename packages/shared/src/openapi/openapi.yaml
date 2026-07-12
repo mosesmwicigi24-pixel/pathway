@@ -2535,6 +2535,15 @@ paths:
       responses:
         "200": { description: Expiring consents }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/members/{id}/walk:
+    get:
+      tags: [adminops]
+      summary: "The member's whole journey (Wave 3 walk thread) for the portal Member Profile — began, modules, reflections, levels, certificates, verses, plans, badges. Same truth the member sees."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ data: [{ kind, title, detail, quote, occurred_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /admin/analytics/intelligence:
     get:
       tags: [portal]
