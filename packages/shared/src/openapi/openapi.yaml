@@ -747,7 +747,7 @@ paths:
   /modules/{id}:
     get:
       tags: [curriculum]
-      summary: Full lesson content + signed media URLs (video + admin audio) with real durations. Includes server-authored content_pages (lesson_content split on <!-- page-break --> markers; falls back to one page).
+      summary: Full lesson content + signed media URLs with real durations, content_pages, and the member's completion summary — completed, completed_at, best_score (highest passing quiz score, null when quizless/never passed) — so a finished module renders as a clean reading room.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:

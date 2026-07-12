@@ -338,12 +338,31 @@ export class CurriculumService {
     // lesson_content stays untouched for older clients; the reader paginates on the
     // server-authored split. CONTRACT (iOS): video_url signed, video_duration_sec,
     // audio_url signed|null, audio_duration_sec.
+    // Per-member completion summary (NOT cached — personal): when the module is
+    // already finished, the reader collapses into a clean "reading room" and the
+    // header shows what was scored and when. best_score is the member's highest
+    // PASSING quiz score for this module (null when no quiz / never passed).
+    const completion = await maybeOne<{ completed_at: string; best_score: number | null }>(
+      this.pool,
+      `SELECT mp.completed_at::text AS completed_at,
+              (SELECT max(qa.score_achieved)::int
+                 FROM quiz_attempts qa
+                WHERE qa.progress_id = mp.progress_id AND qa.is_passed) AS best_score
+         FROM module_progress mp
+         JOIN enrollments e ON e.enrollment_id = mp.enrollment_id
+        WHERE e.user_id = $1 AND mp.module_id = $2 AND mp.is_completed`,
+      [userId, moduleId],
+    );
+
     return {
       ...full,
       video_url: brokerMediaUrl(full.video_url, this.media),
       audio_url: brokerMediaUrl(full.audio_url, this.media),
       content_pages: splitContentPages(full.lesson_content),
       locked: false,
+      completed: completion !== null,
+      completed_at: completion?.completed_at ?? null,
+      best_score: completion?.best_score ?? null,
     };
   }
 
