@@ -354,6 +354,20 @@ export class CurriculumService {
       [userId, moduleId],
     );
 
+    // A discipler's voice on this lesson (Wave 2) — one per congregation,
+    // fetched per-user (outside the shared content cache) like completion.
+    const voice = await maybeOne<{
+      author_name: string; avatar_url: string | null; audio_url: string; duration_sec: number;
+    }>(
+      this.pool,
+      `SELECT a.full_name AS author_name, a.avatar_url, vn.audio_url, vn.duration_sec
+         FROM module_voice_notes vn
+         JOIN users a ON a.user_id = vn.author_user_id
+         JOIN users me ON me.user_id = $1
+        WHERE vn.module_id = $2 AND vn.congregation_id = me.congregation_id`,
+      [userId, moduleId],
+    );
+
     return {
       ...full,
       video_url: brokerMediaUrl(full.video_url, this.media),
@@ -363,6 +377,7 @@ export class CurriculumService {
       completed: completion !== null,
       completed_at: completion?.completed_at ?? null,
       best_score: completion?.best_score ?? null,
+      voice_note: voice,
     };
   }
 

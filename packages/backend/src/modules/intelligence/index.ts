@@ -149,6 +149,71 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
     res.json(await community.bless(requirePrincipal(req).userId, String(req.params.id ?? ""), input.kind as BlessingKind));
   }));
 
+  // --- Discipler voice notes on modules (Wave 2) ---
+  // One per module per congregation; the leader re-records over their own.
+  r.post("/modules/:id/voice-note", auth, requireRole("Instructor"), handler(async (req, res) => {
+    const input = parseBody(
+      z.object({
+        audio_url: z.string().url().max(1024),
+        duration_sec: z.number().int().min(1).max(300),
+        waveform: z.array(z.number().int().min(0).max(100)).max(80).optional(),
+      }),
+      req.body ?? {},
+    );
+    const userId = requirePrincipal(req).userId;
+    const me = await ctx.db.primary.query(`SELECT congregation_id FROM users WHERE user_id = $1`, [userId]);
+    const cong = me.rows[0]?.congregation_id;
+    if (!cong) throw new ApiError("VALIDATION_FAILED", "You need a congregation to leave a voice note");
+    const row = await ctx.db.primary.query(
+      `INSERT INTO module_voice_notes (module_id, congregation_id, author_user_id, audio_url, duration_sec, waveform)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (module_id, congregation_id)
+       DO UPDATE SET author_user_id = $3, audio_url = $4, duration_sec = $5, waveform = $6, created_at = now()
+       RETURNING note_id`,
+      [String(req.params.id ?? ""), cong, userId, input.audio_url, input.duration_sec,
+       input.waveform ? JSON.stringify(input.waveform) : null],
+    );
+    res.status(201).json({ note_id: row.rows[0].note_id });
+  }));
+
+  r.delete("/modules/:id/voice-note", auth, requireRole("Instructor"), handler(async (req, res) => {
+    const userId = requirePrincipal(req).userId;
+    const me = await ctx.db.primary.query(`SELECT congregation_id, role FROM users WHERE user_id = $1`, [userId]);
+    await ctx.db.primary.query(
+      `DELETE FROM module_voice_notes
+        WHERE module_id = $1 AND congregation_id = $2
+          AND (author_user_id = $3 OR $4 IN ('Admin', 'SuperAdmin'))`,
+      [String(req.params.id ?? ""), me.rows[0]?.congregation_id, userId, me.rows[0]?.role],
+    );
+    res.json({ ok: true });
+  }));
+
+  // --- Cell reading presence (Wave 2): studying together, apart ---
+  r.get("/community/presence", auth, handler(async (req, res) => {
+    const userId = requirePrincipal(req).userId;
+    const rows = await ctx.db.primary.query(
+      `WITH me AS (SELECT cell_group_id, congregation_id FROM users WHERE user_id = $1)
+       SELECT split_part(u.full_name, ' ', 1) AS first_name
+         FROM users u, me
+        WHERE u.user_id <> $1 AND u.deleted_at IS NULL
+          AND ((me.cell_group_id IS NOT NULL AND u.cell_group_id = me.cell_group_id)
+               OR (me.cell_group_id IS NULL AND u.congregation_id = me.congregation_id))
+          AND EXISTS (
+            SELECT 1 FROM module_engagement e
+             WHERE e.user_id = u.user_id AND e.updated_at > now() - interval '7 days'
+          )
+        ORDER BY random()
+        LIMIT 12`,
+      [userId],
+    );
+    const me = await ctx.db.primary.query(`SELECT cell_group_id FROM users WHERE user_id = $1`, [userId]);
+    res.json({
+      count: rows.rowCount ?? 0,
+      names: rows.rows.slice(0, 3).map((r: { first_name: string }) => r.first_name),
+      scope: me.rows[0]?.cell_group_id ? "cell" : "congregation",
+    });
+  }));
+
   r.post("/admin/intelligence/liturgy/run", auth, requireRole("Admin"), handler(async (_req, res) => {
     res.json({ composed: await liturgy.composeAll() });
   }));
