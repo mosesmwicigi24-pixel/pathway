@@ -808,9 +808,15 @@ export class IdentityService {
     },
   ): Promise<{ device_id: string }> {
     return tx(this.pool, async (c) => {
+      // One row per (user, platform, model): clients register on every launch,
+      // so this must refresh, not accumulate — the census reads app_version
+      // and last_seen_at from the single live row.
       const device = await one<{ device_id: string }>(
         c,
-        `INSERT INTO client_devices (user_id, platform, app_version, model) VALUES ($1,$2,$3,$4)
+        `INSERT INTO client_devices (user_id, platform, app_version, model, last_seen_at)
+         VALUES ($1,$2,$3,$4, now())
+         ON CONFLICT (user_id, platform, COALESCE(model, ''))
+         DO UPDATE SET app_version = EXCLUDED.app_version, last_seen_at = now()
          RETURNING device_id`,
         [userId, input.platform, input.app_version ?? null, input.model ?? null],
       );
