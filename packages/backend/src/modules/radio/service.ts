@@ -775,7 +775,12 @@ export class RadioService {
     await this.pool.query(
       `INSERT INTO radio_listeners (program_id, user_id, last_seen)
          VALUES ($1, $2, now())
-       ON CONFLICT (program_id, user_id) DO UPDATE SET last_seen = now()`,
+       ON CONFLICT (program_id, user_id) DO UPDATE SET
+         last_seen = now(),
+         -- Real listening time: elapsed since the last beat, capped at 60s so
+         -- a session resumed hours later can't book the gap as listening.
+         listen_seconds = radio_listeners.listen_seconds
+           + LEAST(GREATEST(EXTRACT(EPOCH FROM (now() - radio_listeners.last_seen)), 0), 60)::int`,
       [programId, userId],
     );
     return { ok: true };

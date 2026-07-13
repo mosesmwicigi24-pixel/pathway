@@ -456,11 +456,18 @@ export class AdminOpsService {
         ORDER BY u.created_at LIMIT 12`,
     );
 
+    const connectivity = await many<Record<string, string>>(
+      this.replica,
+      `SELECT COALESCE(network, 'unknown') AS network, count(DISTINCT user_id) AS members
+         FROM client_devices GROUP BY 1 ORDER BY 2 DESC`,
+    );
+
     const radioReach = await one<Record<string, string>>(
       this.replica,
       `SELECT (SELECT count(DISTINCT user_id) FROM radio_listeners) AS listeners_all_time,
               (SELECT count(DISTINCT user_id) FROM radio_listeners WHERE last_seen > now() - interval '7 days') AS listeners_7d,
-              (SELECT count(*) FROM radio_reactions) AS reactions`,
+              (SELECT count(*) FROM radio_reactions) AS reactions,
+              (SELECT COALESCE(round(sum(listen_seconds) / 60.0), 0) FROM radio_listeners) AS minutes_all_time`,
     );
 
     return {
@@ -524,6 +531,7 @@ export class AdminOpsService {
         })),
         payday_cycle: paydayCycle.map((r) => ({ bucket: r.bucket, gifts: Number(r.gifts), total_minor: Number(r.total_minor) })),
         providers: providerSplit.map((r) => ({ provider: r.provider, gifts: Number(r.gifts), total_minor: Number(r.total_minor) })),
+        connectivity: connectivity.map((r) => ({ network: r.network, members: Number(r.members) })),
       },
       retention: {
         cohorts: cohorts.map((r) => ({ cohort: r.cohort, joined: Number(r.joined), active_30d: Number(r.active_30d) })),

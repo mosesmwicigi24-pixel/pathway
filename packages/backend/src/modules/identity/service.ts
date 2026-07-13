@@ -810,6 +810,7 @@ export class IdentityService {
       app_version?: string | undefined;
       model?: string | undefined;
       push_token?: string | undefined;
+      network?: string | undefined;
     },
   ): Promise<{ device_id: string }> {
     return tx(this.pool, async (c) => {
@@ -818,12 +819,14 @@ export class IdentityService {
       // and last_seen_at from the single live row.
       const device = await one<{ device_id: string }>(
         c,
-        `INSERT INTO client_devices (user_id, platform, app_version, model, last_seen_at)
-         VALUES ($1,$2,$3,$4, now())
+        `INSERT INTO client_devices (user_id, platform, app_version, model, network, last_seen_at)
+         VALUES ($1,$2,$3,$4,$5, now())
          ON CONFLICT (user_id, platform, COALESCE(model, ''))
-         DO UPDATE SET app_version = EXCLUDED.app_version, last_seen_at = now()
+         DO UPDATE SET app_version = EXCLUDED.app_version,
+                       network = COALESCE(EXCLUDED.network, client_devices.network),
+                       last_seen_at = now()
          RETURNING device_id`,
-        [userId, input.platform, input.app_version ?? null, input.model ?? null],
+        [userId, input.platform, input.app_version ?? null, input.model ?? null, input.network ?? null],
       );
       if (input.push_token) {
         await c.query(

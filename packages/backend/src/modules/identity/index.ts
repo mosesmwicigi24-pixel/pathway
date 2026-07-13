@@ -220,6 +220,7 @@ export function registerIdentity(ctx: AppContext): Router {
           app_version: z.string().max(20).optional(),
           model: z.string().trim().max(80).optional(),
           push_token: z.string().max(512).optional(),
+          network: z.enum(["wifi", "cellular", "other"]).optional(),
         }),
         req.body,
       );
