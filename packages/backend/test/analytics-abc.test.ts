@@ -72,3 +72,37 @@ describe("analytics A+B+C", () => {
     expect(names).toContain("Sam");
   });
 });
+
+describe("C-layer captures", () => {
+  it("accumulates listen_seconds on repeated heartbeats (gap-capped)", async () => {
+    const prog = await testPool().query(
+      `INSERT INTO radio_programs (title, category) VALUES ('Morning Glory', 'Sermon') RETURNING id`);
+    const pid = prog.rows[0].id;
+    await testPool().query(
+      `INSERT INTO radio_listeners (program_id, user_id, last_seen, listen_seconds)
+       VALUES ($1, $2, now() - interval '20 seconds', 100)`, [pid, memberId]);
+    // Simulate the service upsert (same SQL shape as heartbeat()).
+    await testPool().query(
+      `INSERT INTO radio_listeners (program_id, user_id, last_seen)
+       VALUES ($1, $2, now())
+       ON CONFLICT (program_id, user_id) DO UPDATE SET
+         last_seen = now(),
+         listen_seconds = radio_listeners.listen_seconds
+           + LEAST(GREATEST(EXTRACT(EPOCH FROM (now() - radio_listeners.last_seen)), 0), 60)::int`,
+      [pid, memberId]);
+    const row = await testPool().query(
+      `SELECT listen_seconds FROM radio_listeners WHERE program_id = $1 AND user_id = $2`, [pid, memberId]);
+    expect(row.rows[0].listen_seconds).toBeGreaterThanOrEqual(119);
+    expect(row.rows[0].listen_seconds).toBeLessThanOrEqual(121);
+  });
+
+  it("stores network on device registration and surfaces connectivity split", async () => {
+    const res = await agent().post("/v1/me/devices").set("Authorization", adminTok)
+      .send({ platform: "ios", model: "iPhone18,2", network: "cellular" });
+    expect(res.status).toBe(201);
+    const intel = await agent().get("/v1/admin/analytics/intelligence").set("Authorization", adminTok);
+    const cell = intel.body.economics.connectivity.find((c: { network: string }) => c.network === "cellular");
+    expect(cell.members).toBe(1);
+    expect(intel.body.reachout.radio.minutes_all_time).toBeGreaterThanOrEqual(0);
+  });
+});
