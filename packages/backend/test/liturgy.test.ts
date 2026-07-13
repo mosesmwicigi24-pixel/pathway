@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation } from "./helpers/factories.js";
-import { LiturgyService, easterOf, seasonOf, partOf, FALLBACK_LITURGY } from "../src/modules/intelligence/liturgy.js";
+import { LiturgyService, easterOf, seasonOf, partOf, FALLBACK_LITURGY, LITURGY_ART, pickLiturgyArt } from "../src/modules/intelligence/liturgy.js";
 import { FakeAiProvider, type AiProvider } from "../src/modules/assistant/provider.js";
 
 afterAll(async () => {
@@ -61,6 +61,10 @@ describe("composition + cache", () => {
     expect(["morning", "midday", "evening", "night"]).toContain(now.part);
     expect(now.line.length).toBeGreaterThan(10);
     expect(now.season).toBeTruthy();
+    // The hour's tableau rides along, drawn from that part's curated pool.
+    expect(now.art.url.startsWith("https://images.unsplash.com/photo-")).toBe(true);
+    expect(now.art.alt.length).toBeGreaterThan(5);
+    expect(LITURGY_ART[now.part].some((a) => a.url === now.art.url)).toBe(true);
   });
 
   it("serves the fallback (uncached) when the model fails, then heals", async () => {
