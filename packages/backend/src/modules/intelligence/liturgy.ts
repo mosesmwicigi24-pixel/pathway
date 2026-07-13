@@ -19,6 +19,64 @@ export interface LiturgyLine {
 }
 export type LiturgyDay = Record<LiturgyPart, LiturgyLine>;
 
+// ======================= Liturgy art (the hour, beheld) =====================
+// Home breathes with the hours, so the liturgy card carries a photograph of
+// the hour itself: dawn light for morning, a wide bright sky for midday, a
+// golden sunset for evening, a starfield for night. Curated + theme-matched
+// (every URL verified live and visually reviewed), chosen deterministically
+// per (part, EAT day) so the whole congregation sees the same tableau that
+// day and it rotates day to day. Clients fall back to the navy card offline.
+
+export interface LiturgyArt {
+  url: string;
+  alt: string;
+}
+
+const LU = (id: string): string => `https://images.unsplash.com/photo-${id}?auto=format&fit=crop&w=1080&q=70`;
+
+export const LITURGY_ART: Record<LiturgyPart, LiturgyArt[]> = {
+  morning: [
+    { url: LU("1418065460487-3e41a6c84dc5"), alt: "Mist over a pine forest at first light" },
+    { url: LU("1506744038136-46273834b3fb"), alt: "Morning mist on a mountain river" },
+    { url: LU("1507525428034-b723cf961d3e"), alt: "Dawn breaking over a quiet shore" },
+    { url: LU("1470252649378-9c29740c9fa8"), alt: "Sunrise over an open field" },
+  ],
+  midday: [
+    { url: LU("1490750967868-88aa4486c946"), alt: "Poppies open to a bright blue sky" },
+    { url: LU("1502082553048-f009c37129b9"), alt: "A great tree under a wide noon sky" },
+    { url: LU("1433086966358-54859d0ed716"), alt: "A waterfall through sunlit green cliffs" },
+    { url: LU("1465146344425-f00d5f5c8f07"), alt: "Wildflowers in a bright wheat field" },
+  ],
+  evening: [
+    { url: LU("1472120435266-53107fd0c44a"), alt: "Deep sunset over a still field" },
+    { url: LU("1495616811223-4d98c6e9c869"), alt: "Golden dusk over a lake and jetty" },
+    { url: LU("1500382017468-9049fed747ef"), alt: "Sun rays fading over the wheat" },
+    { url: LU("1499002238440-d264edd596ec"), alt: "Sunset over a lavender field" },
+  ],
+  night: [
+    { url: LU("1419242902214-272b3f66ee7a"), alt: "A meteor over starlit mountains" },
+    { url: LU("1483086431886-3590a88317fe"), alt: "Aurora over the pines" },
+    { url: LU("1519681393784-d120267933ba"), alt: "The Milky Way over the mountains" },
+    { url: LU("1475924156734-496f6cac6ec1"), alt: "Deep twilight over a quiet sea" },
+  ],
+};
+
+/** Stable 32-bit FNV-1a hash — deterministic across runs/processes. */
+function litHash(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** Today's photograph for a part: same across the congregation, fresh daily. */
+export function pickLiturgyArt(part: LiturgyPart, dayKey: string): LiturgyArt {
+  const pool = LITURGY_ART[part];
+  return pool[litHash(`${part}|${dayKey}`) % pool.length]!;
+}
+
 /** Gregorian Easter Sunday (Meeus/Jones/Butcher computus). Month is 1-based. */
 export function easterOf(year: number): { month: number; day: number } {
   const a = year % 19;
@@ -150,6 +208,7 @@ export class LiturgyService {
     is_sunday: boolean;
     line: string;
     scripture_ref: string | null;
+    art: LiturgyArt;
   }> {
     const part = partOf(now);
     const season = seasonOf(now);
@@ -159,7 +218,14 @@ export class LiturgyService {
       const { day } = await this.composeFor(congregationId, now);
       line = day[part];
     }
-    return { part, season, is_sunday: isSunday, line: line.line, scripture_ref: line.scripture };
+    return {
+      part,
+      season,
+      is_sunday: isSunday,
+      line: line.line,
+      scripture_ref: line.scripture,
+      art: pickLiturgyArt(part, ymd(eatDate(now))),
+    };
   }
 
   /** Nightly cron: compose today's liturgy for every congregation. */

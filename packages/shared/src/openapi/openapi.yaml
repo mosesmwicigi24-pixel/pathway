@@ -565,7 +565,7 @@ paths:
       tags: [growth]
       summary: The liturgy line for RIGHT NOW (EAT clock) — part (morning|midday|evening|night), church season, Sunday flag. AI-composed once per congregation per day; deterministic fallback when the model is down.
       responses:
-        "200": { description: "{ part, season, is_sunday, line, scripture_ref }" }
+        "200": { description: "{ part, season, is_sunday, line, scripture_ref, art: { url, alt } } — art is the hour's tableau photograph (dawn/noon/dusk/night), deterministic per (part, EAT day)" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /community/moments:
     get:
