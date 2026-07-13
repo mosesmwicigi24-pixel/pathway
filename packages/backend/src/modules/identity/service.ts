@@ -76,6 +76,11 @@ export class IdentityService {
   ) {}
 
   private async issueSession(user: UserAuthRow, deviceId?: string | null): Promise<SessionTokens> {
+    // True login telemetry (leadership analytics): every minted session is a
+    // front-door entry. Fire-and-forget — a logging hiccup never blocks login.
+    void this.pool
+      .query(`INSERT INTO auth_events (user_id, kind) VALUES ($1, 'login')`, [user.user_id])
+      .catch(() => {});
     const access = signAccessToken(this.env, {
       sub: user.user_id,
       role: user.role,

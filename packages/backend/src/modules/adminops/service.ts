@@ -333,6 +333,136 @@ export class AdminOpsService {
          (SELECT count(DISTINCT user_id) FROM module_engagement WHERE updated_at >= now() - interval '7 days') AS readers_7d`,
     );
 
+    // --- Congregational economics + program telemetry (leadership brief A+B+C) ---
+    // Tiers are an AGGREGATE capacity proxy (ethics contract §4 of the brief):
+    // congregation-level distributions and care signals only, never a
+    // per-member wealth label. A member's tier = the highest tier across
+    // their registered devices; unmatched models stay 'unclassified'.
+    const tierDistribution = await many<Record<string, string>>(
+      this.replica,
+      `WITH ranked AS (
+         SELECT cd.user_id,
+                COALESCE(dt.tier, 'unclassified') AS tier,
+                CASE COALESCE(dt.tier, 'unclassified')
+                  WHEN 'premium' THEN 3 WHEN 'mid' THEN 2 WHEN 'entry' THEN 1 ELSE 0 END AS rank
+           FROM client_devices cd
+           LEFT JOIN LATERAL (
+             SELECT tier FROM device_tiers WHERE cd.model ILIKE pattern
+              ORDER BY length(pattern) DESC LIMIT 1
+           ) dt ON TRUE
+       ), per_user AS (
+         SELECT DISTINCT ON (user_id) user_id, tier FROM ranked ORDER BY user_id, rank DESC
+       )
+       SELECT tier, count(*) AS members FROM per_user GROUP BY tier ORDER BY
+         CASE tier WHEN 'premium' THEN 1 WHEN 'mid' THEN 2 WHEN 'entry' THEN 3 ELSE 4 END`,
+    );
+
+    const givingByTier = await many<Record<string, string>>(
+      this.replica,
+      `WITH ranked AS (
+         SELECT cd.user_id, COALESCE(dt.tier, 'unclassified') AS tier,
+                CASE COALESCE(dt.tier, 'unclassified')
+                  WHEN 'premium' THEN 3 WHEN 'mid' THEN 2 WHEN 'entry' THEN 1 ELSE 0 END AS rank
+           FROM client_devices cd
+           LEFT JOIN LATERAL (
+             SELECT tier FROM device_tiers WHERE cd.model ILIKE pattern
+              ORDER BY length(pattern) DESC LIMIT 1
+           ) dt ON TRUE
+       ), per_user AS (
+         SELECT DISTINCT ON (user_id) user_id, tier FROM ranked ORDER BY user_id, rank DESC
+       )
+       SELECT pu.tier,
+              count(DISTINCT pu.user_id) AS members,
+              count(DISTINCT t.user_id) FILTER (WHERE t.status = 'succeeded') AS givers,
+              count(t.*) FILTER (WHERE t.status = 'succeeded') AS gifts,
+              COALESCE(sum(t.amount_minor) FILTER (WHERE t.status = 'succeeded'), 0)::bigint AS total_minor
+         FROM per_user pu
+         LEFT JOIN transactions t ON t.user_id = pu.user_id
+        GROUP BY pu.tier
+        ORDER BY CASE pu.tier WHEN 'premium' THEN 1 WHEN 'mid' THEN 2 WHEN 'entry' THEN 3 ELSE 4 END`,
+    );
+
+    // The payday cycle — when the congregation is ABLE to respond.
+    const paydayCycle = await many<Record<string, string>>(
+      this.replica,
+      `SELECT CASE
+                WHEN extract(day FROM created_at) <= 5 THEN '1-5'
+                WHEN extract(day FROM created_at) <= 10 THEN '6-10'
+                WHEN extract(day FROM created_at) <= 15 THEN '11-15'
+                WHEN extract(day FROM created_at) <= 20 THEN '16-20'
+                WHEN extract(day FROM created_at) <= 25 THEN '21-25'
+                ELSE '26-31' END AS bucket,
+              count(*) AS gifts, COALESCE(sum(amount_minor), 0)::bigint AS total_minor
+         FROM transactions WHERE status = 'succeeded'
+        GROUP BY 1 ORDER BY min(extract(day FROM created_at))`,
+    );
+
+    const providerSplit = await many<Record<string, string>>(
+      this.replica,
+      `SELECT provider, count(*) AS gifts, COALESCE(sum(amount_minor), 0)::bigint AS total_minor
+         FROM transactions WHERE status = 'succeeded' GROUP BY provider ORDER BY 3 DESC`,
+    );
+
+    // Retention: join-month cohorts × still-active in the last 30 days.
+    const cohorts = await many<Record<string, string>>(
+      this.replica,
+      `SELECT to_char(date_trunc('month', u.created_at), 'Mon YYYY') AS cohort,
+              date_trunc('month', u.created_at) AS m,
+              count(*) AS joined,
+              count(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM module_engagement me
+                 WHERE me.user_id = u.user_id AND me.updated_at > now() - interval '30 days'
+              )) AS active_30d
+         FROM users u WHERE u.deleted_at IS NULL AND u.role = 'Student'
+        GROUP BY 1, 2 ORDER BY 2`,
+    );
+
+    // The front door (auth_events ships with this release — fills from today).
+    const logins = await one<Record<string, string>>(
+      this.replica,
+      `SELECT count(*) FILTER (WHERE at > now() - interval '7 days') AS logins_7d,
+              count(DISTINCT user_id) FILTER (WHERE at > now() - interval '7 days') AS members_7d,
+              count(*) FILTER (WHERE at > now() - interval '30 days') AS logins_30d
+         FROM auth_events`,
+    );
+
+    // Notification effectiveness — read_at already ships on every row.
+    const notifEffect = await one<Record<string, string>>(
+      this.replica,
+      `SELECT count(*) FILTER (WHERE sent_at IS NOT NULL) AS sent,
+              count(*) FILTER (WHERE read_at IS NOT NULL) AS read,
+              COALESCE(round(percentile_cont(0.5) WITHIN GROUP (
+                ORDER BY extract(epoch FROM (read_at - sent_at)) / 60
+              ) FILTER (WHERE read_at IS NOT NULL AND sent_at IS NOT NULL))::int, 0) AS median_minutes_to_read
+         FROM notifications`,
+    );
+
+    // Relational density — the invisibly lonely: members nobody has touched
+    // (no blessing on their moments, no prayer on their wall posts) in 30 days.
+    const untouched = await many<Record<string, string>>(
+      this.replica,
+      `SELECT split_part(u.full_name, ' ', 1) AS first_name, c.name AS congregation
+         FROM users u
+         LEFT JOIN congregations c ON c.congregation_id = u.congregation_id
+        WHERE u.deleted_at IS NULL AND u.role = 'Student'
+          AND NOT EXISTS (
+            SELECT 1 FROM community_moments cm
+            JOIN moment_blessings mb ON mb.moment_id = cm.moment_id
+            WHERE cm.user_id = u.user_id AND mb.created_at > now() - interval '30 days')
+          AND NOT EXISTS (
+            SELECT 1 FROM prayer_wall_posts pw
+            JOIN prayer_wall_reactions pr ON pr.post_id = pw.post_id
+            WHERE pw.author_user_id = u.user_id AND pr.created_at > now() - interval '30 days')
+        ORDER BY u.created_at LIMIT 12`,
+    );
+
+    const radioReach = await one<Record<string, string>>(
+      this.replica,
+      `SELECT (SELECT count(DISTINCT user_id) FROM radio_listeners) AS listeners_all_time,
+              (SELECT count(DISTINCT user_id) FROM radio_listeners WHERE last_seen > now() - interval '7 days') AS listeners_7d,
+              (SELECT count(*) FROM radio_reactions) AS reactions`,
+    );
+
     return {
       generated_at: new Date().toISOString(),
       kpis: num(kpiRow),
@@ -385,6 +515,25 @@ export class AdminOpsService {
         by_city: byCity.map((r) => ({ city: r.city, members: Number(r.members) })),
         by_country: byCountry.map((r) => ({ country_code: r.country_code, members: Number(r.members) })),
         geo_capture: false, // no lat/lng — proximity grouping unlocks once location tagging ships
+      },
+      economics: {
+        tiers: tierDistribution.map((r) => ({ tier: r.tier, members: Number(r.members) })),
+        giving_by_tier: givingByTier.map((r) => ({
+          tier: r.tier, members: Number(r.members), givers: Number(r.givers),
+          gifts: Number(r.gifts), total_minor: Number(r.total_minor),
+        })),
+        payday_cycle: paydayCycle.map((r) => ({ bucket: r.bucket, gifts: Number(r.gifts), total_minor: Number(r.total_minor) })),
+        providers: providerSplit.map((r) => ({ provider: r.provider, gifts: Number(r.gifts), total_minor: Number(r.total_minor) })),
+      },
+      retention: {
+        cohorts: cohorts.map((r) => ({ cohort: r.cohort, joined: Number(r.joined), active_30d: Number(r.active_30d) })),
+        logins: num(logins),
+        login_capture_live: true, // auth_events ships with this release; counts fill from deploy day
+      },
+      reachout: {
+        notifications: num(notifEffect),
+        untouched: untouched.map((r) => ({ first_name: r.first_name, congregation: r.congregation })),
+        radio: num(radioReach),
       },
       formation: {
         totals: num(formationTotals),
