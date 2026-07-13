@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createCellGroup, createUser, createEnrollment, createModule } from "./helpers/factories.js";
-import { pickVerse, VERSE_POOL } from "../src/modules/home/verses.js";
+import { pickVerse, pickVerseArt, VERSE_ART, VERSE_POOL } from "../src/modules/home/verses.js";
 
 let cong: string, cell: string, meId: string, meTok: string;
 const auth = (t: string) => ({ Authorization: t });
@@ -159,6 +159,46 @@ describe("pickVerse — deterministic, repeat-avoiding picker (unit)", () => {
   it("falls back to a deterministic pick when everything is recent", () => {
     const picked = pickVerse("prayer", "user-3", "2026-06-25", VERSE_POOL.prayer);
     expect(VERSE_POOL.prayer).toContain(picked);
+  });
+});
+
+describe("verse art — the day's tableau photograph (unit + wire)", () => {
+  it("pickVerseArt is deterministic per (user, day) and drawn from the curated set", () => {
+    const a = pickVerseArt("growth", "user-1", "2026-07-13");
+    const b = pickVerseArt("growth", "user-1", "2026-07-13");
+    expect(a).toEqual(b);
+    expect(VERSE_ART.growth.some((x) => x.url === a.url)).toBe(true);
+    expect(a.url.startsWith("https://")).toBe(true);
+    expect(a.alt.length).toBeGreaterThan(0);
+  });
+
+  it("unknown mood themes fall back to the union pool, still deterministically", () => {
+    const a = pickVerseArt("GRATITUDE & THANKFULNESS", "user-9", "2026-07-13");
+    const b = pickVerseArt("GRATITUDE & THANKFULNESS", "user-9", "2026-07-13");
+    expect(a).toEqual(b);
+    const all = Object.values(VERSE_ART).flat();
+    expect(all.some((x) => x.url === a.url)).toBe(true);
+  });
+
+  it("every theme carries at least three curated images with https urls and alt text", () => {
+    for (const pool of Object.values(VERSE_ART)) {
+      expect(pool.length).toBeGreaterThanOrEqual(3);
+      for (const art of pool) {
+        expect(art.url).toMatch(/^https:\/\/images\.unsplash\.com\/photo-/);
+        expect(art.alt.length).toBeGreaterThan(5);
+      }
+    }
+  });
+
+  it("GET /me/home/verse includes the art on both fresh and cached reads", async () => {
+    const first = await agent().get("/v1/me/home/verse").set(auth(meTok));
+    expect(first.status).toBe(200);
+    expect(typeof first.body.art?.url).toBe("string");
+    expect(first.body.art.url.startsWith("https://")).toBe(true);
+    expect(typeof first.body.art?.alt).toBe("string");
+    const second = await agent().get("/v1/me/home/verse").set(auth(meTok)); // cached path
+    expect(second.status).toBe(200);
+    expect(second.body.art).toEqual(first.body.art); // stable through the day
   });
 });
 

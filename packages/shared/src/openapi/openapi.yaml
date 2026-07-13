@@ -3602,7 +3602,7 @@ paths:
       tags: [progress]
       summary: My "Verse for today" — chosen from the mood library to meet the season I'm in (cached daily).
       responses:
-        "200": { description: "Tailored verse: { reference, version, theme, reason, mood?, text? }" }
+        "200": { description: "Tailored verse: { reference, version, theme, reason, mood?, text?, art?: { url, alt } } — art is the day's theme-matched tableau photograph, deterministic per (user, day)" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/home/verse/reactions:
     get:
