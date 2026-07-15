@@ -67,6 +67,22 @@ describe("composition + cache", () => {
     expect(LITURGY_ART[now.part].some((a) => a.url === now.art.url)).toBe(true);
   });
 
+  it("each part has ~30 hour-fitting images and rotates 30 days without repeating", () => {
+    for (const part of ["morning", "midday", "evening", "night"] as const) {
+      const pool = LITURGY_ART[part];
+      expect(pool.length).toBeGreaterThanOrEqual(30); // a full month, no repeats
+      expect(new Set(pool.map((a) => a.url)).size).toBe(pool.length); // no dup images
+      for (const a of pool) expect(a.url).toMatch(/^https:\/\/images\.unsplash\.com\/photo-/);
+
+      // 30 consecutive days → 30 distinct images (the one-per-day step).
+      const days = Array.from({ length: 30 }, (_, i) => {
+        const d = new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10);
+        return pickLiturgyArt(part, d).url;
+      });
+      expect(new Set(days).size).toBe(30);
+    }
+  });
+
   it("serves the fallback (uncached) when the model fails, then heals", async () => {
     const broken: AiProvider = {
       name: "broken",

@@ -36,45 +36,152 @@ const LU = (id: string): string => `https://images.unsplash.com/photo-${id}?auto
 
 export const LITURGY_ART: Record<LiturgyPart, LiturgyArt[]> = {
   morning: [
-    { url: LU("1418065460487-3e41a6c84dc5"), alt: "Mist over a pine forest at first light" },
-    { url: LU("1506744038136-46273834b3fb"), alt: "Morning mist on a mountain river" },
-    { url: LU("1507525428034-b723cf961d3e"), alt: "Dawn breaking over a quiet shore" },
-    { url: LU("1470252649378-9c29740c9fa8"), alt: "Sunrise over an open field" },
+    { url: LU("1444090542259-0af8fa96557e"), alt: "First light over the hills" },
+    { url: LU("1484766280341-87861644c80d"), alt: "Dawn mist in the valley" },
+    { url: LU("1498112943420-8eacc6e7cfc3"), alt: "Sunrise breaking the horizon" },
+    { url: LU("1504252060324-1c76e2e09939"), alt: "Morning fog on the mountains" },
+    { url: LU("1508108712903-49b7ef9b1df8"), alt: "The early sky" },
+    { url: LU("1514241516423-6c0a5e031aa2"), alt: "A misty morning field" },
+    { url: LU("1517835797465-ac2216c77362"), alt: "Daybreak over the ridge" },
+    { url: LU("1519414442781-fbd745c5b497"), alt: "Golden dawn light" },
+    { url: LU("1533387520709-752d83de3630"), alt: "First light over the hills" },
+    { url: LU("1626348448069-9b156d20faeb"), alt: "Dawn mist in the valley" },
+    { url: LU("1635001360483-6772df57f2f9"), alt: "Sunrise breaking the horizon" },
+    { url: LU("1653203201902-c103cd99531e"), alt: "Morning fog on the mountains" },
+    { url: LU("1665849863678-fc03a642a9aa"), alt: "The early sky" },
+    { url: LU("1672917585946-339e22ac54dc"), alt: "A misty morning field" },
+    { url: LU("1675652202189-d33f7fa075f0"), alt: "Daybreak over the ridge" },
+    { url: LU("1678218718965-b6bd7b7c4dab"), alt: "Golden dawn light" },
+    { url: LU("1732106846688-3bac122e4f97"), alt: "First light over the hills" },
+    { url: LU("1743309411498-a0f4f4b96b65"), alt: "Dawn mist in the valley" },
+    { url: LU("1760783320169-44e82cd3265f"), alt: "Sunrise breaking the horizon" },
+    { url: LU("1762689744940-8488691b0610"), alt: "Morning fog on the mountains" },
+    { url: LU("1763887277852-be39663e9191"), alt: "The early sky" },
+    { url: LU("1764618979735-dc750932d8a7"), alt: "A misty morning field" },
+    { url: LU("1766200064130-1da9bab345bf"), alt: "Daybreak over the ridge" },
+    { url: LU("1774381498861-bb182e9de9d8"), alt: "Golden dawn light" },
+    { url: LU("1775679226397-ac4366205c91"), alt: "First light over the hills" },
+    { url: LU("1775891842789-e6d8a48b1a91"), alt: "Dawn mist in the valley" },
+    { url: LU("1776806399638-3f6693f8dcd4"), alt: "Sunrise breaking the horizon" },
+    { url: LU("1778236262726-452ab6686b0f"), alt: "Morning fog on the mountains" },
+    { url: LU("1783104122850-3991e530001a"), alt: "The early sky" },
+    { url: LU("1783413193834-69b25f5949d9"), alt: "A misty morning field" },
   ],
   midday: [
-    { url: LU("1490750967868-88aa4486c946"), alt: "Poppies open to a bright blue sky" },
-    { url: LU("1502082553048-f009c37129b9"), alt: "A great tree under a wide noon sky" },
-    { url: LU("1433086966358-54859d0ed716"), alt: "A waterfall through sunlit green cliffs" },
-    { url: LU("1465146344425-f00d5f5c8f07"), alt: "Wildflowers in a bright wheat field" },
+    { url: LU("1582053403239-c58c07d86ce1"), alt: "A bright blue noon sky" },
+    { url: LU("1582053403303-3c2c5f96c8b3"), alt: "Sunlit hills at midday" },
+    { url: LU("1604440095301-4ec2f9230155"), alt: "Clear water under a wide sky" },
+    { url: LU("1629905439673-86199719057a"), alt: "A bright summer meadow" },
+    { url: LU("1650442940325-7f57848ffb9c"), alt: "Full daylight on the mountains" },
+    { url: LU("1701906268617-e56feaedfdb6"), alt: "Turquoise sea at noon" },
+    { url: LU("1714544047757-89462703581e"), alt: "A sunny green valley" },
+    { url: LU("1714544566545-96da265563df"), alt: "Bright day over the water" },
+    { url: LU("1717683822555-06409656b1bd"), alt: "A bright blue noon sky" },
+    { url: LU("1717683822568-3b85cb0b2844"), alt: "Sunlit hills at midday" },
+    { url: LU("1717683823239-2ad7891c0ee4"), alt: "Clear water under a wide sky" },
+    { url: LU("1722194664034-26eef4dbda48"), alt: "A bright summer meadow" },
+    { url: LU("1723767625670-a6c509338c22"), alt: "Full daylight on the mountains" },
+    { url: LU("1734454736580-23f19bdf6423"), alt: "Turquoise sea at noon" },
+    { url: LU("1738508370941-6b333ae8a3dc"), alt: "A sunny green valley" },
+    { url: LU("1744932126743-8954e1432a5a"), alt: "Bright day over the water" },
+    { url: LU("1759363199657-9bfac6fca7dc"), alt: "A bright blue noon sky" },
+    { url: LU("1761204676901-2c751d77bd80"), alt: "Sunlit hills at midday" },
+    { url: LU("1762858924495-fde7d1935ef5"), alt: "Clear water under a wide sky" },
+    { url: LU("1770959837753-63e67740c99d"), alt: "A bright summer meadow" },
+    { url: LU("1775566981662-9b18f0eb8651"), alt: "Full daylight on the mountains" },
+    { url: LU("1777386189712-68b109195907"), alt: "Turquoise sea at noon" },
+    { url: LU("1777473084121-aeae63c9813a"), alt: "A sunny green valley" },
+    { url: LU("1778099744694-b29acc79927b"), alt: "Bright day over the water" },
+    { url: LU("1782092323103-862e70d6657e"), alt: "A bright blue noon sky" },
+    { url: LU("1783883614310-18b4ffdf9df1"), alt: "Sunlit hills at midday" },
+    { url: LU("1709486851809-ca174bfed7ed"), alt: "Clear water under a wide sky" },
+    { url: LU("1623876355063-15d1d5e5b89b"), alt: "A bright summer meadow" },
+    { url: LU("1586359716568-3e1907e4cf9f"), alt: "Full daylight on the mountains" },
+    { url: LU("1781036150366-3854152f37db"), alt: "Turquoise sea at noon" },
   ],
   evening: [
-    { url: LU("1472120435266-53107fd0c44a"), alt: "Deep sunset over a still field" },
-    { url: LU("1495616811223-4d98c6e9c869"), alt: "Golden dusk over a lake and jetty" },
-    { url: LU("1500382017468-9049fed747ef"), alt: "Sun rays fading over the wheat" },
-    { url: LU("1499002238440-d264edd596ec"), alt: "Sunset over a lavender field" },
+    { url: LU("1433477077279-9354d2d72f6b"), alt: "Golden hour over the hills" },
+    { url: LU("1470252649378-9c29740c9fa8"), alt: "Sunset over the mountains" },
+    { url: LU("1494548162494-384bba4ab999"), alt: "Dusk settling on the sea" },
+    { url: LU("1500534623283-312aade485b7"), alt: "The evening sky ablaze" },
+    { url: LU("1503803548695-c2a7b4a5b875"), alt: "Sun sinking behind the ridge" },
+    { url: LU("1506880648420-aafaa650d147"), alt: "A golden sunset field" },
+    { url: LU("1510784722466-f2aa9c52fff6"), alt: "Twilight over the water" },
+    { url: LU("1519614218660-ea0a24a43b4c"), alt: "The last light of day" },
+    { url: LU("1523177839081-99e24a24e9a6"), alt: "Golden hour over the hills" },
+    { url: LU("1571040514537-0424f4a4ee1e"), alt: "Sunset over the mountains" },
+    { url: LU("1581224463294-908316338239"), alt: "Dusk settling on the sea" },
+    { url: LU("1585215148712-c6505c99c392"), alt: "The evening sky ablaze" },
+    { url: LU("1595495745485-f5ffc0318e7f"), alt: "Sun sinking behind the ridge" },
+    { url: LU("1595495745827-85bcc5c9a028"), alt: "A golden sunset field" },
+    { url: LU("1604223190546-a43e4c7f29d7"), alt: "Twilight over the water" },
+    { url: LU("1607947242748-a1a4d4b72022"), alt: "The last light of day" },
+    { url: LU("1612676239016-41e2c92b8e06"), alt: "Golden hour over the hills" },
+    { url: LU("1613365891889-7f7e3316be61"), alt: "Sunset over the mountains" },
+    { url: LU("1616036740257-9449ea1f6605"), alt: "Dusk settling on the sea" },
+    { url: LU("1621472126228-d20f26ff6aee"), alt: "The evening sky ablaze" },
+    { url: LU("1622993288089-18298ec89b78"), alt: "Sun sinking behind the ridge" },
+    { url: LU("1625647891375-91463187659f"), alt: "A golden sunset field" },
+    { url: LU("1625865757464-dad39944b5c2"), alt: "Twilight over the water" },
+    { url: LU("1626663082558-31972acf4763"), alt: "The last light of day" },
+    { url: LU("1648706903501-8b74096438df"), alt: "Golden hour over the hills" },
+    { url: LU("1648885533514-1ed16479bdd7"), alt: "Sunset over the mountains" },
+    { url: LU("1654362248566-6804dbcc5bdc"), alt: "Dusk settling on the sea" },
+    { url: LU("1659608300525-a71e30dd2420"), alt: "The evening sky ablaze" },
+    { url: LU("1682999959985-66f1a4875740"), alt: "Sun sinking behind the ridge" },
+    { url: LU("1723251679023-9fc478009dbb"), alt: "A golden sunset field" },
   ],
   night: [
-    { url: LU("1419242902214-272b3f66ee7a"), alt: "A meteor over starlit mountains" },
-    { url: LU("1483086431886-3590a88317fe"), alt: "Aurora over the pines" },
-    { url: LU("1519681393784-d120267933ba"), alt: "The Milky Way over the mountains" },
-    { url: LU("1475924156734-496f6cac6ec1"), alt: "Deep twilight over a quiet sea" },
+    { url: LU("1435224668334-0f82ec57b605"), alt: "The Milky Way over the mountains" },
+    { url: LU("1456530308602-976f6a4bb440"), alt: "Aurora over the pines" },
+    { url: LU("1468186402854-9a641fd7a7c4"), alt: "A starlit night sky" },
+    { url: LU("1483347756197-71ef80e95f73"), alt: "Northern lights over the lake" },
+    { url: LU("1488415032361-b7e238421f1b"), alt: "Stars above the peaks" },
+    { url: LU("1488866022504-f2584929ca5f"), alt: "Aurora over the snow" },
+    { url: LU("1501418611786-e29f9929fe03"), alt: "Deep night over the hills" },
+    { url: LU("1502957291543-d85480254bf8"), alt: "The night sky, ablaze with stars" },
+    { url: LU("1504858700536-882c978a3464"), alt: "The Milky Way over the mountains" },
+    { url: LU("1516249181155-bbf89a130f77"), alt: "Aurora over the pines" },
+    { url: LU("1517928260182-5688aead3066"), alt: "A starlit night sky" },
+    { url: LU("1526644253653-a411eaafdfe6"), alt: "Northern lights over the lake" },
+    { url: LU("1527467779599-34448b3fa6a7"), alt: "Stars above the peaks" },
+    { url: LU("1529963183134-61a90db47eaf"), alt: "Aurora over the snow" },
+    { url: LU("1531366936337-7c912a4589a7"), alt: "Deep night over the hills" },
+    { url: LU("1568607689150-17e625c1586e"), alt: "The night sky, ablaze with stars" },
+    { url: LU("1571371867188-fdc3f1f8e62d"), alt: "The Milky Way over the mountains" },
+    { url: LU("1595520519880-a86c48ea536c"), alt: "Aurora over the pines" },
+    { url: LU("1604608672516-f1b9b1d37076"), alt: "A starlit night sky" },
+    { url: LU("1605286700104-15889419f60b"), alt: "Northern lights over the lake" },
+    { url: LU("1609528911883-fc7e0ee63c51"), alt: "Stars above the peaks" },
+    { url: LU("1610989432929-9769f3cf8006"), alt: "Aurora over the snow" },
+    { url: LU("1621603523799-bbdadeb207c2"), alt: "Deep night over the hills" },
+    { url: LU("1628818144466-856f7d477125"), alt: "The night sky, ablaze with stars" },
+    { url: LU("1630822957190-7e020791a7e0"), alt: "The Milky Way over the mountains" },
+    { url: LU("1637055972140-64608c1abe53"), alt: "Aurora over the pines" },
+    { url: LU("1678054055852-0f9d40a24dab"), alt: "A starlit night sky" },
+    { url: LU("1720293862142-bba219b0190e"), alt: "Northern lights over the lake" },
+    { url: LU("1720293862191-32c6a907a8ae"), alt: "Stars above the peaks" },
+    { url: LU("1720675009618-a38716724700"), alt: "Aurora over the snow" },
   ],
 };
 
-/** Stable 32-bit FNV-1a hash — deterministic across runs/processes. */
-function litHash(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
+/** Days since the Unix epoch for an EAT calendar day string ("YYYY-MM-DD"). */
+function epochDay(dayKey: string): number {
+  return Math.floor(Date.parse(`${dayKey}T00:00:00Z`) / 86_400_000);
 }
 
-/** Today's photograph for a part: same across the congregation, fresh daily. */
+/**
+ * Today's photograph for a part — a 30-day non-repeating rotation. Each pool
+ * holds ~30 hour-fitting images; stepping the index by ONE per day walks the
+ * whole pool before any image repeats, so a full month passes without a repeat.
+ * A per-part offset keeps the four hours from landing on the same day-index.
+ * Deterministic per (part, day) → the whole congregation sees the same tableau.
+ */
+const PART_OFFSET: Record<LiturgyPart, number> = { morning: 0, midday: 7, evening: 14, night: 21 };
 export function pickLiturgyArt(part: LiturgyPart, dayKey: string): LiturgyArt {
   const pool = LITURGY_ART[part];
-  return pool[litHash(`${part}|${dayKey}`) % pool.length]!;
+  const idx = ((epochDay(dayKey) + PART_OFFSET[part]) % pool.length + pool.length) % pool.length;
+  return pool[idx]!;
 }
 
 /** Gregorian Easter Sunday (Meeus/Jones/Butcher computus). Month is 1-based. */
