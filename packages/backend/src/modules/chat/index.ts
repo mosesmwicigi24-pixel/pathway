@@ -123,7 +123,18 @@ export function registerChat(ctx: AppContext): Router {
   // not a creation.
   r.get("/chat/broadcasts/:id", auth, requireRole("Instructor"), handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
-    res.json(await svc.broadcastDetail(requirePrincipal(req).userId, id));
+    const p = requirePrincipal(req);
+    res.json(await svc.broadcastDetail(p.userId, id, p.role));
+  }));
+
+  // Bring one more person into ONE thread — never into the broadcast. SuperAdmin
+  // only, and only a thread they are already in. The member is told: a note lands
+  // in the conversation naming who joined.
+  r.post("/chat/conversations/:id/invite", auth, requireRole("SuperAdmin"), handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const input = parseBody(ChatService.InviteToThread, req.body);
+    const p = requirePrincipal(req);
+    res.status(201).json(await svc.inviteToThread(p.userId, id, input, p.role));
   }));
 
   // Open a cell's group conversation (provisioning it on first use). Scope-checked

@@ -4200,6 +4200,36 @@ paths:
         "200": { description: Joined }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /chat/conversations/{id}/invite:
+    post:
+      tags: [progress]
+      summary: >-
+        Bring one more person into ONE thread — never into the broadcast.
+        SuperAdmin only, and only a thread they are already in: the unit of
+        authorisation is deliberately the conversation, so authorising a deacon
+        for one member's reply grants them nothing anywhere else. The member is
+        TOLD — a note lands in the thread naming who joined, because someone who
+        wrote privately to their pastor is owed the knowledge that another person
+        is now reading. A dm becomes a group on the first invite (a dm's title is
+        "the other member", which is meaningless once there are two of them).
+        Minors are refused (D-M6).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+      responses:
+        "201": { description: "{ conversation_id, invited, already } — already=true when they were in it (no second notice)." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — not a SuperAdmin, not in this thread, or the invitee is a minor." }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /chat/broadcasts:
     get:
       tags: [progress]

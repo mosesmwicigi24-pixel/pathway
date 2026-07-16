@@ -50,6 +50,8 @@ export class ChatService {
 
   static readonly CreateDm = z.object({ user_id: z.string().uuid() });
 
+  static readonly InviteToThread = z.object({ user_id: z.string().uuid() });
+
   static readonly Broadcast = z.object({
     body: z.string().min(1).max(20_000), // for an image broadcast this is the caption
     msg_type: z.enum(["text", "image"]).default("text"),
@@ -250,8 +252,23 @@ export class ChatService {
     throw new ApiError("NOT_FOUND", "Conversation not found"); // no existence leak
   }
 
-  /** Moderator conversation fetch — bypasses membership (Admin/SuperAdmin only). */
-  private async accessAsModerator(c: Queryable, conversationId: string): Promise<ConversationRow> {
+  /** Moderator conversation fetch — bypasses membership (Admin/SuperAdmin only).
+   *
+   *  EXCEPT a broadcast thread. When someone answers a broadcast they are writing
+   *  privately to the one person who sent it, and moderation is not a reason to
+   *  read that. Those threads are SuperAdmin-only, and an Admin who needs to see
+   *  one must be invited into that thread by name — the invitation is per-thread,
+   *  never per-broadcast. The shield is here rather than only in the list because
+   *  a conversation id is guessable-adjacent (it travels in payloads) and the
+   *  list is not the only door.
+   *
+   *  Members are unaffected: the sender and the recipient reach their own thread
+   *  through the ordinary membership path in access(), which never comes here. */
+  private async accessAsModerator(
+    c: Queryable,
+    conversationId: string,
+    viewerRole?: ViewerRole,
+  ): Promise<ConversationRow> {
     const convo = await maybeOne<ConversationRow>(
       c,
       `SELECT conversation_id, kind, is_public, congregation_id, cell_group_id
@@ -259,15 +276,37 @@ export class ChatService {
       [conversationId],
     );
     if (!convo) throw new ApiError("NOT_FOUND", "Conversation not found");
+    if (viewerRole !== "SuperAdmin" && (await this.isBroadcastThread(c, conversationId))) {
+      throw new ApiError("NOT_FOUND", "Conversation not found"); // no existence leak
+    }
     return convo;
+  }
+
+  /** Was this conversation started by a broadcast? (Any message in it stamped
+   *  back to a chat_broadcasts parent.) */
+  private async isBroadcastThread(c: Queryable, conversationId: string): Promise<boolean> {
+    const hit = await maybeOne(
+      c,
+      `SELECT 1 FROM chat_messages
+        WHERE conversation_id = $1 AND broadcast_id IS NOT NULL LIMIT 1`,
+      [conversationId],
+    );
+    return hit !== null && hit !== undefined;
   }
 
   /**
    * Admin/SuperAdmin oversight inbox: every conversation, with member count,
    * last-message preview, and a per-conversation count of flagged-but-not-hidden
    * messages. Server-authoritative (§1.1) — only moderators reach this path.
+   *
+   * Broadcast threads are withheld from everyone but a SuperAdmin. Answering a
+   * broadcast is writing privately to the one person who sent it, and oversight
+   * is not a reason to read that; an Admin who needs a particular thread is
+   * invited into that thread by name. Threads they are genuinely IN still reach
+   * them — through the personal inbox, as a member, like anyone else.
    */
-  private async listAllForModeration(): Promise<{ conversations: unknown[]; discover_spaces: unknown[] }> {
+  private async listAllForModeration(viewerRole?: ViewerRole): Promise<{ conversations: unknown[]; discover_spaces: unknown[] }> {
+    const hideBroadcasts = viewerRole !== "SuperAdmin";
     const conversations = await many(
       this.pool,
       `SELECT cv.conversation_id, cv.kind, cv.is_public,
@@ -291,9 +330,13 @@ export class ChatService {
              ORDER BY created_at DESC LIMIT 1
          ) lm ON TRUE
          LEFT JOIN users la ON la.user_id = lm.author_user_id
+        WHERE NOT ($1::boolean AND EXISTS (
+                SELECT 1 FROM chat_messages bm
+                 WHERE bm.conversation_id = cv.conversation_id
+                   AND bm.broadcast_id IS NOT NULL))
         ORDER BY COALESCE(lm.created_at, cv.created_at) DESC
         LIMIT 500`,
-      [],
+      [hideBroadcasts],
     );
     return { conversations, discover_spaces: [] };
   }
@@ -305,7 +348,7 @@ export class ChatService {
     // `scope=mine` opts a moderator into the personal inbox instead (the web
     // portal uses it so staff see their own Spaces / DMs / Groups like mobile).
     if (isModerator(viewerRole) && scope !== "mine") {
-      const mod = await this.listAllForModeration();
+      const mod = await this.listAllForModeration(viewerRole);
       return { conversations: mod.conversations, discover_spaces: await this.discoverSpaces(userId) };
     }
     await tx(this.pool, async (c) => this.ensureCellGroup(c, userId));
@@ -382,8 +425,14 @@ export class ChatService {
    */
   async getConversation(userId: string, conversationId: string, viewerRole?: ViewerRole): Promise<unknown> {
     const moderator = isModerator(viewerRole);
-    const convo = moderator
-      ? await this.accessAsModerator(this.pool, conversationId)
+    // A moderator bypasses membership — but NOT into a broadcast thread, which
+    // only a SuperAdmin may read from the outside. An Admin INVITED into one
+    // still gets in: they go through the ordinary membership door instead, which
+    // is the whole point of inviting them to a thread rather than to a broadcast.
+    const shielded = moderator && viewerRole !== "SuperAdmin"
+      && (await this.isBroadcastThread(this.pool, conversationId));
+    const convo = moderator && !shielded
+      ? await this.accessAsModerator(this.pool, conversationId, viewerRole)
       : await this.access(this.pool, userId, conversationId);
     const head = await one<Record<string, unknown>>(
       this.pool,
@@ -701,6 +750,96 @@ export class ChatService {
     });
   }
 
+  /**
+   * Bring one more person into ONE thread — never into the broadcast.
+   *
+   * The unit of authorisation is deliberately the thread, not the broadcast: a
+   * SuperAdmin who wants a deacon on Ann's reply authorises them for ANN's
+   * thread, and gains them nothing anywhere else. There is no "share the
+   * broadcast" verb, because that would hand over sixty private conversations
+   * with one tap.
+   *
+   * The member is TOLD. A note lands in the thread naming who joined, because a
+   * person who wrote privately to their pastor is owed the knowledge that
+   * someone else is now reading — a silent reader is a betrayal, not a feature.
+   * The note is a real message, so it syncs, previews, and cannot be missed.
+   *
+   * The thread stops being a dm the moment a third person is in it (a dm's
+   * title/avatar is "the other member", which is meaningless once there are
+   * two of them), so it becomes a group titled for the member it is about.
+   */
+  async inviteToThread(
+    actorId: string,
+    conversationId: string,
+    input: z.infer<typeof ChatService.InviteToThread>,
+    viewerRole?: ViewerRole,
+  ): Promise<{ conversation_id: string; invited: string; already: boolean }> {
+    if (viewerRole !== "SuperAdmin") {
+      throw new ApiError("FORBIDDEN_SCOPE", "Only a SuperAdmin can bring someone into a thread");
+    }
+    return tx(this.pool, async (c) => {
+      const convo = await maybeOne<{ kind: string; congregation_id: string | null }>(
+        c,
+        `SELECT kind, congregation_id FROM chat_conversations WHERE conversation_id = $1`,
+        [conversationId],
+      );
+      if (!convo) throw new ApiError("NOT_FOUND", "Conversation not found");
+      // You may only widen a room you are in. Oversight is not authorship.
+      const mine = await maybeOne(
+        c, `SELECT 1 FROM chat_members WHERE conversation_id = $1 AND user_id = $2`, [conversationId, actorId],
+      );
+      if (!mine) throw new ApiError("FORBIDDEN_SCOPE", "You are not in this thread");
+      if (input.user_id === actorId) throw new ApiError("UNPROCESSABLE", "You are already here");
+
+      const guest = await maybeOne<{ full_name: string; is_minor: boolean }>(
+        c,
+        `SELECT full_name, is_minor FROM users WHERE user_id = $1 AND deleted_at IS NULL`,
+        [input.user_id],
+      );
+      if (!guest) throw new ApiError("NOT_FOUND", "Member not found");
+      if (guest.is_minor) throw new ApiError("FORBIDDEN_SCOPE", "Direct messages are unavailable for minors");
+
+      const already = await maybeOne(
+        c, `SELECT 1 FROM chat_members WHERE conversation_id = $1 AND user_id = $2`, [conversationId, input.user_id],
+      );
+      if (already) return { conversation_id: conversationId, invited: input.user_id, already: true };
+
+      await c.query(
+        `INSERT INTO chat_members (conversation_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [conversationId, input.user_id],
+      );
+      if (convo.kind === "dm") {
+        // Title it for the person it is ABOUT — the one member who isn't staff —
+        // so it stays findable for everyone now in it.
+        const subject = await maybeOne<{ full_name: string }>(
+          c,
+          `SELECT u.full_name FROM chat_members m
+             JOIN users u ON u.user_id = m.user_id
+            WHERE m.conversation_id = $1 AND m.user_id <> $2 AND m.user_id <> $3
+            ORDER BY u.full_name LIMIT 1`,
+          [conversationId, actorId, input.user_id],
+        );
+        await c.query(
+          `UPDATE chat_conversations SET kind = 'group', title = COALESCE(title, $2), updated_at = now()
+            WHERE conversation_id = $1`,
+          [conversationId, subject?.full_name ?? "Conversation"],
+        );
+      }
+      const actor = await maybeOne<{ full_name: string }>(
+        c, `SELECT full_name FROM users WHERE user_id = $1`, [actorId],
+      );
+      const note = await one<{ message_id: string }>(
+        c,
+        `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type)
+         VALUES (gen_random_uuid(), $1, $2, $3, 'text') RETURNING message_id`,
+        [conversationId, actorId, `${actor?.full_name ?? "A leader"} invited ${guest.full_name} into this conversation.`],
+      );
+      await c.query(`UPDATE chat_conversations SET updated_at = now() WHERE conversation_id = $1`, [conversationId]);
+      await recordChange(c, "chat_messages", note.message_id, null, "upsert");
+      return { conversation_id: conversationId, invited: input.user_id, already: false };
+    });
+  }
+
   /** Every broadcast this sender has sent, newest first, each with the two
    *  numbers that matter: how many it reached, and how many answered. */
   async listBroadcasts(senderId: string): Promise<{ data: unknown[] }> {
@@ -742,7 +881,7 @@ export class ChatService {
    * to a full conversation is therefore just opening it; there is nothing to
    * create, and no context to re-attach.
    */
-  async broadcastDetail(senderId: string, broadcastId: string): Promise<unknown> {
+  async broadcastDetail(senderId: string, broadcastId: string, viewerRole?: ViewerRole): Promise<unknown> {
     const b = await maybeOne<{ sender_user_id: string }>(
       this.pool,
       `SELECT broadcast_id, sender_user_id, body, msg_type, attachment_url, audience,
@@ -751,9 +890,14 @@ export class ChatService {
       [broadcastId],
     );
     if (!b) throw new ApiError("NOT_FOUND", "Broadcast not found");
-    // Your own broadcasts only — a broadcast's replies are the private words of
-    // members answering ONE person (§5.4).
-    if (b.sender_user_id !== senderId) throw new ApiError("FORBIDDEN_SCOPE", "Not your broadcast");
+    // Your own — or any, if you are a SuperAdmin: broadcasts are the one place a
+    // SuperAdmin has oversight by role. For everyone else these replies are the
+    // private words of members answering ONE person (§5.4), so an Admin who needs
+    // a particular conversation is invited into that THREAD, never handed the
+    // broadcast.
+    if (b.sender_user_id !== senderId && viewerRole !== "SuperAdmin") {
+      throw new ApiError("FORBIDDEN_SCOPE", "Not your broadcast");
+    }
     const responses = await many(
       this.pool,
       `SELECT r.message_id, r.conversation_id, r.body, r.msg_type, r.attachment_url,
@@ -771,7 +915,10 @@ export class ChatService {
           AND r.deleted_at IS NULL AND NOT r.is_hidden
         ORDER BY r.created_at DESC
         LIMIT 500`,
-      [broadcastId, senderId],
+      // Exclude the BROADCAST'S sender, not the viewer — a SuperAdmin reading
+      // someone else's broadcast wants the members' answers, not to have their
+      // own messages filtered out of a thread they were never in.
+      [broadcastId, b.sender_user_id],
     );
     return { ...b, responses };
   }

@@ -700,6 +700,99 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     expect(reached).toBeGreaterThanOrEqual(3); // lead + A One + B One, across both congregations
   });
 
+  /** Oversight is not a reason to read someone's answer to a broadcast. An Admin
+   *  who needs one particular conversation is invited into THAT THREAD by name;
+   *  there is no verb that hands over the broadcast. */
+  it("hides broadcast threads from an Admin's oversight inbox — but not from a SuperAdmin", async () => {
+    const cong2 = await createCongregation("Shield Branch");
+    const boss = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "sh-boss@dev.local", fullName: "Shield Boss" });
+    const nosy = await createUser({ congregationId: cong2, role: "Admin", email: "sh-admin@dev.local", fullName: "Shield Admin" });
+    const mem = await createUser({ congregationId: cong2, email: "sh1@dev.local", fullName: "Shield Member" });
+    const bossTok = bearer({ sub: boss.user_id, role: "SuperAdmin", cong: cong2 });
+    const nosyTok = bearer({ sub: nosy.user_id, role: "Admin", cong: cong2 });
+    const memTok = bearer({ sub: mem.user_id, role: "Student", cong: cong2 });
+
+    await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+      .send({ body: "How is your heart?", client_mutation_id: uuid(60) });
+    // The member answers — privately, they believe.
+    const inbox = await agent().get("/v1/chat/conversations").set(auth(memTok));
+    const dm = (inbox.body.conversations as Array<{ conversation_id: string; kind: string }>).find((c) => c.kind === "dm")!;
+    await agent().post(`/v1/chat/conversations/${dm.conversation_id}/messages`).set(auth(memTok))
+      .send({ message_id: uuid(61), body: "Honestly, I am struggling", msg_type: "text", client_mutation_id: uuid(62) });
+
+    // The Admin's oversight inbox does not carry it...
+    const modInbox = await agent().get("/v1/chat/conversations").set(auth(nosyTok));
+    const ids = (modInbox.body.conversations as Array<{ conversation_id: string }>).map((c) => c.conversation_id);
+    expect(ids).not.toContain(dm.conversation_id);
+    // ...and neither does the direct door, even knowing the id (404, no existence leak).
+    const direct = await agent().get(`/v1/chat/conversations/${dm.conversation_id}`).set(auth(nosyTok));
+    expect(direct.status).toBe(404);
+
+    // The SuperAdmin sees it in oversight, and can open it.
+    const bossInbox = await agent().get("/v1/chat/conversations").set(auth(bossTok));
+    expect((bossInbox.body.conversations as Array<{ conversation_id: string }>).map((c) => c.conversation_id))
+      .toContain(dm.conversation_id);
+    const bossOpen = await agent().get(`/v1/chat/conversations/${dm.conversation_id}`).set(auth(bossTok));
+    expect(bossOpen.status).toBe(200);
+
+    // An ordinary DM is NOT shielded — Admin oversight is unchanged elsewhere.
+    const plain = await agent().post("/v1/chat/dms").set(auth(memTok)).send({ user_id: nosy.user_id });
+    const plainOpen = await agent().get(`/v1/chat/conversations/${plain.body.conversation_id}`).set(auth(nosyTok));
+    expect(plainOpen.status).toBe(200);
+  });
+
+  it("a SuperAdmin invites one person into ONE thread — and the member is told", async () => {
+    const cong2 = await createCongregation("Invite Branch");
+    const boss = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "iv-boss@dev.local", fullName: "Pastor Ivy" });
+    const deacon = await createUser({ congregationId: cong2, role: "Admin", email: "iv-dea@dev.local", fullName: "Deacon Dan" });
+    const mem = await createUser({ congregationId: cong2, email: "iv1@dev.local", fullName: "Iva Member" });
+    const other = await createUser({ congregationId: cong2, email: "iv2@dev.local", fullName: "Otto Member" });
+    const bossTok = bearer({ sub: boss.user_id, role: "SuperAdmin", cong: cong2 });
+    const deaTok = bearer({ sub: deacon.user_id, role: "Admin", cong: cong2 });
+    const memTok = bearer({ sub: mem.user_id, role: "Student", cong: cong2 });
+    const otherTok = bearer({ sub: other.user_id, role: "Student", cong: cong2 });
+
+    await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+      .send({ body: "Tell me how to pray for you", client_mutation_id: uuid(64) });
+    const threadOf = async (tok: string): Promise<string> => {
+      const ib = await agent().get("/v1/chat/conversations").set(auth(tok));
+      return (ib.body.conversations as Array<{ conversation_id: string; kind: string }>).find((c) => c.kind === "dm")!.conversation_id;
+    };
+    const ivaThread = await threadOf(memTok);
+    const ottoThread = await threadOf(otherTok);
+
+    // Before: the deacon can reach neither.
+    expect((await agent().get(`/v1/chat/conversations/${ivaThread}`).set(auth(deaTok))).status).toBe(404);
+
+    const inv = await agent().post(`/v1/chat/conversations/${ivaThread}/invite`).set(auth(bossTok))
+      .send({ user_id: deacon.user_id });
+    expect(inv.status).toBe(201);
+    expect(inv.body.already).toBe(false);
+
+    // The deacon can now open THAT thread — through membership, not oversight.
+    const opened = await agent().get(`/v1/chat/conversations/${ivaThread}`).set(auth(deaTok));
+    expect(opened.status).toBe(200);
+    // ...and still nothing else. The authorisation was for one conversation.
+    expect((await agent().get(`/v1/chat/conversations/${ottoThread}`).set(auth(deaTok))).status).toBe(404);
+
+    // Iva is TOLD — a silent reader would be a betrayal.
+    const seen = await agent().get(`/v1/chat/conversations/${ivaThread}`).set(auth(memTok));
+    const bodies = (seen.body.messages as Array<{ body: string }>).map((m) => m.body);
+    expect(bodies.some((b) => b.includes("Pastor Ivy invited Deacon Dan into this conversation."))).toBe(true);
+
+    // Re-inviting is a no-op, not a second notice.
+    const again = await agent().post(`/v1/chat/conversations/${ivaThread}/invite`).set(auth(bossTok))
+      .send({ user_id: deacon.user_id });
+    expect(again.body.already).toBe(true);
+    const after = await agent().get(`/v1/chat/conversations/${ivaThread}`).set(auth(memTok));
+    expect((after.body.messages as Array<{ body: string }>).filter((m) => m.body.includes("invited"))).toHaveLength(1);
+
+    // An Admin cannot invite — widening a private room is a SuperAdmin act.
+    const denied = await agent().post(`/v1/chat/conversations/${ottoThread}/invite`).set(auth(deaTok))
+      .send({ user_id: mem.user_id });
+    expect(denied.status).toBe(403);
+  });
+
   it("a replay returns what actually landed, not a recount of today's membership", async () => {
     const cong2 = await createCongregation("Replay Branch");
     const sender = await createUser({ congregationId: cong2, role: "Admin", email: "rp@dev.local", fullName: "Replay Ray" });
