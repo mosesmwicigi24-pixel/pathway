@@ -539,10 +539,10 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
 
   it("an image broadcast delivers msg_type image + attachment_url (body = caption) to every DM", async () => {
     const cong2 = await createCongregation("Broadcast Branch Img");
-    const sender = await createUser({ congregationId: cong2, role: "Instructor", email: "img-lead@dev.local", fullName: "Ivy Lead" });
+    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "img-lead@dev.local", fullName: "Ivy Lead" });
     const m1 = await createUser({ congregationId: cong2, email: "im1@dev.local", fullName: "Img One" });
     const m2 = await createUser({ congregationId: cong2, email: "im2@dev.local", fullName: "Img Two" });
-    const senderTok = staff(sender.user_id, "Instructor", cong2);
+    const senderTok = staff(sender.user_id, "Admin", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
     const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });
 
@@ -580,9 +580,9 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
 
   it("re-broadcasting (new client_mutation_id) reuses the existing DMs instead of creating new ones", async () => {
     const cong2 = await createCongregation("Broadcast Branch 2");
-    const sender = await createUser({ congregationId: cong2, role: "Instructor", email: "lead@dev.local", fullName: "Lead Lee" });
+    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "lead@dev.local", fullName: "Lead Lee" });
     const m1 = await createUser({ congregationId: cong2, email: "bm1@dev.local", fullName: "Bee One" });
-    const senderTok = staff(sender.user_id, "Instructor", cong2);
+    const senderTok = staff(sender.user_id, "Admin", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
 
     const first = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
@@ -680,33 +680,56 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     expect(list.body.data).toHaveLength(0);
   });
 
-  it("audience=all is SuperAdmin-only, and reaches members an Instructor's congregation misses", async () => {
+  /** Broadcast belongs to Admin+ alone. Not a cell leader: an Instructor is a
+   *  member who is not an admin, and for them the Broadcast does not exist —
+   *  no tab, and 403 if they ask the API directly anyway. */
+  it("does not exist below Admin — not for a member, not for a cell leader", async () => {
+    const cong2 = await createCongregation("Floor Branch");
+    const lead = await createUser({ congregationId: cong2, role: "Instructor", email: "fl-lead@dev.local", fullName: "Cell Leader" });
+    const mem = await createUser({ congregationId: cong2, email: "fl1@dev.local", fullName: "Plain Member" });
+    const leadTok = staff(lead.user_id, "Instructor", cong2);
+    const memTok = bearer({ sub: mem.user_id, role: "Student", cong: cong2, pwd_at: Math.floor(Date.now() / 1000) });
+
+    // Even holding a freshly password-confirmed token, neither may reach it —
+    // the password gate is on top of the role floor, not instead of it.
+    for (const tok of [leadTok, memTok]) {
+      expect((await agent().get("/v1/chat/broadcasts").set(auth(tok))).status).toBe(403);
+      expect((await agent().get(`/v1/chat/broadcasts/${uuid(88)}`).set(auth(tok))).status).toBe(403);
+      const send = await agent().post("/v1/chat/broadcast").set(auth(tok))
+        .send({ body: "not mine to send", client_mutation_id: uuid(89) });
+      expect(send.status).toBe(403);
+      expect(send.body.error.code).toBe("FORBIDDEN_SCOPE");
+    }
+  });
+
+  it("audience=all is SuperAdmin-only, and reaches members one congregation misses", async () => {
     const congA = await createCongregation("Reach A");
     const congB = await createCongregation("Reach B");
     const boss = await createUser({ congregationId: congA, role: "SuperAdmin", email: "boss@dev.local", fullName: "Big Boss" });
-    const lead = await createUser({ congregationId: congA, role: "Instructor", email: "lead2@dev.local", fullName: "Lead Two" });
+    const dean = await createUser({ congregationId: congA, role: "Admin", email: "lead2@dev.local", fullName: "Dean Two" });
     await createUser({ congregationId: congA, email: "ra1@dev.local", fullName: "A One" });
     await createUser({ congregationId: congB, email: "rb1@dev.local", fullName: "B One" });
     const bossTok = staff(boss.user_id, "SuperAdmin", congA);
-    const leadTok = staff(lead.user_id, "Instructor", congA);
+    const deanTok = staff(dean.user_id, "Admin", congA);
 
-    // An Instructor may not reach everyone.
-    const denied = await agent().post("/v1/chat/broadcast").set(auth(leadTok))
+    // An Admin may broadcast — but not to everyone. Reaching every congregation
+    // at once is a SuperAdmin act.
+    const denied = await agent().post("/v1/chat/broadcast").set(auth(deanTok))
       .send({ body: "everyone hear me", audience: "all", client_mutation_id: uuid(80) });
     expect(denied.status).toBe(403);
     expect(denied.body.error.code).toBe("FORBIDDEN_SCOPE");
 
-    // Their congregation-scoped broadcast reaches only congregation A (boss, lead's own is excluded, A One).
-    const scoped = await agent().post("/v1/chat/broadcast").set(auth(leadTok))
+    // Their congregation-scoped broadcast reaches only congregation A (boss + A One).
+    const scoped = await agent().post("/v1/chat/broadcast").set(auth(deanTok))
       .send({ body: "branch only", client_mutation_id: uuid(81) });
-    expect(scoped.body.sent).toBe(2); // boss + A One — never B One
+    expect(scoped.body.sent).toBe(2); // never B One
 
     // The SuperAdmin's reaches across congregations.
     const all = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
       .send({ body: "to the whole church", audience: "all", client_mutation_id: uuid(82) });
     expect(all.status).toBe(201);
     const reached = all.body.sent as number;
-    expect(reached).toBeGreaterThanOrEqual(3); // lead + A One + B One, across both congregations
+    expect(reached).toBeGreaterThanOrEqual(3); // dean + A One + B One, across both congregations
   });
 
   /** Oversight is not a reason to read someone's answer to a broadcast. An Admin

@@ -97,30 +97,33 @@ export function registerChat(ctx: AppContext): Router {
     res.status(201).json(await svc.createOrGetDm(p.userId, input.user_id, p.role));
   }));
 
-  // Staff broadcast (Instructor+ per requireRole — Students get 403): one message
-  // delivered to every active member as an individual DM from the sender
+  // Broadcast — Admin+ ONLY. Not Instructor: a cell leader is a member who is not
+  // an admin, and the Broadcast does not exist for them. (This used to be
+  // Instructor+, but no client ever called it, so nothing is taken away.) One
+  // message delivered to every active member as an individual DM from the sender
   // (ensure-DM + insert, no group room). Replies come back as normal 1:1 threads,
   // private to the sender. Idempotent on client_mutation_id (§3.6).
-  //   audience=congregation (default) — the sender's own congregation, Instructor+.
+  //   audience=congregation (default) — the sender's own congregation.
   //   audience=all — every member of every congregation; SuperAdmin only, checked
   //                  in the service (requireRole here is only a floor).
   // Password-gated too: speaking to the whole church in your name is at least as
   // grave as reading the answers.
-  r.post("/chat/broadcast", auth, requireRole("Instructor"), requirePasswordStepUp(), handler(async (req, res) => {
+  r.post("/chat/broadcast", auth, requireRole("Admin"), requirePasswordStepUp(), handler(async (req, res) => {
     const input = parseBody(ChatService.Broadcast, req.body);
     const p = requirePrincipal(req);
     res.status(201).json(await svc.broadcast(p.userId, input, p.role));
   }));
 
-  // The Broadcast tab: what I have sent, and who answered. Mine only — a
+  // The Broadcast tab: what I have sent, and who answered. Admin+ only — anyone
+  // below never sees the tab, and gets 403 here if they ask anyway. Mine only: a
   // broadcast's replies are members speaking privately to ONE person (§5.4), so
-  // there is no "all broadcasts" view, not even for a moderator.
+  // there is no "all broadcasts" view except for a SuperAdmin.
   // Password-gated (§5.3). A valid session is not the same claim as "the owner is
   // holding the phone": an unlocked, logged-in handset on a desk is already past
   // auth and past requireRole. Before it opens the church's private answers, the
   // person holding it re-enters their password. 403 + details.password_required
   // is the client's cue to prompt and retry.
-  r.get("/chat/broadcasts", auth, requireRole("Instructor"), requirePasswordStepUp(), handler(async (req, res) => {
+  r.get("/chat/broadcasts", auth, requireRole("Admin"), requirePasswordStepUp(), handler(async (req, res) => {
     res.json(await svc.listBroadcasts(requirePrincipal(req).userId));
   }));
 
@@ -128,7 +131,7 @@ export function registerChat(ctx: AppContext): Router {
   // the conversation_id of the private thread with that person — already seeded
   // with the broadcast as its top message, so "open the thread" is a navigation,
   // not a creation.
-  r.get("/chat/broadcasts/:id", auth, requireRole("Instructor"), requirePasswordStepUp(), handler(async (req, res) => {
+  r.get("/chat/broadcasts/:id", auth, requireRole("Admin"), requirePasswordStepUp(), handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
     const p = requirePrincipal(req);
     res.json(await svc.broadcastDetail(p.userId, id, p.role));
