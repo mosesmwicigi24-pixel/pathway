@@ -472,6 +472,7 @@ export class ChatService {
       this.pool,
       `SELECT m.message_id, m.author_user_id, u.full_name AS author_name, u.avatar_url AS author_avatar, m.body, m.msg_type,
               m.attachment_url, m.attachment_meta, m.reply_to_id, m.ai_tag, m.is_edited, m.created_at,
+              m.broadcast_id,
               ${moderator ? "m.is_hidden, m.is_flagged, m.flag_reason, m.moderated_at," : ""}
               rt.body AS reply_body, ru.full_name AS reply_author,
               (m.author_user_id = $1) AS mine,
