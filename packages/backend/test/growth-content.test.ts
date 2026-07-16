@@ -178,6 +178,107 @@ describe("reading plans + day progress", () => {
   });
 });
 
+/** The plan is walked, not skimmed. A day is finished when its PARTS are
+ *  finished (server-decided, §1.1), and day N only opens once 1..N-1 are behind
+ *  it. These are the invariants whose absence let a day be sealed showing
+ *  "0 of 3 parts read". */
+describe("reading plans — a day is earned, and the days are walked in order", () => {
+  interface Seg { segment_id: string; kind: string; completed: boolean; content: string | null; video_url: string | null }
+  interface Day { day_number: number; completed: boolean; locked: boolean; content: string | null; segments: Seg[] }
+
+  const psalms = async (): Promise<{ plan_id: string }> => {
+    const plans = await agent().get("/v1/growth/plans").set(auth(meTok));
+    return plans.body.data.find((p: { code: string }) => p.code === "rooted-psalms-10");
+  };
+  const detailOf = async (planId: string): Promise<{ next_day: number | null; days: Day[] }> =>
+    (await agent().get(`/v1/growth/plans/${planId}`).set(auth(meTok))).body;
+
+  it("refuses to seal a day whose parts are still unread", async () => {
+    const p = await psalms();
+    const before = await detailOf(p.plan_id);
+    expect(before.days[0]!.segments.length).toBe(4);
+    expect(before.days[0]!.completed).toBe(false);
+
+    const sealed = await agent().post(`/v1/growth/plans/${p.plan_id}/complete-day`).set(auth(meTok)).send({ day_number: 1 });
+    expect(sealed.status).toBe(409);
+    expect(sealed.body.error.code).toBe("CONTENT_INCOMPLETE");
+    expect(sealed.body.error.details.parts_remaining).toBe(4);
+
+    // and nothing was recorded on the way out
+    const after = await detailOf(p.plan_id);
+    expect(after.days[0]!.completed).toBe(false);
+  });
+
+  it("seals the day only once every part is read, then opens the next one", async () => {
+    const p = await psalms();
+    let d = await detailOf(p.plan_id);
+    expect(d.next_day).toBe(1);
+    expect(d.days[1]!.locked).toBe(true);
+
+    const segs = d.days[0]!.segments;
+    for (const [i, s] of segs.entries()) {
+      const r = await agent().post(`/v1/growth/segments/${s.segment_id}/complete`).set(auth(meTok));
+      expect(r.status).toBe(200);
+      // The day rolls up on the LAST part, not before.
+      expect(r.body.day_completed).toBe(i === segs.length - 1);
+    }
+
+    d = await detailOf(p.plan_id);
+    expect(d.days[0]!.completed).toBe(true);
+    expect(d.days[1]!.locked).toBe(false);   // day 2 has opened
+    expect(d.days[2]!.locked).toBe(true);    // day 3 has not
+    expect(d.next_day).toBe(2);
+
+    // Re-sealing a finished day is a no-op, not a second completion.
+    const again = await agent().post(`/v1/growth/plans/${p.plan_id}/complete-day`).set(auth(meTok)).send({ day_number: 1 });
+    expect(again.status).toBe(200);
+    expect(again.body.completed_days).toEqual([1]);
+  });
+
+  it("locks day 2 while day 1 is unfinished — by the day CTA and by the part", async () => {
+    const p = await psalms();
+    const d = await detailOf(p.plan_id);
+
+    const skip = await agent().post(`/v1/growth/plans/${p.plan_id}/complete-day`).set(auth(meTok)).send({ day_number: 2 });
+    expect(skip.status).toBe(409);
+    expect(skip.body.error.code).toBe("GATE_LOCKED");
+    expect(skip.body.error.details.next_day).toBe(1);
+
+    // The part is another door into the same room — it is gated too.
+    const part = await agent().post(`/v1/growth/segments/${d.days[1]!.segments[0]!.segment_id}/complete`).set(auth(meTok));
+    expect(part.status).toBe(409);
+    expect(part.body.error.code).toBe("GATE_LOCKED");
+  });
+
+  it("withholds a locked day's words — the journey is visible, the content is not", async () => {
+    const p = await psalms();
+    const d = await detailOf(p.plan_id);
+
+    const open = d.days[0]!;
+    expect(open.locked).toBe(false);
+    expect(open.segments.some((s) => s.content !== null)).toBe(true);
+    expect(open.segments.find((s) => s.kind === "video")!.video_url).toBeTruthy();
+
+    const locked = d.days[4]!;
+    expect(locked.locked).toBe(true);
+    // Shape stays — the member can see what is coming and that it is real...
+    expect(locked.segments.length).toBe(4);
+    expect(locked.segments.map((s) => s.kind)).toEqual(["video", "scripture", "devotional", "talk"]);
+    // ...but no client, however old, can render past the gate.
+    expect(locked.content).toBeNull();
+    expect(locked.segments.every((s) => s.content === null)).toBe(true);
+    expect(locked.segments.every((s) => s.video_url === null)).toBe(true);
+  });
+
+  it("refuses a day that is not in the plan, however plausible the number", async () => {
+    const p = await psalms();
+    // 10-day plan: day 11 is beyond it, and day 0 never reaches the handler.
+    const beyond = await agent().post(`/v1/growth/plans/${p.plan_id}/complete-day`).set(auth(meTok)).send({ day_number: 11 });
+    expect(beyond.status).toBe(400);
+    expect(beyond.body.error.code).toBe("VALIDATION_FAILED");
+  });
+});
+
 describe("Talk it Over — AI compose help", () => {
   it("returns an editable suggestion (offline provider in tests) and posts nothing", async () => {
     const plans = await agent().get("/v1/growth/plans").set(auth(meTok));

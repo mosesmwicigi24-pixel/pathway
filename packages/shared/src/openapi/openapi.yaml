@@ -3406,7 +3406,13 @@ paths:
   /growth/plans/{id}:
     get:
       tags: [progress]
-      summary: Reading-plan detail with days and my progress.
+      summary: >-
+        Reading-plan detail with days and my progress. Each day carries `locked`
+        — true while an earlier day is unfinished. A locked day keeps its shape
+        (title, reference, the kinds of its parts) but its `content` and
+        `video_url` come back null on the day and every segment, so no client can
+        render past the gate. `next_day` is the first unfinished day (null when
+        the plan is done).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
@@ -3426,7 +3432,10 @@ paths:
   /growth/plans/{id}/complete-day:
     post:
       tags: [progress]
-      summary: Mark a reading-plan day complete; advances progress.
+      summary: >-
+        Seal a reading-plan day. The client asks; the SERVER decides (§1.1) — a
+        day is finished when its parts are, never on the client's say-so.
+        Idempotent: re-sealing a finished day returns the same progress.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       requestBody:
@@ -3440,8 +3449,14 @@ paths:
                 day_number: { type: integer, minimum: 1 }
       responses:
         "200": { description: Progress }
+        "400": { description: "VALIDATION_FAILED — day beyond the plan length" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
+        "404": { description: "NOT_FOUND — no such plan, or that day is not in it" }
+        "409":
+          description: >-
+            CONTENT_INCOMPLETE — parts of this day are still unread
+            (details.parts_remaining), or GATE_LOCKED — an earlier day is
+            unfinished (details.next_day names the day to go back to).
   /growth/plans/{planId}/days/{dayNumber}/reflection:
     get:
       tags: [progress]
@@ -3553,13 +3568,20 @@ paths:
   /growth/segments/{id}/complete:
     post:
       tags: [progress]
-      summary: Mark one reading-plan day SEGMENT complete (YouVersion reader); rolls the day up when all are done.
+      summary: >-
+        Mark one reading-plan day PART complete (YouVersion reader); rolls the
+        day up when all of them are done. Gated the same way as sealing the day —
+        the day CTA is not the only door in.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
         "200": { description: "{ segment_id, day_number, day_completed, progress }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >-
+            GATE_LOCKED — this part belongs to a day that has not opened yet
+            because an earlier day is unfinished (details.next_day).
   /growth/resources:
     get:
       tags: [progress]
