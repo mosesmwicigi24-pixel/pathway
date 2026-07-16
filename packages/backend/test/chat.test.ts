@@ -484,11 +484,11 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
     // Fresh congregation so the count is exact: an Admin sender + 2 members
     // (+ a minor, who must be skipped — DMs never touch minors, D-M6).
     const cong2 = await createCongregation("Broadcast Branch");
-    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "pastor@dev.local", fullName: "Pastor Pat" });
+    const sender = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "pastor@dev.local", fullName: "Pastor Pat" });
     const m1 = await createUser({ congregationId: cong2, email: "m1@dev.local", fullName: "Member One" });
     const m2 = await createUser({ congregationId: cong2, email: "m2@dev.local", fullName: "Member Two" });
     await createUser({ congregationId: cong2, email: "kid2@dev.local", fullName: "Kid Two", dateOfBirth: "2016-06-06" });
-    const senderTok = staff(sender.user_id, "Admin", cong2);
+    const senderTok = staff(sender.user_id, "SuperAdmin", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
     const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });
 
@@ -499,7 +499,7 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
     expect(denied.body.error.code).toBe("FORBIDDEN_SCOPE");
 
     const res = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
-      .send({ body: "Service moves to 10am this Sunday 🙏", client_mutation_id: uuid(98) });
+      .send({ body: "Service moves to 10am this Sunday 🙏", audience: "congregation", client_mutation_id: uuid(98) });
     expect(res.status).toBe(201);
     expect(res.body.sent).toBe(2); // minor + sender excluded
     expect(res.body.duplicate).toBe(false);
@@ -526,7 +526,7 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
 
     // Replaying the same client_mutation_id is a no-op: no new messages anywhere.
     const replay = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
-      .send({ body: "Service moves to 10am this Sunday 🙏", client_mutation_id: uuid(98) });
+      .send({ body: "Service moves to 10am this Sunday 🙏", audience: "congregation", client_mutation_id: uuid(98) });
     expect(replay.status).toBe(201);
     expect(replay.body.duplicate).toBe(true);
     expect(replay.body.sent).toBe(2);
@@ -539,16 +539,16 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
 
   it("an image broadcast delivers msg_type image + attachment_url (body = caption) to every DM", async () => {
     const cong2 = await createCongregation("Broadcast Branch Img");
-    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "img-lead@dev.local", fullName: "Ivy Lead" });
+    const sender = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "img-lead@dev.local", fullName: "Ivy Lead" });
     const m1 = await createUser({ congregationId: cong2, email: "im1@dev.local", fullName: "Img One" });
     const m2 = await createUser({ congregationId: cong2, email: "im2@dev.local", fullName: "Img Two" });
-    const senderTok = staff(sender.user_id, "Admin", cong2);
+    const senderTok = staff(sender.user_id, "SuperAdmin", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
     const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });
 
     const flyer = "https://res.cloudinary.com/demo/image/upload/v1/nuru/chat/flyer.jpg";
     const res = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
-      .send({ body: "Sunday flyer 📸", msg_type: "image", attachment_url: flyer, client_mutation_id: uuid(90) });
+      .send({ body: "Sunday flyer 📸", msg_type: "image", attachment_url: flyer, audience: "congregation", client_mutation_id: uuid(90) });
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ sent: 2, duplicate: false });
     expect(res.body.broadcast_id).toBeTruthy();
@@ -570,7 +570,7 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
 
     // Replay is still a no-op with the attachment present.
     const replay = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
-      .send({ body: "Sunday flyer 📸", msg_type: "image", attachment_url: flyer, client_mutation_id: uuid(90) });
+      .send({ body: "Sunday flyer 📸", msg_type: "image", attachment_url: flyer, audience: "congregation", client_mutation_id: uuid(90) });
     expect(replay.body).toMatchObject({ sent: 2, duplicate: true, broadcast_id: res.body.broadcast_id });
     const count = await testPool().query(
       `SELECT count(*)::int AS n FROM chat_messages WHERE attachment_url = $1`, [flyer],
@@ -580,16 +580,16 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
 
   it("re-broadcasting (new client_mutation_id) reuses the existing DMs instead of creating new ones", async () => {
     const cong2 = await createCongregation("Broadcast Branch 2");
-    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "lead@dev.local", fullName: "Lead Lee" });
+    const sender = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "lead@dev.local", fullName: "Lead Lee" });
     const m1 = await createUser({ congregationId: cong2, email: "bm1@dev.local", fullName: "Bee One" });
-    const senderTok = staff(sender.user_id, "Admin", cong2);
+    const senderTok = staff(sender.user_id, "SuperAdmin", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
 
     const first = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
-      .send({ body: "first word", client_mutation_id: uuid(95) });
+      .send({ body: "first word", audience: "congregation", client_mutation_id: uuid(95) });
     expect(first.body).toMatchObject({ sent: 1, duplicate: false });
     const second = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
-      .send({ body: "second word", client_mutation_id: uuid(96) });
+      .send({ body: "second word", audience: "congregation", client_mutation_id: uuid(96) });
     expect(second.body).toMatchObject({ sent: 1, duplicate: false });
     expect(second.body.broadcast_id).not.toBe(first.body.broadcast_id); // two sends, two things sent
 
@@ -607,18 +607,150 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
 describe("broadcast — the sent thing, and the answers to it", () => {
   interface Resp { user_id: string; full_name: string; body: string; conversation_id: string }
 
+  /** Sending should not need a second round trip to find out what you just said:
+   *  the moment it lands, the send returns the message AS SENT — its own words,
+   *  the server's timestamp, the count it actually reached — so the UI pins it at
+   *  the top of its page immediately. */
+  it("returns the message as sent, whole — no refetch needed to display it", async () => {
+    const cong2 = await createCongregation("Echo Branch");
+    const boss = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "ec-boss@dev.local", fullName: "Echo Boss" });
+    await createUser({ congregationId: cong2, email: "ec1@dev.local", fullName: "Echo One" });
+    await createUser({ congregationId: cong2, email: "ec2@dev.local", fullName: "Echo Two" });
+    const bossTok = staff(boss.user_id, "SuperAdmin", cong2);
+
+    const sent = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+      .send({ body: "The Lord bless you and keep you 🙏", audience: "congregation", client_mutation_id: uuid(50) });
+    expect(sent.status).toBe(201);
+    // Everything the page needs to draw the sent message, in the send's own reply.
+    expect(sent.body.body).toBe("The Lord bless you and keep you 🙏");
+    expect(sent.body.msg_type).toBe("text");
+    expect(sent.body.audience).toBe("congregation");
+    expect(sent.body.recipient_count).toBe(2);
+    expect(sent.body.created_at).toBeTruthy();
+    expect(sent.body.sent).toBe(2);
+
+    // It is the same thing the detail page shows — one shape, whichever door.
+    const detail = await agent().get(`/v1/chat/broadcasts/${sent.body.broadcast_id}`).set(auth(bossTok));
+    expect(detail.body.body).toBe(sent.body.body);
+    expect(detail.body.recipient_count).toBe(sent.body.recipient_count);
+
+    // A replay (a lost response, a retried queue) returns the sent message whole
+    // too — not a bare id the client cannot draw.
+    const replay = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+      .send({ body: "The Lord bless you and keep you 🙏", audience: "congregation", client_mutation_id: uuid(50) });
+    expect(replay.body.duplicate).toBe(true);
+    expect(replay.body.body).toBe("The Lord bless you and keep you 🙏");
+    expect(replay.body.broadcast_id).toBe(sent.body.broadcast_id);
+    expect(replay.body.recipient_count).toBe(2);
+  });
+
+  /** The reach bug, pinned. A SuperAdmin who just types and sends means the WHOLE
+   *  church; scoping them to their own congregation silently drops everyone filed
+   *  under none — which on prod was 19 of 60, so a broadcast reached 40. */
+  it("an unasked SuperAdmin broadcast reaches everyone, including members with no congregation", async () => {
+    const congA = await createCongregation("Default A");
+    const congB = await createCongregation("Default B");
+    const boss = await createUser({ congregationId: congA, role: "SuperAdmin", email: "df-boss@dev.local", fullName: "Default Boss" });
+    const dean = await createUser({ congregationId: congA, role: "Admin", email: "df-dean@dev.local", fullName: "Default Dean" });
+    await createUser({ congregationId: congA, email: "df1@dev.local", fullName: "In A" });
+    await createUser({ congregationId: congB, email: "df2@dev.local", fullName: "In B" });
+    // The member nobody filed — the one a congregation-scoped fan-out forgets.
+    const { rows } = await testPool().query<{ user_id: string }>(
+      `INSERT INTO users (full_name, phone_number, date_of_birth, congregation_id, role, email)
+       VALUES ('Unfiled Ulla', '+254700000999', '1990-01-01', NULL, 'Student', 'df3@dev.local')
+       RETURNING user_id`,
+    );
+    const ulla = rows[0]!.user_id;
+    const bossTok = staff(boss.user_id, "SuperAdmin", congA);
+    const deanTok = staff(dean.user_id, "Admin", congA);
+    const reached = async (bId: string, userId: string): Promise<boolean> => {
+      const r = await testPool().query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM chat_messages m
+           JOIN chat_members mem ON mem.conversation_id = m.conversation_id AND mem.user_id = $2
+          WHERE m.broadcast_id = $1`,
+        [bId, userId],
+      );
+      return (r.rows[0]?.n ?? 0) > 0;
+    };
+
+    // The SuperAdmin says nothing about audience — and means the whole church.
+    // (Counting exactly is the wrong assertion here: "all" is deliberately not
+    // scoped, so it also reaches this file's other fixtures. What matters is
+    // that it reaches ACROSS congregations and does not forget the unfiled.)
+    const all = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+      .send({ body: "to everyone", client_mutation_id: uuid(40) });
+    expect(all.body.audience).toBe("all");
+    expect(await reached(all.body.broadcast_id, ulla)).toBe(true); // the 19, in miniature
+
+    // Narrowing on purpose still works, and then Ulla is correctly out of reach —
+    // she is in no congregation to be included in.
+    const chosen = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+      .send({ body: "just my branch", audience: "congregation", client_mutation_id: uuid(42) });
+    expect(chosen.body.audience).toBe("congregation");
+    expect(chosen.body.recipient_count).toBe(2); // dean + In A
+    expect(await reached(chosen.body.broadcast_id, ulla)).toBe(false);
+    expect(all.body.recipient_count).toBeGreaterThan(chosen.body.recipient_count as number);
+
+    // And an Admin cannot broadcast at all — the whole thing is between the
+    // SuperAdmin and one member; nobody else is in it.
+    const denied = await agent().post("/v1/chat/broadcast").set(auth(deanTok))
+      .send({ body: "not mine to send", client_mutation_id: uuid(41) });
+    expect(denied.status).toBe(403);
+  });
+
+  /** The ticks: one blue for delivered, two blue for seen. */
+  it("reports who it reached and who has seen it — delivered vs seen, per person", async () => {
+    const cong2 = await createCongregation("Ticks Branch");
+    const boss = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "tk-boss@dev.local", fullName: "Ticks Boss" });
+    const reader = await createUser({ congregationId: cong2, email: "tk1@dev.local", fullName: "Reader Rita" });
+    await createUser({ congregationId: cong2, email: "tk2@dev.local", fullName: "Silent Sam" });
+    const bossTok = staff(boss.user_id, "SuperAdmin", cong2);
+    const readerTok = bearer({ sub: reader.user_id, role: "Student", cong: cong2 });
+
+    const sent = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+      .send({ body: "Did you see this?", audience: "congregation", client_mutation_id: uuid(44) });
+    const bId = sent.body.broadcast_id as string;
+
+    interface Rcpt { user_id: string; full_name: string; delivered: boolean; seen: boolean; seen_at: string | null }
+    let detail = await agent().get(`/v1/chat/broadcasts/${bId}`).set(auth(bossTok));
+    let rcpts = detail.body.recipients as Rcpt[];
+    // Delivered to both the moment it was sent — it is written into their threads
+    // server-side, so arrival is a fact, not a hope. Nobody has opened it.
+    expect(rcpts).toHaveLength(2);
+    expect(rcpts.every((r) => r.delivered)).toBe(true);
+    expect(rcpts.every((r) => !r.seen)).toBe(true);
+    expect(detail.body.delivered_count).toBe(2);
+    expect(detail.body.seen_count).toBe(0);
+
+    // Rita opens her thread.
+    const inbox = await agent().get("/v1/chat/conversations").set(auth(readerTok));
+    const dm = (inbox.body.conversations as Array<{ conversation_id: string; kind: string }>).find((c) => c.kind === "dm")!;
+    await agent().post(`/v1/chat/conversations/${dm.conversation_id}/read`).set(auth(readerTok)).send({});
+
+    detail = await agent().get(`/v1/chat/broadcasts/${bId}`).set(auth(bossTok));
+    rcpts = detail.body.recipients as Rcpt[];
+    const rita = rcpts.find((r) => r.full_name === "Reader Rita")!;
+    const sam = rcpts.find((r) => r.full_name === "Silent Sam")!;
+    expect(rita.seen).toBe(true);      // two blue ticks
+    expect(rita.seen_at).toBeTruthy(); // ...and WHEN she saw it
+    expect(sam.seen).toBe(false);      // one blue tick — delivered, not opened
+    expect(sam.seen_at).toBeNull();
+    expect(detail.body.seen_count).toBe(1);
+    expect(detail.body.delivered_count).toBe(2);
+  });
+
   it("gathers every reply under the broadcast, each carrying the private thread it came from", async () => {
     const cong2 = await createCongregation("Answering Branch");
-    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "bc-pastor@dev.local", fullName: "Pastor Ann" });
+    const sender = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "bc-pastor@dev.local", fullName: "Pastor Ann" });
     const m1 = await createUser({ congregationId: cong2, email: "bc1@dev.local", fullName: "Ann Member" });
     const m2 = await createUser({ congregationId: cong2, email: "bc2@dev.local", fullName: "Ben Member" });
     await createUser({ congregationId: cong2, email: "bc3@dev.local", fullName: "Quiet Cara" }); // never answers
-    const senderTok = staff(sender.user_id, "Admin", cong2);
+    const senderTok = staff(sender.user_id, "SuperAdmin", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
     const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });
 
     const sent = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
-      .send({ body: "Who can serve on Sunday?", client_mutation_id: uuid(70) });
+      .send({ body: "Who can serve on Sunday?", audience: "congregation", client_mutation_id: uuid(70) });
     const bId = sent.body.broadcast_id as string;
     expect(sent.body.sent).toBe(3);
 
@@ -652,7 +784,7 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     expect(msgs[0]!.body).toBe("Who can serve on Sunday?"); // the broadcast IS the top message
     expect(msgs[1]!.body).toBe("I can serve 🙋🏽‍♀️");
 
-    // The list carries the two numbers that matter.
+    // The list carries the numbers that matter.
     const list = await agent().get("/v1/chat/broadcasts").set(auth(senderTok));
     const row = (list.body.data as Array<{ broadcast_id: string; recipient_count: number; replied_count: number }>)
       .find((b) => b.broadcast_id === bId)!;
@@ -660,45 +792,65 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     expect(row.replied_count).toBe(2);
   });
 
-  it("a broadcast's replies are private to its sender — another admin cannot read them", async () => {
-    const cong2 = await createCongregation("Private Branch");
-    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "mine@dev.local", fullName: "Mine Admin" });
-    const nosy = await createUser({ congregationId: cong2, role: "Admin", email: "nosy@dev.local", fullName: "Nosy Admin" });
-    await createUser({ congregationId: cong2, email: "pm1@dev.local", fullName: "Pat Member" });
-    const senderTok = staff(sender.user_id, "Admin", cong2);
-    const nosyTok = staff(nosy.user_id, "Admin", cong2);
+  /** The page opens on the last 4 sent, and says how many more there are. */
+  it("opens on the last 4 sent, newest first, and names the total", async () => {
+    const cong2 = await createCongregation("Recent Branch");
+    const boss = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "rc-boss@dev.local", fullName: "Recent Boss" });
+    await createUser({ congregationId: cong2, email: "rc1@dev.local", fullName: "Recent One" });
+    const bossTok = staff(boss.user_id, "SuperAdmin", cong2);
 
-    const sent = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
-      .send({ body: "How is your heart today?", client_mutation_id: uuid(75) });
+    for (const i of [1, 2, 3, 4, 5, 6]) {
+      const r = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+        .send({ body: `word ${i}`, audience: "congregation", client_mutation_id: uuid(10 + i) });
+      expect(r.status).toBe(201);
+    }
 
-    const peek = await agent().get(`/v1/chat/broadcasts/${sent.body.broadcast_id}`).set(auth(nosyTok));
-    expect(peek.status).toBe(403);
-    expect(peek.body.error.code).toBe("FORBIDDEN_SCOPE");
+    const opened = await agent().get("/v1/chat/broadcasts").set(auth(bossTok));
+    const first = opened.body.data as Array<{ body: string }>;
+    expect(first).toHaveLength(4);
+    expect(first.map((b) => b.body)).toEqual(["word 6", "word 5", "word 4", "word 3"]); // newest first
+    expect(opened.body.total).toBe(6); // ...and there are two more behind them
 
-    // ...and it isn't in their list either.
-    const list = await agent().get("/v1/chat/broadcasts").set(auth(nosyTok));
-    expect(list.body.data).toHaveLength(0);
+    // Asked for, the rest come.
+    const all = await agent().get("/v1/chat/broadcasts?limit=100").set(auth(bossTok));
+    expect(all.body.data).toHaveLength(6);
+    expect(all.body.total).toBe(6);
   });
 
-  /** Broadcast belongs to Admin+ alone. Not a cell leader: an Instructor is a
-   *  member who is not an admin, and for them the Broadcast does not exist —
-   *  no tab, and 403 if they ask the API directly anyway. */
-  it("does not exist below Admin — not for a member, not for a cell leader", async () => {
+  /** The whole thing is between the SuperAdmin and one member. Nobody else is in
+   *  it — not a cell leader, not an Admin, not another member. An Admin who needs
+   *  ONE particular conversation is invited into that thread by name; there is no
+   *  verb that hands over the broadcast. */
+  it("does not exist below SuperAdmin — not for a member, a cell leader, or an Admin", async () => {
     const cong2 = await createCongregation("Floor Branch");
+    const boss = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "fl-boss@dev.local", fullName: "Floor Boss" });
+    const dean = await createUser({ congregationId: cong2, role: "Admin", email: "fl-dean@dev.local", fullName: "Dean Admin" });
     const lead = await createUser({ congregationId: cong2, role: "Instructor", email: "fl-lead@dev.local", fullName: "Cell Leader" });
     const mem = await createUser({ congregationId: cong2, email: "fl1@dev.local", fullName: "Plain Member" });
-    const leadTok = staff(lead.user_id, "Instructor", cong2);
-    const memTok = bearer({ sub: mem.user_id, role: "Student", cong: cong2, pwd_at: Math.floor(Date.now() / 1000) });
+    const bossTok = staff(boss.user_id, "SuperAdmin", cong2);
+    const now = Math.floor(Date.now() / 1000);
 
-    // Even holding a freshly password-confirmed token, neither may reach it —
-    // the password gate is on top of the role floor, not instead of it.
-    for (const tok of [leadTok, memTok]) {
+    // A real broadcast exists, so the 403s below are a refusal to show something
+    // that IS there — not a 404 for an empty world.
+    const sent = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+      .send({ body: "How is your heart today?", audience: "congregation", client_mutation_id: uuid(75) });
+    expect(sent.status).toBe(201);
+
+    // Every one of them holds a freshly password-confirmed token — the password
+    // gate sits ON TOP of the role floor, not instead of it, so it saves nobody.
+    const shutOut = [
+      staff(dean.user_id, "Admin", cong2),
+      staff(lead.user_id, "Instructor", cong2),
+      bearer({ sub: mem.user_id, role: "Student", cong: cong2, pwd_at: now }),
+    ];
+    for (const tok of shutOut) {
       expect((await agent().get("/v1/chat/broadcasts").set(auth(tok))).status).toBe(403);
-      expect((await agent().get(`/v1/chat/broadcasts/${uuid(88)}`).set(auth(tok))).status).toBe(403);
+      const peek = await agent().get(`/v1/chat/broadcasts/${sent.body.broadcast_id}`).set(auth(tok));
+      expect(peek.status).toBe(403);
+      expect(peek.body.error.code).toBe("FORBIDDEN_SCOPE");
       const send = await agent().post("/v1/chat/broadcast").set(auth(tok))
         .send({ body: "not mine to send", client_mutation_id: uuid(89) });
       expect(send.status).toBe(403);
-      expect(send.body.error.code).toBe("FORBIDDEN_SCOPE");
     }
   });
 
@@ -719,17 +871,17 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     expect(denied.status).toBe(403);
     expect(denied.body.error.code).toBe("FORBIDDEN_SCOPE");
 
-    // Their congregation-scoped broadcast reaches only congregation A (boss + A One).
-    const scoped = await agent().post("/v1/chat/broadcast").set(auth(deanTok))
-      .send({ body: "branch only", client_mutation_id: uuid(81) });
-    expect(scoped.body.sent).toBe(2); // never B One
+    // The SuperAdmin narrowing on purpose reaches only congregation A.
+    const scoped = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+      .send({ body: "branch only", audience: "congregation", client_mutation_id: uuid(81) });
+    expect(scoped.body.sent).toBe(2); // dean + A One — never B One
 
-    // The SuperAdmin's reaches across congregations.
+    // ...and unasked, reaches across congregations.
     const all = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
-      .send({ body: "to the whole church", audience: "all", client_mutation_id: uuid(82) });
+      .send({ body: "to the whole church", client_mutation_id: uuid(82) });
     expect(all.status).toBe(201);
-    const reached = all.body.sent as number;
-    expect(reached).toBeGreaterThanOrEqual(3); // dean + A One + B One, across both congregations
+    expect(all.body.audience).toBe("all");
+    expect(all.body.sent as number).toBeGreaterThan(scoped.body.sent as number); // B One is in this one
   });
 
   /** Oversight is not a reason to read someone's answer to a broadcast. An Admin
@@ -745,7 +897,7 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     const memTok = bearer({ sub: mem.user_id, role: "Student", cong: cong2 });
 
     await agent().post("/v1/chat/broadcast").set(auth(bossTok))
-      .send({ body: "How is your heart?", client_mutation_id: uuid(60) });
+      .send({ body: "How is your heart?", audience: "congregation", client_mutation_id: uuid(60) });
     // The member answers — privately, they believe.
     const inbox = await agent().get("/v1/chat/conversations").set(auth(memTok));
     const dm = (inbox.body.conversations as Array<{ conversation_id: string; kind: string }>).find((c) => c.kind === "dm")!;
@@ -785,7 +937,7 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     const otherTok = bearer({ sub: other.user_id, role: "Student", cong: cong2 });
 
     await agent().post("/v1/chat/broadcast").set(auth(bossTok))
-      .send({ body: "Tell me how to pray for you", client_mutation_id: uuid(64) });
+      .send({ body: "Tell me how to pray for you", audience: "congregation", client_mutation_id: uuid(64) });
     const threadOf = async (tok: string): Promise<string> => {
       const ib = await agent().get("/v1/chat/conversations").set(auth(tok));
       return (ib.body.conversations as Array<{ conversation_id: string; kind: string }>).find((c) => c.kind === "dm")!.conversation_id;
@@ -893,19 +1045,19 @@ describe("broadcast — the sent thing, and the answers to it", () => {
 
   it("a replay returns what actually landed, not a recount of today's membership", async () => {
     const cong2 = await createCongregation("Replay Branch");
-    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "rp@dev.local", fullName: "Replay Ray" });
+    const sender = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "rp@dev.local", fullName: "Replay Ray" });
     await createUser({ congregationId: cong2, email: "rp1@dev.local", fullName: "Rp One" });
-    const senderTok = staff(sender.user_id, "Admin", cong2);
+    const senderTok = staff(sender.user_id, "SuperAdmin", cong2);
 
     const first = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
-      .send({ body: "counted once", client_mutation_id: uuid(85) });
+      .send({ body: "counted once", audience: "congregation", client_mutation_id: uuid(85) });
     expect(first.body.sent).toBe(1);
 
     // Someone joins AFTER the send. The replay must still report 1 — the number
     // that actually went out — not 2, which never happened.
     await createUser({ congregationId: cong2, email: "rp2@dev.local", fullName: "Rp Two (joined later)" });
     const replay = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
-      .send({ body: "counted once", client_mutation_id: uuid(85) });
+      .send({ body: "counted once", audience: "congregation", client_mutation_id: uuid(85) });
     expect(replay.body).toMatchObject({ sent: 1, duplicate: true, broadcast_id: first.body.broadcast_id });
 
     // And the latecomer got nothing — a replay delivers no new copies.

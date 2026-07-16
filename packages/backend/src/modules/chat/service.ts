@@ -22,6 +22,20 @@ interface ConversationRow {
 type ViewerRole = string | undefined;
 const isModerator = (role: ViewerRole): boolean => role === "Admin" || role === "SuperAdmin";
 
+/** A broadcast as every path describes it — the send, the list, the detail — so
+ *  the client draws "the message you sent" from one shape, whichever door it
+ *  came through. */
+export interface BroadcastRow {
+  broadcast_id: string;
+  body: string;
+  msg_type: string;
+  attachment_url: string | null;
+  audience: "congregation" | "all";
+  recipient_count: number;
+  created_at: string;
+}
+const BROADCAST_COLS = "broadcast_id, body, msg_type, attachment_url, audience, recipient_count, created_at";
+
 type ModerationAction = "flag" | "unflag" | "remove" | "restore";
 
 export class ChatService {
@@ -56,11 +70,16 @@ export class ChatService {
     body: z.string().min(1).max(20_000), // for an image broadcast this is the caption
     msg_type: z.enum(["text", "image"]).default("text"),
     attachment_url: z.string().url().max(2000).optional(),
-    /** "congregation" (Instructor+, the default) reaches the sender's own
-     *  congregation. "all" is SuperAdmin-only and reaches every member of every
-     *  congregation — including the members who have no congregation at all,
-     *  whom a congregation-scoped fan-out silently misses. */
-    audience: z.enum(["congregation", "all"]).default("congregation"),
+    /** Who it reaches. OMIT IT and it means the WHOLE CHURCH — only a SuperAdmin
+     *  can broadcast at all, and when they simply type and send they mean
+     *  everyone. Pass "congregation" to narrow it to their own on purpose.
+     *
+     *  Deliberately NOT `.default("congregation")`: a schema default is applied
+     *  before the service sees the request, making "didn't say" indistinguishable
+     *  from "said congregation" — which is exactly how a broadcast quietly
+     *  reached 40 of 60 members, the other 19 having no congregation to be
+     *  scoped to. */
+    audience: z.enum(["congregation", "all"]).optional(),
     client_mutation_id: z.string().uuid().optional(),
   });
 
@@ -698,10 +717,13 @@ export class ChatService {
     senderId: string,
     input: z.infer<typeof ChatService.Broadcast>,
     viewerRole?: ViewerRole,
-  ): Promise<{ broadcast_id: string; sent: number; duplicate: boolean }> {
-    // Reaching every congregation at once is a SuperAdmin act, not an
-    // Instructor's — the route only guarantees Instructor+.
-    if (input.audience === "all" && viewerRole !== "SuperAdmin") {
+  ): Promise<BroadcastRow & { sent: number; duplicate: boolean }> {
+    // Unasked, the reach follows who you are: a SuperAdmin's broadcast means the
+    // WHOLE church — including the members filed under no congregation, who are
+    // not a rounding error (19 of 60 today). Anyone else means their own.
+    const audience = input.audience ?? (viewerRole === "SuperAdmin" ? "all" : "congregation");
+    // Reaching every congregation at once is a SuperAdmin act, however it arrives.
+    if (audience === "all" && viewerRole !== "SuperAdmin") {
       throw new ApiError("FORBIDDEN_SCOPE", "Only a SuperAdmin can broadcast to every member");
     }
     return tx(this.pool, async (c) => {
@@ -709,31 +731,38 @@ export class ChatService {
       // returns the id and the count that actually landed, rather than
       // recomputing today's membership and reporting a number that never
       // happened.
+      // A replay returns the SAME sent thing, whole — so a client that lost the
+      // response (or retried from its offline queue) still renders the message
+      // exactly as it went out, rather than a bare id it cannot draw.
       if (input.client_mutation_id) {
-        const dup = await maybeOne<{ broadcast_id: string; recipient_count: number }>(
+        const dup = await maybeOne<BroadcastRow>(
           c,
-          `SELECT broadcast_id, recipient_count FROM chat_broadcasts WHERE client_mutation_id = $1`,
+          `SELECT ${BROADCAST_COLS} FROM chat_broadcasts WHERE client_mutation_id = $1`,
           [input.client_mutation_id],
         );
-        if (dup) return { broadcast_id: dup.broadcast_id, sent: dup.recipient_count, duplicate: true };
+        if (dup) return { ...dup, sent: dup.recipient_count, duplicate: true };
       }
-      const recipients = await this.broadcastRecipients(c, senderId, input.audience);
+      const recipients = await this.broadcastRecipients(c, senderId, audience);
       const me = await this.me(c, senderId);
-      const bc = await one<{ broadcast_id: string }>(
+      // Return the whole row, not just its id: the moment a broadcast is sent the
+      // UI shows it as THE SENT MESSAGE — pinned at the top of its own page, with
+      // the server's own timestamp and the count it actually reached. Sending
+      // should not need a second round trip to find out what you just said.
+      const bc = await one<BroadcastRow>(
         c,
         `INSERT INTO chat_broadcasts
            (sender_user_id, body, msg_type, attachment_url, audience, congregation_id, recipient_count, client_mutation_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING broadcast_id`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${BROADCAST_COLS}`,
         [
           senderId, input.body, input.msg_type, input.attachment_url ?? null,
-          input.audience, input.audience === "all" ? null : me.congregation_id,
+          audience, audience === "all" ? null : me.congregation_id,
           recipients.length, input.client_mutation_id ?? null,
         ],
       );
       for (const otherUserId of recipients) {
         // An 'all' broadcast crosses congregations, so the DM belongs to the
         // recipient's, not the sender's.
-        const dmCongregation = input.audience === "all"
+        const dmCongregation = audience === "all"
           ? (await this.me(c, otherUserId)).congregation_id ?? me.congregation_id
           : me.congregation_id;
         const conversationId = await this.ensureDm(c, senderId, otherUserId, dmCongregation);
@@ -746,7 +775,7 @@ export class ChatService {
         await c.query(`UPDATE chat_conversations SET updated_at = now() WHERE conversation_id = $1`, [conversationId]);
         await recordChange(c, "chat_messages", msg.message_id, null, "upsert");
       }
-      return { broadcast_id: bc.broadcast_id, sent: recipients.length, duplicate: false };
+      return { ...bc, sent: recipients.length, duplicate: false };
     });
   }
 
@@ -840,9 +869,19 @@ export class ChatService {
     });
   }
 
-  /** Every broadcast this sender has sent, newest first, each with the two
-   *  numbers that matter: how many it reached, and how many answered. */
-  async listBroadcasts(senderId: string): Promise<{ data: unknown[] }> {
+  /** Broadcasts newest first, each with the numbers that matter: how many it
+   *  reached, how many have seen it, how many answered.
+   *
+   *  The page opens on the last 4 — the ones still live enough to be worth
+   *  watching — and asks for the rest only when you say so. `limit` caps it;
+   *  `total` tells the client how many more there are, so "show all 12" can name
+   *  its number instead of guessing. */
+  async listBroadcasts(senderId: string, limit = 4): Promise<{ data: unknown[]; total: number }> {
+    const { n: total } = await one<{ n: number }>(
+      this.pool,
+      `SELECT count(*)::int AS n FROM chat_broadcasts WHERE sender_user_id = $1`,
+      [senderId],
+    );
     const data = await many(
       this.pool,
       `SELECT b.broadcast_id, b.body, b.msg_type, b.attachment_url, b.audience,
@@ -860,14 +899,14 @@ export class ChatService {
                                       AND mem.user_id <> b.sender_user_id
                 WHERE copy.broadcast_id = b.broadcast_id
                   AND mem.last_read_at IS NOT NULL
-                  AND mem.last_read_at >= copy.created_at) AS read_count
+                  AND mem.last_read_at >= copy.created_at) AS seen_count
          FROM chat_broadcasts b
         WHERE b.sender_user_id = $1
         ORDER BY b.created_at DESC
-        LIMIT 100`,
-      [senderId],
+        LIMIT $2`,
+      [senderId, limit],
     );
-    return { data };
+    return { data, total };
   }
 
   /**
@@ -920,7 +959,33 @@ export class ChatService {
       // own messages filtered out of a thread they were never in.
       [broadcastId, b.sender_user_id],
     );
-    return { ...b, responses };
+    // Who it reached, and who has actually seen it — the ticks.
+    //
+    // delivered: the copy exists in their thread. A broadcast is written server-
+    //   side into every recipient's conversation in one transaction, so delivery
+    //   is not a hope: if the row is there, it arrived. One blue tick.
+    // seen_at: they opened the thread AFTER the copy landed (chat_members
+    //   .last_read_at, the same read receipt the rest of chat runs on). Two blue
+    //   ticks.
+    const recipients = await many(
+      this.pool,
+      `SELECT u.user_id, u.full_name, u.avatar_url,
+              copy.created_at AS delivered_at,
+              TRUE AS delivered,
+              (mem.last_read_at IS NOT NULL AND mem.last_read_at >= copy.created_at) AS seen,
+              CASE WHEN mem.last_read_at IS NOT NULL AND mem.last_read_at >= copy.created_at
+                   THEN mem.last_read_at END AS seen_at
+         FROM chat_messages copy
+         JOIN chat_members mem ON mem.conversation_id = copy.conversation_id
+                              AND mem.user_id <> $2
+         JOIN users u ON u.user_id = mem.user_id
+        WHERE copy.broadcast_id = $1
+        ORDER BY (mem.last_read_at IS NOT NULL AND mem.last_read_at >= copy.created_at) DESC,
+                 u.full_name`,
+      [broadcastId, b.sender_user_id],
+    );
+    const seenCount = (recipients as Array<{ seen: boolean }>).filter((r) => r.seen).length;
+    return { ...b, responses, recipients, delivered_count: recipients.length, seen_count: seenCount };
   }
 
   /** Join a public space in the caller's congregation. */

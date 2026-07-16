@@ -4177,24 +4177,39 @@ paths:
                 audience:
                   type: string
                   enum: [congregation, all]
-                  default: congregation
                   description: >-
-                    "congregation" reaches the sender's own congregation (Instructor+).
-                    "all" reaches every member of every congregation — including those
-                    with no congregation at all, whom a scoped fan-out silently misses.
-                    SuperAdmin only; anyone else gets 403 FORBIDDEN_SCOPE.
+                    Who it reaches. OMIT IT and the server picks the honest default
+                    for who you are — a SuperAdmin means the whole church ("all"),
+                    anyone else means their own congregation. There is deliberately
+                    no schema default: one would be applied before the service sees
+                    the request, making "didn't say" indistinguishable from "said
+                    congregation" — which is exactly how a SuperAdmin's broadcast
+                    quietly reached 40 of 60 members, the other 19 having no
+                    congregation to be scoped to. "all" is SuperAdmin-only however
+                    it arrives; anyone else asking for it gets 403 FORBIDDEN_SCOPE.
                 client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
       responses:
         "201":
-          description: Delivery count
+          description: >-
+            The message AS SENT — the same shape /chat/broadcasts/{id} returns, so
+            the UI pins it at the top of its page immediately, with the server's
+            timestamp and the count it actually reached. Sending never needs a
+            second round trip to find out what you just said. A replay returns it
+            whole too, not a bare id the client cannot draw.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   broadcast_id: { type: string, format: uuid, description: "The send itself — pass to /chat/broadcasts/{id} to see who answered." }
-                  sent: { type: integer, description: "Number of members the message was delivered to, recorded at send time." }
-                  duplicate: { type: boolean, description: "True when a replayed client_mutation_id short-circuited. `sent` is then what actually landed, not a recount of today's membership." }
+                  body: { type: string, description: "What you said (the caption, for an image broadcast)." }
+                  msg_type: { type: string, enum: [text, voice, image, file, video] }
+                  attachment_url: { type: [string, "null"] }
+                  audience: { type: string, enum: [congregation, all] }
+                  recipient_count: { type: integer, description: "How many members it reached, recorded at send time." }
+                  created_at: { type: string, format: date-time, description: "The server's timestamp — display this, not the device clock." }
+                  sent: { type: integer, description: "Same as recipient_count; kept for callers that read it." }
+                  duplicate: { type: boolean, description: "True when a replayed client_mutation_id short-circuited. Everything else is what actually landed, not a recount of today's membership." }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "422": { $ref: "#/components/responses/Unprocessable" }
@@ -4268,15 +4283,27 @@ paths:
     get:
       tags: [progress]
       summary: >-
-        My broadcasts, newest first, each with recipient_count (how many it
-        reached, recorded at send time) and replied_count (how many answered).
-        MINE only — a broadcast's replies are members speaking privately to one
-        person (§5.4), so there is no all-broadcasts view, not even for a
-        moderator.
+        My broadcasts, newest first — the LAST 4 by default, because that is what
+        is still live enough to watch. Each carries recipient_count (how many it
+        reached, at send time), seen_count (how many have opened it) and
+        replied_count (how many answered). SuperAdmin only: the whole thing is a
+        conversation between the SuperAdmin and one member, and nobody else is in
+        it (§5.4). Password step-up required (§5.3).
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 4 }
+          description: How many to return. Ask for more when the member taps "show all".
       responses:
-        "200": { description: "{ data: [{ broadcast_id, body, audience, recipient_count, replied_count, read_count, created_at }] }" }
+        "200":
+          description: >-
+            { data: [{ broadcast_id, body, msg_type, attachment_url, audience,
+            recipient_count, seen_count, replied_count, created_at }], total } —
+            `total` is every broadcast you have sent, so "show all N" can name its
+            number rather than guess.
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { description: "FORBIDDEN_SCOPE — Admin+ only, or the password step-up is missing/stale (details.password_required)." }
+        "403": { description: "FORBIDDEN_SCOPE — SuperAdmin only, or the password step-up is missing/stale (details.password_required)." }
   /chat/broadcasts/{id}:
     get:
       tags: [progress]
@@ -4290,7 +4317,18 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: "{ broadcast_id, body, recipient_count, created_at, responses: [{ message_id, conversation_id, body, created_at, user_id, full_name, avatar_url, from_them }] }" }
+        "200":
+          description: >-
+            The broadcast, its responses, and its ticks.
+            responses[] — every reply, each carrying the conversation_id of the
+            private thread it came from (already seeded with the broadcast as its
+            top message, so opening it is a navigation, not a creation).
+            recipients[] — one row per member it reached: { user_id, full_name,
+            avatar_url, delivered (always true — a broadcast is written into every
+            thread server-side in one transaction, so arrival is a fact, not a
+            hope: ONE blue tick), delivered_at, seen (they opened the thread after
+            it landed: TWO blue ticks), seen_at }.
+            Plus delivered_count and seen_count.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { description: "FORBIDDEN_SCOPE — not your broadcast" }
         "404": { $ref: "#/components/responses/NotFound" }
