@@ -16,6 +16,11 @@ export interface AccessClaims {
   cong: string; // congregation_id
   mfa?: boolean; // a second factor was verified for this token (§5.3 step-up)
   mfa_at?: number; // unix seconds of that verification (freshness for re-prompt)
+  /** Unix seconds of a PASSWORD re-confirmation on this token (§5.3 step-up).
+   *  Distinct from mfa_at: it proves the person holding an unlocked phone is the
+   *  account owner, which a valid session alone does not. Gates the reading of
+   *  other people's private words — see requirePasswordStepUp. */
+  pwd_at?: number;
 }
 
 export function signAccessToken(env: Env, claims: AccessClaims): string {

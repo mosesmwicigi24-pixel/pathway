@@ -75,6 +75,31 @@ paths:
               schema: { $ref: "#/components/schemas/TokenPair" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+  /auth/confirm-password:
+    post:
+      tags: [identity]
+      summary: >-
+        Step-up: prove you are the account owner, right now (§5.3). Re-mints the
+        CALLER'S OWN access token with a fresh pwd_at; routes behind the password
+        step-up (the Broadcast reads/sends, thread invites) admit it for 15
+        minutes. Any MFA stamp on the old token is carried across, so confirming a
+        password never downgrades a stronger session. Failures count toward the
+        SAME lockout as login. Clients call this after a 403 carrying
+        details.password_required, then retry with the new token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "200": { description: "{ access_token, expires_in, confirmed_at } — replace the stored access token with this one." }
+        "401": { description: "AUTH_REQUIRED — wrong password (counts toward lockout)." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "429": { description: "RATE_LIMITED — too many failed attempts; the account is in cooldown." }
   /auth/login:
     post:
       tags: [auth]
@@ -4128,7 +4153,16 @@ paths:
   /chat/broadcast:
     post:
       tags: [progress]
-      summary: Staff broadcast (Instructor+) — deliver ONE message to every active member of the sender's congregation as an individual DM from the sender (no group room; replies return as normal 1:1 threads). Minors excluded (D-M6). Idempotent on client_mutation_id. May carry an image (msg_type=image + attachment_url uploaded via /chat/attachments/sign) — body is then the caption.
+      summary: >-
+        Broadcast — Admin+ ONLY. Not Instructor; a cell leader is a member who is
+        not an admin, and the Broadcast does not exist for them (no tab, and 403
+        here if they ask anyway). Delivers ONE message to every active member as
+        an individual DM from the sender (no group room; replies return as normal
+        1:1 threads, private to the sender). Minors excluded (D-M6). Idempotent on
+        client_mutation_id. May carry an image (msg_type=image + attachment_url
+        uploaded via /chat/attachments/sign) — body is then the caption. Recorded
+        as a chat_broadcasts row, so the send is addressable afterwards via
+        /chat/broadcasts. Password step-up required (§5.3).
       requestBody:
         required: true
         content:
@@ -4140,17 +4174,42 @@ paths:
                 body: { type: string, minLength: 1, maxLength: 20000, description: "The message text (the caption, for an image broadcast)." }
                 msg_type: { type: string, enum: [text, image], default: text }
                 attachment_url: { type: string, format: uri, maxLength: 2000, description: Cloudinary secure_url of the uploaded image (the caption travels in body). }
+                audience:
+                  type: string
+                  enum: [congregation, all]
+                  description: >-
+                    Who it reaches. OMIT IT and the server picks the honest default
+                    for who you are — a SuperAdmin means the whole church ("all"),
+                    anyone else means their own congregation. There is deliberately
+                    no schema default: one would be applied before the service sees
+                    the request, making "didn't say" indistinguishable from "said
+                    congregation" — which is exactly how a SuperAdmin's broadcast
+                    quietly reached 40 of 60 members, the other 19 having no
+                    congregation to be scoped to. "all" is SuperAdmin-only however
+                    it arrives; anyone else asking for it gets 403 FORBIDDEN_SCOPE.
                 client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
       responses:
         "201":
-          description: Delivery count
+          description: >-
+            The message AS SENT — the same shape /chat/broadcasts/{id} returns, so
+            the UI pins it at the top of its page immediately, with the server's
+            timestamp and the count it actually reached. Sending never needs a
+            second round trip to find out what you just said. A replay returns it
+            whole too, not a bare id the client cannot draw.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  sent: { type: integer, description: Number of members the message was delivered to. }
-                  duplicate: { type: boolean, description: True when a replayed client_mutation_id short-circuited. }
+                  broadcast_id: { type: string, format: uuid, description: "The send itself — pass to /chat/broadcasts/{id} to see who answered." }
+                  body: { type: string, description: "What you said (the caption, for an image broadcast)." }
+                  msg_type: { type: string, enum: [text, voice, image, file, video] }
+                  attachment_url: { type: [string, "null"] }
+                  audience: { type: string, enum: [congregation, all] }
+                  recipient_count: { type: integer, description: "How many members it reached, recorded at send time." }
+                  created_at: { type: string, format: date-time, description: "The server's timestamp — display this, not the device clock." }
+                  sent: { type: integer, description: "Same as recipient_count; kept for callers that read it." }
+                  duplicate: { type: boolean, description: "True when a replayed client_mutation_id short-circuited. Everything else is what actually landed, not a recount of today's membership." }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "422": { $ref: "#/components/responses/Unprocessable" }
@@ -4189,6 +4248,89 @@ paths:
       responses:
         "200": { description: Joined }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/conversations/{id}/invite:
+    post:
+      tags: [progress]
+      summary: >-
+        Bring one more person into ONE thread — never into the broadcast.
+        SuperAdmin only, and only a thread they are already in: the unit of
+        authorisation is deliberately the conversation, so authorising a deacon
+        for one member's reply grants them nothing anywhere else. The member is
+        TOLD — a note lands in the thread naming who joined, because someone who
+        wrote privately to their pastor is owed the knowledge that another person
+        is now reading. A dm becomes a group on the first invite (a dm's title is
+        "the other member", which is meaningless once there are two of them).
+        Minors are refused (D-M6).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+      responses:
+        "201": { description: "{ conversation_id, invited, already } — already=true when they were in it (no second notice)." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — not a SuperAdmin, not in this thread, or the invitee is a minor." }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /chat/broadcasts:
+    get:
+      tags: [progress]
+      summary: >-
+        My broadcasts, newest first — the LAST 4 by default, because that is what
+        is still live enough to watch. Each carries recipient_count (how many it
+        reached, at send time), seen_count (how many have opened it) and
+        replied_count (how many answered). SuperAdmin only: the whole thing is a
+        conversation between the SuperAdmin and one member, and nobody else is in
+        it (§5.4). Password step-up required (§5.3).
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 4 }
+          description: How many to return. Ask for more when the member taps "show all".
+      responses:
+        "200":
+          description: >-
+            { data: [{ broadcast_id, body, msg_type, attachment_url, audience,
+            recipient_count, seen_count, replied_count, created_at }], total } —
+            `total` is every broadcast you have sent, so "show all N" can name its
+            number rather than guess.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — SuperAdmin only, or the password step-up is missing/stale (details.password_required)." }
+  /chat/broadcasts/{id}:
+    get:
+      tags: [progress]
+      summary: >-
+        One broadcast: the message, then every response to it. A response is any
+        message a recipient wrote in their delivered copy's conversation after it
+        landed — no reply table exists or is needed. Each response carries the
+        conversation_id of the private thread it came from, ALREADY seeded with
+        the broadcast as its top message, so promoting a response to a full
+        conversation is a navigation rather than a creation.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: >-
+            The broadcast, its responses, and its ticks.
+            responses[] — every reply, each carrying the conversation_id of the
+            private thread it came from (already seeded with the broadcast as its
+            top message, so opening it is a navigation, not a creation).
+            recipients[] — one row per member it reached: { user_id, full_name,
+            avatar_url, delivered (always true — a broadcast is written into every
+            thread server-side in one transaction, so arrival is a fact, not a
+            hope: ONE blue tick), delivered_at, seen (they opened the thread after
+            it landed: TWO blue ticks), seen_at }.
+            Plus delivered_count and seen_count.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — not your broadcast" }
         "404": { $ref: "#/components/responses/NotFound" }
   /chat/messages/{id}/flag:
     post:

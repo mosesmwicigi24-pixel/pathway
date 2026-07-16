@@ -4,6 +4,7 @@
 import type { Pool } from "pg";
 import { randomBytes, createHash } from "node:crypto";
 import { z } from "zod";
+import type { UserRole } from "@nuru/shared";
 import type { Env } from "../../config/env.js";
 import { ApiError } from "../../http/errors.js";
 import { many, maybeOne, one, tx, recordChange, audit } from "../../db/db.js";
@@ -188,6 +189,67 @@ export class IdentityService {
   // failed password attempts, for this long. A successful login resets the count.
   static readonly MAX_FAILED_LOGINS = 5;
   static readonly LOCKOUT_MINUTES = 15;
+
+  static readonly ConfirmPassword = z.object({ password: z.string().min(1).max(200) });
+
+  /**
+   * Step-up: prove you are the account owner, right now (§5.3).
+   *
+   * Re-mints the caller's OWN access token with pwd_at = now; requirePasswordStepUp
+   * then admits it for a short window. Nothing else about the token changes — same
+   * subject, same role, same congregation, and any existing MFA stamp is carried
+   * across so confirming a password never quietly downgrades a stronger session.
+   *
+   * A valid session is not the same claim as "the owner is holding the phone".
+   * This is what stands between an unlocked, logged-in handset on a desk and
+   * sixty members' private answers to a broadcast.
+   *
+   * Failures count toward the SAME lockout as login — otherwise this endpoint
+   * would be a soft place to guess a password that the front door refuses.
+   */
+  async confirmPassword(
+    userId: string,
+    input: z.infer<typeof IdentityService.ConfirmPassword>,
+    /** The MFA stamp on the token being replaced — carried across verbatim so
+     *  confirming a password never quietly downgrades a stronger session. */
+    carry?: { mfa?: boolean; mfaAt?: number },
+  ): Promise<{ access_token: string; expires_in: number; confirmed_at: number }> {
+    const row = await maybeOne<{
+      user_id: string; role: UserRole; congregation_id: string | null;
+      password_hash: string | null; account_status: string;
+      failed_login_count: number; locked_until: Date | null;
+    }>(
+      this.pool,
+      `SELECT user_id, role, congregation_id, password_hash, account_status, failed_login_count, locked_until
+         FROM users WHERE user_id = $1 AND deleted_at IS NULL`,
+      [userId],
+    );
+    if (!row || !row.password_hash) throw new ApiError("AUTH_REQUIRED", "Password confirmation unavailable");
+    if (row.account_status === "suspended") throw new ApiError("FORBIDDEN_SCOPE", "This account is suspended");
+    if (row.locked_until && row.locked_until.getTime() > Date.now()) {
+      throw new ApiError("RATE_LIMITED", "Too many failed attempts. Try again later.");
+    }
+    if (!(await verifyPassword(row.password_hash, input.password))) {
+      const next = (row.failed_login_count ?? 0) + 1;
+      const lock = next >= IdentityService.MAX_FAILED_LOGINS;
+      await this.pool.query(
+        `UPDATE users SET failed_login_count = $2, locked_until = $3 WHERE user_id = $1`,
+        [row.user_id, lock ? 0 : next, lock ? new Date(Date.now() + IdentityService.LOCKOUT_MINUTES * 60_000) : null],
+      );
+      throw new ApiError("AUTH_REQUIRED", "That password is not right");
+    }
+    await this.pool.query(`UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE user_id = $1`, [row.user_id]);
+    const confirmedAt = Math.floor(Date.now() / 1000);
+    const access = signAccessToken(this.env, {
+      sub: row.user_id,
+      role: row.role,
+      cong: row.congregation_id ?? "",
+      pwd_at: confirmedAt,
+      ...(carry?.mfa === true ? { mfa: true } : {}),
+      ...(typeof carry?.mfaAt === "number" ? { mfa_at: carry.mfaAt } : {}),
+    });
+    return { access_token: access, expires_in: this.env.JWT_ACCESS_TTL, confirmed_at: confirmedAt };
+  }
 
   async loginWithPassword(input: z.infer<typeof IdentityService.LoginSchema>): Promise<LoginResult> {
     const row = await maybeOne<
