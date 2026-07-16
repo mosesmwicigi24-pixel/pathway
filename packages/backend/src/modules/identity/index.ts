@@ -51,6 +51,25 @@ export function registerIdentity(ctx: AppContext): Router {
     }),
   );
 
+  // Step-up: prove you are the account owner, right now (§5.3). Re-mints the
+  // caller's OWN access token with a fresh pwd_at; routes behind
+  // requirePasswordStepUp admit it for a short window. Any MFA stamp on the old
+  // token is carried across, so confirming a password never downgrades a
+  // stronger session. Failures count toward the same lockout as login.
+  r.post(
+    "/auth/confirm-password",
+    authenticate(ctx.env),
+    handler(async (req, res) => {
+      const input = parseBody(IdentityService.ConfirmPassword, req.body);
+      const p = requirePrincipal(req);
+      const carry = {
+        ...(p.mfa === true ? { mfa: true } : {}),
+        ...(typeof p.mfaAt === "number" ? { mfaAt: p.mfaAt } : {}),
+      };
+      res.status(200).json(await svc.confirmPassword(p.userId, input, carry));
+    }),
+  );
+
   // Second step of a 2FA login: exchange the challenge token + a TOTP/recovery
   // code for a session. Public (the challenge token is the proof of step one).
   r.post(

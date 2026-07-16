@@ -4,7 +4,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
-import { authenticate, requireRole, assertCellInScope } from "../../http/auth.js";
+import { authenticate, requireRole, assertCellInScope, requirePasswordStepUp } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ChatService } from "./service.js";
 import { MediaService } from "../media/service.js";
@@ -104,7 +104,9 @@ export function registerChat(ctx: AppContext): Router {
   //   audience=congregation (default) — the sender's own congregation, Instructor+.
   //   audience=all — every member of every congregation; SuperAdmin only, checked
   //                  in the service (requireRole here is only a floor).
-  r.post("/chat/broadcast", auth, requireRole("Instructor"), handler(async (req, res) => {
+  // Password-gated too: speaking to the whole church in your name is at least as
+  // grave as reading the answers.
+  r.post("/chat/broadcast", auth, requireRole("Instructor"), requirePasswordStepUp(), handler(async (req, res) => {
     const input = parseBody(ChatService.Broadcast, req.body);
     const p = requirePrincipal(req);
     res.status(201).json(await svc.broadcast(p.userId, input, p.role));
@@ -113,7 +115,12 @@ export function registerChat(ctx: AppContext): Router {
   // The Broadcast tab: what I have sent, and who answered. Mine only — a
   // broadcast's replies are members speaking privately to ONE person (§5.4), so
   // there is no "all broadcasts" view, not even for a moderator.
-  r.get("/chat/broadcasts", auth, requireRole("Instructor"), handler(async (req, res) => {
+  // Password-gated (§5.3). A valid session is not the same claim as "the owner is
+  // holding the phone": an unlocked, logged-in handset on a desk is already past
+  // auth and past requireRole. Before it opens the church's private answers, the
+  // person holding it re-enters their password. 403 + details.password_required
+  // is the client's cue to prompt and retry.
+  r.get("/chat/broadcasts", auth, requireRole("Instructor"), requirePasswordStepUp(), handler(async (req, res) => {
     res.json(await svc.listBroadcasts(requirePrincipal(req).userId));
   }));
 
@@ -121,7 +128,7 @@ export function registerChat(ctx: AppContext): Router {
   // the conversation_id of the private thread with that person — already seeded
   // with the broadcast as its top message, so "open the thread" is a navigation,
   // not a creation.
-  r.get("/chat/broadcasts/:id", auth, requireRole("Instructor"), handler(async (req, res) => {
+  r.get("/chat/broadcasts/:id", auth, requireRole("Instructor"), requirePasswordStepUp(), handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
     const p = requirePrincipal(req);
     res.json(await svc.broadcastDetail(p.userId, id, p.role));
@@ -130,7 +137,7 @@ export function registerChat(ctx: AppContext): Router {
   // Bring one more person into ONE thread — never into the broadcast. SuperAdmin
   // only, and only a thread they are already in. The member is told: a note lands
   // in the conversation naming who joined.
-  r.post("/chat/conversations/:id/invite", auth, requireRole("SuperAdmin"), handler(async (req, res) => {
+  r.post("/chat/conversations/:id/invite", auth, requireRole("SuperAdmin"), requirePasswordStepUp(), handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
     const input = parseBody(ChatService.InviteToThread, req.body);
     const p = requirePrincipal(req);

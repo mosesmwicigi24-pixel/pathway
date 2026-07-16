@@ -12,6 +12,7 @@ export interface Principal {
   congregationId: string;
   mfa?: boolean; // a second factor was verified for the presenting token (§5.3)
   mfaAt?: number; // unix seconds of that verification
+  pwdAt?: number; // unix seconds of a PASSWORD re-confirmation on this token (§5.3)
 }
 
 // Augment Express Request with our principal.

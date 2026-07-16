@@ -75,6 +75,31 @@ paths:
               schema: { $ref: "#/components/schemas/TokenPair" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+  /auth/confirm-password:
+    post:
+      tags: [identity]
+      summary: >-
+        Step-up: prove you are the account owner, right now (§5.3). Re-mints the
+        CALLER'S OWN access token with a fresh pwd_at; routes behind the password
+        step-up (the Broadcast reads/sends, thread invites) admit it for 15
+        minutes. Any MFA stamp on the old token is carried across, so confirming a
+        password never downgrades a stronger session. Failures count toward the
+        SAME lockout as login. Clients call this after a 403 carrying
+        details.password_required, then retry with the new token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "200": { description: "{ access_token, expires_in, confirmed_at } — replace the stored access token with this one." }
+        "401": { description: "AUTH_REQUIRED — wrong password (counts toward lockout)." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "429": { description: "RATE_LIMITED — too many failed attempts; the account is in cooldown." }
   /auth/login:
     post:
       tags: [auth]

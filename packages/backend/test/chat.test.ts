@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, closeTestPool, testPool } from "./helpers/db.js";
 import { createCongregation, createCellGroup, createUser, createLeaderAssignment } from "./helpers/factories.js";
+import { hashPassword } from "../src/modules/identity/passwords.js";
 
 let cong: string, cellA: string, cellB: string;
 let aId: string, aTok: string; // cellA
@@ -16,6 +17,14 @@ let adminTok: string; // Admin (not a member of any cell room)
 
 const auth = (t: string) => ({ Authorization: t });
 const uuid = (n: number) => `00000000-0000-4000-8000-0000000000${String(n).padStart(2, "0")}`;
+
+/** A staff token that has JUST confirmed its password. The broadcast routes are
+ *  password-gated (§5.3 step-up), so a staff caller reaching them in the real app
+ *  has re-entered their password within the last 15 minutes and holds a re-minted
+ *  token carrying pwd_at. Minting it here is the equivalent of that, without
+ *  needing a real password hash on every fixture user. */
+const staff = (sub: string, role: "Instructor" | "Admin" | "SuperAdmin", cong: string): string =>
+  bearer({ sub, role, cong, pwd_at: Math.floor(Date.now() / 1000) });
 
 beforeEach(async () => {
   await resetDb();
@@ -479,7 +488,7 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
     const m1 = await createUser({ congregationId: cong2, email: "m1@dev.local", fullName: "Member One" });
     const m2 = await createUser({ congregationId: cong2, email: "m2@dev.local", fullName: "Member Two" });
     await createUser({ congregationId: cong2, email: "kid2@dev.local", fullName: "Kid Two", dateOfBirth: "2016-06-06" });
-    const senderTok = bearer({ sub: sender.user_id, role: "Admin", cong: cong2 });
+    const senderTok = staff(sender.user_id, "Admin", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
     const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });
 
@@ -533,7 +542,7 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
     const sender = await createUser({ congregationId: cong2, role: "Instructor", email: "img-lead@dev.local", fullName: "Ivy Lead" });
     const m1 = await createUser({ congregationId: cong2, email: "im1@dev.local", fullName: "Img One" });
     const m2 = await createUser({ congregationId: cong2, email: "im2@dev.local", fullName: "Img Two" });
-    const senderTok = bearer({ sub: sender.user_id, role: "Instructor", cong: cong2 });
+    const senderTok = staff(sender.user_id, "Instructor", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
     const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });
 
@@ -573,7 +582,7 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
     const cong2 = await createCongregation("Broadcast Branch 2");
     const sender = await createUser({ congregationId: cong2, role: "Instructor", email: "lead@dev.local", fullName: "Lead Lee" });
     const m1 = await createUser({ congregationId: cong2, email: "bm1@dev.local", fullName: "Bee One" });
-    const senderTok = bearer({ sub: sender.user_id, role: "Instructor", cong: cong2 });
+    const senderTok = staff(sender.user_id, "Instructor", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
 
     const first = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
@@ -604,7 +613,7 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     const m1 = await createUser({ congregationId: cong2, email: "bc1@dev.local", fullName: "Ann Member" });
     const m2 = await createUser({ congregationId: cong2, email: "bc2@dev.local", fullName: "Ben Member" });
     await createUser({ congregationId: cong2, email: "bc3@dev.local", fullName: "Quiet Cara" }); // never answers
-    const senderTok = bearer({ sub: sender.user_id, role: "Admin", cong: cong2 });
+    const senderTok = staff(sender.user_id, "Admin", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
     const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });
 
@@ -656,8 +665,8 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     const sender = await createUser({ congregationId: cong2, role: "Admin", email: "mine@dev.local", fullName: "Mine Admin" });
     const nosy = await createUser({ congregationId: cong2, role: "Admin", email: "nosy@dev.local", fullName: "Nosy Admin" });
     await createUser({ congregationId: cong2, email: "pm1@dev.local", fullName: "Pat Member" });
-    const senderTok = bearer({ sub: sender.user_id, role: "Admin", cong: cong2 });
-    const nosyTok = bearer({ sub: nosy.user_id, role: "Admin", cong: cong2 });
+    const senderTok = staff(sender.user_id, "Admin", cong2);
+    const nosyTok = staff(nosy.user_id, "Admin", cong2);
 
     const sent = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
       .send({ body: "How is your heart today?", client_mutation_id: uuid(75) });
@@ -678,8 +687,8 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     const lead = await createUser({ congregationId: congA, role: "Instructor", email: "lead2@dev.local", fullName: "Lead Two" });
     await createUser({ congregationId: congA, email: "ra1@dev.local", fullName: "A One" });
     await createUser({ congregationId: congB, email: "rb1@dev.local", fullName: "B One" });
-    const bossTok = bearer({ sub: boss.user_id, role: "SuperAdmin", cong: congA });
-    const leadTok = bearer({ sub: lead.user_id, role: "Instructor", cong: congA });
+    const bossTok = staff(boss.user_id, "SuperAdmin", congA);
+    const leadTok = staff(lead.user_id, "Instructor", congA);
 
     // An Instructor may not reach everyone.
     const denied = await agent().post("/v1/chat/broadcast").set(auth(leadTok))
@@ -708,8 +717,8 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     const boss = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "sh-boss@dev.local", fullName: "Shield Boss" });
     const nosy = await createUser({ congregationId: cong2, role: "Admin", email: "sh-admin@dev.local", fullName: "Shield Admin" });
     const mem = await createUser({ congregationId: cong2, email: "sh1@dev.local", fullName: "Shield Member" });
-    const bossTok = bearer({ sub: boss.user_id, role: "SuperAdmin", cong: cong2 });
-    const nosyTok = bearer({ sub: nosy.user_id, role: "Admin", cong: cong2 });
+    const bossTok = staff(boss.user_id, "SuperAdmin", cong2);
+    const nosyTok = staff(nosy.user_id, "Admin", cong2);
     const memTok = bearer({ sub: mem.user_id, role: "Student", cong: cong2 });
 
     await agent().post("/v1/chat/broadcast").set(auth(bossTok))
@@ -747,8 +756,8 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     const deacon = await createUser({ congregationId: cong2, role: "Admin", email: "iv-dea@dev.local", fullName: "Deacon Dan" });
     const mem = await createUser({ congregationId: cong2, email: "iv1@dev.local", fullName: "Iva Member" });
     const other = await createUser({ congregationId: cong2, email: "iv2@dev.local", fullName: "Otto Member" });
-    const bossTok = bearer({ sub: boss.user_id, role: "SuperAdmin", cong: cong2 });
-    const deaTok = bearer({ sub: deacon.user_id, role: "Admin", cong: cong2 });
+    const bossTok = staff(boss.user_id, "SuperAdmin", cong2);
+    const deaTok = staff(deacon.user_id, "Admin", cong2);
     const memTok = bearer({ sub: mem.user_id, role: "Student", cong: cong2 });
     const otherTok = bearer({ sub: other.user_id, role: "Student", cong: cong2 });
 
@@ -793,11 +802,77 @@ describe("broadcast — the sent thing, and the answers to it", () => {
     expect(denied.status).toBe(403);
   });
 
+  /** A valid session is not the same claim as "the account owner is holding the
+   *  phone". An unlocked, logged-in handset left on a desk is already past auth
+   *  and past requireRole — so before it opens the church's private answers, the
+   *  password is asked for again (§5.3 step-up). */
+  it("will not open a broadcast on a session alone — the password is asked for again", async () => {
+    const cong2 = await createCongregation("Locked Branch");
+    const boss = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "lk-boss@dev.local", fullName: "Locked Boss" });
+    await createUser({ congregationId: cong2, email: "lk1@dev.local", fullName: "Locked Member" });
+    await testPool().query(`UPDATE users SET password_hash = $2 WHERE user_id = $1`,
+      [boss.user_id, await hashPassword("correct horse battery")]);
+
+    // A perfectly valid, logged-in staff session — no password confirmation on it.
+    const session = bearer({ sub: boss.user_id, role: "SuperAdmin", cong: cong2 });
+
+    const listed = await agent().get("/v1/chat/broadcasts").set(auth(session));
+    expect(listed.status).toBe(403);
+    expect(listed.body.error.code).toBe("FORBIDDEN_SCOPE");
+    expect(listed.body.error.details.password_required).toBe(true); // the client's cue to prompt
+    // Sending in the church's name is gated too.
+    const sent = await agent().post("/v1/chat/broadcast").set(auth(session))
+      .send({ body: "not from me", client_mutation_id: uuid(66) });
+    expect(sent.status).toBe(403);
+    expect(sent.body.error.details.password_required).toBe(true);
+
+    // A wrong password does not open it.
+    const wrong = await agent().post("/v1/auth/confirm-password").set(auth(session)).send({ password: "hunter2" });
+    expect(wrong.status).toBe(401);
+
+    // The right one re-mints the SAME session, now password-confirmed.
+    const ok = await agent().post("/v1/auth/confirm-password").set(auth(session))
+      .send({ password: "correct horse battery" });
+    expect(ok.status).toBe(200);
+    expect(ok.body.access_token).toBeTruthy();
+    const confirmed = `Bearer ${ok.body.access_token}`;
+
+    const opened = await agent().get("/v1/chat/broadcasts").set(auth(confirmed));
+    expect(opened.status).toBe(200);
+    const nowSent = await agent().post("/v1/chat/broadcast").set(auth(confirmed))
+      .send({ body: "Grace to you", client_mutation_id: uuid(67) });
+    expect(nowSent.status).toBe(201);
+
+    // A confirmation older than the window is no longer good enough.
+    const stale = bearer({ sub: boss.user_id, role: "SuperAdmin", cong: cong2, pwd_at: Math.floor(Date.now() / 1000) - 1000 });
+    expect((await agent().get("/v1/chat/broadcasts").set(auth(stale))).status).toBe(403);
+  });
+
+  it("confirming a password never downgrades a session that had 2FA", async () => {
+    const cong2 = await createCongregation("Carry Branch");
+    const boss = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "cy-boss@dev.local", fullName: "Carry Boss" });
+    await testPool().query(`UPDATE users SET password_hash = $2 WHERE user_id = $1`,
+      [boss.user_id, await hashPassword("second factor please")]);
+    const mfaAt = Math.floor(Date.now() / 1000);
+    const strong = bearer({ sub: boss.user_id, role: "SuperAdmin", cong: cong2, mfa: true, mfa_at: mfaAt });
+
+    const ok = await agent().post("/v1/auth/confirm-password").set(auth(strong))
+      .send({ password: "second factor please" });
+    expect(ok.status).toBe(200);
+    // The re-minted token still carries the second factor — a password step-up
+    // must never quietly weaken what was already proven.
+    const claims = JSON.parse(Buffer.from((ok.body.access_token as string).split(".")[1]!, "base64").toString()) as
+      { mfa?: boolean; mfa_at?: number; pwd_at?: number };
+    expect(claims.mfa).toBe(true);
+    expect(claims.mfa_at).toBe(mfaAt);
+    expect(claims.pwd_at).toBeGreaterThanOrEqual(mfaAt);
+  });
+
   it("a replay returns what actually landed, not a recount of today's membership", async () => {
     const cong2 = await createCongregation("Replay Branch");
     const sender = await createUser({ congregationId: cong2, role: "Admin", email: "rp@dev.local", fullName: "Replay Ray" });
     await createUser({ congregationId: cong2, email: "rp1@dev.local", fullName: "Rp One" });
-    const senderTok = bearer({ sub: sender.user_id, role: "Admin", cong: cong2 });
+    const senderTok = staff(sender.user_id, "Admin", cong2);
 
     const first = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
       .send({ body: "counted once", client_mutation_id: uuid(85) });

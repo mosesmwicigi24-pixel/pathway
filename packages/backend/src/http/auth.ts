@@ -35,6 +35,7 @@ export function authenticate(env: Env) {
         congregationId: claims.cong,
         ...(claims.mfa === true ? { mfa: true } : {}),
         ...(typeof claims.mfa_at === "number" ? { mfaAt: claims.mfa_at } : {}),
+        ...(typeof claims.pwd_at === "number" ? { pwdAt: claims.pwd_at } : {}),
       };
       next();
     } catch (err) {
@@ -112,6 +113,39 @@ export function requireStepUp(maxAgeSeconds = 900) {
       return next(
         new ApiError("FORBIDDEN_SCOPE", "Step-up MFA required for this action", {
           mfa_required: true,
+        }),
+      );
+    }
+    next();
+  };
+}
+
+/**
+ * Step-up PASSWORD gate (§5.3): the presenting access token must carry a recent
+ * password re-confirmation (POST /auth/confirm-password re-mints it with pwd_at).
+ *
+ * Distinct from requireStepUp, which asks for a second FACTOR. This asks for the
+ * thing only the account owner knows, and it answers a different question: an
+ * unlocked, logged-in phone left on a desk is already past `auth` and past
+ * `requireRole`. Before it opens sixty members' private answers to a broadcast,
+ * the person holding it should have to prove they are the pastor.
+ *
+ * Compose after the role check:
+ *   r.get(path, auth, requireRole("Instructor"), requirePasswordStepUp(), handler)
+ *
+ * Clients get 403 + details.password_required, which is their cue to prompt and
+ * retry with the re-minted token — the same shape as mfa_required.
+ */
+export function requirePasswordStepUp(maxAgeSeconds = 900) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    const p = req.principal;
+    if (!p) return next(new ApiError("AUTH_REQUIRED", "Authentication required"));
+    const now = Math.floor(Date.now() / 1000);
+    if (typeof p.pwdAt !== "number" || now - p.pwdAt > maxAgeSeconds) {
+      return next(
+        new ApiError("FORBIDDEN_SCOPE", "Confirm your password to open this", {
+          password_required: true,
+          max_age_seconds: maxAgeSeconds,
         }),
       );
     }
