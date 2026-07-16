@@ -98,12 +98,32 @@ export function registerChat(ctx: AppContext): Router {
   }));
 
   // Staff broadcast (Instructor+ per requireRole — Students get 403): one message
-  // delivered to every active member of the sender's congregation as an individual
-  // DM from the sender (ensure-DM + insert, no group room). Replies come back as
-  // normal 1:1 threads. Idempotent on client_mutation_id (§3.6).
+  // delivered to every active member as an individual DM from the sender
+  // (ensure-DM + insert, no group room). Replies come back as normal 1:1 threads,
+  // private to the sender. Idempotent on client_mutation_id (§3.6).
+  //   audience=congregation (default) — the sender's own congregation, Instructor+.
+  //   audience=all — every member of every congregation; SuperAdmin only, checked
+  //                  in the service (requireRole here is only a floor).
   r.post("/chat/broadcast", auth, requireRole("Instructor"), handler(async (req, res) => {
     const input = parseBody(ChatService.Broadcast, req.body);
-    res.status(201).json(await svc.broadcast(requirePrincipal(req).userId, input));
+    const p = requirePrincipal(req);
+    res.status(201).json(await svc.broadcast(p.userId, input, p.role));
+  }));
+
+  // The Broadcast tab: what I have sent, and who answered. Mine only — a
+  // broadcast's replies are members speaking privately to ONE person (§5.4), so
+  // there is no "all broadcasts" view, not even for a moderator.
+  r.get("/chat/broadcasts", auth, requireRole("Instructor"), handler(async (req, res) => {
+    res.json(await svc.listBroadcasts(requirePrincipal(req).userId));
+  }));
+
+  // One broadcast: the message, then every response to it. Each response carries
+  // the conversation_id of the private thread with that person — already seeded
+  // with the broadcast as its top message, so "open the thread" is a navigation,
+  // not a creation.
+  r.get("/chat/broadcasts/:id", auth, requireRole("Instructor"), handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await svc.broadcastDetail(requirePrincipal(req).userId, id));
   }));
 
   // Open a cell's group conversation (provisioning it on first use). Scope-checked

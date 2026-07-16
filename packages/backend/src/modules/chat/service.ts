@@ -54,6 +54,11 @@ export class ChatService {
     body: z.string().min(1).max(20_000), // for an image broadcast this is the caption
     msg_type: z.enum(["text", "image"]).default("text"),
     attachment_url: z.string().url().max(2000).optional(),
+    /** "congregation" (Instructor+, the default) reaches the sender's own
+     *  congregation. "all" is SuperAdmin-only and reaches every member of every
+     *  congregation — including the members who have no congregation at all,
+     *  whom a congregation-scoped fan-out silently misses. */
+    audience: z.enum(["congregation", "all"]).default("congregation"),
     client_mutation_id: z.string().uuid().optional(),
   });
 
@@ -591,10 +596,30 @@ export class ChatService {
     return convo.conversation_id;
   }
 
-  /** Everyone a broadcast reaches: active members of the sender's congregation,
-   *  excluding the sender, soft-deleted accounts, and minors (D-M6 — a broadcast
-   *  materializes DMs, and DMs with minors are forbidden everywhere). */
-  private async broadcastRecipients(c: Queryable, senderId: string): Promise<string[]> {
+  /** Everyone a broadcast reaches, excluding the sender, soft-deleted accounts,
+   *  and minors (D-M6 — a broadcast materializes DMs, and DMs with minors are
+   *  forbidden everywhere).
+   *
+   *  audience "congregation": active members of the sender's own congregation.
+   *  audience "all": every active member, congregation or not — the whole point
+   *  of the SuperAdmin reach is that it does not depend on where someone has
+   *  been filed. (Roughly a third of members currently have no congregation, so
+   *  a congregation-scoped fan-out would silently skip them.) */
+  private async broadcastRecipients(
+    c: Queryable,
+    senderId: string,
+    audience: "congregation" | "all",
+  ): Promise<string[]> {
+    if (audience === "all") {
+      const rows = await many<{ user_id: string }>(
+        c,
+        `SELECT user_id FROM users
+          WHERE user_id <> $1 AND deleted_at IS NULL AND is_minor = FALSE
+          ORDER BY user_id`,
+        [senderId],
+      );
+      return rows.map((r) => r.user_id);
+    }
     const me = await this.me(c, senderId);
     if (!me.congregation_id) throw new ApiError("UNPROCESSABLE", "You need a congregation to broadcast");
     const rows = await many<{ user_id: string }>(
@@ -620,32 +645,135 @@ export class ChatService {
    * bytes went straight to Cloudinary via /chat/attachments/sign, §4.5); body
    * is then the caption.
    */
-  async broadcast(senderId: string, input: z.infer<typeof ChatService.Broadcast>): Promise<{ sent: number; duplicate: boolean }> {
+  async broadcast(
+    senderId: string,
+    input: z.infer<typeof ChatService.Broadcast>,
+    viewerRole?: ViewerRole,
+  ): Promise<{ broadcast_id: string; sent: number; duplicate: boolean }> {
+    // Reaching every congregation at once is a SuperAdmin act, not an
+    // Instructor's — the route only guarantees Instructor+.
+    if (input.audience === "all" && viewerRole !== "SuperAdmin") {
+      throw new ApiError("FORBIDDEN_SCOPE", "Only a SuperAdmin can broadcast to every member");
+    }
     return tx(this.pool, async (c) => {
+      // Idempotent on the BROADCAST (§3.6), not on one lucky copy: a replay now
+      // returns the id and the count that actually landed, rather than
+      // recomputing today's membership and reporting a number that never
+      // happened.
       if (input.client_mutation_id) {
-        const dup = await maybeOne(c, `SELECT 1 FROM chat_messages WHERE client_mutation_id = $1`, [input.client_mutation_id]);
-        if (dup) return { sent: (await this.broadcastRecipients(c, senderId)).length, duplicate: true };
+        const dup = await maybeOne<{ broadcast_id: string; recipient_count: number }>(
+          c,
+          `SELECT broadcast_id, recipient_count FROM chat_broadcasts WHERE client_mutation_id = $1`,
+          [input.client_mutation_id],
+        );
+        if (dup) return { broadcast_id: dup.broadcast_id, sent: dup.recipient_count, duplicate: true };
       }
-      const recipients = await this.broadcastRecipients(c, senderId);
+      const recipients = await this.broadcastRecipients(c, senderId, input.audience);
       const me = await this.me(c, senderId);
-      let stampedMutationId = false;
+      const bc = await one<{ broadcast_id: string }>(
+        c,
+        `INSERT INTO chat_broadcasts
+           (sender_user_id, body, msg_type, attachment_url, audience, congregation_id, recipient_count, client_mutation_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING broadcast_id`,
+        [
+          senderId, input.body, input.msg_type, input.attachment_url ?? null,
+          input.audience, input.audience === "all" ? null : me.congregation_id,
+          recipients.length, input.client_mutation_id ?? null,
+        ],
+      );
       for (const otherUserId of recipients) {
-        const conversationId = await this.ensureDm(c, senderId, otherUserId, me.congregation_id);
+        // An 'all' broadcast crosses congregations, so the DM belongs to the
+        // recipient's, not the sender's.
+        const dmCongregation = input.audience === "all"
+          ? (await this.me(c, otherUserId)).congregation_id ?? me.congregation_id
+          : me.congregation_id;
+        const conversationId = await this.ensureDm(c, senderId, otherUserId, dmCongregation);
         const msg = await one<{ message_id: string }>(
           c,
-          `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type, attachment_url, client_mutation_id)
+          `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type, attachment_url, broadcast_id)
            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6) RETURNING message_id`,
-          [
-            conversationId, senderId, input.body, input.msg_type,
-            input.attachment_url ?? null, stampedMutationId ? null : input.client_mutation_id ?? null,
-          ],
+          [conversationId, senderId, input.body, input.msg_type, input.attachment_url ?? null, bc.broadcast_id],
         );
-        stampedMutationId = true;
         await c.query(`UPDATE chat_conversations SET updated_at = now() WHERE conversation_id = $1`, [conversationId]);
         await recordChange(c, "chat_messages", msg.message_id, null, "upsert");
       }
-      return { sent: recipients.length, duplicate: false };
+      return { broadcast_id: bc.broadcast_id, sent: recipients.length, duplicate: false };
     });
+  }
+
+  /** Every broadcast this sender has sent, newest first, each with the two
+   *  numbers that matter: how many it reached, and how many answered. */
+  async listBroadcasts(senderId: string): Promise<{ data: unknown[] }> {
+    const data = await many(
+      this.pool,
+      `SELECT b.broadcast_id, b.body, b.msg_type, b.attachment_url, b.audience,
+              b.recipient_count, b.created_at,
+              (SELECT count(DISTINCT r.author_user_id)::int
+                 FROM chat_messages copy
+                 JOIN chat_messages r ON r.conversation_id = copy.conversation_id
+                WHERE copy.broadcast_id = b.broadcast_id
+                  AND r.author_user_id <> b.sender_user_id
+                  AND r.created_at > copy.created_at
+                  AND r.deleted_at IS NULL AND NOT r.is_hidden) AS replied_count,
+              (SELECT count(*)::int
+                 FROM chat_messages copy
+                 JOIN chat_members mem ON mem.conversation_id = copy.conversation_id
+                                      AND mem.user_id <> b.sender_user_id
+                WHERE copy.broadcast_id = b.broadcast_id
+                  AND mem.last_read_at IS NOT NULL
+                  AND mem.last_read_at >= copy.created_at) AS read_count
+         FROM chat_broadcasts b
+        WHERE b.sender_user_id = $1
+        ORDER BY b.created_at DESC
+        LIMIT 100`,
+      [senderId],
+    );
+    return { data };
+  }
+
+  /**
+   * One broadcast and everything it stirred up: the message itself at the top,
+   * then every response beneath it — the church answering back in one place.
+   *
+   * A response needs no table of its own: it is any message in a delivered
+   * copy's conversation, written by the recipient, after the copy landed. Each
+   * carries its conversation_id, which IS the private thread with that person —
+   * already seeded with the broadcast as its top message. Promoting a response
+   * to a full conversation is therefore just opening it; there is nothing to
+   * create, and no context to re-attach.
+   */
+  async broadcastDetail(senderId: string, broadcastId: string): Promise<unknown> {
+    const b = await maybeOne<{ sender_user_id: string }>(
+      this.pool,
+      `SELECT broadcast_id, sender_user_id, body, msg_type, attachment_url, audience,
+              recipient_count, created_at
+         FROM chat_broadcasts WHERE broadcast_id = $1`,
+      [broadcastId],
+    );
+    if (!b) throw new ApiError("NOT_FOUND", "Broadcast not found");
+    // Your own broadcasts only — a broadcast's replies are the private words of
+    // members answering ONE person (§5.4).
+    if (b.sender_user_id !== senderId) throw new ApiError("FORBIDDEN_SCOPE", "Not your broadcast");
+    const responses = await many(
+      this.pool,
+      `SELECT r.message_id, r.conversation_id, r.body, r.msg_type, r.attachment_url,
+              r.created_at, u.user_id, u.full_name, u.avatar_url,
+              (SELECT count(*)::int FROM chat_messages n
+                WHERE n.conversation_id = r.conversation_id
+                  AND n.author_user_id = r.author_user_id
+                  AND n.deleted_at IS NULL AND NOT n.is_hidden) AS from_them
+         FROM chat_messages copy
+         JOIN chat_messages r ON r.conversation_id = copy.conversation_id
+                             AND r.created_at > copy.created_at
+         JOIN users u ON u.user_id = r.author_user_id
+        WHERE copy.broadcast_id = $1
+          AND r.author_user_id <> $2
+          AND r.deleted_at IS NULL AND NOT r.is_hidden
+        ORDER BY r.created_at DESC
+        LIMIT 500`,
+      [broadcastId, senderId],
+    );
+    return { ...b, responses };
   }
 
   /** Join a public space in the caller's congregation. */

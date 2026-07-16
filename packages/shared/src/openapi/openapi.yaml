@@ -4128,7 +4128,7 @@ paths:
   /chat/broadcast:
     post:
       tags: [progress]
-      summary: Staff broadcast (Instructor+) — deliver ONE message to every active member of the sender's congregation as an individual DM from the sender (no group room; replies return as normal 1:1 threads). Minors excluded (D-M6). Idempotent on client_mutation_id. May carry an image (msg_type=image + attachment_url uploaded via /chat/attachments/sign) — body is then the caption.
+      summary: Staff broadcast (Instructor+) — deliver ONE message to every active member as an individual DM from the sender (no group room; replies return as normal 1:1 threads, private to the sender). Minors excluded (D-M6). Idempotent on client_mutation_id. May carry an image (msg_type=image + attachment_url uploaded via /chat/attachments/sign) — body is then the caption. Recorded as a chat_broadcasts row, so the send is addressable afterwards via /chat/broadcasts.
       requestBody:
         required: true
         content:
@@ -4140,6 +4140,15 @@ paths:
                 body: { type: string, minLength: 1, maxLength: 20000, description: "The message text (the caption, for an image broadcast)." }
                 msg_type: { type: string, enum: [text, image], default: text }
                 attachment_url: { type: string, format: uri, maxLength: 2000, description: Cloudinary secure_url of the uploaded image (the caption travels in body). }
+                audience:
+                  type: string
+                  enum: [congregation, all]
+                  default: congregation
+                  description: >-
+                    "congregation" reaches the sender's own congregation (Instructor+).
+                    "all" reaches every member of every congregation — including those
+                    with no congregation at all, whom a scoped fan-out silently misses.
+                    SuperAdmin only; anyone else gets 403 FORBIDDEN_SCOPE.
                 client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
       responses:
         "201":
@@ -4149,8 +4158,9 @@ paths:
               schema:
                 type: object
                 properties:
-                  sent: { type: integer, description: Number of members the message was delivered to. }
-                  duplicate: { type: boolean, description: True when a replayed client_mutation_id short-circuited. }
+                  broadcast_id: { type: string, format: uuid, description: "The send itself — pass to /chat/broadcasts/{id} to see who answered." }
+                  sent: { type: integer, description: "Number of members the message was delivered to, recorded at send time." }
+                  duplicate: { type: boolean, description: "True when a replayed client_mutation_id short-circuited. `sent` is then what actually landed, not a recount of today's membership." }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "422": { $ref: "#/components/responses/Unprocessable" }
@@ -4189,6 +4199,36 @@ paths:
       responses:
         "200": { description: Joined }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/broadcasts:
+    get:
+      tags: [progress]
+      summary: >-
+        My broadcasts, newest first, each with recipient_count (how many it
+        reached, recorded at send time) and replied_count (how many answered).
+        MINE only — a broadcast's replies are members speaking privately to one
+        person (§5.4), so there is no all-broadcasts view, not even for a
+        moderator.
+      responses:
+        "200": { description: "{ data: [{ broadcast_id, body, audience, recipient_count, replied_count, read_count, created_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — Instructor+ only" }
+  /chat/broadcasts/{id}:
+    get:
+      tags: [progress]
+      summary: >-
+        One broadcast: the message, then every response to it. A response is any
+        message a recipient wrote in their delivered copy's conversation after it
+        landed — no reply table exists or is needed. Each response carries the
+        conversation_id of the private thread it came from, ALREADY seeded with
+        the broadcast as its top message, so promoting a response to a full
+        conversation is a navigation rather than a creation.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ broadcast_id, body, recipient_count, created_at, responses: [{ message_id, conversation_id, body, created_at, user_id, full_name, avatar_url, from_them }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — not your broadcast" }
         "404": { $ref: "#/components/responses/NotFound" }
   /chat/messages/{id}/flag:
     post:

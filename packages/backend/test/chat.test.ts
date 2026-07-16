@@ -541,7 +541,8 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
     const res = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
       .send({ body: "Sunday flyer 📸", msg_type: "image", attachment_url: flyer, client_mutation_id: uuid(90) });
     expect(res.status).toBe(201);
-    expect(res.body).toEqual({ sent: 2, duplicate: false });
+    expect(res.body).toMatchObject({ sent: 2, duplicate: false });
+    expect(res.body.broadcast_id).toBeTruthy();
 
     // BOTH recipients' DMs carry the image message with the caption as body.
     for (const tok of [m1Tok, m2Tok]) {
@@ -561,7 +562,7 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
     // Replay is still a no-op with the attachment present.
     const replay = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
       .send({ body: "Sunday flyer 📸", msg_type: "image", attachment_url: flyer, client_mutation_id: uuid(90) });
-    expect(replay.body).toEqual({ sent: 2, duplicate: true });
+    expect(replay.body).toMatchObject({ sent: 2, duplicate: true, broadcast_id: res.body.broadcast_id });
     const count = await testPool().query(
       `SELECT count(*)::int AS n FROM chat_messages WHERE attachment_url = $1`, [flyer],
     );
@@ -577,16 +578,148 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
 
     const first = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
       .send({ body: "first word", client_mutation_id: uuid(95) });
-    expect(first.body).toEqual({ sent: 1, duplicate: false });
+    expect(first.body).toMatchObject({ sent: 1, duplicate: false });
     const second = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
       .send({ body: "second word", client_mutation_id: uuid(96) });
-    expect(second.body).toEqual({ sent: 1, duplicate: false });
+    expect(second.body).toMatchObject({ sent: 1, duplicate: false });
+    expect(second.body.broadcast_id).not.toBe(first.body.broadcast_id); // two sends, two things sent
 
     const inbox = await agent().get("/v1/chat/conversations").set(auth(m1Tok));
     const dms = (inbox.body.conversations as Array<{ conversation_id: string; kind: string }>).filter((c) => c.kind === "dm");
     expect(dms).toHaveLength(1); // same thread, two messages
     const thread = await agent().get(`/v1/chat/conversations/${dms[0]!.conversation_id}`).set(auth(m1Tok));
     expect((thread.body.messages as unknown[]).length).toBe(2);
+  });
+});
+
+/** The Broadcast tab: one message out, every answer home. A broadcast is a thing
+ *  you can point at — without the parent row the delivered copies were
+ *  indistinguishable from hand-typed DMs and nothing could be asked of them. */
+describe("broadcast — the sent thing, and the answers to it", () => {
+  interface Resp { user_id: string; full_name: string; body: string; conversation_id: string }
+
+  it("gathers every reply under the broadcast, each carrying the private thread it came from", async () => {
+    const cong2 = await createCongregation("Answering Branch");
+    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "bc-pastor@dev.local", fullName: "Pastor Ann" });
+    const m1 = await createUser({ congregationId: cong2, email: "bc1@dev.local", fullName: "Ann Member" });
+    const m2 = await createUser({ congregationId: cong2, email: "bc2@dev.local", fullName: "Ben Member" });
+    await createUser({ congregationId: cong2, email: "bc3@dev.local", fullName: "Quiet Cara" }); // never answers
+    const senderTok = bearer({ sub: sender.user_id, role: "Admin", cong: cong2 });
+    const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
+    const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });
+
+    const sent = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
+      .send({ body: "Who can serve on Sunday?", client_mutation_id: uuid(70) });
+    const bId = sent.body.broadcast_id as string;
+    expect(sent.body.sent).toBe(3);
+
+    // Two of the three answer, in their own private threads.
+    // NB: uuid(n) here pads to TWO digits — keep every n <= 99 or it mints an
+    // invalid uuid and the route 400s.
+    const replyIn = async (tok: string, body: string, msgN: number, mutN: number): Promise<void> => {
+      const inbox = await agent().get("/v1/chat/conversations").set(auth(tok));
+      const dm = (inbox.body.conversations as Array<{ conversation_id: string; kind: string }>).find((c) => c.kind === "dm")!;
+      const r = await agent().post(`/v1/chat/conversations/${dm.conversation_id}/messages`).set(auth(tok))
+        .send({ message_id: uuid(msgN), body, msg_type: "text", client_mutation_id: uuid(mutN) });
+      expect(r.status, `reply failed: ${JSON.stringify(r.body)}`).toBeLessThan(300);
+    };
+    await replyIn(m1Tok, "I can serve 🙋🏽‍♀️", 71, 73);
+    await replyIn(m2Tok, "Travelling, but praying", 72, 74);
+
+    const detail = await agent().get(`/v1/chat/broadcasts/${bId}`).set(auth(senderTok));
+    expect(detail.status).toBe(200);
+    expect(detail.body.body).toBe("Who can serve on Sunday?"); // the top message
+    expect(detail.body.recipient_count).toBe(3);
+
+    const responses = detail.body.responses as Resp[];
+    expect(responses).toHaveLength(2); // Cara's silence is not a response
+    expect(responses.map((r) => r.full_name).sort()).toEqual(["Ann Member", "Ben Member"]);
+    // Each answer carries the thread it lives in — already seeded with the
+    // broadcast, so "open the conversation" is a navigation, not a creation.
+    for (const r of responses) expect(r.conversation_id).toBeTruthy();
+    const annThread = responses.find((r) => r.full_name === "Ann Member")!.conversation_id;
+    const opened = await agent().get(`/v1/chat/conversations/${annThread}`).set(auth(senderTok));
+    const msgs = opened.body.messages as Array<{ body: string }>;
+    expect(msgs[0]!.body).toBe("Who can serve on Sunday?"); // the broadcast IS the top message
+    expect(msgs[1]!.body).toBe("I can serve 🙋🏽‍♀️");
+
+    // The list carries the two numbers that matter.
+    const list = await agent().get("/v1/chat/broadcasts").set(auth(senderTok));
+    const row = (list.body.data as Array<{ broadcast_id: string; recipient_count: number; replied_count: number }>)
+      .find((b) => b.broadcast_id === bId)!;
+    expect(row.recipient_count).toBe(3);
+    expect(row.replied_count).toBe(2);
+  });
+
+  it("a broadcast's replies are private to its sender — another admin cannot read them", async () => {
+    const cong2 = await createCongregation("Private Branch");
+    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "mine@dev.local", fullName: "Mine Admin" });
+    const nosy = await createUser({ congregationId: cong2, role: "Admin", email: "nosy@dev.local", fullName: "Nosy Admin" });
+    await createUser({ congregationId: cong2, email: "pm1@dev.local", fullName: "Pat Member" });
+    const senderTok = bearer({ sub: sender.user_id, role: "Admin", cong: cong2 });
+    const nosyTok = bearer({ sub: nosy.user_id, role: "Admin", cong: cong2 });
+
+    const sent = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
+      .send({ body: "How is your heart today?", client_mutation_id: uuid(75) });
+
+    const peek = await agent().get(`/v1/chat/broadcasts/${sent.body.broadcast_id}`).set(auth(nosyTok));
+    expect(peek.status).toBe(403);
+    expect(peek.body.error.code).toBe("FORBIDDEN_SCOPE");
+
+    // ...and it isn't in their list either.
+    const list = await agent().get("/v1/chat/broadcasts").set(auth(nosyTok));
+    expect(list.body.data).toHaveLength(0);
+  });
+
+  it("audience=all is SuperAdmin-only, and reaches members an Instructor's congregation misses", async () => {
+    const congA = await createCongregation("Reach A");
+    const congB = await createCongregation("Reach B");
+    const boss = await createUser({ congregationId: congA, role: "SuperAdmin", email: "boss@dev.local", fullName: "Big Boss" });
+    const lead = await createUser({ congregationId: congA, role: "Instructor", email: "lead2@dev.local", fullName: "Lead Two" });
+    await createUser({ congregationId: congA, email: "ra1@dev.local", fullName: "A One" });
+    await createUser({ congregationId: congB, email: "rb1@dev.local", fullName: "B One" });
+    const bossTok = bearer({ sub: boss.user_id, role: "SuperAdmin", cong: congA });
+    const leadTok = bearer({ sub: lead.user_id, role: "Instructor", cong: congA });
+
+    // An Instructor may not reach everyone.
+    const denied = await agent().post("/v1/chat/broadcast").set(auth(leadTok))
+      .send({ body: "everyone hear me", audience: "all", client_mutation_id: uuid(80) });
+    expect(denied.status).toBe(403);
+    expect(denied.body.error.code).toBe("FORBIDDEN_SCOPE");
+
+    // Their congregation-scoped broadcast reaches only congregation A (boss, lead's own is excluded, A One).
+    const scoped = await agent().post("/v1/chat/broadcast").set(auth(leadTok))
+      .send({ body: "branch only", client_mutation_id: uuid(81) });
+    expect(scoped.body.sent).toBe(2); // boss + A One — never B One
+
+    // The SuperAdmin's reaches across congregations.
+    const all = await agent().post("/v1/chat/broadcast").set(auth(bossTok))
+      .send({ body: "to the whole church", audience: "all", client_mutation_id: uuid(82) });
+    expect(all.status).toBe(201);
+    const reached = all.body.sent as number;
+    expect(reached).toBeGreaterThanOrEqual(3); // lead + A One + B One, across both congregations
+  });
+
+  it("a replay returns what actually landed, not a recount of today's membership", async () => {
+    const cong2 = await createCongregation("Replay Branch");
+    const sender = await createUser({ congregationId: cong2, role: "Admin", email: "rp@dev.local", fullName: "Replay Ray" });
+    await createUser({ congregationId: cong2, email: "rp1@dev.local", fullName: "Rp One" });
+    const senderTok = bearer({ sub: sender.user_id, role: "Admin", cong: cong2 });
+
+    const first = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
+      .send({ body: "counted once", client_mutation_id: uuid(85) });
+    expect(first.body.sent).toBe(1);
+
+    // Someone joins AFTER the send. The replay must still report 1 — the number
+    // that actually went out — not 2, which never happened.
+    await createUser({ congregationId: cong2, email: "rp2@dev.local", fullName: "Rp Two (joined later)" });
+    const replay = await agent().post("/v1/chat/broadcast").set(auth(senderTok))
+      .send({ body: "counted once", client_mutation_id: uuid(85) });
+    expect(replay.body).toMatchObject({ sent: 1, duplicate: true, broadcast_id: first.body.broadcast_id });
+
+    // And the latecomer got nothing — a replay delivers no new copies.
+    const copies = await testPool().query(`SELECT count(*)::int AS n FROM chat_messages WHERE body = $1`, ["counted once"]);
+    expect(copies.rows[0].n).toBe(1);
   });
 });
 
