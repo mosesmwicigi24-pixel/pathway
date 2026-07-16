@@ -513,9 +513,12 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
       expect(dm.title).toBe("Pastor Pat");
       expect(dm.last_body).toBe("Service moves to 10am this Sunday 🙏");
       const thread = await agent().get(`/v1/chat/conversations/${dm.conversation_id}`).set(auth(tok));
-      const msgs = thread.body.messages as Array<{ body: string; author_user_id: string; message_id: string }>;
+      const msgs = thread.body.messages as Array<{ body: string; author_user_id: string; message_id: string; broadcast_id: string | null }>;
       expect(msgs).toHaveLength(1);
       expect(msgs[0]!.author_user_id).toBe(sender.user_id);
+      // The copy carries its parent's mark — how a member's thread knows to
+      // dress itself as "Talk with Pastor" instead of a plain DM.
+      expect(msgs[0]!.broadcast_id).toBeTruthy();
       expect(msgs[0]!.message_id).toBe(msgs[0]!.message_id.toLowerCase()); // server-minted lowercase id
     }
 
