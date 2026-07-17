@@ -4,10 +4,10 @@ import {
   BookOpen, LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
   TrendingUp, MessageSquare, MessagesSquare, Video, Star, HelpCircle, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
-  Radio, SlidersVertical, ListMusic, UserCheck, HeartHandshake, HeartPulse, type LucideIcon,
+  Radio, SlidersVertical, ListMusic, UserCheck, HeartHandshake, HeartPulse, Megaphone, type LucideIcon,
 } from "lucide-react";
 
-export interface NavItem { path: string; label: string; icon: LucideIcon }
+export interface NavItem { path: string; label: string; icon: LucideIcon; superAdminOnly?: boolean }
 export interface NavGroup { label: string; items: NavItem[] }
 
 export const navGroups: NavGroup[] = [
@@ -55,6 +55,9 @@ export const navGroups: NavGroup[] = [
     label: "Communication",
     items: [
       { path: "/chat", label: "Chat", icon: MessagesSquare },
+      // Between the shepherd and the flock — the item itself is hidden from
+      // everyone below SuperAdmin (the server enforces it regardless).
+      { path: "/broadcast", label: "Broadcast", icon: Megaphone, superAdminOnly: true },
     ],
   },
   {
@@ -96,6 +99,7 @@ export const pageTitles: Record<string, string> = {
   "/level-reviews": "Level Reviews",
   "/discipleship-hub": "Discipleship Hub",
   "/chat": "Chat",
+  "/broadcast": "Broadcast",
   "/events": "Events & Attendance",
   "/finance": "Finance",
   "/certificates": "Certificates & Badges",

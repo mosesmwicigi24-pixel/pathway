@@ -2246,3 +2246,98 @@ async function defaultRefresh(): Promise<string | null> {
   }
 }
 setRefreshHandler(defaultRefresh);
+
+// ---- Broadcast (SuperAdmin only; §5.3 password step-up guards every route) ----
+// The server opens these only for a token carrying a fresh pwd_at. A stale one
+// answers 403 + details.password_required — the cue to ask for the password,
+// POST /auth/confirm-password (re-mints the access token; refresh untouched),
+// and retry. The portal keeps no unlock state of its own beyond the token: the
+// server's 15-minute window is the single source of truth.
+
+export interface BroadcastRow {
+  broadcast_id: string;
+  body: string;
+  msg_type: string;
+  attachment_url?: string | null;
+  audience: "all" | "congregation";
+  recipient_count: number;
+  created_at: string;
+  replied_count: number;
+  seen_count: number;
+}
+
+export interface BroadcastSent {
+  broadcast_id: string;
+  body: string;
+  audience: string;
+  recipient_count: number;
+  created_at: string;
+  sent: number;
+  duplicate: boolean;
+}
+
+export interface BroadcastResponse {
+  message_id: string;
+  conversation_id: string; // the private 1:1 thread — "open" is a navigation
+  body: string;
+  msg_type: string;
+  attachment_url: string | null;
+  created_at: string;
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  from_them: number; // how many messages this member has written in the thread
+}
+
+export interface BroadcastRecipient {
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  delivered_at: string;
+  delivered: boolean; // one blue tick — the copy is in their thread
+  seen: boolean; // two blue ticks — they opened it after it landed
+  seen_at: string | null;
+}
+
+export interface BroadcastDetailData {
+  broadcast_id: string;
+  body: string;
+  msg_type: string;
+  attachment_url: string | null;
+  audience: string;
+  recipient_count: number;
+  created_at: string;
+  responses: BroadcastResponse[];
+  recipients: BroadcastRecipient[];
+  delivered_count: number;
+  seen_count: number;
+}
+
+/** True when a 403 is the step-up cue (details.password_required) rather than a plain scope refusal. */
+export function isPasswordRequired(e: unknown): boolean {
+  const err = e as { response?: { status?: number; data?: { error?: { details?: { password_required?: boolean } } } } };
+  return err?.response?.status === 403 && err.response.data?.error?.details?.password_required === true;
+}
+
+export const BroadcastApi = {
+  /** Prove the password now; the re-minted token opens the broadcast for 15 min. */
+  confirmPassword: (password: string) =>
+    api
+      .post<{ access_token: string; expires_in: number; confirmed_at: number }>("/auth/confirm-password", { password })
+      .then((r) => {
+        setAccessToken(r.data.access_token); // refresh token stays as-is
+        return r.data;
+      }),
+  /** Send to the whole church (audience omitted = ALL — the SuperAdmin default). */
+  send: (body: string, clientMutationId: string) =>
+    api
+      .post<BroadcastSent>("/chat/broadcast", { body, msg_type: "text", client_mutation_id: clientMutationId })
+      .then((r) => r.data),
+  /** The last posts sent (server default 4) + the all-time total. */
+  list: (limit?: number) =>
+    api
+      .get<{ data: BroadcastRow[]; total: number }>("/chat/broadcasts", limit ? { params: { limit } } : undefined)
+      .then((r) => r.data),
+  /** One broadcast whole: the message, every response, and the tick ledger. */
+  detail: (id: string) => api.get<BroadcastDetailData>(`/chat/broadcasts/${id}`).then((r) => r.data),
+};
