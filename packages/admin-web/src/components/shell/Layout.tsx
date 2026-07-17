@@ -94,7 +94,9 @@ export function Layout(): ReactElement {
               {!collapsed && (
                 <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(232,239,245,0.3)", textTransform: "uppercase", letterSpacing: "0.1em", padding: "10px 20px 4px" }}>{group.label}</div>
               )}
-              {group.items.map(({ path, label, icon: Icon }) => (
+              {group.items
+                .filter((i) => !i.superAdminOnly || (me?.role ?? role) === "SuperAdmin")
+                .map(({ path, label, icon: Icon }) => (
                 <NavLink
                   key={path}
                   to={path}

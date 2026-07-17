@@ -22,6 +22,7 @@ import { ReflectionQueue } from "./components/pages/ReflectionQueue";
 import { LevelReviews } from "./components/pages/LevelReviews";
 import { DiscipleshipHub } from "./components/pages/DiscipleshipHub";
 import { Chat } from "./components/pages/Chat";
+import { Broadcast } from "./components/pages/Broadcast";
 import { Events } from "./components/pages/Events";
 import { Finance } from "./components/pages/Finance";
 import { Certificates } from "./components/pages/Certificates";
@@ -68,6 +69,7 @@ const router = createBrowserRouter([
       { path: "level-reviews", element: <LevelReviews /> },
       { path: "discipleship-hub", element: <DiscipleshipHub /> },
       { path: "chat", element: <Chat /> },
+      { path: "broadcast", element: <Broadcast /> },
       { path: "events", element: <Events /> },
       { path: "finance", element: <Finance /> },
       { path: "certificates", element: <Certificates /> },
