@@ -2092,7 +2092,14 @@ export const RadioApi = {
   // Uploaded session audio (self-hosted disk; mirrors the video upload) -----
   // Bytes go to our own /media store; returns { url, duration_sec }. The axios
   // instance injects the admin JWT and sets multipart from the FormData body.
-  uploadAudio: (file: File, durationSec?: number): Promise<AudioUploadResult> => {
+  uploadAudio: (
+    file: File,
+    durationSec?: number,
+    // Real per-file transfer progress (bytes sent / total) for the multi-file
+    // upload queue — axios' XHR adapter reports genuine upload progress, which
+    // a plain fetch cannot.
+    onProgress?: (sentBytes: number, totalBytes: number) => void,
+  ): Promise<AudioUploadResult> => {
     const form = new FormData();
     form.append("file", file, file.name);
     if (durationSec != null && Number.isFinite(durationSec)) {
@@ -2100,7 +2107,14 @@ export const RadioApi = {
     }
     // timeout: 0 — audio files run up to 70 MB; the instance-wide 15s timeout
     // would abort any real-world upload mid-flight.
-    return api.post<AudioUploadResult>("/admin/media/audio/upload", form, { timeout: 0 }).then((r) => r.data);
+    return api
+      .post<AudioUploadResult>("/admin/media/audio/upload", form, {
+        timeout: 0,
+        ...(onProgress
+          ? { onUploadProgress: (e: { loaded: number; total?: number }) => onProgress(e.loaded, e.total && e.total > 0 ? e.total : file.size) }
+          : {}),
+      })
+      .then((r) => r.data);
   },
 
   // Broadcast lifecycle (server-authoritative) -----------------------------

@@ -5,7 +5,7 @@
 // deleted; Super Admin is always full and cannot be restricted.
 import { useCallback, useEffect, useMemo, useState, Fragment, type ReactElement, type CSSProperties } from "react";
 import {
-  ChevronRight, Plus, Shield, ShieldCheck, ShieldAlert, ShieldHalf, Trash2, Search,
+  ChevronRight, Pencil, Plus, Shield, ShieldCheck, ShieldAlert, ShieldHalf, Trash2, Search,
   Globe, UsersRound, BookOpenCheck, HeartHandshake, X, Check, Lock, RotateCcw, Save,
 } from "lucide-react";
 import { SystemApi, type SystemRole, type RolePermission, type Capability } from "../../api/client";
@@ -71,6 +71,7 @@ export function Roles(): ReactElement {
   const [query, setQuery] = useState("");
   const [openRole, setOpenRole] = useState<SystemRole | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editRole, setEditRole] = useState<SystemRole | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => { try { setList(await SystemApi.roles()); } catch (e) { setError(errorMessage(e, "Could not load roles.")); } }, []);
@@ -119,20 +120,21 @@ export function Roles(): ReactElement {
             {keyRoles.length > 0 && (
               <>
                 <RoleGroupHeader title="Key roles" caption="Built-in access tiers" />
-                {keyRoles.map((r, i) => <RoleRow key={r.role_key} role={r} divided={i > 0} onOpen={() => setOpenRole(r)} onDelete={() => deleteRole(r)} />)}
+                {keyRoles.map((r, i) => <RoleRow key={r.role_key} role={r} divided={i > 0} onOpen={() => setOpenRole(r)} onEdit={() => setEditRole(r)} onDelete={() => deleteRole(r)} />)}
               </>
             )}
             {otherRoles.length > 0 && (
               <>
                 <RoleGroupHeader title="Configured roles" caption={`${otherRoles.length} custom ${otherRoles.length === 1 ? "role" : "roles"}`} />
-                {otherRoles.map((r, i) => <RoleRow key={r.role_key} role={r} divided={i > 0} onOpen={() => setOpenRole(r)} onDelete={() => deleteRole(r)} />)}
+                {otherRoles.map((r, i) => <RoleRow key={r.role_key} role={r} divided={i > 0} onOpen={() => setOpenRole(r)} onEdit={() => setEditRole(r)} onDelete={() => deleteRole(r)} />)}
               </>
             )}
           </div>
         )}
       </div>
 
-      {createOpen && <CreateRoleModal roles={list} onClose={() => setCreateOpen(false)} onCreated={async (key) => { setCreateOpen(false); await load(); const created = (await SystemApi.roles()).find((x) => x.role_key === key); if (created) setOpenRole(created); }} onError={setError} />}
+      {createOpen && <RoleModal roles={list} onClose={() => setCreateOpen(false)} onDone={async (key) => { setCreateOpen(false); await load(); const created = (await SystemApi.roles()).find((x) => x.role_key === key); if (created) setOpenRole(created); }} onError={setError} />}
+      {editRole && <RoleModal roles={list} editRole={editRole} onClose={() => setEditRole(null)} onDone={async () => { setEditRole(null); await load(); }} onError={setError} />}
       {openRole && <PermissionsDrawer role={openRole} onClose={() => setOpenRole(null)} onSaved={async () => { setOpenRole(null); await load(); }} onError={setError} />}
     </div>
   );
@@ -153,7 +155,7 @@ function RoleGroupHeader({ title, caption }: { title: string; caption: string })
 
 // Members-style informative role row (iPad RoleRichRow): icon tile · name + mono key +
 // type pill + description · perms / members metrics · status pill · right-aligned actions.
-function RoleRow({ role, divided, onOpen, onDelete }: { role: SystemRole; divided: boolean; onOpen: () => void; onDelete: () => void }): ReactElement {
+function RoleRow({ role, divided, onOpen, onEdit, onDelete }: { role: SystemRole; divided: boolean; onOpen: () => void; onEdit: () => void; onDelete: () => void }): ReactElement {
   const ic = KEY_ICONS[role.role_key] ?? typeIcon[role.role_type];
   const Icon = ic.Icon;
   const rc = roleChip[role.role_type];
@@ -184,6 +186,7 @@ function RoleRow({ role, divided, onOpen, onDelete }: { role: SystemRole; divide
       </div>
       <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 shrink-0" style={{ background: active ? "#E8F6EE" : "#F3F4F6", color: active ? "#0F6B33" : "#6B7280", fontSize: 11, fontWeight: 700, textTransform: "capitalize" }}><span style={{ width: 6, height: 6, borderRadius: 999, background: active ? "#0F6B33" : "#6B7280" }} /> {role.status}</span>
       <div className="flex items-center gap-1.5 shrink-0">
+        <button onClick={onEdit} title="Edit role" className="flex items-center justify-center rounded-lg" style={{ width: 32, height: 30, color: "var(--nuru-navy)", background: "rgba(11,31,51,0.06)", border: "none", cursor: "pointer" }}><Pencil size={13} /></button>
         <button onClick={onOpen} title="Permissions" className="flex items-center justify-center rounded-lg" style={{ width: 32, height: 30, color: "var(--nuru-navy)", background: "rgba(11,31,51,0.06)", border: "none", cursor: "pointer" }}><Shield size={13} /></button>
         <button onClick={onDelete} title={role.is_system ? "Built-in roles can't be deleted" : "Delete role"} disabled={role.is_system} className="flex items-center justify-center rounded-lg" style={{ width: 32, height: 30, color: role.is_system ? "var(--muted-foreground)" : "#DC2626", background: role.is_system ? "rgba(107,114,128,0.10)" : "rgba(220,38,38,0.10)", border: "none", cursor: role.is_system ? "not-allowed" : "pointer", opacity: role.is_system ? 0.6 : 1 }}><Trash2 size={13} /></button>
       </div>
@@ -191,37 +194,61 @@ function RoleRow({ role, divided, onOpen, onDelete }: { role: SystemRole; divide
   );
 }
 
-function CreateRoleModal({ roles, onClose, onCreated, onError }: { roles: SystemRole[]; onClose: () => void; onCreated: (key: string) => void; onError: (m: string) => void }): ReactElement {
-  const [name, setName] = useState("");
-  const [type, setType] = useState<SystemRole["role_type"]>("staff");
-  const [description, setDescription] = useState("");
+// One modal shell for both CREATE and EDIT (edit prefills from the role and
+// PUTs via SystemApi.updateRole). In edit mode the copy-from picker is hidden
+// (permissions live in the drawer) and built-in roles lock their type.
+function RoleModal({ roles, editRole, onClose, onDone, onError }: { roles: SystemRole[]; editRole?: SystemRole; onClose: () => void; onDone: (key: string) => void; onError: (m: string) => void }): ReactElement {
+  const editing = !!editRole;
+  const typeLocked = !!editRole?.is_system;
+  const [name, setName] = useState(editRole?.name ?? "");
+  const [type, setType] = useState<SystemRole["role_type"]>(editRole?.role_type ?? "staff");
+  const [description, setDescription] = useState(editRole?.description ?? "");
   const [copyFrom, setCopyFrom] = useState("");
   const [busy, setBusy] = useState(false);
-  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const slug = editRole?.role_key ?? name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
   async function submit(): Promise<void> {
     if (!name.trim()) { onError("Please enter a role name."); return; }
     setBusy(true);
     try {
-      const created = await SystemApi.createRole({ name: name.trim(), role_type: type, description: description.trim() || "Custom role.", ...(copyFrom ? { copy_from: copyFrom } : {}) });
-      onCreated(created.role_key);
-    } catch (e) { onError(errorMessage(e, "Create failed.")); } finally { setBusy(false); }
+      if (editRole) {
+        await SystemApi.updateRole(editRole.role_key, { name: name.trim(), description: description.trim(), ...(typeLocked ? {} : { role_type: type }) });
+        onDone(editRole.role_key);
+      } else {
+        const created = await SystemApi.createRole({ name: name.trim(), role_type: type, description: description.trim() || "Custom role.", ...(copyFrom ? { copy_from: copyFrom } : {}) });
+        onDone(created.role_key);
+      }
+    } catch (e) { onError(errorMessage(e, editing ? "Update failed." : "Create failed.")); } finally { setBusy(false); }
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(11,31,51,0.55)" }} onClick={onClose}>
       <div className="rounded-2xl overflow-hidden flex flex-col w-full" style={{ background: "var(--card)", maxWidth: 540, maxHeight: "90vh", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }} onClick={(e) => e.stopPropagation()}>
         <div className="px-6 py-5 flex items-start justify-between" style={{ borderBottom: "1px solid var(--border)" }}>
-          <div><div className="flex items-center gap-2" style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: "var(--nuru-gold)" }}><Shield size={12} /> NEW ROLE</div><h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--foreground)", marginTop: 2 }}>Create a role</h2><p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 4 }}>Name it, pick a starting permission set, then fine-tune the matrix.</p></div>
+          <div>
+            <div className="flex items-center gap-2" style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: "var(--nuru-gold)" }}><Shield size={12} /> {editing ? "EDIT ROLE" : "NEW ROLE"}</div>
+            <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--foreground)", marginTop: 2 }}>{editing ? `Edit ${editRole?.name ?? "role"}` : "Create a role"}</h2>
+            <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 4 }}>{editing ? "Rename the role or update its type and description. Permissions are edited in the drawer." : "Name it, pick a starting permission set, then fine-tune the matrix."}</p>
+          </div>
           <button onClick={onClose} className="rounded-lg p-2" style={{ background: "var(--secondary)", color: "var(--foreground)", border: "none" }}><X size={16} /></button>
         </div>
         <div className="px-6 py-5 flex flex-col gap-4 overflow-y-auto">
-          <div><label style={lbl}>Role name</label><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Cell Coordinator" style={inp} />{slug && <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 5 }}>Key: <code style={{ fontFamily: "var(--font-mono)", color: "var(--nuru-navy)" }}>{slug}</code></div>}</div>
-          <div><label style={lbl}>Role type</label><select value={type} onChange={(e) => setType(e.target.value as SystemRole["role_type"])} style={{ ...inp, fontWeight: 600 }}><option value="staff">Staff — office / ministry</option><option value="field">Field — front-line disciple-maker</option></select></div>
+          <div><label style={lbl}>Role name</label><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Cell Coordinator" style={inp} />{slug && <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 5 }}>Key: <code style={{ fontFamily: "var(--font-mono)", color: "var(--nuru-navy)" }}>{slug}</code>{editing && " — fixed"}</div>}</div>
+          <div>
+            <label style={lbl}>Role type</label>
+            <select value={type} onChange={(e) => setType(e.target.value as SystemRole["role_type"])} disabled={typeLocked} style={{ ...inp, fontWeight: 600, opacity: typeLocked ? 0.6 : 1, cursor: typeLocked ? "not-allowed" : undefined }}>
+              {editRole?.role_type === "system" && <option value="system">System — platform owner</option>}
+              <option value="staff">Staff — office / ministry</option>
+              <option value="field">Field — front-line disciple-maker</option>
+            </select>
+            {typeLocked && <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 6 }}>Built-in role — its type is fixed.</div>}
+          </div>
           <div><label style={lbl}>Description</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} placeholder="What this role is responsible for…" style={{ ...inp, height: "auto", padding: "10px 14px", resize: "vertical", lineHeight: 1.5 }} /></div>
-          <div><label style={lbl}>Starting permissions</label><select value={copyFrom} onChange={(e) => setCopyFrom(e.target.value)} style={{ ...inp, fontWeight: 600 }}><option value="">Blank — no permissions</option>{roles.filter((r) => r.role_key !== "super_admin").map((r) => <option key={r.role_key} value={r.role_key}>Copy from: {r.name}</option>)}</select><div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 6 }}>You can adjust every capability in the next step.</div></div>
+          {!editing && (
+            <div><label style={lbl}>Starting permissions</label><select value={copyFrom} onChange={(e) => setCopyFrom(e.target.value)} style={{ ...inp, fontWeight: 600 }}><option value="">Blank — no permissions</option>{roles.filter((r) => r.role_key !== "super_admin").map((r) => <option key={r.role_key} value={r.role_key}>Copy from: {r.name}</option>)}</select><div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 6 }}>You can adjust every capability in the next step.</div></div>
+          )}
         </div>
-        <div className="px-6 py-4 flex items-center justify-end gap-2" style={{ borderTop: "1px solid var(--border)" }}><button onClick={onClose} className="rounded-xl px-4 py-2.5" style={{ background: "transparent", color: "var(--foreground)", fontSize: 13, fontWeight: 600, border: "none" }}>Cancel</button><button onClick={() => void submit()} disabled={busy} className="flex items-center gap-2 rounded-xl px-5 py-2.5" style={{ background: "var(--nuru-gold)", color: "#fff", fontSize: 13, fontWeight: 600, border: "none", opacity: busy ? 0.6 : 1 }}><Plus size={14} /> Create &amp; set permissions</button></div>
+        <div className="px-6 py-4 flex items-center justify-end gap-2" style={{ borderTop: "1px solid var(--border)" }}><button onClick={onClose} className="rounded-xl px-4 py-2.5" style={{ background: "transparent", color: "var(--foreground)", fontSize: 13, fontWeight: 600, border: "none" }}>Cancel</button><button onClick={() => void submit()} disabled={busy} className="flex items-center gap-2 rounded-xl px-5 py-2.5" style={{ background: "var(--nuru-gold)", color: "#fff", fontSize: 13, fontWeight: 600, border: "none", opacity: busy ? 0.6 : 1 }}>{editing ? <><Save size={14} /> Save changes</> : <><Plus size={14} /> Create &amp; set permissions</>}</button></div>
       </div>
     </div>
   );

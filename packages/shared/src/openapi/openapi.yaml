@@ -1194,7 +1194,7 @@ paths:
   /admin/roles/{key}:
     put:
       tags: [system]
-      summary: RBAC. Update a role's name/description/status (rolesAdmin:edit).
+      summary: RBAC. Update a role's name/type/description/status (rolesAdmin:edit).
       parameters: [{ name: key, in: path, required: true, schema: { type: string } }]
       responses:
         "200": { description: Updated }

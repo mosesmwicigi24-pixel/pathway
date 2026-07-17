@@ -299,7 +299,7 @@ export function registerSystem(ctx: AppContext): Router {
   r.put("/admin/roles/:key", auth, perm("rolesAdmin", "edit"), handler(async (req, res) => {
     const key = String(req.params.key);
     const input = parseBody(RoleInput.partial().extend({ status: z.enum(["active", "inactive"]).optional() }), req.body);
-    const cols: Record<string, unknown> = { name: input.name, description: input.description, status: input.status };
+    const cols: Record<string, unknown> = { name: input.name, role_type: input.role_type, description: input.description, status: input.status };
     const keys = Object.keys(cols).filter((k) => cols[k] !== undefined);
     const row = await tx(db, async (c) => {
       if (!await maybeOne(c, `SELECT 1 FROM rbac_roles WHERE role_key = $1`, [key])) {

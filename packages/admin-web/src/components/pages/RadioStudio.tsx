@@ -169,6 +169,13 @@ export function RadioStudio(): ReactElement {
   const anyLive = programs?.some((p) => p.is_live) ?? false;
   const mic = useMicEngine(anyLive);
 
+  // Best-effort brand recognition for the SELECTED input. Labels only exist
+  // after mic permission — with a blank label this claims nothing.
+  const selectedMicLabel = mic.deviceId
+    ? mic.devices.find((d) => d.deviceId === mic.deviceId)?.label
+    : (mic.devices.find((d) => d.deviceId === "default")?.label ?? mic.devices[0]?.label);
+  const micBrand = matchMicBrand(selectedMicLabel);
+
   // The mic-started broadcast ended elsewhere (kill switch, another console,
   // auto-air worker) — drop the flag so OFF MIC is a plain disconnect again.
   useEffect(() => {
@@ -930,6 +937,17 @@ export function RadioStudio(): ReactElement {
                       </div>
                     ) : (
                       <>
+                        {mic.deviceToast && (
+                          <div className="rs-reveal rounded-lg px-3 py-2 mb-2.5" style={{ background: "rgba(255,255,255,0.05)", border: `1px solid ${PANEL_BORDER}`, color: TEXT, fontSize: 11.5, fontWeight: 600 }}>
+                            {mic.deviceToast}
+                          </div>
+                        )}
+                        {mic.silent && (
+                          <div className="rs-reveal rounded-lg px-3 py-2 mb-2.5 flex items-start gap-2" style={{ background: "rgba(230,198,110,0.10)", border: `1px solid ${GOLD}66`, color: GOLD, fontSize: 11.5, fontWeight: 600, lineHeight: 1.5 }}>
+                            <ShieldAlert size={14} className="shrink-0" style={{ marginTop: 1 }} />
+                            <span>Capturing silence — check your input device and level. On a mixer, route your mix to USB 1–2.</span>
+                          </div>
+                        )}
                         {!mic.ready && (
                           <button onClick={mic.enable} className="rs-btn w-full flex items-center justify-center gap-2 rounded-xl mb-3" style={{ height: 40, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px dashed ${GOLD}66`, fontSize: 12.5, fontWeight: 700 }}>
                             <Mic size={15} /> Enable microphone
@@ -946,6 +964,12 @@ export function RadioStudio(): ReactElement {
                             <option key={d.deviceId} value={d.deviceId} style={optStyle}>{d.label || `Microphone ${i + 1}`}</option>
                           ))}
                         </select>
+                        {micBrand && (
+                          <div className="rs-reveal flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
+                            <span className="rounded-full px-2.5 py-0.5 shrink-0" style={{ background: "rgba(230,198,110,0.14)", border: `1px solid ${GOLD}55`, color: GOLD, fontSize: 10, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{micBrand.brand}</span>
+                            <span style={{ fontSize: 11, color: micBrand.warn ? "#FCD34D" : DIM, lineHeight: 1.45 }}>{micBrand.hint}</span>
+                          </div>
+                        )}
                         <div style={{ fontSize: 11, color: DIM, marginTop: 8, lineHeight: 1.5 }}>
                           Any mic or audio interface your computer recognizes appears here — including DAWs routed through a loopback device (BlackHole, Loopback, VB-Cable). New devices appear the moment the OS sees them.
                         </div>
@@ -1149,7 +1173,7 @@ export function RadioStudio(): ReactElement {
                     {/* Playlists + track uploads live on their own page */}
                     <div className="flex items-center justify-between gap-2 flex-wrap" style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${PANEL_BORDER}` }}>
                       <span style={{ fontSize: 11, color: DIM }}>Playlists & track uploads have their own bench.</span>
-                      <Link to="/uploads-sessions" className="rs-btn flex items-center gap-1.5 rounded-lg px-2.5" style={{ height: 28, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>
+                      <Link to={`/uploads-sessions?open=${selected.id}`} className="rs-btn flex items-center gap-1.5 rounded-lg px-2.5" style={{ height: 28, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 11, fontWeight: 700, textDecoration: "none" }}>
                         <ListMusic size={12} /> Open in Uploads & Sessions
                       </Link>
                     </div>
@@ -1699,6 +1723,45 @@ type MicBootResult = "live" | "cancelled" | "occupied" | "failed";
 const MIC_BOOT_WINDOW_MS = 45_000;
 const MIC_BOOT_RETRY_MS = 3_000;
 
+// ── Zero-signal silence watchdog (native parity) ──
+// While ON AIR, a float-RMS reading pinned at digital zero (below ~0.00002 —
+// a dead input path, not merely a quiet room) for 4+ seconds means nothing is
+// reaching the capture: wrong device, a muted interface, or a mixer whose mix
+// bus isn't routed to its USB return. Latches once per silent stretch and
+// clears the moment signal returns.
+const SILENCE_RMS_FLOOR = 0.00002;
+const SILENCE_HOLD_MS = 4_000;
+// Transient device arrival/departure notice lifetime.
+const MIC_TOAST_MS = 5_000;
+
+// ── Best-effort mic brand recognition ──
+// Purely label-based (device labels exist only AFTER mic permission is
+// granted — a blank label notes nothing). Case- and diacritic-insensitive
+// substring match; first hit wins, so specific entries sit above generic ones.
+interface MicBrandHint { brand: string; hint: string; warn?: boolean }
+const MIC_BRAND_REGISTRY: { needles: string[]; info: MicBrandHint }[] = [
+  { needles: ["podmic", "rode"], info: { brand: "RØDE", hint: "Dynamic broadcast mic — talk close." } },
+  { needles: ["sm7b", "shure"], info: { brand: "Shure", hint: "Dynamic broadcast mic — talk close and give it gain." } },
+  { needles: ["mr18", "midas"], info: { brand: "Midas", hint: "Digital mixer — the app takes the mix from your selected input. Route your mix to USB 1–2." } },
+  { needles: ["xr18", "x air", "behringer"], info: { brand: "Behringer", hint: "The app takes the mix from your selected input. On a mixer, route your mix to USB 1–2." } },
+  { needles: ["scarlett", "focusrite"], info: { brand: "Focusrite", hint: "Audio interface — the app takes the mix from your selected input." } },
+  { needles: ["at2020", "at2035", "audio-technica", "audio technica"], info: { brand: "Audio-Technica", hint: "Condenser mic — a quiet room helps." } },
+  { needles: ["blue yeti", "yeti"], info: { brand: "Blue Yeti", hint: "USB condenser — set the pickup pattern to cardioid." } },
+  { needles: ["elgato wave", "wave:3", "wave:1", "elgato"], info: { brand: "Elgato Wave", hint: "USB condenser — the Wave Link mix feeds this input." } },
+  { needles: ["sennheiser"], info: { brand: "Sennheiser", hint: "Broadcast-grade mic — talk close." } },
+  { needles: ["zoom h", "zoom f", "zoom u", "zoom p"], info: { brand: "Zoom", hint: "Field recorder — set it to audio-interface mode." } },
+  { needles: ["samson"], info: { brand: "Samson", hint: "USB mic — talk close and watch the meter." } },
+  { needles: ["bluetooth", "airpods", "hands-free", "hfp"], info: { brand: "Bluetooth", hint: "Bluetooth runs call-grade audio — use a wired input for broadcast quality.", warn: true } },
+];
+function matchMicBrand(label: string | null | undefined): MicBrandHint | null {
+  if (!label) return null; // honest ceiling: no label (pre-permission) → no claim
+  const norm = label.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ø/gi, "o").toLowerCase();
+  for (const entry of MIC_BRAND_REGISTRY) {
+    if (entry.needles.some((n) => norm.includes(n))) return entry.info;
+  }
+  return null;
+}
+
 interface MicEngine {
   supported: boolean;
   devices: MediaDeviceInfo[];
@@ -1718,6 +1781,10 @@ interface MicEngine {
   gainPct: number;
   changeGain: (pct: number) => void;
   micErr: string | null;
+  // Zero-signal watchdog: ON AIR but the input has been digitally dead ≥4s.
+  silent: boolean;
+  // Transient device arrival/departure notice (auto-clears; null = none).
+  deviceToast: string | null;
   enable: () => void;
   goOnMic: () => void;
   // Instant mic broadcast: connect while the transmitter (harbor) is still
@@ -1753,6 +1820,8 @@ function useMicEngine(canGoLive: boolean): MicEngine {
   const [elapsed, setElapsed] = useState(0);
   const [micErr, setMicErr] = useState<string | null>(null);
   const [booting, setBooting] = useState(false);
+  const [silent, setSilent] = useState(false);
+  const [deviceToast, setDeviceToast] = useState<string | null>(null);
 
   // Refs mirror whatever the stable callbacks need (no stale closures).
   const phaseRef = useRef<MicPhase>("idle");
@@ -1784,6 +1853,19 @@ function useMicEngine(canGoLive: boolean): MicEngine {
   // set, 4008 closes retry instead of erroring; the promise settles once.
   const bootDeadlineRef = useRef<number | null>(null);
   const bootResolveRef = useRef<((r: MicBootResult) => void) | null>(null);
+  // Silence watchdog + device-change toast plumbing.
+  const silenceSinceRef = useRef<number | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevInputsRef = useRef<MediaDeviceInfo[] | null>(null);
+
+  const flashToast = useCallback((msg: string): void => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setDeviceToast(msg);
+    toastTimerRef.current = setTimeout(() => {
+      toastTimerRef.current = null;
+      setDeviceToast(null);
+    }, MIC_TOAST_MS);
+  }, []);
 
   const setPhaseBoth = useCallback((p: MicPhase): void => {
     phaseRef.current = p;
@@ -1805,6 +1887,7 @@ function useMicEngine(canGoLive: boolean): MicEngine {
     if (!analyser) return;
     cancelAnimationFrame(rafRef.current);
     const data = new Uint8Array(analyser.fftSize);
+    const floatData = new Float32Array(analyser.fftSize);
     let last = 0;
     const tick = (t: number): void => {
       rafRef.current = requestAnimationFrame(tick);
@@ -1817,6 +1900,24 @@ function useMicEngine(canGoLive: boolean): MicEngine {
         sum += v * v;
       }
       setMeter(Math.min(1, Math.sqrt(sum / data.length) * 2.8));
+      // Zero-signal silence watchdog — float precision (byte samples quantize
+      // to 1/128, so a dead input reads all-128 there; the float read tells
+      // true digital zero from merely quiet). Latches after SILENCE_HOLD_MS
+      // while ON AIR, clears the moment any signal returns.
+      analyser.getFloatTimeDomainData(floatData);
+      let fsum = 0;
+      for (let i = 0; i < floatData.length; i++) {
+        const f = floatData[i] ?? 0;
+        fsum += f * f;
+      }
+      const rms = Math.sqrt(fsum / floatData.length);
+      if (phaseRef.current === "live" && rms < SILENCE_RMS_FLOOR) {
+        if (silenceSinceRef.current == null) silenceSinceRef.current = t;
+        else if (t - silenceSinceRef.current >= SILENCE_HOLD_MS) setSilent(true);
+      } else {
+        silenceSinceRef.current = null;
+        setSilent(false);
+      }
     };
     rafRef.current = requestAnimationFrame(tick);
   }, []);
@@ -1891,6 +1992,29 @@ function useMicEngine(canGoLive: boolean): MicEngine {
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
       const inputs = all.filter((d) => d.kind === "audioinput" && d.deviceId);
+      // Arrival/departure notices. Honest ceiling: labels exist only after mic
+      // permission, so a blank label notes nothing — and the permission-reveal
+      // pass (prev list empty) is not an "arrival". Chrome's "default"/
+      // "communications" pseudo-devices shadow real ones; skip them in the diff.
+      const prev = prevInputsRef.current;
+      prevInputsRef.current = inputs;
+      if (prev && prev.length > 0) {
+        const real = (d: MediaDeviceInfo): boolean =>
+          d.deviceId !== "default" && d.deviceId !== "communications" && !!d.label;
+        const prevIds = new Set(prev.map((d) => d.deviceId));
+        const nowIds = new Set(inputs.map((d) => d.deviceId));
+        const added = inputs.find((d) => real(d) && !prevIds.has(d.deviceId));
+        const removed = prev.find((d) => real(d) && !nowIds.has(d.deviceId));
+        if (added) {
+          flashToast(`🎙 ${added.label} connected`);
+        } else if (removed) {
+          const keptId = deviceIdRef.current;
+          const kept = keptId && keptId !== removed.deviceId
+            ? inputs.find((d) => d.deviceId === keptId)?.label
+            : null;
+          flashToast(`${removed.label} disconnected — using ${kept || "the system default"}`);
+        }
+      }
       setDevices(inputs);
       const cur = deviceIdRef.current;
       if (cur && !inputs.some((d) => d.deviceId === cur)) {
@@ -1899,7 +2023,7 @@ function useMicEngine(canGoLive: boolean): MicEngine {
         lsWrite(MIC_DEVICE_KEY, null);
       }
     } catch { /* enumeration unavailable */ }
-  }, [supported]);
+  }, [supported, flashToast]);
 
   // Plug-and-play: re-enumerate the moment the OS sees a device come or go.
   useEffect(() => {
@@ -2149,6 +2273,8 @@ function useMicEngine(canGoLive: boolean): MicEngine {
     srcRef.current = null;
     cancelAnimationFrame(rafRef.current);
     setMeter(0);
+    silenceSinceRef.current = null;
+    setSilent(false);
     setPhaseBoth("idle");
   }, [stopRecorder, setPhaseBoth, settleBoot]);
 
@@ -2171,6 +2297,7 @@ function useMicEngine(canGoLive: boolean): MicEngine {
   useEffect(() => () => {
     stoppingRef.current = true;
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     const rec = recRef.current;
     if (rec && rec.state !== "inactive") { try { rec.stop(); } catch { /* noop */ } }
     try { wsRef.current?.close(1000); } catch { /* noop */ }
@@ -2198,6 +2325,8 @@ function useMicEngine(canGoLive: boolean): MicEngine {
     gainPct,
     changeGain,
     micErr,
+    silent,
+    deviceToast,
     enable,
     goOnMic,
     booting,

@@ -80,6 +80,18 @@ describe("RBAC roles & permission matrix", () => {
     expect(cc2.permissions).toHaveLength(2);
   });
 
+  it("edits a role's name, type and description via PUT /admin/roles/:key", async () => {
+    await agent().post("/v1/admin/roles").set(auth(adminTok))
+      .send({ name: "Media Desk", role_type: "staff", description: "Runs the studio." });
+    const upd = await agent().put("/v1/admin/roles/media_desk").set(auth(adminTok))
+      .send({ name: "Media Desk Lead", role_type: "field", description: "Leads the studio desk." });
+    expect(upd.status).toBe(200);
+    expect(upd.body.name).toBe("Media Desk Lead");
+    expect(upd.body.role_type).toBe("field");
+    expect(upd.body.description).toBe("Leads the studio desk.");
+    expect(upd.body.role_key).toBe("media_desk"); // renaming never re-keys
+  });
+
   it("rejects duplicate role names", async () => {
     await agent().post("/v1/admin/roles").set(auth(adminTok)).send({ name: "Cell Coordinator" });
     const dup = await agent().post("/v1/admin/roles").set(auth(adminTok)).send({ name: "Cell Coordinator" });
