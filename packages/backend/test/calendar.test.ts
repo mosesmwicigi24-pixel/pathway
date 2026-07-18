@@ -471,7 +471,9 @@ describe("RSVP roster (Events page)", () => {
       title: "Cell A Gathering",
       cell_group_id: cellA,
       timezone: "Africa/Nairobi",
-      dtstart_local: "2026-06-07T18:00:00",
+      // Dynamic future start — a hardcoded date rots once the calendar passes
+      // it (the materializer only writes future occurrences).
+      dtstart_local: `${new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10)}T18:00:00`,
       duration_min: 60,
       rrule: "FREQ=WEEKLY;COUNT=6",
       visibility: "cell",

@@ -194,19 +194,36 @@ export class VideoService {
     }
     if (filter.q) {
       params.push(`%${filter.q}%`);
-      where.push(`(m.title ILIKE $${params.length}::text OR ma.caption ILIKE $${params.length}::text)`);
+      where.push(
+        `(m.title ILIKE $${params.length}::text OR ma.title ILIKE $${params.length}::text OR ma.caption ILIKE $${params.length}::text)`,
+      );
     }
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    // placements[] is the authoritative attachment list (§2.2 one asset, many
+    // modules); attached_module_* stays (the mirror column) for old clients
+    // during the transition.
     const rows = await many<Record<string, unknown>>(
       this.pool,
       `SELECT ma.media_asset_id, ma.kind, ma.status, ma.provider, ma.video_source,
-              ma.external_url, ma.external_video_id, ma.caption, ma.level_number,
+              ma.external_url, ma.external_video_id, ma.title, ma.caption, ma.level_number,
               ma.is_homepage, ma.thumbnail_url, ma.duration_sec, ma.error_detail, ma.created_at,
               m.title AS attached_module_title, m.module_id AS attached_module_id,
+              COALESCE(pl.placements, '[]'::json) AS placements,
               (ma.status = 'transcoding' AND ma.created_at < now() - interval '30 minutes') AS is_stuck,
               vp.views, vp.completion
          FROM media_assets ma
          LEFT JOIN modules m ON m.media_asset_id = ma.media_asset_id
+         LEFT JOIN (
+                SELECT p.media_asset_id,
+                       json_agg(json_build_object(
+                         'module_id', pm.module_id,
+                         'module_title', pm.title,
+                         'level_number', pm.level_number
+                       ) ORDER BY p.position, p.created_at) AS placements
+                  FROM media_placements p
+                  JOIN modules pm ON pm.module_id = p.module_id
+                 GROUP BY p.media_asset_id
+              ) pl ON pl.media_asset_id = ma.media_asset_id
          LEFT JOIN (
                 SELECT media_asset_id,
                        COUNT(*)::int AS views,
@@ -249,28 +266,26 @@ export class VideoService {
       throw new ApiError("VALIDATION_FAILED", `Could not parse a ${input.video_source} video id from the URL`);
     }
     return tx(this.pool, async (c) => {
+      // Title lives on the ASSET only (§2.2 — the module's title has one owner;
+      // the old reverse-write into modules.title is gone).
       const row = await one<{ media_asset_id: string }>(
         c,
         `INSERT INTO media_assets
             (cloudinary_id, kind, status, provider, video_source,
-             external_url, external_video_id, caption, level_number, created_by)
-         VALUES ('external', 'lesson_video', 'ready', $1::varchar, $2::text, $3, $4, $5, $6, $7)
+             external_url, external_video_id, title, caption, level_number, created_by)
+         VALUES ('external', 'lesson_video', 'ready', $1::varchar, $2::text, $3, $4, $5, $6, $7, $8)
          RETURNING media_asset_id`,
         [
           input.video_source,
           input.video_source,
           input.url,
           videoId,
+          input.title ?? null,
           input.caption ?? null,
           input.level_number ?? null,
           adminId,
         ],
       );
-      if (input.title) {
-        // Title lives on the linked module; apply it if an attachment already
-        // exists (single-attach model — no placement table this PR).
-        await c.query(`UPDATE modules SET title = $1 WHERE media_asset_id = $2`, [input.title, row.media_asset_id]);
-      }
       await audit(c, adminId, "media.external_register", "media_assets", row.media_asset_id, {
         video_source: input.video_source,
         external_video_id: videoId,
@@ -297,26 +312,25 @@ export class VideoService {
     },
   ): Promise<unknown> {
     return tx(this.pool, async (c) => {
+      // Title lives on the ASSET only (§2.2) — no reverse-write into modules.
       const row = await one<{ media_asset_id: string }>(
         c,
         `INSERT INTO media_assets
             (cloudinary_id, kind, status, provider, video_source,
-             external_url, source_object_key, caption, level_number, duration_sec, created_by)
+             external_url, source_object_key, title, caption, level_number, duration_sec, created_by)
          VALUES ('local', 'lesson_video', 'ready', 'local', 'direct',
-                 $1, $2, $3, $4, $5, $6)
+                 $1, $2, $3, $4, $5, $6, $7)
          RETURNING media_asset_id`,
         [
           input.publicUrl,
           input.storageFilename,
+          input.title ?? null,
           input.caption ?? null,
           input.level_number ?? null,
           input.duration_sec ?? null,
           adminId,
         ],
       );
-      if (input.title) {
-        await c.query(`UPDATE modules SET title = $1 WHERE media_asset_id = $2`, [input.title, row.media_asset_id]);
-      }
       await audit(c, adminId, "media.upload_stored", "media_assets", row.media_asset_id, {
         storage: "local",
         filename: input.storageFilename,
@@ -335,8 +349,8 @@ export class VideoService {
     })
     .strict();
 
-  /** Edit library metadata: caption, level_number, and (for external) the source/url.
-   *  Title is applied to the linked module when one is attached. */
+  /** Edit library metadata: title, caption, level_number, and (for external) the
+   *  source/url. Title lives on the asset only (§2.2) — never written to modules. */
   async updateAsset(
     adminId: string,
     id: string,
@@ -356,6 +370,7 @@ export class VideoService {
         params.push(val);
         sets.push(`${col} = $${params.length}`);
       };
+      if (input.title !== undefined) push("title", input.title);
       if (input.caption !== undefined) push("caption", input.caption);
       if (input.level_number !== undefined) push("level_number", input.level_number);
 
@@ -382,9 +397,6 @@ export class VideoService {
       if (sets.length > 0) {
         params.push(id);
         await c.query(`UPDATE media_assets SET ${sets.join(", ")} WHERE media_asset_id = $${params.length}`, params);
-      }
-      if (input.title !== undefined) {
-        await c.query(`UPDATE modules SET title = $1 WHERE media_asset_id = $2`, [input.title, id]);
       }
       await audit(c, adminId, "media.update", "media_assets", id, { fields: Object.keys(input) });
       return this.getAssetRow(c, id);
@@ -540,7 +552,7 @@ export class VideoService {
     return one(
       c,
       `SELECT media_asset_id, kind, status, provider, video_source, external_url,
-              external_video_id, caption, level_number, is_homepage, thumbnail_url, ladder,
+              external_video_id, title, caption, level_number, is_homepage, thumbnail_url, ladder,
               duration_sec, hls_master_key, error_detail, created_at
          FROM media_assets WHERE media_asset_id = $1`,
       [id],
@@ -622,19 +634,44 @@ export class VideoService {
     if (!asset || asset.status !== "ready" || !asset.hls_master_key) {
       throw new ApiError("NOT_FOUND", "Media asset not available");
     }
-    // If a published module owns this asset, the §1.9 hard-lock applies.
-    const owning = await maybeOne<{ module_id: string; level_number: number; module_sequence_number: number }>(
+    // §1.9 hard-lock, any-placement rule (docs/CURRICULUM_ARCHITECTURE.md §2.2):
+    // the asset is available iff ANY of its placements' published modules is
+    // unlocked for this member — through the same shared predicate. Strictly
+    // correct for shared assets: a member never sees content they haven't
+    // legitimately unlocked. Assets with NO placements fall back to the legacy
+    // mirror column so non-curriculum assets keep their current behavior.
+    let gates = await many<{ module_id: string; level_number: number; module_sequence_number: number }>(
       this.pool,
-      `SELECT module_id, level_number, module_sequence_number
-         FROM modules WHERE media_asset_id = $1 AND status = 'published'
-        ORDER BY level_number, module_sequence_number LIMIT 1`,
+      `SELECT m.module_id, m.level_number, m.module_sequence_number
+         FROM media_placements p
+         JOIN modules m ON m.module_id = p.module_id
+        WHERE p.media_asset_id = $1 AND m.status = 'published'
+        ORDER BY m.level_number, m.module_sequence_number`,
       [mediaAssetId],
     );
-    if (owning) {
+    if (gates.length === 0) {
+      gates = await many<{ module_id: string; level_number: number; module_sequence_number: number }>(
+        this.pool,
+        `SELECT module_id, level_number, module_sequence_number
+           FROM modules WHERE media_asset_id = $1 AND status = 'published'
+          ORDER BY level_number, module_sequence_number LIMIT 1`,
+        [mediaAssetId],
+      );
+    }
+    if (gates.length > 0) {
       const enrollment = await loadEnrollment(this.pool, userId);
-      if (!enrollment || !(await isModuleUnlocked(this.pool, enrollment, owning))) {
+      let unlocked = false;
+      if (enrollment) {
+        for (const gate of gates) {
+          if (await isModuleUnlocked(this.pool, enrollment, gate)) {
+            unlocked = true;
+            break;
+          }
+        }
+      }
+      if (!unlocked) {
         throw new ApiError("GATE_LOCKED", "Video is not yet unlocked", {
-          module_sequence_number: owning.module_sequence_number,
+          module_sequence_number: gates[0]!.module_sequence_number,
         });
       }
     }

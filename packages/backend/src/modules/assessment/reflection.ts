@@ -1,18 +1,17 @@
-// Reflection review + level transition (spec §1.9 rule 3, §3.3). After a member
-// finishes a level's modules they submit a written reflection; a pastor
-// (Instructor+) approves or rejects it from the review queue. Approval is the
-// ONLY thing that advances enrollments.current_level and triggers the level
-// certificate (via the transactional outbox). All decisions are server-side and
-// scope-checked (§5.4) — the client never advances itself.
+// Reflection review (spec §1.9 rule 3, §3.3). After a member finishes a
+// level's modules they submit a written reflection; a pastor (Instructor+)
+// approves or rejects it from the review queue. SINGLE ADVANCEMENT WRITER
+// (docs/CURRICULUM_ARCHITECTURE.md §2.4): approving a reflection only RECORDS
+// the decision — enrollments.current_level is written exclusively by the
+// discipler-usher path (levelAdvancement.ts), which also carries certificate
+// issuance. All decisions are server-side and scope-checked (§5.4).
 import type { Pool } from "pg";
 import { z } from "zod";
-import { many, maybeOne, one, tx, recordChange, audit, enqueueOutbox } from "../../db/db.js";
+import { many, maybeOne, one, tx, audit, enqueueOutbox } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { assertCellInScope } from "../../http/auth.js";
 import type { Principal } from "../../http/http.js";
 import { ensureEnrollment, entryFloorSeq } from "../progress/gating.js";
-
-const MAX_LEVEL = 5;
 
 export class ReflectionService {
   constructor(private readonly pool: Pool) {}
@@ -132,9 +131,11 @@ export class ReflectionService {
   }
 
   /**
-   * Approve or reject a pending reflection. Approval advances the member to the
-   * next level (or completes the program) and enqueues the certificate. The
-   * reviewer must be in scope for the member's cell (§5.4).
+   * Approve or reject a pending reflection. The decision is RECORDED, nothing
+   * else (§2.4 single advancement writer): advancement of current_level and
+   * certificate issuance belong exclusively to the discipler-usher path
+   * (levelAdvancement.usher). The reviewer must be in scope for the member's
+   * cell (§5.4). `leveled_up` stays on the wire for old clients — always false.
    */
   async decide(
     principal: Principal,
@@ -167,37 +168,13 @@ export class ReflectionService {
         [newState, principal.userId, input.feedback_notes ?? null, reviewId],
       );
 
-      let leveledUp = false;
-      if (input.decision === "approve") {
-        if (review.level_number >= MAX_LEVEL) {
-          await c.query(
-            `UPDATE enrollments SET state = 'completed', completed_at = now() WHERE user_id = $1`,
-            [review.user_id],
-          );
-        } else {
-          // Guard on current_level so a double-approve race can't skip a level.
-          await c.query(
-            `UPDATE enrollments SET current_level = $1 WHERE user_id = $2 AND current_level = $3`,
-            [review.level_number + 1, review.user_id, review.level_number],
-          );
-        }
-        leveledUp = true;
-        await enqueueOutbox(c, "certificate.issue", {
-          user_id: review.user_id,
-          level_number: review.level_number,
-        });
-        await enqueueOutbox(c, "notification.level_completed", {
-          user_id: review.user_id,
-          level_number: review.level_number,
-        });
-        await recordChange(c, "enrollments", null, review.user_id, "upsert");
-      }
-
+      // §2.4: no enrollment write, no certificate, no level-completed nudge here
+      // — the usher path is the sole advancer and issues the certificate.
       await audit(c, principal.userId, `reflection.${newState}`, "reflection_reviews", reviewId, {
         user_id: review.user_id,
         level_number: review.level_number,
       });
-      return { review_id: reviewId, state: newState, leveled_up: leveledUp };
+      return { review_id: reviewId, state: newState, leveled_up: false };
     });
   }
 }

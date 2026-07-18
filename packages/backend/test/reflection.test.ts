@@ -1,4 +1,6 @@
-// Reflection review + level transition (§1.9 rule 3, §3.3, §5.4).
+// Reflection review (§1.9 rule 3, §3.3, §5.4). Under the single-advancement-
+// writer rule (docs/CURRICULUM_ARCHITECTURE.md §2.4) a decision only records
+// the outcome — advancement + certificate belong to the usher path.
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import {
@@ -85,7 +87,7 @@ describe("reflection review + level transition (§1.9)", () => {
     expect(assigned.map((r) => r.user_id)).toContain(student);
   });
 
-  it("approval advances the member to the next level and enqueues the certificate", async () => {
+  it("approval records the decision ONLY — no advancement, no certificate (§2.4 single writer)", async () => {
     await finishLevel1();
     const sub = (await refl().submit(student, 1, TEXT)) as { review_id: string };
     await createLeaderAssignment(instructor, cell);
@@ -94,13 +96,13 @@ describe("reflection review + level transition (§1.9)", () => {
       decision: "approve",
     });
     expect(decision.state).toBe("approved");
-    expect(decision.leveled_up).toBe(true);
+    expect(decision.leveled_up).toBe(false); // the usher path is the sole advancer
 
     const enr = await testPool().query("SELECT current_level FROM enrollments WHERE user_id=$1", [student]);
-    expect(enr.rows[0].current_level).toBe(2);
+    expect(enr.rows[0].current_level).toBe(1); // unchanged — awaiting the usher
 
     const ob = await testPool().query("SELECT count(*)::int n FROM outbox WHERE topic='certificate.issue'");
-    expect(ob.rows[0].n).toBe(1);
+    expect(ob.rows[0].n).toBe(0); // the certificate rides the advancement, not the approval
   });
 
   it("rejection records feedback and does NOT advance the level", async () => {

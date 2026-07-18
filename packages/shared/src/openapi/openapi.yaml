@@ -398,12 +398,12 @@ paths:
                         created_at: { type: string, format: date-time }
                         last_used_at: { type: [string, "null"], format: date-time }
         "401": { $ref: "#/components/responses/Unauthorized" }
-  /auth/webauthn/credentials/{credentialId}:
+  /auth/webauthn/credentials/{id}:
     delete:
       tags: [auth]
       summary: Revoke one of the caller's passkeys. Owner-scoped — someone else's credential id 404s.
       parameters:
-        - { name: credentialId, in: path, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         "204": { description: Passkey revoked }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -1039,6 +1039,41 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
   # --- Admin curriculum CMS (Admin/SuperAdmin only, §5.4) ---
+  # One stats source (docs/CURRICULUM_ARCHITECTURE.md §3): dashboard, validation
+  # and classified activity all read curriculum/stats.ts.
+  /admin/curriculum/summary:
+    get:
+      tags: [curriculum]
+      summary: Admin. Curriculum Dashboard payload in one call — totals, per-level summary cards, pipeline counts (one stats source, replica reads).
+      responses:
+        "200": { description: Summary }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/curriculum/validate:
+    get:
+      tags: [curriculum]
+      summary: "Admin. Completeness report — issues as {severity, level_number, module_id?, code, message}, errors first."
+      responses:
+        "200": { description: Issues }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/curriculum/activity:
+    get:
+      tags: [curriculum]
+      summary: Admin. Audit-log slice classified server-side (published|edited|review|video|quiz|module|milestone).
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 40 } }
+      responses:
+        "200": { description: Activity }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/modules/{id}/media:
+    get:
+      tags: [curriculum]
+      summary: Admin. Media placements of a module (asset id/title/duration/status/thumbnail + position/required), position-ordered.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Placements }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/levels:
     get:
       tags: [curriculum]
@@ -1055,7 +1090,7 @@ paths:
   /admin/levels/{n}:
     put:
       tags: [curriculum]
-      summary: Admin. Update a level's title/theme/pass mark.
+      summary: Admin. Update a level's title/theme/metadata. required_exam_pass_mark is NOT accepted here — the exam endpoint owns it (one editor per entity).
       parameters:
         - { name: n, in: path, required: true, schema: { type: integer, minimum: 1 } }
       responses:
@@ -1618,7 +1653,7 @@ paths:
   /reviews/{id}/decision:
     post:
       tags: [portal]
-      summary: Approve/reject a reflection; approval flips the level and triggers certificate issuance.
+      summary: Approve/reject a reflection. Records the decision ONLY — advancement + certificate belong to the usher path (§2.4 single advancement writer).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       requestBody:
@@ -1669,7 +1704,8 @@ paths:
       tags: [portal]
       summary: >-
         Instructor+. Usher a member into the next level — marks the advancement ushered,
-        advances current_level to N+1 (idempotent), and notifies the member. Cell-scoped (§5.4).
+        advances current_level to N+1 (idempotent), issues the level certificate via the
+        outbox (§2.4 single advancement writer), and notifies the member. Cell-scoped (§5.4).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       requestBody:
@@ -1986,7 +2022,7 @@ paths:
   /admin/media:
     get:
       tags: [system]
-      summary: Admin. Video Library — managed assets with linked module, stuck-encoding flag, external + library fields, derived views/completion.
+      summary: "Admin. Video Library — managed assets with placements[] ({module_id, module_title, level_number} — authoritative), the legacy attached_module_* mirror fields (transition), stuck-encoding flag, external + library fields, derived views/completion."
       parameters:
         - { name: status, in: query, required: false, schema: { type: string, enum: [uploading, transcoding, ready, failed] } }
         - { name: video_source, in: query, required: false, schema: { type: string, enum: [cloudinary, youtube, vimeo, direct, private] } }
@@ -2206,6 +2242,41 @@ paths:
         - $ref: "#/components/parameters/IdPath"
       responses:
         "200": { description: Thumbnail cleared }
+        "404": { $ref: "#/components/responses/NotFound" }
+  # Media placements (docs/CURRICULUM_ARCHITECTURE.md §2.2): one asset, many
+  # modules; placements are authoritative and maintain the modules.media_asset_id
+  # mirror so member reads stay byte-identical.
+  /admin/media/{id}/placements:
+    post:
+      tags: [system]
+      summary: Admin. Place an asset in a module (level inferred from the module, never asked). 409 on the duplicate (asset, module) pair.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [module_id]
+              properties:
+                module_id: { type: string, format: uuid }
+                position: { type: integer, description: Order within the module (lowest = primary/mirrored). }
+                required: { type: boolean }
+      responses:
+        "201": { description: Placement }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/media/placements/{placementId}:
+    delete:
+      tags: [system]
+      summary: Admin. Remove one placement (never the asset); the module's mirror column follows its remaining lowest-position placement.
+      parameters:
+        - { name: placementId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Removed }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   # --- Calendar (Features v2 §C) ---

@@ -4,7 +4,7 @@
 import type { Pool } from "pg";
 import type Redis from "ioredis";
 import { z } from "zod";
-import { many, maybeOne, one, tx, recordChange, audit } from "../../db/db.js";
+import { many, maybeOne, one, tx, audit } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { cacheGetSet, cacheKeys } from "../../cache.js";
 import { loadEnrollment, loadModule, isModuleUnlocked, isEntryModule } from "../progress/gating.js";
@@ -430,68 +430,10 @@ export class CurriculumService {
     return row ?? { reading_seconds: 0, audio_seconds: 0, video_seconds: 0, last_page: 1 };
   }
 
-  static readonly EditModuleSchema = z
-    .object({
-      lesson_content: z.string().min(1).optional(),
-      quiz_pass_mark: z.number().min(0).max(100).optional(),
-      title: z.string().min(1).max(255).optional(),
-      is_published: z.boolean().optional(),
-    })
-    .strict();
-
-  /** Admin edit: writes an immutable module_versions row, bumps current_version. */
-  async editModule(
-    moduleId: string,
-    editorId: string,
-    input: z.infer<typeof CurriculumService.EditModuleSchema>,
-  ): Promise<unknown> {
-    return tx(this.pool, async (c) => {
-      const existing = await maybeOne<{ current_version: number; lesson_content: string }>(
-        c,
-        `SELECT current_version, lesson_content FROM modules WHERE module_id = $1`,
-        [moduleId],
-      );
-      if (!existing) throw new ApiError("NOT_FOUND", "Module not found");
-
-      if (input.lesson_content !== undefined) {
-        const nextVersion = existing.current_version + 1;
-        await c.query(
-          `INSERT INTO module_versions (module_id, version_number, lesson_content, edited_by)
-           VALUES ($1,$2,$3,$4)`,
-          [moduleId, nextVersion, input.lesson_content, editorId],
-        );
-        await c.query(
-          `UPDATE modules SET lesson_content = $1, current_version = $2 WHERE module_id = $3`,
-          [input.lesson_content, nextVersion, moduleId],
-        );
-      }
-      const sets: string[] = [];
-      const params: unknown[] = [];
-      let i = 1;
-      if (input.quiz_pass_mark !== undefined) {
-        sets.push(`quiz_pass_mark = $${i++}`);
-        params.push(input.quiz_pass_mark);
-      }
-      if (input.title !== undefined) {
-        sets.push(`title = $${i++}`);
-        params.push(input.title);
-      }
-      if (input.is_published !== undefined) {
-        // is_published is a generated mirror of status now — write status instead.
-        sets.push(`status = $${i++}`);
-        params.push(input.is_published ? "published" : "draft");
-      }
-      if (sets.length > 0) {
-        params.push(moduleId);
-        await c.query(`UPDATE modules SET ${sets.join(", ")} WHERE module_id = $${i}`, params);
-      }
-
-      await recordChange(c, "modules", moduleId, null, "upsert");
-      await audit(c, editorId, "module.edited", "modules", moduleId, {});
-      const updated = await one(c, `SELECT * FROM modules WHERE module_id = $1`, [moduleId]);
-      return updated;
-    });
-  }
+  // NOTE (docs/CURRICULUM_ARCHITECTURE.md §2.5): the legacy editModule path
+  // that used to live here is DELETED — AdminCurriculumService.updateModule is
+  // the only module editor (one editor per entity). It was never mounted on a
+  // member-facing route.
 
   static readonly AddQuestionsSchema = z.object({
     questions: z

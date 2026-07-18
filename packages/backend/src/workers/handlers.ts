@@ -54,7 +54,8 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
     });
   });
 
-  // Flow B: an approved reflection enqueues this; issue the level credential.
+  // The discipler-usher advancement enqueues this (§2.4 single advancement
+  // writer); issue the level credential.
   handlers.set("certificate.issue", async (p) => {
     await certs.issue(String(p.user_id), p.level_number == null ? null : Number(p.level_number));
   });

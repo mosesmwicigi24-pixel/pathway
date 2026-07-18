@@ -1,5 +1,7 @@
-// Journey B (§1.10 Flow B): finish L1 → pass exam → submit reflection → pastor
-// approves → current_level flips to 2 and the certificate issues via the outbox.
+// Journey B (§1.10 Flow B, updated for the single advancement writer §2.4):
+// finish L1 → pass exam (records a PENDING advancement) → submit reflection →
+// pastor approves (records the decision only) → the discipler USHERS the member
+// → current_level flips to 2 and the certificate issues via the outbox.
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { testEnv } from "./helpers/app.js";
@@ -16,6 +18,7 @@ import { ProgressService } from "../src/modules/progress/service.js";
 import { AssessmentService } from "../src/modules/assessment/service.js";
 import { ExamService } from "../src/modules/assessment/exam.js";
 import { ReflectionService } from "../src/modules/assessment/reflection.js";
+import { LevelAdvancementService } from "../src/modules/assessment/levelAdvancement.js";
 import { OutboxWorker } from "../src/workers/outbox.js";
 import { buildOutboxHandlers } from "../src/workers/handlers.js";
 import type { AppContext } from "../src/http/context.js";
@@ -41,7 +44,7 @@ describe("Journey B — exam → reflection → approval → level-up + certific
     await closeTestPool();
   });
 
-  it("advances the member to L2 and issues a certificate through the outbox", async () => {
+  it("advances the member to L2 via the usher and issues the certificate through the outbox", async () => {
     const answers = [{ question_id: q, given_answer: "A" }];
     await new ProgressService(testPool()).completeModule(student, m1, null);
     await new AssessmentService(testPool()).submitQuiz(student, m1, {
@@ -57,14 +60,23 @@ describe("Journey B — exam → reflection → approval → level-up + certific
     const refl = new ReflectionService(testPool());
     const submitted = (await refl.submit(student, 1, REFLECTION)) as { review_id: string };
 
+    // §2.4 single advancement writer: approval records the decision ONLY.
     const pastor: Principal = { userId: instructor, role: "Instructor", congregationId: "c" };
     const decision = await refl.decide(pastor, submitted.review_id, { decision: "approve" });
-    expect(decision.leveled_up).toBe(true);
+    expect(decision.leveled_up).toBe(false);
+    let enr = await testPool().query("SELECT current_level FROM enrollments WHERE user_id=$1", [student]);
+    expect(enr.rows[0].current_level).toBe(1);
 
-    const enr = await testPool().query("SELECT current_level FROM enrollments WHERE user_id=$1", [student]);
+    // The discipler ushers the member (the exam pass recorded the PENDING
+    // advancement) — the sole writer of current_level; certificate rides it.
+    const usherer = new LevelAdvancementService(testPool());
+    const [item] = (await usherer.listPending(pastor)) as Array<{ id: string }>;
+    const done = await usherer.usher(pastor, item!.id, "Welcome to Level 2");
+    expect(done.advanced).toBe(true);
+    enr = await testPool().query("SELECT current_level FROM enrollments WHERE user_id=$1", [student]);
     expect(enr.rows[0].current_level).toBe(2);
 
-    // The approval enqueued certificate.issue; the outbox worker issues it.
+    // The usher enqueued certificate.issue; the outbox worker issues it.
     const ctx = { env: testEnv(), db: { primary: testPool(), replica: testPool() } } as AppContext;
     const drained = await new OutboxWorker(testPool(), buildOutboxHandlers(ctx)).drainOnce();
     expect(drained.done).toBeGreaterThanOrEqual(1);
