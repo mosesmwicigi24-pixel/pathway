@@ -7,14 +7,20 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole, assertCellInScope, requirePasswordStepUp } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ChatService } from "./service.js";
+import { ConnectionsService } from "./connections.js";
 import { MediaService } from "../media/service.js";
 
 const IdParam = z.object({ id: z.string().uuid() });
+const UserIdParam = z.object({ user_id: z.string().uuid() });
+const RequestIdParam = z.object({ id: z.string().uuid(), reqId: z.string().uuid() });
+const RoleParam = z.object({ id: z.string().uuid(), user_id: z.string().uuid(), role: z.enum(["leader", "moderator"]) });
+const MemberActionParam = z.object({ id: z.string().uuid(), user_id: z.string().uuid() });
 
 export const chatRouter: Router = Router();
 
 export function registerChat(ctx: AppContext): Router {
   const svc = new ChatService(ctx.db.primary);
+  const connections = new ConnectionsService(ctx.db.primary);
   const media = new MediaService(ctx.env.CLOUDINARY_URL);
   const auth = authenticate(ctx.env);
   const r = chatRouter;
@@ -97,6 +103,54 @@ export function registerChat(ctx: AppContext): Router {
     res.status(201).json(await svc.createOrGetDm(p.userId, input.user_id, p.role));
   }));
 
+  // ---- Connections: consent-gated Chat (Chat Redesign C1/C2) ----
+  // "No unsolicited DMs" — request/accept/decline/remove/block/unblock. See
+  // chat/connections.ts and CreateDm's gate above for how the two meet.
+  r.post("/chat/connections/requests", auth, handler(async (req, res) => {
+    const input = parseBody(ConnectionsService.RequestConnection, req.body);
+    res.status(201).json(await connections.requestConnection(requirePrincipal(req).userId, input));
+  }));
+
+  const ListRequestsQuery = z.object({ direction: z.enum(["incoming", "outgoing"]) });
+  r.get("/chat/connections/requests", auth, handler(async (req, res) => {
+    const { direction } = parseBody(ListRequestsQuery, req.query);
+    res.json(await connections.listRequests(requirePrincipal(req).userId, direction));
+  }));
+
+  r.post("/chat/connections/requests/:id/accept", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await connections.acceptRequest(requirePrincipal(req).userId, id));
+  }));
+
+  r.post("/chat/connections/requests/:id/decline", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await connections.declineRequest(requirePrincipal(req).userId, id));
+  }));
+
+  r.delete("/chat/connections/requests/:id", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await connections.cancelRequest(requirePrincipal(req).userId, id));
+  }));
+
+  r.get("/chat/connections", auth, handler(async (req, res) => {
+    res.json(await connections.listConnections(requirePrincipal(req).userId));
+  }));
+
+  r.post("/chat/connections/:user_id/remove", auth, handler(async (req, res) => {
+    const { user_id } = parseBody(UserIdParam, req.params);
+    res.json(await connections.removeConnection(requirePrincipal(req).userId, user_id));
+  }));
+
+  r.post("/chat/connections/:user_id/block", auth, handler(async (req, res) => {
+    const { user_id } = parseBody(UserIdParam, req.params);
+    res.json(await connections.blockUser(requirePrincipal(req).userId, user_id));
+  }));
+
+  r.post("/chat/connections/:user_id/unblock", auth, handler(async (req, res) => {
+    const { user_id } = parseBody(UserIdParam, req.params);
+    res.json(await connections.unblockUser(requirePrincipal(req).userId, user_id));
+  }));
+
   // Broadcast — SuperAdmin ONLY. Not Admin, not Instructor, not a member: the
   // whole thing is a conversation between the SuperAdmin and one member at a
   // time, and nobody else is in it. Below SuperAdmin there is no tab and a 403
@@ -167,6 +221,56 @@ export function registerChat(ctx: AppContext): Router {
   r.post("/chat/spaces/:id/join", auth, handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
     res.json(await svc.joinSpace(requirePrincipal(req).userId, id));
+  }));
+
+  // ---- Space lifecycle: join requests, delegated roles, moderation (C1/C2) ----
+  r.post("/chat/spaces/:id/join-requests", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const input = parseBody(ChatService.RequestJoinSpace, req.body);
+    res.status(201).json(await svc.requestJoinSpace(requirePrincipal(req).userId, id, input));
+  }));
+
+  r.get("/chat/spaces/:id/join-requests", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const p = requirePrincipal(req);
+    res.json(await svc.listJoinRequests(p.userId, id, p.role));
+  }));
+
+  r.post("/chat/spaces/:id/join-requests/:reqId/accept", auth, handler(async (req, res) => {
+    const { id, reqId } = parseBody(RequestIdParam, req.params);
+    const p = requirePrincipal(req);
+    res.json(await svc.decideJoinRequest(p.userId, id, reqId, "accept", p.role));
+  }));
+
+  r.post("/chat/spaces/:id/join-requests/:reqId/decline", auth, handler(async (req, res) => {
+    const { id, reqId } = parseBody(RequestIdParam, req.params);
+    const p = requirePrincipal(req);
+    res.json(await svc.decideJoinRequest(p.userId, id, reqId, "decline", p.role));
+  }));
+
+  r.post("/chat/spaces/:id/roles", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const input = parseBody(ChatService.GrantSpaceRole, req.body);
+    const p = requirePrincipal(req);
+    res.status(201).json(await svc.grantSpaceRole(p.userId, id, input, p.role));
+  }));
+
+  r.delete("/chat/spaces/:id/roles/:user_id/:role", auth, handler(async (req, res) => {
+    const { id, user_id, role } = parseBody(RoleParam, req.params);
+    const p = requirePrincipal(req);
+    res.json(await svc.revokeSpaceRole(p.userId, id, user_id, role, p.role));
+  }));
+
+  r.post("/chat/spaces/:id/members/:user_id/remove", auth, handler(async (req, res) => {
+    const { id, user_id } = parseBody(MemberActionParam, req.params);
+    const p = requirePrincipal(req);
+    res.json(await svc.setSpaceMemberStatus(p.userId, id, user_id, "removed", p.role));
+  }));
+
+  r.post("/chat/spaces/:id/members/:user_id/suspend", auth, handler(async (req, res) => {
+    const { id, user_id } = parseBody(MemberActionParam, req.params);
+    const p = requirePrincipal(req);
+    res.json(await svc.setSpaceMemberStatus(p.userId, id, user_id, "suspended", p.role));
   }));
 
   // Leaders curate public spaces for their congregation.

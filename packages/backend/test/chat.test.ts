@@ -13,7 +13,7 @@ let a2Id: string, a2Tok: string; // cellA (same cell as a)
 let bId: string, bTok: string; // cellB
 let lId: string, leaderTok: string; // Instructor in cellA
 let minorId: string, minorTok: string; // a minor in cellA
-let adminTok: string; // Admin (not a member of any cell room)
+let adminId: string, adminTok: string; // Admin (not a member of any cell room)
 
 const auth = (t: string) => ({ Authorization: t });
 const uuid = (n: number) => `00000000-0000-4000-8000-0000000000${String(n).padStart(2, "0")}`;
@@ -38,7 +38,7 @@ beforeEach(async () => {
   const minor = await createUser({ congregationId: cong, cellGroupId: cellA, email: "m@dev.local", fullName: "Kid", dateOfBirth: "2015-01-01" });
   expect(minor.is_minor).toBe(true);
   const admin = await createUser({ congregationId: cong, cellGroupId: cellB, role: "Admin", email: "admin@dev.local", fullName: "Admin" });
-  aId = a.user_id; a2Id = a2.user_id; bId = b.user_id; lId = l.user_id; minorId = minor.user_id;
+  aId = a.user_id; a2Id = a2.user_id; bId = b.user_id; lId = l.user_id; minorId = minor.user_id; adminId = admin.user_id;
   aTok = bearer({ sub: a.user_id, role: "Student", cong });
   a2Tok = bearer({ sub: a2.user_id, role: "Student", cong });
   bTok = bearer({ sub: b.user_id, role: "Student", cong });
@@ -148,8 +148,25 @@ describe("unread + reactions", () => {
   });
 });
 
+/** Connect two ordinary members (request → accept) — the precondition Chat
+ *  Redesign C1/C2 puts in front of a brand-new DM between them. */
+async function connect(requesterTok: string, targetId: string, targetTok: string): Promise<void> {
+  const req = await agent().post("/v1/chat/connections/requests").set(auth(requesterTok)).send({ user_id: targetId });
+  expect(req.status, `connect request failed: ${JSON.stringify(req.body)}`).toBe(201);
+  if (req.body.status === "accepted") return; // mutual ask already resolved it
+  const acc = await agent().post(`/v1/chat/connections/requests/${req.body.request_id}/accept`).set(auth(targetTok)).send({});
+  expect(acc.status, `connect accept failed: ${JSON.stringify(acc.body)}`).toBe(200);
+}
+
 describe("direct messages", () => {
-  it("creates a DM, dedupes, and both members can read it", async () => {
+  it("refuses an unsolicited DM between two ordinary members (no accepted connection)", async () => {
+    const res = await agent().post("/v1/chat/dms").set(auth(aTok)).send({ user_id: a2Id });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("CONSENT_REQUIRED");
+  });
+
+  it("creates a DM (once connected), dedupes, and both members can read it", async () => {
+    await connect(aTok, a2Id, a2Tok);
     const made = await agent().post("/v1/chat/dms").set(auth(aTok)).send({ user_id: a2Id });
     expect(made.status).toBe(201);
     const again = await agent().post("/v1/chat/dms").set(auth(aTok)).send({ user_id: a2Id });
@@ -162,6 +179,7 @@ describe("direct messages", () => {
   });
 
   it("inbox rows carry peer_user_id for DMs (null for group rooms)", async () => {
+    await connect(aTok, a2Id, a2Tok);
     const made = await agent().post("/v1/chat/dms").set(auth(aTok)).send({ user_id: a2Id });
     const inbox = await agent().get("/v1/chat/conversations").set(auth(aTok));
     const rows = inbox.body.conversations as Array<{ conversation_id: string; kind: string; peer_user_id: string | null }>;
@@ -174,6 +192,17 @@ describe("direct messages", () => {
   it("blocks DMs with a minor (D-M6)", async () => {
     const res = await agent().post("/v1/chat/dms").set(auth(aTok)).send({ user_id: minorId });
     expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN_SCOPE"); // minor-safety fires before the consent check
+  });
+
+  it("staff (Admin/SuperAdmin) keep the unsolicited-DM exception on either side of the pair", async () => {
+    // Admin-initiated: unaffected (existing "reach anyone" support behaviour).
+    const byAdmin = await agent().post("/v1/chat/dms").set(auth(adminTok)).send({ user_id: bId });
+    expect(byAdmin.status).toBe(201);
+    // Member-initiated AT an Admin: also unaffected — a member has always been
+    // able to reach staff for support without a connection handshake.
+    const atAdmin = await agent().post("/v1/chat/dms").set(auth(a2Tok)).send({ user_id: adminId });
+    expect(atAdmin.status).toBe(201);
   });
 });
 
