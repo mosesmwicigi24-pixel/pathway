@@ -76,7 +76,10 @@ export class IdentityService {
     private readonly emailer: EmailProvider = buildEmailProvider(env),
   ) {}
 
-  private async issueSession(user: UserAuthRow, deviceId?: string | null): Promise<SessionTokens> {
+  /** Mint a session (access + refresh). The single issuance path shared by every
+   *  login flavor — OAuth, password, MFA completion, dev login, and passkey
+   *  (WebAuthnService) — so there is never parallel token logic. */
+  async issueSession(user: UserAuthRow, deviceId?: string | null): Promise<SessionTokens> {
     // True login telemetry (leadership analytics): every minted session is a
     // front-door entry. Fire-and-forget — a logging hiccup never blocks login.
     void this.pool

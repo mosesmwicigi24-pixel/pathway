@@ -319,6 +319,126 @@ paths:
                 properties:
                   mfa_enabled: { type: boolean, enum: [false] }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/webauthn/register/options:
+    post:
+      tags: [auth]
+      summary: Begin passkey enrollment for the caller — WebAuthn creation options (platform authenticator, userVerification required); the challenge is stored server-side, single-use, 5-minute TTL (§5.3).
+      responses:
+        "200":
+          description: PublicKeyCredentialCreationOptions (JSON), passed to the browser's startRegistration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebAuthnOptions" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/webauthn/register/verify:
+    post:
+      tags: [auth]
+      summary: Verify the attestation and store the passkey on the caller's account. The challenge is burned on use.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [response]
+              properties:
+                response: { type: object, description: "RegistrationResponseJSON from the browser's startRegistration." }
+                device_label: { type: string, maxLength: 120, description: "Shown in Profile ▸ Passkeys, e.g. \"Mac · Chrome\"." }
+      responses:
+        "201":
+          description: Passkey stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credential_id]
+                properties:
+                  credential_id: { type: string }
+                  device_label: { type: [string, "null"] }
+                  created_at: { type: string, format: date-time }
+        "400": { description: Validation failed }
+        "401": { description: "AUTH_REQUIRED — attestation failed, or the challenge is unknown/expired/replayed." }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /auth/webauthn/credentials:
+    get:
+      tags: [auth]
+      summary: The caller's registered passkeys (Profile ▸ Passkeys).
+      responses:
+        "200":
+          description: Passkey list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [credential_id]
+                      properties:
+                        credential_id: { type: string }
+                        device_label: { type: [string, "null"] }
+                        created_at: { type: string, format: date-time }
+                        last_used_at: { type: [string, "null"], format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/webauthn/credentials/{credentialId}:
+    delete:
+      tags: [auth]
+      summary: Revoke one of the caller's passkeys. Owner-scoped — someone else's credential id 404s.
+      parameters:
+        - { name: credentialId, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Passkey revoked }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /auth/webauthn/login/options:
+    post:
+      tags: [auth]
+      summary: Request passkey sign-in options for an email. Anti-enumeration — an unknown email or an account without passkeys gets the SAME well-formed options with empty allowCredentials, never an error.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+                scope: { type: string, enum: [admin], description: "Sent by the admin consoles; the gate itself is enforced at verify." }
+      responses:
+        "200":
+          description: PublicKeyCredentialRequestOptions (JSON), passed to the browser's startAuthentication
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebAuthnOptions" }
+        "400": { description: Validation failed }
+  /auth/webauthn/login/verify:
+    post:
+      tags: [auth]
+      summary: Verify a passkey assertion and mint the same session as password login. Same staff-only gate under scope=admin (403 FORBIDDEN_SCOPE); userVerification=required counts as strong auth, so no TOTP step follows.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [response]
+              properties:
+                response: { type: object, description: "AuthenticationResponseJSON from the browser's startAuthentication." }
+                scope: { type: string, enum: [admin] }
+      responses:
+        "200":
+          description: Access + refresh pair
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "400": { description: Validation failed }
+        "401": { description: "AUTH_REQUIRED — assertion failed, unknown passkey, or the challenge is unknown/expired/replayed." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /me:
     get:
       tags: [auth]
@@ -5858,6 +5978,21 @@ components:
           type: array
           items: { type: string }
           description: One-time recovery codes, returned ONCE on the call that first enables 2FA.
+    WebAuthnOptions:
+      type: object
+      required: [challenge]
+      description: A WebAuthn options object (creation or request), passed to the browser ceremony verbatim. Only the server-stored challenge is contractual; the rest follows the WebAuthn L3 JSON shapes.
+      properties:
+        challenge: { type: string, description: "base64url — single-use, 5-minute TTL, stored server-side" }
+        allowCredentials:
+          type: array
+          description: Request options only — the account's registered credential ids (empty for unknown emails, by design).
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              transports: { type: array, items: { type: string } }
+      additionalProperties: true
     MfaChallenge:
       type: object
       required: [mfa_required, mfa_token]

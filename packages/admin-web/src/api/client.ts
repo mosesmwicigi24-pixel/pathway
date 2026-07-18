@@ -526,6 +526,44 @@ export const MeApi = {
   activity: () => api.get<{ data: MeActivityRow[] }>("/me/activity").then((r) => r.data.data),
 };
 
+// ---- Passkeys / WebAuthn (§5.3 strong auth) ----
+// The options objects are handed to @simplewebauthn/browser's ceremonies
+// verbatim; only `challenge` (server-stored, single-use) is contractual.
+export type WebAuthnOptions = Record<string, unknown> & { challenge: string };
+
+export interface PasskeyCredential {
+  credential_id: string;
+  device_label: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export const WebAuthnApi = {
+  /** Creation options for enrolling a passkey on the signed-in account. */
+  registerOptions: () => api.post<WebAuthnOptions>("/auth/webauthn/register/options").then((r) => r.data),
+  /** Store the attestation produced by startRegistration. */
+  registerVerify: (response: unknown, deviceLabel?: string) =>
+    api
+      .post<PasskeyCredential>("/auth/webauthn/register/verify", {
+        response,
+        ...(deviceLabel ? { device_label: deviceLabel } : {}),
+      })
+      .then((r) => r.data),
+  /** The account's registered passkeys (Profile ▸ Passkeys). */
+  credentials: () => api.get<{ data: PasskeyCredential[] }>("/auth/webauthn/credentials").then((r) => r.data.data),
+  /** Revoke one of the caller's own passkeys (owner-scoped server-side). */
+  removeCredential: (credentialId: string) =>
+    api.delete(`/auth/webauthn/credentials/${encodeURIComponent(credentialId)}`).then(() => undefined),
+  /** Request options for a passkey sign-in. Anti-enumeration: an unknown email
+   *  gets the same well-formed options with empty allowCredentials. */
+  loginOptions: (email: string) =>
+    api.post<WebAuthnOptions>("/auth/webauthn/login/options", { email, scope: "admin" }).then((r) => r.data),
+  /** Verify the assertion → the SAME session as password login (staff gate and
+   *  all — scope:"admin" keeps this console staff-only, §5.4). */
+  loginVerify: (response: unknown) =>
+    api.post<DevSession>("/auth/webauthn/login/verify", { response, scope: "admin" }).then((r) => r.data),
+};
+
 export interface LevelAnalyticsRow {
   level_number: number;
   title: string;

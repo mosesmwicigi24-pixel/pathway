@@ -9,11 +9,13 @@ import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ApiError } from "../../http/errors.js";
 import { IdentityService } from "./service.js";
 import { buildOAuthRegistry } from "./oauth.js";
+import { WebAuthnService } from "./webauthn.js";
 
 export const identityRouter: Router = Router();
 
 export function registerIdentity(ctx: AppContext): Router {
   const svc = new IdentityService(ctx.db.primary, ctx.env);
+  const webauthn = new WebAuthnService(ctx.db.primary, ctx.env, ctx.webauthnVerifier, svc);
   const oauth = buildOAuthRegistry(ctx.env);
   const auth = authenticate(ctx.env);
   const r = identityRouter;
@@ -138,6 +140,62 @@ export function registerIdentity(ctx: AppContext): Router {
       }),
     );
   }
+
+  // --- Passkeys / WebAuthn (§5.3 strong auth) ---
+  // Enrollment (authenticated): options → browser ceremony → verify+store.
+  r.post(
+    "/auth/webauthn/register/options",
+    auth,
+    handler(async (req, res) => {
+      res.status(200).json(await webauthn.registrationOptions(requirePrincipal(req).userId));
+    }),
+  );
+
+  r.post(
+    "/auth/webauthn/register/verify",
+    auth,
+    handler(async (req, res) => {
+      const input = parseBody(WebAuthnService.RegisterVerifySchema, req.body);
+      res.status(201).json(await webauthn.registrationVerify(requirePrincipal(req).userId, input));
+    }),
+  );
+
+  r.get(
+    "/auth/webauthn/credentials",
+    auth,
+    handler(async (req, res) => {
+      res.json({ data: await webauthn.listCredentials(requirePrincipal(req).userId) });
+    }),
+  );
+
+  r.delete(
+    "/auth/webauthn/credentials/:id",
+    auth,
+    handler(async (req, res) => {
+      await webauthn.deleteCredential(requirePrincipal(req).userId, req.params.id ?? "");
+      res.status(204).end();
+    }),
+  );
+
+  // Sign-in (public — these two share the /v1/auth rate-limit bucket with the
+  // password login, applied by path prefix in app.ts). Verify enforces the same
+  // staff-only scope gate as loginWithPassword and, with userVerification
+  // required, stands in for password+TOTP (see WebAuthnService.loginVerify).
+  r.post(
+    "/auth/webauthn/login/options",
+    handler(async (req, res) => {
+      const input = parseBody(WebAuthnService.LoginOptionsSchema, req.body);
+      res.status(200).json(await webauthn.loginOptions(input));
+    }),
+  );
+
+  r.post(
+    "/auth/webauthn/login/verify",
+    handler(async (req, res) => {
+      const input = parseBody(WebAuthnService.LoginVerifySchema, req.body);
+      res.status(200).json(await webauthn.loginVerify(input));
+    }),
+  );
 
   // --- Step-up MFA (§5.3) ---
   r.post(

@@ -14,6 +14,7 @@
   "dependencies": {
     "@nuru/shared": "workspace:*",
     "@reduxjs/toolkit": "^2.2.6",
+    "@simplewebauthn/browser": "^13.1.0",
     "@tailwindcss/vite": "^4",
     "axios": "^1.7.2",
     "lucide-react": "^1.18.0",

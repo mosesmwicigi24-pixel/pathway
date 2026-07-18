@@ -6,6 +6,7 @@ import type { Redis } from "ioredis";
 import type { Env } from "../config/env.js";
 import type { DbPools } from "../db/pool.js";
 import type { ObjectStore } from "../modules/certificates/objectStore.js";
+import type { WebAuthnVerifier } from "../modules/identity/webauthn.js";
 
 export interface AppContext {
   env: Env;
@@ -18,4 +19,8 @@ export interface AppContext {
   // modules fall back to buildObjectStore(env) (disk under MEDIA_STORAGE_DIR);
   // tests inject an InMemoryObjectStore shared between issuer and download route.
   objectStore?: ObjectStore | undefined;
+  // Passkey ceremony verifier (§5.3). Optional — identity falls back to the real
+  // @simplewebauthn adapter; tests inject FakeWebAuthnVerifier (no authenticator
+  // hardware in CI).
+  webauthnVerifier?: WebAuthnVerifier | undefined;
 }

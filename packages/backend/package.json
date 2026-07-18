@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@nuru/shared": "workspace:*",
+    "@simplewebauthn/server": "^13.1.1",
     "argon2": "^0.40.3",
     "chrono-node": "^2.9.1",
     "dotenv": "^16.4.5",

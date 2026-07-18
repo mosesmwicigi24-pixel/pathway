@@ -5,11 +5,12 @@ import { useEffect, useState, type ReactElement } from "react";
 import { NavLink, Outlet, Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
   Bell, Search, User, LogOut, ChevronDown, ChevronUp,
-  ChevronLeft, ChevronRight, Menu, Check, Trash2, X, ArrowRight,
+  ChevronLeft, ChevronRight, Menu, Check, Trash2, X, ArrowRight, Fingerprint,
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
 import { logout } from "../../store/authSlice";
-import { MeApi } from "../../api/client";
+import { MeApi, WebAuthnApi } from "../../api/client";
+import { passkeyNudgeCandidate, dismissPasskeyNudge, clearPasswordLoginMarker } from "../../lib/passkeys";
 import { useIsMobile } from "./useIsMobile";
 import { navGroups, titleFor } from "./nav";
 import { useNotifications, notifTimeAgo, CATEGORY_META } from "../notifications/NotificationsProvider";
@@ -32,8 +33,19 @@ export function Layout(): ReactElement {
   // Real logged-in identity (name + role) from /me, so the shell shows the
   // registered person — not a guess parsed from their email address.
   const [me, setMe] = useState<{ full_name: string; role: string } | null>(null);
+  // One-time passkey nudge: after a PASSWORD login on a WebAuthn-capable
+  // browser with ZERO registered passkeys. Dismissal sticks (localStorage).
+  const [passkeyNudge, setPasskeyNudge] = useState(false);
 
   useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
+  useEffect(() => {
+    if (!accessToken || !passkeyNudgeCandidate()) return;
+    let alive = true;
+    WebAuthnApi.credentials()
+      .then((creds) => { if (alive && creds.length === 0) setPasskeyNudge(true); })
+      .catch(() => { /* nudge is best-effort — never block the shell */ });
+    return () => { alive = false; };
+  }, [accessToken]);
   useEffect(() => {
     if (!accessToken) { setMe(null); return; }
     let alive = true;
@@ -286,6 +298,24 @@ export function Layout(): ReactElement {
           </div>
         </header>
 
+        {passkeyNudge && (
+          <div className="flex items-center gap-3 shrink-0" style={{ background: "rgba(200,155,60,0.10)", borderBottom: "1px solid rgba(200,155,60,0.25)", padding: isMobile ? "10px 14px" : "10px 28px" }}>
+            <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 30, height: 30, background: "rgba(200,155,60,0.18)", color: "var(--nuru-gold)" }}><Fingerprint size={16} /></span>
+            <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--nuru-navy)" }}>
+              <strong>Skip the password next time</strong>{!isMobile && <span style={{ color: "var(--muted-foreground)" }}> — add Touch ID, Face ID or Windows Hello and sign in with one touch.</span>}
+            </div>
+            <button
+              onClick={() => { setPasskeyNudge(false); clearPasswordLoginMarker(); navigate("/profile?tab=passkeys"); }}
+              className="rounded-lg shrink-0"
+              style={{ padding: "7px 14px", background: "var(--nuru-gold)", color: "#fff", fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer" }}
+            >
+              Add a passkey
+            </button>
+            <button onClick={() => { setPasskeyNudge(false); dismissPasskeyNudge(); }} className="shrink-0 rounded-md p-1" aria-label="Dismiss" style={{ color: "var(--muted-foreground)", background: "none", border: "none", cursor: "pointer" }}>
+              <X size={15} />
+            </button>
+          </div>
+        )}
         <main className="flex-1 overflow-y-auto no-scrollbar"><Outlet /></main>
       </div>
 

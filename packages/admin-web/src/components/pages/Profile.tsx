@@ -3,16 +3,19 @@
 // 2FA, Sessions and Preferences tabs are client-side surfaces (no per-account
 // model in our schema) and are labelled honestly rather than showing fake data.
 import { useCallback, useEffect, useState, type ReactElement, type CSSProperties, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
-  ChevronRight, User, Lock, Shield, Monitor, SlidersHorizontal, Activity, Smartphone,
+  ChevronRight, User, Lock, Shield, Monitor, SlidersHorizontal, Activity, Smartphone, Fingerprint, Trash2, Loader2,
 } from "lucide-react";
-import { MeApi, type MeProfile, type MeActivityRow } from "../../api/client";
+import { MeApi, WebAuthnApi, type MeProfile, type MeActivityRow, type PasskeyCredential } from "../../api/client";
 import { errorMessage } from "../../util/error";
+import { passkeySupported, enrollPasskey, isCeremonyCancelled, clearPasswordLoginMarker } from "../../lib/passkeys";
 
-type TabKey = "profile" | "password" | "2fa" | "sessions" | "preferences" | "activity";
+type TabKey = "profile" | "password" | "passkeys" | "2fa" | "sessions" | "preferences" | "activity";
 const TABS: { key: TabKey; label: string; icon: typeof User }[] = [
   { key: "profile", label: "Profile", icon: User },
   { key: "password", label: "Password", icon: Lock },
+  { key: "passkeys", label: "Passkeys", icon: Fingerprint },
   { key: "2fa", label: "2FA Security", icon: Shield },
   { key: "sessions", label: "Sessions", icon: Monitor },
   { key: "preferences", label: "Preferences", icon: SlidersHorizontal },
@@ -63,7 +66,12 @@ function DetailRow({ label, value, mono }: { label: string; value: ReactNode; mo
 }
 
 export function Profile(): ReactElement {
-  const [tab, setTab] = useState<TabKey>("profile");
+  // Deep-linkable tab (?tab=passkeys — used by the shell's enrollment nudge).
+  const [searchParams] = useSearchParams();
+  const requested = searchParams.get("tab");
+  const [tab, setTab] = useState<TabKey>(
+    TABS.some((t) => t.key === requested) ? (requested as TabKey) : "profile",
+  );
   const [profile, setProfile] = useState<MeProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -116,6 +124,7 @@ export function Profile(): ReactElement {
             <div style={{ padding: "24px 26px" }}>
               {tab === "profile" && <ProfilePanel profile={profile} onSaved={(m) => { setProfile(m); setFlash("Profile saved."); }} onError={setError} />}
               {tab === "password" && <PasswordPanel onChanged={() => setFlash("Password changed. Other sessions were signed out.")} onError={setError} />}
+              {tab === "passkeys" && <PasskeysPanel onFlash={setFlash} onError={setError} />}
               {tab === "2fa" && <TwoFactorPanel enabled={profile.require_2fa} />}
               {tab === "sessions" && <SessionsPanel />}
               {tab === "preferences" && <PreferencesPanel />}
@@ -198,6 +207,83 @@ function PasswordPanel({ onChanged, onError }: { onChanged: () => void; onError:
         <Field label="Confirm New Password" required type="password" value={confirm} onChange={setConfirm} {...(errs.confirm ? { error: errs.confirm } : {})} />
       </div>
       <div className="flex justify-end" style={{ marginTop: 24, maxWidth: 520 }}><PrimaryButton onClick={() => void submit()} disabled={busy}>Change Password</PrimaryButton></div>
+    </div>
+  );
+}
+
+function PasskeysPanel({ onFlash, onError }: { onFlash: (m: string) => void; onError: (m: string) => void }): ReactElement {
+  const [creds, setCreds] = useState<PasskeyCredential[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const supported = passkeySupported();
+
+  const load = useCallback(() => {
+    WebAuthnApi.credentials().then(setCreds).catch((e) => onError(errorMessage(e, "Could not load your passkeys.")));
+  }, [onError]);
+  useEffect(() => { load(); }, [load]);
+
+  async function add(): Promise<void> {
+    setBusy(true);
+    try {
+      await enrollPasskey();
+      clearPasswordLoginMarker(); // a passkey now exists — retire the sign-in nudge
+      onFlash("Passkey added. Next sign-in, use your fingerprint or face instead of the password.");
+      load();
+    } catch (e) {
+      if (!isCeremonyCancelled(e)) onError(errorMessage(e, "Could not add a passkey on this device."));
+    } finally { setBusy(false); }
+  }
+
+  async function revoke(id: string): Promise<void> {
+    setRemoving(id);
+    try { await WebAuthnApi.removeCredential(id); onFlash("Passkey removed."); load(); }
+    catch (e) { onError(errorMessage(e, "Could not remove that passkey.")); }
+    finally { setRemoving(null); }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between flex-wrap gap-3" style={{ marginBottom: 16 }}>
+        <SectionTitle>Passkeys</SectionTitle>
+        <button onClick={() => void add()} disabled={busy || !supported} className="flex items-center gap-2 rounded-lg px-4" style={{ height: 38, background: GOLD, color: "#fff", fontSize: 13, fontWeight: 600, opacity: busy || !supported ? 0.5 : 1, cursor: busy || !supported ? "not-allowed" : "pointer", border: "none" }}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Fingerprint size={14} />}
+          Add a passkey for this device
+        </button>
+      </div>
+      <p style={{ fontSize: 12.5, color: "var(--muted-foreground)", lineHeight: 1.5, marginBottom: 18, maxWidth: 560 }}>
+        Sign in with Touch ID, Face ID or Windows Hello instead of typing your password. A passkey is stored on this
+        device and unlocks with your fingerprint, face or device PIN — it also stands in for your two-factor code.
+      </p>
+      {!supported && (
+        <div className="rounded-lg" style={{ background: "#FFF6E0", border: "1px solid rgba(245,158,11,0.25)", padding: "10px 14px", marginBottom: 16, fontSize: 12.5, color: "#A87616" }}>
+          This browser doesn't support passkeys — try Chrome, Safari or Edge on a device with a screen lock.
+        </div>
+      )}
+      {!creds ? (
+        <p style={{ fontSize: 13, color: "var(--muted-foreground)" }}>Loading…</p>
+      ) : creds.length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-xl" style={{ padding: "36px 0", border: "1px dashed var(--border)", color: "var(--muted-foreground)" }}>
+          <Fingerprint size={26} style={{ opacity: 0.4, marginBottom: 10 }} />
+          <span style={{ fontSize: 13 }}>No passkeys yet — add one to skip the password next time.</span>
+        </div>
+      ) : (
+        <div className="flex flex-col">
+          {creds.map((c) => (
+            <div key={c.credential_id} className="flex items-center gap-3" style={{ padding: "12px 0", borderBottom: "1px solid var(--border)" }}>
+              <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 34, height: 34, background: "rgba(200,155,60,0.12)", color: GOLD }}><Fingerprint size={16} /></span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)" }}>{c.device_label ?? "Passkey"}</div>
+                <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 1 }}>
+                  Added {fmtDate(c.created_at)}{c.last_used_at ? ` · Last used ${timeAgo(Date.parse(c.last_used_at) || 0)}` : " · Never used"}
+                </div>
+              </div>
+              <button onClick={() => void revoke(c.credential_id)} disabled={removing === c.credential_id} className="flex items-center gap-1.5 rounded-lg shrink-0" style={{ padding: "7px 12px", fontSize: 12, fontWeight: 600, color: "#DC2626", background: "rgba(220,38,38,0.06)", border: "1px solid rgba(220,38,38,0.18)", cursor: "pointer", opacity: removing === c.credential_id ? 0.6 : 1 }}>
+                {removing === c.credential_id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

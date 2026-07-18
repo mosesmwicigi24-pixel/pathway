@@ -2,9 +2,11 @@
 // localStorage by the api client and mirrored into Redux, so a reload restores the
 // session and the access token is silently refreshed — no more surprise sign-offs.
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
-import { PortalApi, setSession, clearSession, getAccessToken } from "../api/client";
+import { startAuthentication } from "@simplewebauthn/browser";
+import { PortalApi, WebAuthnApi, setSession, clearSession, getAccessToken } from "../api/client";
 import { errorMessage } from "../util/error";
 import { decodeRole } from "../util/jwt";
+import { markPasswordLogin, clearPasswordLoginMarker, isCeremonyCancelled } from "../lib/passkeys";
 
 export const devLogin = createAsyncThunk<
   { accessToken: string; email: string; role: string | null },
@@ -31,6 +33,7 @@ export const login = createAsyncThunk<
     const res = await PortalApi.login(email, password);
     if ("mfa_required" in res) return { mfaToken: res.mfa_token, email };
     setSession(res.access_token, res.refresh_token);
+    markPasswordLogin(); // the shell may offer the one-time "add a passkey" nudge
     return { accessToken: res.access_token, email, role: decodeRole(res.access_token) };
   } catch (e) {
     return rejectWithValue(errorMessage(e, "Invalid email or password."));
@@ -45,9 +48,38 @@ export const completeMfa = createAsyncThunk<
   try {
     const session = await PortalApi.loginCompleteMfa(mfaToken, code);
     setSession(session.access_token, session.refresh_token);
+    markPasswordLogin(); // password+TOTP entry — still a candidate for the passkey nudge
     return { accessToken: session.access_token, email, role: decodeRole(session.access_token) };
   } catch (e) {
     return rejectWithValue(errorMessage(e, "That code didn't match. Try again or use a recovery code."));
+  }
+});
+
+// Passkey sign-in (Touch ID / Face ID / Windows Hello): options → platform
+// authenticator ceremony → verify. The server enforces the same staff-only
+// scope gate as password login and, with userVerification required, skips the
+// TOTP step. A user backing out of the ceremony rejects with "" — the UI
+// treats that as a quiet reset, not an error.
+export const passkeyLogin = createAsyncThunk<
+  { accessToken: string; email: string; role: string | null },
+  { email: string },
+  { rejectValue: string }
+>("auth/passkeyLogin", async ({ email }, { rejectWithValue }) => {
+  let assertion: unknown;
+  try {
+    const options = await WebAuthnApi.loginOptions(email);
+    assertion = await startAuthentication({ optionsJSON: options as never });
+  } catch (e) {
+    if (isCeremonyCancelled(e)) return rejectWithValue("");
+    return rejectWithValue(errorMessage(e, "Passkey sign-in didn't work — use your password instead."));
+  }
+  try {
+    const session = await WebAuthnApi.loginVerify(assertion);
+    setSession(session.access_token, session.refresh_token);
+    clearPasswordLoginMarker(); // they're already using a passkey — never nudge
+    return { accessToken: session.access_token, email, role: decodeRole(session.access_token) };
+  } catch (e) {
+    return rejectWithValue(errorMessage(e, "Passkey sign-in didn't work — use your password instead."));
   }
 });
 
@@ -139,6 +171,26 @@ const authSlice = createSlice({
       .addCase(completeMfa.rejected, (s, a) => {
         s.status = "error";
         s.error = a.payload ?? "Verification failed";
+      })
+      .addCase(passkeyLogin.pending, (s) => {
+        s.status = "loading";
+        s.error = null;
+      })
+      .addCase(passkeyLogin.fulfilled, (s, a) => {
+        s.status = "idle";
+        s.accessToken = a.payload.accessToken;
+        s.email = a.payload.email;
+        s.role = a.payload.role;
+      })
+      .addCase(passkeyLogin.rejected, (s, a) => {
+        // "" = the user cancelled the ceremony — reset quietly, no error banner.
+        if (a.payload === "") {
+          s.status = "idle";
+          s.error = null;
+          return;
+        }
+        s.status = "error";
+        s.error = a.payload ?? "Passkey sign-in failed";
       });
   },
 });

@@ -78,6 +78,13 @@ const EnvSchema = z.object({
   // Public base URL used to build links in emails (e.g. the password-reset page).
   APP_PUBLIC_URL: z.string().url().default("https://pathway.nuruplace.org"),
 
+  // --- Passkeys / WebAuthn (§5.3 strong auth). The RP ID is the domain passkeys
+  // are bound to; the origin is what signed clientData must match. Both default
+  // to APP_PUBLIC_URL (hostname / origin) — prod: pathway.nuruplace.org. Override
+  // only for split-host setups; plain localhost works for dev. ---
+  WEBAUTHN_RP_ID: z.string().optional(),
+  WEBAUTHN_ORIGIN: z.string().optional(),
+
   // --- Nuru AI (§5.10: keys by name only; absent → offline fake responder). ---
   // Anthropic (Claude) — preferred; tiered models power the intelligence layer
   // (fast = nightly story batch, standard = companion chat, deep = Sunday Letter).
