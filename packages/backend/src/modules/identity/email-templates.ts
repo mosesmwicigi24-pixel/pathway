@@ -74,22 +74,43 @@ function button(href: string, label: string): string {
     </td></tr></table>`;
 }
 
-/** Password-reset email — the link is valid for `minutes` minutes. */
-export function renderPasswordReset(opts: { link: string; minutes: number; name?: string }): RenderedEmail {
+/**
+ * Password-reset email — leads with a short, phone-typeable CODE (the primary
+ * path: type it straight into the mobile app), with the link as a secondary
+ * option for anyone reading on the same device they're resetting on. Both are
+ * valid for `minutes` minutes and redeem the same request.
+ */
+export function renderPasswordReset(opts: { code: string; link: string; minutes: number; name?: string }): RenderedEmail {
   const greeting = opts.name ? `Hi ${opts.name},` : "Hi,";
-  const subject = "Reset your Nuru Place password";
+  const subject = `Your Nuru Place reset code: ${opts.code}`;
   const text =
     `${greeting}\n\n` +
     `We received a request to reset the password for your Nuru Place account.\n\n` +
-    `Reset it here (valid for ${opts.minutes} minutes):\n${opts.link}\n\n` +
+    `Your reset code: ${opts.code}\n` +
+    `Enter it in the Nuru Place app to choose a new password. Valid for ${opts.minutes} minutes.\n\n` +
+    `On your phone's browser instead? Open this link — it shows the code again and lets you set a new password directly:\n${opts.link}\n\n` +
     `If you didn't request this, you can safely ignore this email — your password won't change.\n\n` +
     `— Nuru Place Discipleship Pathway`;
+  const codeBlock =
+    `<div style="margin:0 0 22px;text-align:center;">` +
+    `<div style="display:inline-block;padding:16px 26px;border-radius:12px;background-color:${PAPER};border:1.5px solid ${GOLD};">` +
+    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:10.5px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:${INK_MUTED};margin-bottom:6px;">Your reset code</div>` +
+    `<div style="font-family:'Courier New',Courier,monospace;font-size:28px;font-weight:bold;letter-spacing:4px;color:${NAVY};">${esc(opts.code)}</div>` +
+    `</div>` +
+    `</div>`;
   const inner =
     `<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:${INK};">${esc(greeting)}</p>` +
-    `<p style="margin:0 0 24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:${INK};">We received a request to reset the password for your Nuru Place account. Tap the button below to choose a new one.</p>` +
-    `<div style="margin:0 0 24px;">${button(opts.link, "Reset your password")}</div>` +
-    `<p style="margin:0 0 24px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:${INK_MUTED};">This link is valid for <strong>${opts.minutes} minutes</strong>. If the button doesn't work, copy and paste this link into your browser:<br><a href="${esc(opts.link)}" style="color:${NAVY};word-break:break-all;">${esc(opts.link)}</a></p>` +
-    `<hr style="border:none;border-top:1px solid ${BORDER};margin:0 0 16px;">` +
+    `<p style="margin:0 0 18px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:24px;color:${INK};">We received a request to reset the password for your Nuru Place account. Enter this code in the app:</p>` +
+    codeBlock +
+    `<p style="margin:0 0 22px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:${INK_MUTED};text-align:center;">Valid for <strong>${opts.minutes} minutes</strong>.</p>` +
+    `<hr style="border:none;border-top:1px solid ${BORDER};margin:0 0 20px;">` +
+    `<p style="margin:0 0 16px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:${INK_MUTED};">On your phone's browser instead? Tap below — it'll show your code again and let you set a new password directly.</p>` +
+    `<div style="margin:0 0 20px;">${button(opts.link, "Open reset page")}</div>` +
+    `<p style="margin:0 0 24px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:${INK_MUTED};">If the button doesn't work, copy and paste this link into your browser:<br><a href="${esc(opts.link)}" style="color:${NAVY};word-break:break-all;">${esc(opts.link)}</a></p>` +
     `<p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;color:${INK_MUTED};">If you didn't request this, you can safely ignore this email — your password won't change.</p>`;
-  return { subject, text, html: layout({ preheader: "Reset your Nuru Place password (link valid for 30 minutes).", inner }) };
+  return {
+    subject,
+    text,
+    html: layout({ preheader: `Your reset code: ${opts.code} (valid for ${opts.minutes} minutes).`, inner }),
+  };
 }
