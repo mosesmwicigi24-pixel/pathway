@@ -121,6 +121,15 @@ export class ChatService {
    * that one is dispatched (status flips to 'sent'), the NEXT message is free
    * to schedule a fresh nudge. Best-effort like `notify` — never blocks the
    * send it follows.
+   *
+   * Mute-aware (migration 172, conversation_mutes): a recipient with an
+   * ACTIVE mute on this conversation (muted_until NULL = forever, or in the
+   * future) gets no nudge at all — checked before the throttle lookup so a
+   * muted thread never even occupies the "one outstanding nudge" slot.
+   * Applies uniformly to every typed template that flows through here,
+   * including `chat_broadcast` (`broadcast()` calls this same method) — the
+   * task's "broadcast nudges too". The unread badge/in-app state is
+   * unaffected; muting silences the PUSH, never the message itself.
    */
   private async notifyMessage(
     userId: string,
@@ -129,6 +138,14 @@ export class ChatService {
     payload: Record<string, unknown>,
   ): Promise<void> {
     try {
+      const muted = await maybeOne(
+        this.pool,
+        `SELECT 1 FROM conversation_mutes
+          WHERE conversation_id = $1 AND user_id = $2
+            AND (muted_until IS NULL OR muted_until > now())`,
+        [conversationId, userId],
+      );
+      if (muted) return;
       const pending = await maybeOne(
         this.pool,
         `SELECT 1 FROM notifications
@@ -519,7 +536,11 @@ export class ChatService {
                  WHERE cm.conversation_id = cv.conversation_id AND NOT cm.is_hidden) AS message_count,
               (SELECT count(*)::int FROM chat_reactions cr
                  JOIN chat_messages rm ON rm.message_id = cr.message_id
-                WHERE rm.conversation_id = cv.conversation_id AND NOT rm.is_hidden) AS reaction_count
+                WHERE rm.conversation_id = cv.conversation_id AND NOT rm.is_hidden) AS reaction_count,
+              -- Mute state (migration 172, Chat Redesign C4): additive, MINE only —
+              -- never inferred for the other side of a DM. Active whenever a row
+              -- exists and either has no expiry (forever) or hasn't expired yet.
+              (cmu.user_id IS NOT NULL AND (cmu.muted_until IS NULL OR cmu.muted_until > now())) AS muted
          FROM chat_members mem
          JOIN chat_conversations cv ON cv.conversation_id = mem.conversation_id
          LEFT JOIN LATERAL (
@@ -533,6 +554,7 @@ export class ChatService {
              ORDER BY created_at DESC LIMIT 1
          ) lm ON TRUE
          LEFT JOIN users la ON la.user_id = lm.author_user_id
+         LEFT JOIN conversation_mutes cmu ON cmu.conversation_id = cv.conversation_id AND cmu.user_id = $1
         WHERE mem.user_id = $1
         ORDER BY COALESCE(lm.created_at, cv.created_at) DESC
         LIMIT 200`,
@@ -595,7 +617,13 @@ export class ChatService {
               CASE WHEN cv.kind = 'dm' THEN other.full_name ELSE cv.title END AS title,
               CASE WHEN cv.kind = 'dm' THEN other.avatar_url ELSE NULL END AS avatar_url,
               (SELECT count(*)::int FROM chat_members m2 WHERE m2.conversation_id = cv.conversation_id) AS member_count,
-              EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = cv.conversation_id AND m.user_id = $1) AS joined
+              EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = cv.conversation_id AND m.user_id = $1) AS joined,
+              -- Mute state (migration 172), additive — same MINE-only semantics as listConversations.
+              EXISTS (
+                SELECT 1 FROM conversation_mutes cmu
+                 WHERE cmu.conversation_id = cv.conversation_id AND cmu.user_id = $1
+                   AND (cmu.muted_until IS NULL OR cmu.muted_until > now())
+              ) AS muted
          FROM chat_conversations cv
          LEFT JOIN LATERAL (
             SELECT om.user_id FROM chat_members om WHERE om.conversation_id = cv.conversation_id AND om.user_id <> $1 LIMIT 1
@@ -799,6 +827,41 @@ export class ChatService {
       [conversationId, userId],
     );
     return { conversation_id: conversationId };
+  }
+
+  static readonly MuteConversation = z.object({ until: z.string().datetime().nullish() });
+
+  /**
+   * Mute a conversation's push nudges for the caller (migration 172,
+   * `conversation_mutes`, Chat Redesign C4's "mute" control on the Chat and
+   * Talk with My Pastor ⋮ menus). `until` omitted/null = muted forever;
+   * an ISO timestamp mutes through that instant. Reuses `access()` for the
+   * "active participant" gate — same 404 (no existence leak) / 403 posture
+   * as every other member-scoped route. Idempotent: re-muting overwrites the
+   * prior `muted_until` via upsert rather than erroring or duplicating rows.
+   */
+  async muteConversation(
+    userId: string,
+    conversationId: string,
+    until?: string | null,
+  ): Promise<{ conversation_id: string; muted: true; muted_until: string | null }> {
+    await this.access(this.pool, userId, conversationId);
+    const mutedUntil = until ?? null;
+    await this.pool.query(
+      `INSERT INTO conversation_mutes (conversation_id, user_id, muted_until)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (conversation_id, user_id) DO UPDATE SET muted_until = EXCLUDED.muted_until`,
+      [conversationId, userId, mutedUntil],
+    );
+    return { conversation_id: conversationId, muted: true, muted_until: mutedUntil };
+  }
+
+  /** Unmute (migration 172). Idempotent — deleting a row that doesn't exist
+   *  (already unmuted, or never muted) is a no-op, not an error. */
+  async unmuteConversation(userId: string, conversationId: string): Promise<{ conversation_id: string; muted: false }> {
+    await this.access(this.pool, userId, conversationId);
+    await this.pool.query(`DELETE FROM conversation_mutes WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId]);
+    return { conversation_id: conversationId, muted: false };
   }
 
   /** Read receipts for a message — who (other than the author) has seen it, and how
