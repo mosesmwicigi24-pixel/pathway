@@ -623,6 +623,98 @@ describe("event images + homepage feature (migration 52)", () => {
   });
 });
 
+describe("Home 'Upcoming events' list — show_on_home (migration 160)", () => {
+  let cong: string, admin: string, member: string;
+  beforeEach(async () => {
+    await resetDb();
+    cong = await createCongregation();
+    admin = (await createUser({ congregationId: cong, role: "Admin", email: "a@dev.local" })).user_id;
+    member = (await createUser({ congregationId: cong, role: "Student", email: "m@dev.local" })).user_id;
+  });
+  afterAll(async () => {
+    await closeTestPool();
+  });
+
+  // One-off series (no rrule) anchored `daysAhead` from now — mirrors futureWeekly's
+  // "anchor in the future" rule, but for a single occurrence rather than a recurrence.
+  function futureOneOff(daysAhead: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    d.setHours(9, 0, 0, 0);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T09:00:00`;
+  }
+
+  it("toggles show_on_home on and off (round trip); non-admins are refused", async () => {
+    const s = (await svc().createSeries(principal(admin, "Admin", cong), {
+      title: "Youth Night",
+      timezone: "Africa/Nairobi",
+      dtstart_local: futureOneOff(3),
+      duration_min: 60,
+      visibility: "congregation",
+    })) as { series_id: string };
+
+    const before = await testPool().query("SELECT show_on_home FROM event_series WHERE series_id=$1", [s.series_id]);
+    expect(before.rows[0].show_on_home).toBe(false);
+
+    const on = await svc().setSeriesShowOnHome(principal(admin, "Admin", cong), s.series_id, true);
+    expect(on.show_on_home).toBe(true);
+    const after = await testPool().query("SELECT show_on_home FROM event_series WHERE series_id=$1", [s.series_id]);
+    expect(after.rows[0].show_on_home).toBe(true);
+
+    const off = await svc().setSeriesShowOnHome(principal(admin, "Admin", cong), s.series_id, false);
+    expect(off.show_on_home).toBe(false);
+
+    await expect(svc().setSeriesShowOnHome(principal(member, "Student", cong), s.series_id, true)).rejects.toThrow();
+  });
+
+  it("GET /home/events (homeEvents) returns only flagged series, soonest first, capped at 5 even with 6 flagged", async () => {
+    const flaggedTitles: string[] = [];
+    for (let i = 1; i <= 6; i++) {
+      const s = (await svc().createSeries(principal(admin, "Admin", cong), {
+        title: `Home Event ${i}`,
+        timezone: "Africa/Nairobi",
+        dtstart_local: futureOneOff(i),
+        duration_min: 60,
+        visibility: "congregation",
+        primary_image_url: "https://res.cloudinary.com/x/event.jpg",
+      })) as { series_id: string };
+      await svc().materialize(s.series_id);
+      await svc().setSeriesShowOnHome(principal(admin, "Admin", cong), s.series_id, true);
+      flaggedTitles.push(`Home Event ${i}`);
+    }
+    // An un-flagged series, even one sooner than all the flagged ones, must never appear.
+    const unflagged = (await svc().createSeries(principal(admin, "Admin", cong), {
+      title: "Not curated for Home",
+      timezone: "Africa/Nairobi",
+      dtstart_local: futureOneOff(1),
+      duration_min: 60,
+      visibility: "congregation",
+    })) as { series_id: string };
+    await svc().materialize(unflagged.series_id);
+
+    const home = (await svc().homeEvents(member, cong)) as Array<{
+      occurrence_id: string;
+      series_id: string;
+      title: string;
+      venue: string | null;
+      starts_at: string;
+      primary_image_url: string | null;
+      my_rsvp: string | null;
+    }>;
+    expect(home).toHaveLength(5); // server caps at 5, never 6
+    expect(home.map((h) => h.title)).not.toContain("Not curated for Home");
+    // Soonest first — "Home Event 6" (furthest out) is excluded by the cap.
+    expect(home.map((h) => h.title)).toEqual(flaggedTitles.slice(0, 5));
+    const starts = home.map((h) => new Date(h.starts_at).getTime());
+    expect(starts).toEqual([...starts].sort((a, b) => a - b));
+    for (const row of home) {
+      expect(row.occurrence_id).toBeTruthy();
+      expect(row.primary_image_url).toContain("event.jpg");
+      expect(row.my_rsvp).toBeNull(); // no RSVP recorded yet
+    }
+  });
+});
+
 describe("Event Moments (community photo gallery)", () => {
   let cong: string, cong2: string, leader: string, leader2: string;
   beforeEach(async () => {

@@ -36,6 +36,7 @@ interface SeriesRow {
   is_paused?: boolean;
   status?: "draft" | "active";
   primary_image_url?: string | null;
+  show_on_home?: boolean;
 }
 
 // The admin portal's Create-event modal posts a richer, UI-shaped payload than
@@ -144,7 +145,7 @@ export class CalendarService {
       c,
       `SELECT series_id, congregation_id, cell_group_id, title, description, location, timezone,
               to_char(dtstart_local, 'YYYY-MM-DD"T"HH24:MI:SS') AS dtstart_local,
-              duration_min, rrule, visibility, category, is_paused, status, primary_image_url
+              duration_min, rrule, visibility, category, is_paused, status, primary_image_url, show_on_home
          FROM event_series es
         WHERE es.deleted_at IS NULL AND es.is_paused = FALSE AND es.congregation_id = $1
           -- Drafts are visible only to leaders/admins ($4), never to members.
@@ -195,6 +196,7 @@ export class CalendarService {
           status: s.status ?? "active",
           cell_group_id: s.cell_group_id,
           primary_image_url: s.primary_image_url ?? null,
+          show_on_home: s.show_on_home ?? false,
           start_at: start,
           end_at: end,
           original_start_at: o.start_at,
@@ -880,10 +882,11 @@ export class CalendarService {
       primary_image_url: string | null;
       gallery_image_urls: string[] | null;
       video_url: string | null;
+      show_on_home: boolean | null;
     }>(
       this.pool,
       `SELECT e.event_id, e.title, e.occurs_at, e.congregation_id,
-              s.description, s.location, s.category, s.primary_image_url, s.gallery_image_urls, s.video_url
+              s.description, s.location, s.category, s.primary_image_url, s.gallery_image_urls, s.video_url, s.show_on_home
          FROM events e
          LEFT JOIN event_series s ON s.series_id = e.series_id
         WHERE e.event_id = $1`,
@@ -919,6 +922,7 @@ export class CalendarService {
       primary_image_url: ev.primary_image_url ?? null,
       images,
       video_url: ev.video_url ?? null,
+      show_on_home: ev.show_on_home ?? false,
       rsvp_counts: Object.fromEntries(counts.map((r) => [r.status, r.n])),
       my_rsvp: mine?.status ?? null,
       attendees: faces,
@@ -957,6 +961,48 @@ export class CalendarService {
           LIMIT 1`,
         [congregationId],
       )) ?? null
+    );
+  }
+
+  // ---------------- Home "Upcoming events" list (up to 5, portal-curated) ----------------
+
+  /** Show / hide a series on the member Home "Upcoming" list. Unlike
+   *  `is_featured` (single homepage hero), any number of series may be flagged
+   *  at once — GET /home/events caps the response at 5 soonest occurrences
+   *  regardless of how many are flagged. Admin+ only, mirroring the featured
+   *  toggle's RBAC. */
+  async setSeriesShowOnHome(principal: Principal, seriesId: string, show: boolean): Promise<{ show_on_home: boolean }> {
+    if (principal.role !== "Admin" && principal.role !== "SuperAdmin") {
+      throw new ApiError("FORBIDDEN_SCOPE", "Only admins can curate the Home events list");
+    }
+    return tx(this.pool, async (c) => {
+      const s = await maybeOne<{ congregation_id: string }>(c, `SELECT congregation_id FROM event_series WHERE series_id = $1 AND deleted_at IS NULL`, [seriesId]);
+      if (!s) throw new ApiError("NOT_FOUND", "Series not found");
+      if (s.congregation_id !== principal.congregationId && principal.role !== "SuperAdmin") {
+        throw new ApiError("FORBIDDEN_SCOPE", "Series outside your congregation");
+      }
+      await c.query(`UPDATE event_series SET show_on_home = $2 WHERE series_id = $1`, [seriesId, show]);
+      await audit(c, principal.userId, "calendar.series_show_on_home", "event_series", seriesId, { show_on_home: show });
+      return { show_on_home: show };
+    });
+  }
+
+  /** Up to 5 soonest upcoming occurrences from series curated for the member
+   *  Home screen (`show_on_home`), soonest first. Reads the materialized
+   *  `events` rows (same source as RSVPs/attendance) so `my_rsvp` is a cheap
+   *  join, not a re-projection. The server — never the client — caps this at 5. */
+  async homeEvents(userId: string, congregationId: string): Promise<unknown[]> {
+    return many(
+      this.pool,
+      `SELECT e.event_id AS occurrence_id, e.series_id, e.title, s.location AS venue, e.occurs_at AS starts_at,
+              s.primary_image_url,
+              (SELECT r.status::text FROM event_rsvps r WHERE r.event_id = e.event_id AND r.user_id = $2) AS my_rsvp
+         FROM events e
+         JOIN event_series s ON s.series_id = e.series_id
+        WHERE s.show_on_home = true AND s.deleted_at IS NULL AND e.congregation_id = $1 AND e.occurs_at >= now()
+        ORDER BY e.occurs_at ASC
+        LIMIT 5`,
+      [congregationId, userId],
     );
   }
 

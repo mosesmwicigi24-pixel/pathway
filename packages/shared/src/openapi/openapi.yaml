@@ -2842,6 +2842,32 @@ paths:
       responses:
         "200": { description: Featured event or null }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/events/series/{id}/show-on-home:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    patch:
+      tags: [calendar]
+      summary: Admin. Show/hide this event series on the Home "Upcoming events" list (any number may be flagged; server caps the list at 5).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [show_on_home]
+              properties:
+                show_on_home: { type: boolean }
+      responses:
+        "200": { description: Updated }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /home/events:
+    get:
+      tags: [calendar]
+      summary: Member. Up to 5 soonest upcoming occurrences from portal-curated (show_on_home) series, soonest first.
+      responses:
+        "200": { description: Home events list }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /moments:
     get:
       tags: [calendar]
