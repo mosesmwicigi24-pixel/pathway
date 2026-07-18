@@ -179,5 +179,6 @@ export const pageTitles: Record<string, string> = {
 export function titleFor(pathname: string): string {
   if (pageTitles[pathname]) return pageTitles[pathname] as string;
   if (pathname.startsWith("/cell-engagement/")) return "Cell Detail";
+  if (pathname.startsWith("/events/series/")) return "Event Command Center";
   return "Nuru Pathway";
 }

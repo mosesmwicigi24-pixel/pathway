@@ -24,7 +24,8 @@ import { LevelReviews } from "./components/pages/LevelReviews";
 import { DiscipleshipHub } from "./components/pages/DiscipleshipHub";
 import { Chat } from "./components/pages/Chat";
 import { Broadcast } from "./components/pages/Broadcast";
-import { Events } from "./components/pages/Events";
+import { EventsHub } from "./components/events/EventsHub";
+import { SeriesCommandCenter } from "./components/events/SeriesCommandCenter";
 import { Finance } from "./components/pages/Finance";
 import { Certificates } from "./components/pages/Certificates";
 import { Badges } from "./components/pages/Badges";
@@ -108,7 +109,10 @@ const router = createBrowserRouter([
       { path: "discipleship-hub", element: <Guarded><DiscipleshipHub /></Guarded> },
       { path: "chat", element: <Guarded><Chat /></Guarded> },
       { path: "broadcast", element: <Guarded><Broadcast /></Guarded> },
-      { path: "events", element: <Guarded><Events /></Guarded> },
+      // Events page family (EVENTS_ARCHITECTURE §9): the Operations Center hub
+      // and the per-series Command Center.
+      { path: "events", element: <Guarded><EventsHub /></Guarded> },
+      { path: "events/series/:id", element: <Guarded><SeriesCommandCenter /></Guarded> },
       { path: "finance", element: <Guarded><Finance /></Guarded> },
       { path: "certificates", element: <Guarded><Certificates /></Guarded> },
       { path: "badges", element: <Guarded><Badges /></Guarded> },

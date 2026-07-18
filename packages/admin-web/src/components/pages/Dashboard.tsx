@@ -141,10 +141,12 @@ export function Dashboard(): ReactElement {
   const levels = useZone<AdminLevel[]>(() => CurriculumApi.levels());
   const plans = useZone<PlanRow[]>(() => GrowthAdminApi.plans());
   const finance = useZone<FundSummary[]>(() => ConfigApi.financeSummary().then((r) => r.funds));
+  // Next-90-days window for the "next event" tile (the Events page itself pages
+  // by visible range — see useCalendarRange; this tile only needs the horizon).
   const calendar = useZone<CalendarOccurrence[]>(() => {
     const now = new Date();
-    const in60 = new Date(now.getTime() + 60 * 24 * 3600 * 1000);
-    return OpsApi.calendar(now.toISOString(), in60.toISOString());
+    const in90 = new Date(now.getTime() + 90 * 24 * 3600 * 1000);
+    return OpsApi.calendar(now.toISOString(), in90.toISOString());
   });
   const audit = useZone<AuditRow[]>(() => ConfigApi.audit({}).then((r) => r.data));
   const radio = useZone<RadioProgram[]>(() => RadioApi.programs());
