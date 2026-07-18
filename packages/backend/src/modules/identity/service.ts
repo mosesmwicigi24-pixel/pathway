@@ -15,6 +15,8 @@ import {
   revokeFamily,
   signMfaChallenge,
   verifyMfaChallenge,
+  generateResetCode,
+  normalizeResetCode,
   type AccessClaims,
 } from "./tokens.js";
 import type { OAuthProfile } from "./oauth.js";
@@ -463,12 +465,15 @@ export class IdentityService {
    * Request a password-reset link (Figma "Reset password"). Always reports success
    * to avoid account enumeration; only accounts that actually have a password get a
    * token. We persist the SHA-256 of a single-use 30-minute token (never the raw
-   * value). With no email provider wired, non-production returns the raw token so
-   * the flow is testable end-to-end; production would deliver it by email instead.
+   * value) — plus the SHA-256 of a short human-typeable CODE (e.g. "K7F4-P2XN")
+   * redeeming the same row, so a member on a phone can key eight characters
+   * into the app instead of pasting a 64-char hex string. With no email
+   * provider wired, non-production returns both raw credentials so the flow is
+   * testable end-to-end; production would deliver them by email instead.
    */
   async requestPasswordReset(
     input: z.infer<typeof IdentityService.ForgotPasswordSchema>,
-  ): Promise<{ sent: true; dev_token?: string }> {
+  ): Promise<{ sent: true; dev_token?: string; dev_code?: string }> {
     const row = await maybeOne<{ user_id: string; password_hash: string | null; full_name: string | null }>(
       this.pool,
       `SELECT user_id, password_hash, full_name FROM users WHERE email = $1 AND deleted_at IS NULL`,
@@ -477,18 +482,24 @@ export class IdentityService {
     if (!row || !row.password_hash) return { sent: true };
     const raw = randomBytes(32).toString("hex");
     const tokenHash = createHash("sha256").update(raw).digest("hex");
+    const code = generateResetCode();
+    const codeHash = createHash("sha256").update(normalizeResetCode(code) as string).digest("hex");
     const expires = new Date(Date.now() + 30 * 60 * 1000);
     await this.pool.query(
-      `INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
-      [row.user_id, tokenHash, expires],
+      `INSERT INTO password_resets (user_id, token_hash, code_hash, expires_at) VALUES ($1, $2, $3, $4)`,
+      [row.user_id, tokenHash, codeHash, expires],
     );
     await audit(this.pool, row.user_id, "user.password_reset_requested", "users", row.user_id, {});
 
-    // Email the link to the account address. Best-effort: a delivery failure must
-    // not change the (no-enumeration) response, so we never surface it.
-    const link = `${this.env.APP_PUBLIC_URL}/reset-password?token=${raw}`;
+    // Email the code (primary) + link to the account address. The link carries
+    // the code too (query string) so the reset page can show it big and
+    // copyable for pasting into the mobile app. Best-effort: a delivery
+    // failure must not change the (no-enumeration) response, so we never
+    // surface it.
+    const link = `${this.env.APP_PUBLIC_URL}/reset-password?token=${raw}&code=${encodeURIComponent(code)}`;
     const firstName = row.full_name?.trim().split(/\s+/)[0];
     const email = renderPasswordReset({
+      code,
       link,
       minutes: 30,
       ...(firstName ? { name: firstName } : {}),
@@ -498,32 +509,43 @@ export class IdentityService {
     } catch {
       /* best-effort delivery */
     }
-    return this.env.NODE_ENV === "production" ? { sent: true } : { sent: true, dev_token: raw };
+    return this.env.NODE_ENV === "production" ? { sent: true } : { sent: true, dev_token: raw, dev_code: code };
   }
 
+  // `token` doubles as the credential field for BOTH the long link token and
+  // the short code (kept as one field so the mobile apps' existing "paste the
+  // token from your email" input works unchanged with either). min(6) admits
+  // the shortest code shape (8 chars, no dash); resetPassword tells them apart
+  // by trying both hashes.
   static readonly ResetPasswordSchema = z
-    .object({ token: z.string().min(16).max(200), new_password: z.string().min(8).max(200) })
+    .object({ token: z.string().min(6).max(200), new_password: z.string().min(8).max(200) })
     .strict();
 
   /**
-   * Consume a reset token and set a new password. The token must be unused and
-   * unexpired; it is burned on use. All refresh-token families are revoked so any
-   * session opened with the old (possibly compromised) credential dies.
+   * Consume a reset token OR reset code and set a new password. Whichever
+   * credential was presented must be unused and unexpired; it is burned on
+   * use (both the token and the code on that row die together, so a member
+   * can't reuse the other form of the same request either). All
+   * refresh-token families are revoked so any session opened with the old
+   * (possibly compromised) credential dies.
    */
   async resetPassword(
     input: z.infer<typeof IdentityService.ResetPasswordSchema>,
   ): Promise<{ reset: true }> {
     const tokenHash = createHash("sha256").update(input.token).digest("hex");
+    const normalizedCode = normalizeResetCode(input.token);
+    const codeHash = normalizedCode ? createHash("sha256").update(normalizedCode).digest("hex") : null;
     const newHash = await hashPassword(input.new_password);
     await tx(this.pool, async (c) => {
       const reset = await maybeOne<{ reset_id: string; user_id: string }>(
         c,
         `SELECT reset_id, user_id FROM password_resets
-          WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+          WHERE (token_hash = $1 OR (code_hash IS NOT NULL AND code_hash = $2))
+            AND used_at IS NULL AND expires_at > now()
           FOR UPDATE`,
-        [tokenHash],
+        [tokenHash, codeHash],
       );
-      if (!reset) throw new ApiError("UNPROCESSABLE", "This reset link is invalid or has expired");
+      if (!reset) throw new ApiError("UNPROCESSABLE", "This reset code or link is invalid or has expired");
       await c.query(
         `UPDATE users SET password_hash = $2, failed_login_count = 0, locked_until = NULL, updated_at = now() WHERE user_id = $1`,
         [reset.user_id, newHash],

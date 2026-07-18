@@ -3,7 +3,7 @@
 // Rotation issues a new token and invalidates the old; presenting an
 // already-used (revoked) token revokes the entire family — theft detection.
 import jwt from "jsonwebtoken";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import type { UserRole } from "@nuru/shared";
 import type { Env } from "../../config/env.js";
@@ -135,6 +135,31 @@ export async function rotateRefreshToken(
   await pool.query(`UPDATE refresh_tokens SET revoked_at = now() WHERE token_id = $1`, [row.token_id]);
   const refresh = await issueRefreshToken(pool, row.user_id, env, { familyId: row.family_id });
   return { userId: row.user_id, refresh };
+}
+
+// Unambiguous alphabet for human-typed codes (§5.3 code-first password reset):
+// A-Z minus I/O (look like 1/0) plus 2-9 (skip 0/1 for the same reason).
+const RESET_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/**
+ * Mint a short reset code a member can type on a phone keyboard instead of
+ * copying a 64-char hex token — e.g. "K7F4-P2XN". Grouped 4-4 for
+ * readability only; normalizeResetCode() strips the grouping before hashing.
+ */
+export function generateResetCode(): string {
+  const pick = (n: number) =>
+    Array.from({ length: n }, () => RESET_CODE_ALPHABET[randomInt(RESET_CODE_ALPHABET.length)]).join("");
+  return `${pick(4)}-${pick(4)}`;
+}
+
+/**
+ * Canonicalize a user-entered reset code: uppercase, strip dashes/whitespace.
+ * Returns null when the result isn't 8 characters, so a pasted long link
+ * token (or anything else) is never mistaken for — and looked up as — a code.
+ */
+export function normalizeResetCode(input: string): string | null {
+  const stripped = input.toUpperCase().replace(/[\s-]/g, "");
+  return stripped.length === 8 ? stripped : null;
 }
 
 /** Revoke an entire refresh-token family (logout). */

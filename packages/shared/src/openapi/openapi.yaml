@@ -174,7 +174,11 @@ paths:
   /auth/password/forgot:
     post:
       tags: [auth]
-      summary: Request a password-reset link. Always 200 (no account enumeration).
+      summary: Request a password reset. Always 200 (no account enumeration).
+      description: >
+        Emails a short 8-character reset code (e.g. "K7F4-P2XN") plus a link
+        to the portal reset page carrying the same code, if the account
+        exists and has a password.
       security: []
       requestBody:
         required: true
@@ -187,7 +191,7 @@ paths:
                 email: { type: string, format: email }
       responses:
         "200":
-          description: Reset requested (link delivered if the account exists)
+          description: Reset requested (code + link delivered if the account exists)
           content:
             application/json:
               schema:
@@ -195,11 +199,16 @@ paths:
                 required: [sent]
                 properties:
                   sent: { type: boolean }
-                  dev_token: { type: string, description: "Non-production only: the raw reset token, for testing." }
+                  dev_token: { type: string, description: "Non-production only: the raw reset link token, for testing." }
+                  dev_code: { type: string, description: "Non-production only: the raw reset code, for testing." }
   /auth/password/reset:
     post:
       tags: [auth]
-      summary: Consume a reset token and set a new password; revokes all sessions.
+      summary: Consume a reset code or link token and set a new password; revokes all sessions.
+      description: >
+        `token` accepts either credential from the forgot-password email: the
+        short reset code (case-insensitive, dashes optional) or the long link
+        token. Either redeems the same request.
       security: []
       requestBody:
         required: true
@@ -209,7 +218,7 @@ paths:
               type: object
               required: [token, new_password]
               properties:
-                token: { type: string }
+                token: { type: string, description: "The reset code (e.g. \"K7F4-P2XN\") or the long link token." }
                 new_password: { type: string, minLength: 8 }
       responses:
         "200":
