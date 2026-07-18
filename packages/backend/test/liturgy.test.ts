@@ -4,7 +4,18 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation } from "./helpers/factories.js";
-import { LiturgyService, easterOf, seasonOf, partOf, FALLBACK_LITURGY, LITURGY_ART, pickLiturgyArt } from "../src/modules/intelligence/liturgy.js";
+import {
+  LiturgyService,
+  easterOf,
+  seasonOf,
+  partOf,
+  bandOf,
+  FALLBACK_LITURGY,
+  LITURGY_ART,
+  pickLiturgyArt,
+  pickBandArt,
+  type DayBand,
+} from "../src/modules/intelligence/liturgy.js";
 import { FakeAiProvider, type AiProvider } from "../src/modules/assistant/provider.js";
 
 afterAll(async () => {
@@ -36,6 +47,37 @@ describe("computus + seasons + clock (pure)", () => {
     expect(partOf(new Date("2026-07-11T20:00:00Z"))).toBe("night"); // 23:00 EAT
     expect(partOf(new Date("2026-07-11T23:30:00Z"))).toBe("night"); // 02:30 EAT next day
   });
+
+  it("maps the EAT clock to the seven finer bands, at every boundary", () => {
+    expect(bandOf(new Date("2026-07-11T02:59:00Z"))).toBe("midnight"); // 05:59 EAT
+    expect(bandOf(new Date("2026-07-11T03:00:00Z"))).toBe("sunrise"); // 06:00 EAT
+    expect(bandOf(new Date("2026-07-11T05:59:00Z"))).toBe("sunrise"); // 08:59 EAT
+    expect(bandOf(new Date("2026-07-11T06:00:00Z"))).toBe("morning"); // 09:00 EAT
+    expect(bandOf(new Date("2026-07-11T10:59:00Z"))).toBe("midday"); // 13:59 EAT
+    expect(bandOf(new Date("2026-07-11T11:00:00Z"))).toBe("afternoon"); // 14:00 EAT
+    expect(bandOf(new Date("2026-07-11T17:59:00Z"))).toBe("evening"); // 20:59 EAT
+    expect(bandOf(new Date("2026-07-11T18:00:00Z"))).toBe("night"); // 21:00 EAT
+  });
+});
+
+describe("band art — disjoint tableau photographs per card", () => {
+  const BANDS: DayBand[] = ["sunrise", "morning", "midday", "afternoon", "evening", "night", "midnight"];
+  const DAYS = ["2026-01-01", "2026-06-15", "2026-12-31"];
+
+  it("pickBandArt('liturgy') and pickBandArt('verse') never coincide, for any band and day", () => {
+    for (const band of BANDS) {
+      for (const day of DAYS) {
+        const liturgyArt = pickBandArt("liturgy", band, day);
+        const verseArt = pickBandArt("verse", band, day);
+        expect(liturgyArt.url).not.toBe(verseArt.url);
+      }
+    }
+  });
+
+  it("is deterministic per (card, band, day)", () => {
+    expect(pickBandArt("liturgy", "sunrise", "2026-07-13")).toEqual(pickBandArt("liturgy", "sunrise", "2026-07-13"));
+    expect(pickBandArt("verse", "midnight", "2026-07-13")).toEqual(pickBandArt("verse", "midnight", "2026-07-13"));
+  });
 });
 
 describe("composition + cache", () => {
@@ -61,10 +103,18 @@ describe("composition + cache", () => {
     expect(["morning", "midday", "evening", "night"]).toContain(now.part);
     expect(now.line.length).toBeGreaterThan(10);
     expect(now.season).toBeTruthy();
-    // The hour's tableau rides along, drawn from that part's curated pool.
+    // The hour's tableau rides along, drawn from that band's curated (liturgy-card) pool.
     expect(now.art.url.startsWith("https://images.unsplash.com/photo-")).toBe(true);
     expect(now.art.alt.length).toBeGreaterThan(5);
-    expect(LITURGY_ART[now.part].some((a) => a.url === now.art.url)).toBe(true);
+    // The finer 7-band clock rides along too: a band, a second authored charge
+    // line, and a curated verse-line for that band.
+    expect(["sunrise", "morning", "midday", "afternoon", "evening", "night", "midnight"]).toContain(now.band);
+    expect(typeof now.charge).toBe("string");
+    expect(now.charge.length).toBeGreaterThan(10);
+    expect(typeof now.verse_line.reference).toBe("string");
+    expect(now.verse_line.reference.length).toBeGreaterThan(0);
+    expect(typeof now.verse_line.text).toBe("string");
+    expect(now.verse_line.text.length).toBeGreaterThan(10);
   });
 
   it("each part has ~30 hour-fitting images and rotates 30 days without repeating", () => {
