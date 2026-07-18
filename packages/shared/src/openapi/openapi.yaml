@@ -4033,6 +4033,85 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/discipler-assignments:
+    post:
+      tags: [portal]
+      summary: >-
+        Assign (or REASSIGN) a member's discipler (Chat Redesign C2) —
+        history-preserving, unlike the one-shot POST /relationships. Ends the
+        disciple's prior active row (end_reason=reassigned) and archives the
+        OLD DISCIPLER conversation between disciple and former discipler
+        (chat_conversations.archived_at) — never merged into or exposed via
+        the new assignment. Scope: assertCellInScope (Instructor+, scoped to
+        the disciple's cell; Admin/SuperAdmin unrestricted) — same authority
+        as POST /relationships.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disciple_user_id, discipler_user_id]
+              properties:
+                disciple_user_id: { type: string, format: uuid }
+                discipler_user_id: { type: string, format: uuid }
+      responses:
+        "201": { description: "{ assignment_id, disciple_user_id, discipler_user_id, reassigned }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    get:
+      tags: [portal]
+      summary: A disciple's full discipler-assignment history, newest first. Same scope as the POST above.
+      parameters:
+        - name: disciple_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: "{ data: [{ assignment_id, disciple_user_id, discipler_user_id, discipler_full_name, assigned_by, assigned_at, ended_at, end_reason }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/pastor-assignments:
+    post:
+      tags: [portal]
+      summary: >-
+        Name (or rename) a member's pastor, or a congregation's default
+        pastoral account (Chat Redesign C2, "Talk with My Pastor"). Admin+.
+        Ends the prior active row for the same key (member, or congregation
+        default) before inserting the new one — history-preserving.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pastor_user_id]
+              properties:
+                member_user_id: { type: [string, "null"], format: uuid, description: "Omit/null for a congregation-wide default row (then assignment_kind must be default and congregation_id required)." }
+                congregation_id: { type: string, format: uuid }
+                pastor_user_id: { type: string, format: uuid }
+                assignment_kind: { type: string, enum: [primary, campus, cell, default], default: primary }
+      responses:
+        "201": { description: "{ assignment_id, reassigned }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    get:
+      tags: [portal]
+      summary: A member's full pastor-assignment history, newest first. Admin+.
+      parameters:
+        - name: member_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: "{ data: [{ assignment_id, member_user_id, congregation_id, pastor_user_id, pastor_full_name, assignment_kind, assigned_by, assigned_at, ended_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
 
   # --- Growth-content authoring (Admin+) — every mobile growth element editable ---
   /admin/growth/devotionals:
@@ -4410,6 +4489,20 @@ paths:
         "403":
           description: FORBIDDEN_SCOPE (minor-safety, or cross-congregation) or CONSENT_REQUIRED (no accepted connection for a brand-new thread).
         "404": { $ref: "#/components/responses/NotFound" }
+  /chat/discipler/conversation:
+    get:
+      tags: [progress]
+      summary: >-
+        My Discipler (Chat Redesign C2): resolve — lazily creating — my
+        DISCIPLER thread with my CURRENT assignment (discipler_assignments,
+        falling back to a not-yet-migrated relationship_tree edge — NEVER the
+        cell-leader inference). Minor-safe (D-M6). Never reuses an ARCHIVED
+        thread from a prior assignment.
+      responses:
+        "200": { description: "{ conversation_id }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: "NOT_FOUND, details.no_discipler = true — no valid discipler assignment exists." }
   /chat/connections/requests:
     post:
       tags: [progress]
@@ -4519,6 +4612,33 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /chat/pastoral:
+    post:
+      tags: [progress]
+      summary: >-
+        Talk with My Pastor (Chat Redesign C2): create-or-open MY thread with
+        my CURRENT pastor. Resolution order: my own active assignment → my
+        congregation's active default → the congregation's earliest-created
+        SuperAdmin (audit-logged every time this last-resort fallback actually
+        fires). No step-up — this is my own conversation.
+      responses:
+        "201": { description: "{ conversation_id, pastor_user_id, source }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: "NOT_FOUND, details.no_pastor = true — no pastor resolves at all (no assignment, no default, no SuperAdmin)." }
+  /chat/pastoral/inbox:
+    get:
+      tags: [progress]
+      summary: >-
+        Pastoral Inbox ("Talk with Your Pastor"): every PASTORAL thread the
+        caller is the pastor of, or every PASTORAL thread for a SuperAdmin's
+        oversight reach. Refused (403) for anyone who has never held a pastor
+        assignment and isn't SuperAdmin. Password step-up required (§5.3) —
+        same posture as Broadcast.
+      responses:
+        "200": { description: "{ data: [{ conversation_id, archived_at, updated_at, member_user_id, member_name, member_avatar_url, last_body, last_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — no pastor assignment on file and not SuperAdmin, OR password_required (step-up)." }
   /chat/broadcast:
     post:
       tags: [progress]
@@ -4556,6 +4676,20 @@ paths:
                     quietly reached 40 of 60 members, the other 19 having no
                     congregation to be scoped to. "all" is SuperAdmin-only however
                     it arrives; anyone else asking for it gets 403 FORBIDDEN_SCOPE.
+                reply_policy:
+                  type: string
+                  enum: [none, official_inbox, ordinary_chat, linked_thread]
+                  default: ordinary_chat
+                  description: >-
+                    Chat Redesign C2. Omit it and today's exact behaviour is
+                    unchanged (ordinary_chat — the recipient may reply freely
+                    in the shared thread). 'none'/'official_inbox' refuse the
+                    recipient's reply with 403 FORBIDDEN_SCOPE, details.reply_policy
+                    set accordingly (the broadcaster is never gated). 'linked_thread'
+                    also refuses the shared-thread reply, but resolves
+                    details.linked_conversation_id to the recipient's DISCIPLER
+                    or PASTORAL thread with the sender when one applies (null
+                    otherwise) — the client re-sends there instead.
                 client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
       responses:
         "201":
@@ -4576,6 +4710,7 @@ paths:
                   attachment_url: { type: [string, "null"] }
                   audience: { type: string, enum: [congregation, all] }
                   recipient_count: { type: integer, description: "How many members it reached, recorded at send time." }
+                  reply_policy: { type: string, enum: [none, official_inbox, ordinary_chat, linked_thread] }
                   created_at: { type: string, format: date-time, description: "The server's timestamp — display this, not the device clock." }
                   sent: { type: integer, description: "Same as recipient_count; kept for callers that read it." }
                   duplicate: { type: boolean, description: "True when a replayed client_mutation_id short-circuited. Everything else is what actually landed, not a recount of today's membership." }

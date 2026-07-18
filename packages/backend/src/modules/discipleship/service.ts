@@ -1,21 +1,78 @@
-// Module: discipleship — the Discipleship Hub read-aggregation layer.
+// Module: discipleship — the Discipleship Hub read-aggregation layer, plus
+// (Chat Redesign C2) the discipler_assignments write path: an explicit,
+// history-preserving "who disciples whom" edge that replaces relying on
+// relationship_tree's UNIQUE(disciple_id)-with-no-history for anything that
+// needs REASSIGNMENT (docs/CHAT_REDESIGN.md "My Discipler",
+// docs/CHAT_REDESIGN_PLAN.md §2.5).
 //
-// The Hub is a COMPOSITION layer: every building block (1:1 DM, reflection review,
-// level-advancement usher, engagement snapshot, cell roster, growth scores) already
-// exists. The gap this module closes is a single call that answers "where is this
-// student, who is their discipler, what are they waiting on." Pure read aggregation
-// over the existing schema — NO new tables, NO migration.
+// The Hub itself is a COMPOSITION layer: every building block (1:1 DM,
+// reflection review, level-advancement usher, engagement snapshot, cell
+// roster, growth scores) already exists. The gap it closes is a single call
+// that answers "where is this student, who is their discipler, what are they
+// waiting on." Pure read aggregation — no migration of its own.
 //
-// Two authority axes (§5.4):
-//   • leader_assignments → cell_group_id → users.cell_group_id (cell scope), and
-//   • explicit relationship_tree(multiplier_id, disciple_id) edges (1:1 discipling).
+// Three authority axes now (§5.4, extended by C2):
+//   • discipler_assignments (disciple_user_id → discipler_user_id, ACTIVE row) —
+//     the canonical, explicit assignment (C2).
+//   • relationship_tree(multiplier_id, disciple_id) — the pre-C2 explicit edge,
+//     kept as a fallback for anything not yet migrated into an assignment.
+//   • leader_assignments → cell_group_id → users.cell_group_id (cell scope) —
+//     an INFERENCE, never promoted to an "assignment" (owner brief: "Tab
+//     active only when a valid discipler assignment exists").
 import type { Pool } from "pg";
-import { many, maybeOne, one } from "../../db/db.js";
+import { z } from "zod";
+import { many, maybeOne, one, tx, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
+import { assertCellInScope } from "../../http/auth.js";
 import type { Principal } from "../../http/http.js";
 import { ScoresService } from "../scores/service.js";
 
 type ReflectionState = "approved" | "pending" | "returned" | "deferred";
+
+/** A disciple's CURRENT explicit discipler, C2 resolution order:
+ *  1. discipler_assignments (active row) — the canonical source.
+ *  2. relationship_tree (an explicit edge never migrated into an assignment).
+ *  Deliberately NEVER the cell-leader inference (cell_groups.leader_user_id) —
+ *  that stays a display-only fallback inside resolveDiscipler below, not
+ *  something a DISCIPLER chat thread or a "valid assignment" check may rely
+ *  on (owner brief, "My Discipler": "Tab active only when a valid discipler
+ *  assignment exists"). Exported so chat/service.ts (GET /chat/discipler/
+ *  conversation, broadcast reply-policy "linked_thread" resolution) shares
+ *  this ONE source of truth rather than re-deriving it. */
+export async function resolveCurrentDiscipler(
+  q: Queryable,
+  discipleId: string,
+): Promise<{ discipler_user_id: string; assigned_at: string; source: "assignment" | "relationship_tree" } | null> {
+  const viaAssignment = await maybeOne<{ discipler_user_id: string; assigned_at: string }>(
+    q,
+    `SELECT discipler_user_id, assigned_at FROM discipler_assignments
+      WHERE disciple_user_id = $1 AND ended_at IS NULL`,
+    [discipleId],
+  );
+  if (viaAssignment) return { ...viaAssignment, source: "assignment" };
+  const viaEdge = await maybeOne<{ multiplier_id: string; established_at: string }>(
+    q,
+    `SELECT multiplier_id, established_at FROM relationship_tree WHERE disciple_id = $1 LIMIT 1`,
+    [discipleId],
+  );
+  if (viaEdge) {
+    return { discipler_user_id: viaEdge.multiplier_id, assigned_at: viaEdge.established_at, source: "relationship_tree" };
+  }
+  return null;
+}
+
+/** One row of a disciple's full discipler-assignment history (GET
+ *  /admin/discipler-assignments), newest first. */
+export interface DisciplerAssignmentRow {
+  assignment_id: string;
+  disciple_user_id: string;
+  discipler_user_id: string;
+  discipler_full_name: string;
+  assigned_by: string | null;
+  assigned_at: string;
+  ended_at: string | null;
+  end_reason: "reassigned" | "removed" | null;
+}
 
 /** Shape returned by GET /me/discipleship (student-facing Hub). */
 export interface MyDiscipleship {
@@ -270,41 +327,155 @@ export class DiscipleshipService {
     };
   }
 
+  // ── Discipler assignment (write path, Chat Redesign C2) ───────────────────
+
+  static readonly AssignDiscipler = z.object({
+    disciple_user_id: z.string().uuid(),
+    discipler_user_id: z.string().uuid(),
+  });
+
+  /**
+   * Assign (or REASSIGN) a member's discipler — the canonical write path C2
+   * adds alongside the pre-existing, one-shot-only POST /relationships. Ends
+   * the disciple's prior active row (if any, end_reason='reassigned') and
+   * ARCHIVES the old DISCIPLER conversation between them
+   * (chat_conversations.archived_at, migration 169) so it is never merged
+   * into or exposed via the new assignment (owner brief, "My Discipler":
+   * "reassignment does NOT merge or expose the former conversation").
+   *
+   * Scope: the SAME authority the app already trusts for "who may name this
+   * member's discipler" — assertCellInScope (Instructor+, scoped to the
+   * disciple's cell; Admin/SuperAdmin unrestricted), the identical gate
+   * PortalService.addRelationship already uses. This is a parallel,
+   * history-preserving path onto that authority, not a new permission
+   * surface. relationship_tree itself is left untouched — other modules
+   * (scores, signals, growth-content) still read it for the "multiplier"
+   * growth-tree concept.
+   */
+  async assignDiscipler(
+    principal: Principal,
+    input: z.infer<typeof DiscipleshipService.AssignDiscipler>,
+  ): Promise<{ assignment_id: string; disciple_user_id: string; discipler_user_id: string; reassigned: boolean }> {
+    if (input.disciple_user_id === input.discipler_user_id) {
+      throw new ApiError("VALIDATION_FAILED", "A member cannot disciple themselves");
+    }
+    return tx(this.pool, async (c) => {
+      const disciple = await maybeOne<{ cell_group_id: string | null }>(
+        c, `SELECT cell_group_id FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [input.disciple_user_id],
+      );
+      if (!disciple) throw new ApiError("NOT_FOUND", "Member not found");
+      await assertCellInScope(c, principal, disciple.cell_group_id ?? "");
+      const discipler = await maybeOne(
+        c, `SELECT 1 FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [input.discipler_user_id],
+      );
+      if (!discipler) throw new ApiError("NOT_FOUND", "Discipler not found");
+
+      const prior = await maybeOne<{ assignment_id: string; discipler_user_id: string }>(
+        c,
+        `SELECT assignment_id, discipler_user_id FROM discipler_assignments
+          WHERE disciple_user_id = $1 AND ended_at IS NULL`,
+        [input.disciple_user_id],
+      );
+      if (prior && prior.discipler_user_id === input.discipler_user_id) {
+        // Idempotent no-op: already the current discipler — not a reassignment.
+        return {
+          assignment_id: prior.assignment_id,
+          disciple_user_id: input.disciple_user_id,
+          discipler_user_id: input.discipler_user_id,
+          reassigned: false,
+        };
+      }
+      if (prior) {
+        await c.query(
+          `UPDATE discipler_assignments SET ended_at = now(), end_reason = 'reassigned' WHERE assignment_id = $1`,
+          [prior.assignment_id],
+        );
+        // Archive the OLD DISCIPLER conversation, if the pair ever opened
+        // one — never merged into or exposed via the new assignment.
+        await c.query(
+          `UPDATE chat_conversations
+              SET archived_at = now()
+            WHERE kind = 'dm' AND type = 'DISCIPLER' AND archived_at IS NULL
+              AND EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = chat_conversations.conversation_id AND m.user_id = $1)
+              AND EXISTS (SELECT 1 FROM chat_members m2 WHERE m2.conversation_id = chat_conversations.conversation_id AND m2.user_id = $2)`,
+          [input.disciple_user_id, prior.discipler_user_id],
+        );
+        await audit(c, principal.userId, "discipler.reassigned", "discipler_assignments", prior.assignment_id, {
+          disciple_user_id: input.disciple_user_id,
+          from_discipler_user_id: prior.discipler_user_id,
+          to_discipler_user_id: input.discipler_user_id,
+        });
+      }
+      const row = await one<{ assignment_id: string }>(
+        c,
+        `INSERT INTO discipler_assignments (disciple_user_id, discipler_user_id, assigned_by)
+         VALUES ($1, $2, $3) RETURNING assignment_id`,
+        [input.disciple_user_id, input.discipler_user_id, principal.userId],
+      );
+      await audit(c, principal.userId, "discipler.assigned", "discipler_assignments", row.assignment_id, {
+        disciple_user_id: input.disciple_user_id,
+        discipler_user_id: input.discipler_user_id,
+      });
+      return {
+        assignment_id: row.assignment_id,
+        disciple_user_id: input.disciple_user_id,
+        discipler_user_id: input.discipler_user_id,
+        reassigned: prior !== null,
+      };
+    });
+  }
+
+  /** Full assignment history for a disciple, newest first — same scope as assignDiscipler. */
+  async disciplerAssignmentHistory(principal: Principal, discipleUserId: string): Promise<{ data: DisciplerAssignmentRow[] }> {
+    const disciple = await maybeOne<{ cell_group_id: string | null }>(
+      this.pool, `SELECT cell_group_id FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [discipleUserId],
+    );
+    if (!disciple) throw new ApiError("NOT_FOUND", "Member not found");
+    await assertCellInScope(this.pool, principal, disciple.cell_group_id ?? "");
+    const data = await many<DisciplerAssignmentRow>(
+      this.pool,
+      `SELECT da.assignment_id, da.disciple_user_id, da.discipler_user_id, u.full_name AS discipler_full_name,
+              da.assigned_by, da.assigned_at, da.ended_at, da.end_reason
+         FROM discipler_assignments da
+         JOIN users u ON u.user_id = da.discipler_user_id
+        WHERE da.disciple_user_id = $1
+        ORDER BY da.assigned_at DESC`,
+      [discipleUserId],
+    );
+    return { data };
+  }
+
   // ── shared building blocks ────────────────────────────────────────────────
 
-  /** Canonical discipler resolution (student → discipler):
-   *  1. relationship_tree.multiplier_id (explicit edge) — preferred.
-   *  2. else cell_groups.leader_user_id for the student's cell.
+  /** Canonical discipler resolution (student → discipler), C2:
+   *  1. discipler_assignments / relationship_tree (resolveCurrentDiscipler
+   *     above — an explicit ASSIGNMENT) — preferred.
+   *  2. else cell_groups.leader_user_id for the student's cell (inference).
    *  3. else null. */
   private async resolveDiscipler(
     studentId: string,
     cellGroupId: string | null,
   ): Promise<MyDiscipleship["discipler"]> {
-    const viaEdge = await maybeOne<{
-      user_id: string;
-      full_name: string;
-      avatar_url: string | null;
-      cell_name: string | null;
-      established_at: string;
-    }>(
-      this.pool,
-      `SELECT d.user_id, d.full_name, d.avatar_url, cg.name AS cell_name, rt.established_at
-         FROM relationship_tree rt
-         JOIN users d ON d.user_id = rt.multiplier_id AND d.deleted_at IS NULL
-         LEFT JOIN cell_groups cg ON cg.leader_user_id = d.user_id
-        WHERE rt.disciple_id = $1
-        LIMIT 1`,
-      [studentId],
-    );
-    if (viaEdge) {
-      return {
-        user_id: viaEdge.user_id,
-        full_name: viaEdge.full_name,
-        avatar_url: viaEdge.avatar_url,
-        role_label: "Discipler",
-        cell_name: viaEdge.cell_name,
-        established_at: viaEdge.established_at,
-      };
+    const current = await resolveCurrentDiscipler(this.pool, studentId);
+    if (current) {
+      const person = await maybeOne<{ user_id: string; full_name: string; avatar_url: string | null }>(
+        this.pool,
+        `SELECT user_id, full_name, avatar_url FROM users WHERE user_id = $1 AND deleted_at IS NULL`,
+        [current.discipler_user_id],
+      );
+      if (person) {
+        const cell = await maybeOne<{ name: string }>(
+          this.pool, `SELECT name FROM cell_groups WHERE leader_user_id = $1 LIMIT 1`, [current.discipler_user_id],
+        );
+        return {
+          user_id: person.user_id,
+          full_name: person.full_name,
+          avatar_url: person.avatar_url,
+          role_label: "Discipler",
+          cell_name: cell?.name ?? null,
+          established_at: current.assigned_at,
+        };
+      }
     }
 
     if (cellGroupId) {

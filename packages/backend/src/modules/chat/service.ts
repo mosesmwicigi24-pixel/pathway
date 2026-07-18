@@ -21,11 +21,24 @@
 //   - space membership grows a lifecycle: join requests reviewed by a leader or
 //     a space_roles-delegated moderator, and removed/suspended members (status
 //     column) are refused access() without deleting their history.
+//
+// Chat Redesign C2 adds two more things, still on `type`:
+//   - GET /chat/discipler/conversation: lazily resolves/creates the caller's
+//     DISCIPLER thread with their CURRENT assignment (discipleship.
+//     resolveCurrentDiscipler — an explicit ASSIGNMENT, never the cell-leader
+//     inference). Never reuses an ARCHIVED thread (migration 169) — a
+//     reassignment starts a genuinely fresh conversation.
+//   - Broadcast reply_policy (migration 165) is now ENFORCED at send time: a
+//     BROADCAST_RESPONSE thread's most recently delivered broadcast decides
+//     whether the RECIPIENT (never the broadcaster) may keep replying in it —
+//     see sendMessage's policy check and resolveLinkedReplyThread below.
 import type { Pool } from "pg";
 import { z } from "zod";
 import { many, maybeOne, one, tx, recordChange, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { NotificationService } from "../notifications/service.js";
+import { resolveCurrentDiscipler } from "../discipleship/service.js";
+import { resolvePastorForMember } from "../pastoral/service.js";
 
 export type ConversationType = "SPACE" | "DIRECT" | "DISCIPLER" | "PASTORAL" | "BROADCAST" | "BROADCAST_RESPONSE";
 
@@ -60,6 +73,8 @@ const isModerator = (role: ViewerRole): boolean => role === "Admin" || role === 
 /** A broadcast as every path describes it — the send, the list, the detail — so
  *  the client draws "the message you sent" from one shape, whichever door it
  *  came through. */
+export type BroadcastReplyPolicy = "none" | "official_inbox" | "ordinary_chat" | "linked_thread";
+
 export interface BroadcastRow {
   broadcast_id: string;
   body: string;
@@ -67,9 +82,10 @@ export interface BroadcastRow {
   attachment_url: string | null;
   audience: "congregation" | "all";
   recipient_count: number;
+  reply_policy: BroadcastReplyPolicy;
   created_at: string;
 }
-const BROADCAST_COLS = "broadcast_id, body, msg_type, attachment_url, audience, recipient_count, created_at";
+const BROADCAST_COLS = "broadcast_id, body, msg_type, attachment_url, audience, recipient_count, reply_policy, created_at";
 
 type ModerationAction = "flag" | "unflag" | "remove" | "restore";
 
@@ -132,6 +148,11 @@ export class ChatService {
      *  reached 40 of 60 members, the other 19 having no congregation to be
      *  scoped to. */
     audience: z.enum(["congregation", "all"]).optional(),
+    /** Chat Redesign C2 (migration 165, docs/CHAT_REDESIGN_PLAN.md §2.6):
+     *  configurable reply behaviour. Omit it and today's exact behaviour is
+     *  unchanged (server default 'ordinary_chat') — see sendMessage's policy
+     *  check for what each of the other three modes actually does. */
+    reply_policy: z.enum(["none", "official_inbox", "ordinary_chat", "linked_thread"]).optional(),
     client_mutation_id: z.string().uuid().optional(),
   });
 
@@ -590,6 +611,36 @@ export class ChatService {
         );
         if (blocked) throw new ApiError("FORBIDDEN_SCOPE", "This conversation is blocked");
       }
+      // Broadcast reply_policy (Chat Redesign C2, migration 165, plan §2.6):
+      // the RECIPIENT's ability to keep talking in a BROADCAST_RESPONSE thread
+      // is governed by the most recently delivered broadcast's policy — the
+      // BROADCASTER (staff) is never gated, this only ever restricts the
+      // member answering. 'ordinary_chat' (the default) is today's actual,
+      // unchanged behaviour.
+      if (convo.kind === "dm" && convo.type === "BROADCAST_RESPONSE") {
+        const latest = await maybeOne<{ reply_policy: BroadcastReplyPolicy; sender_user_id: string }>(
+          c,
+          `SELECT b.reply_policy, b.sender_user_id
+             FROM chat_messages m JOIN chat_broadcasts b ON b.broadcast_id = m.broadcast_id
+            WHERE m.conversation_id = $1 AND m.broadcast_id IS NOT NULL
+            ORDER BY m.created_at DESC LIMIT 1`,
+          [conversationId],
+        );
+        if (latest && userId !== latest.sender_user_id && latest.reply_policy !== "ordinary_chat") {
+          // 'linked_thread': resolve where the reply SHOULD go (the sender's
+          // DISCIPLER or PASTORAL thread with this member, if either applies)
+          // and hand it back as a detail rather than silently writing the
+          // message somewhere the client didn't ask to post it — the client
+          // re-sends to that conversation_id itself.
+          const linkedConversationId = latest.reply_policy === "linked_thread"
+            ? await this.resolveLinkedReplyThread(c, userId, latest.sender_user_id)
+            : null;
+          throw new ApiError("FORBIDDEN_SCOPE", "Replies are not open for this message", {
+            reply_policy: latest.reply_policy,
+            ...(latest.reply_policy === "linked_thread" ? { linked_conversation_id: linkedConversationId } : {}),
+          });
+        }
+      }
       const res = await c.query(
         `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type, attachment_url, attachment_meta, reply_to_id, client_mutation_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (message_id) DO NOTHING RETURNING message_id`,
@@ -787,6 +838,89 @@ export class ChatService {
     return convo.conversation_id;
   }
 
+  /**
+   * GET /chat/discipler/conversation (Chat Redesign C2): resolve — lazily
+   * creating — the caller's DISCIPLER thread with their CURRENT assignment
+   * (discipleship.resolveCurrentDiscipler: discipler_assignments, falling
+   * back to a not-yet-migrated relationship_tree edge — NEVER the cell-leader
+   * inference; owner brief: "Tab active only when a valid discipler
+   * assignment exists"). 404 NOT_FOUND {no_discipler:true} if none. Minor-safe
+   * (D-M6) like every other DM. Never reuses an ARCHIVED thread (migration
+   * 169) — a reassignment starts a fresh, empty conversation, never merged
+   * into or exposed via the old one.
+   */
+  async openDisciplerConversation(userId: string): Promise<{ conversation_id: string }> {
+    return tx(this.pool, async (c) => {
+      const current = await resolveCurrentDiscipler(c, userId);
+      if (!current) throw new ApiError("NOT_FOUND", "No discipler assigned", { no_discipler: true });
+      const me = await this.me(c, userId);
+      const discipler = await maybeOne<{ is_minor: boolean; congregation_id: string | null }>(
+        c, `SELECT is_minor, congregation_id FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [current.discipler_user_id],
+      );
+      if (!discipler) throw new ApiError("NOT_FOUND", "No discipler assigned", { no_discipler: true });
+      if (me.is_minor || discipler.is_minor) {
+        throw new ApiError("FORBIDDEN_SCOPE", "Direct messages are unavailable for minors");
+      }
+      const existing = await maybeOne<{ conversation_id: string }>(
+        c,
+        `SELECT cv.conversation_id FROM chat_conversations cv
+          WHERE cv.kind = 'dm' AND cv.type = 'DISCIPLER' AND cv.archived_at IS NULL
+            AND EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = cv.conversation_id AND m.user_id = $1)
+            AND EXISTS (SELECT 1 FROM chat_members m2 WHERE m2.conversation_id = cv.conversation_id AND m2.user_id = $2)
+          LIMIT 1`,
+        [userId, current.discipler_user_id],
+      );
+      if (existing) return { conversation_id: existing.conversation_id };
+      const convo = await one<{ conversation_id: string }>(
+        c,
+        `INSERT INTO chat_conversations (conversation_id, kind, type, congregation_id, created_by)
+         VALUES (gen_random_uuid(), 'dm', 'DISCIPLER', $1, $2) RETURNING conversation_id`,
+        [me.congregation_id ?? discipler.congregation_id, userId],
+      );
+      await c.query(
+        `INSERT INTO chat_members (conversation_id, user_id) VALUES ($1, $2), ($1, $3)`,
+        [convo.conversation_id, userId, current.discipler_user_id],
+      );
+      return { conversation_id: convo.conversation_id };
+    });
+  }
+
+  /** Broadcast reply_policy='linked_thread' resolution (§2.6): if the
+   *  broadcaster is the RECIPIENT's current discipler or pastor, point at the
+   *  EXISTING (non-archived) DISCIPLER/PASTORAL thread between them — read-
+   *  only lookup, never creates one (a blocked POST that errors out should
+   *  not have a side effect). Null if neither relationship applies, or the
+   *  relevant thread was never opened. */
+  private async resolveLinkedReplyThread(c: Queryable, recipientUserId: string, broadcasterUserId: string): Promise<string | null> {
+    const discipler = await resolveCurrentDiscipler(c, recipientUserId);
+    if (discipler?.discipler_user_id === broadcasterUserId) {
+      const t = await maybeOne<{ conversation_id: string }>(
+        c,
+        `SELECT cv.conversation_id FROM chat_conversations cv
+          WHERE cv.kind = 'dm' AND cv.type = 'DISCIPLER' AND cv.archived_at IS NULL
+            AND EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = cv.conversation_id AND m.user_id = $1)
+            AND EXISTS (SELECT 1 FROM chat_members m2 WHERE m2.conversation_id = cv.conversation_id AND m2.user_id = $2)
+          LIMIT 1`,
+        [recipientUserId, broadcasterUserId],
+      );
+      if (t) return t.conversation_id;
+    }
+    const pastor = await resolvePastorForMember(c, recipientUserId);
+    if (pastor?.pastor_user_id === broadcasterUserId) {
+      const t = await maybeOne<{ conversation_id: string }>(
+        c,
+        `SELECT cv.conversation_id FROM chat_conversations cv
+          WHERE cv.kind = 'dm' AND cv.type = 'PASTORAL' AND cv.archived_at IS NULL
+            AND EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = cv.conversation_id AND m.user_id = $1)
+            AND EXISTS (SELECT 1 FROM chat_members m2 WHERE m2.conversation_id = cv.conversation_id AND m2.user_id = $2)
+          LIMIT 1`,
+        [recipientUserId, broadcasterUserId],
+      );
+      if (t) return t.conversation_id;
+    }
+    return null;
+  }
+
   /** Everyone a broadcast reaches, excluding the sender, soft-deleted accounts,
    *  and minors (D-M6 — a broadcast materializes DMs, and DMs with minors are
    *  forbidden everywhere).
@@ -874,12 +1008,13 @@ export class ChatService {
       const bc = await one<BroadcastRow>(
         c,
         `INSERT INTO chat_broadcasts
-           (sender_user_id, body, msg_type, attachment_url, audience, congregation_id, recipient_count, client_mutation_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${BROADCAST_COLS}`,
+           (sender_user_id, body, msg_type, attachment_url, audience, congregation_id, recipient_count, client_mutation_id, reply_policy)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${BROADCAST_COLS}`,
         [
           senderId, input.body, input.msg_type, input.attachment_url ?? null,
           audience, audience === "all" ? null : me.congregation_id,
           recipients.length, input.client_mutation_id ?? null,
+          input.reply_policy ?? "ordinary_chat",
         ],
       );
       for (const otherUserId of recipients) {
@@ -1018,7 +1153,7 @@ export class ChatService {
     const data = await many(
       this.pool,
       `SELECT b.broadcast_id, b.body, b.msg_type, b.attachment_url, b.audience,
-              b.recipient_count, b.created_at,
+              b.recipient_count, b.reply_policy, b.created_at,
               (SELECT count(DISTINCT r.author_user_id)::int
                  FROM chat_messages copy
                  JOIN chat_messages r ON r.conversation_id = copy.conversation_id
@@ -1057,7 +1192,7 @@ export class ChatService {
     const b = await maybeOne<{ sender_user_id: string }>(
       this.pool,
       `SELECT broadcast_id, sender_user_id, body, msg_type, attachment_url, audience,
-              recipient_count, created_at
+              recipient_count, reply_policy, created_at
          FROM chat_broadcasts WHERE broadcast_id = $1`,
       [broadcastId],
     );
