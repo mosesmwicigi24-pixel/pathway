@@ -22,6 +22,7 @@ import {
 import type { Env } from "../../config/env.js";
 import { ApiError } from "../../http/errors.js";
 import { many, maybeOne, one, audit } from "../../db/db.js";
+import { effectivePermissions, permissionKeys } from "../../http/auth.js";
 import { IdentityService, type SessionTokens } from "./service.js";
 import type { AccessClaims } from "./tokens.js";
 
@@ -496,25 +497,45 @@ export class WebAuthnService {
     // Staff-only console gate — the SAME rule and audit event as password login:
     // checked AFTER the assertion verifies so it never reveals which emails are
     // staff, and server-authoritative so no client can bypass it (§1.1, §5.4).
-    if (input.scope === "admin" && !IdentityService.STAFF_ROLES.has(cred.role) && !cred.is_staff) {
-      await audit(this.pool, cred.user_id, "user.login_denied_scope", "users", cred.user_id, {
-        scope: "admin",
-        role: cred.role,
-        method: "passkey",
-      });
-      throw new ApiError(
-        "FORBIDDEN_SCOPE",
-        "This portal is for staff accounts. Members should sign in with the Nuru Pathway app.",
-      );
+    let grantedPermissions: string[] | undefined;
+    if (input.scope === "admin") {
+      if (!IdentityService.STAFF_ROLES.has(cred.role) && !cred.is_staff) {
+        await audit(this.pool, cred.user_id, "user.login_denied_scope", "users", cred.user_id, {
+          scope: "admin",
+          role: cred.role,
+          method: "passkey",
+        });
+        throw new ApiError(
+          "FORBIDDEN_SCOPE",
+          "This portal is for staff accounts. Members should sign in with the Nuru Pathway app.",
+        );
+      }
+      // Same generalized gate as password login: an empty effective permission
+      // set means the console has nothing to show this account — refuse here
+      // rather than after a "successful" sign-in.
+      const perms = await effectivePermissions(this.pool, cred.user_id, cred.role);
+      if (perms.length === 0) {
+        await audit(this.pool, cred.user_id, "user.login_denied_no_permissions", "users", cred.user_id, {
+          scope: "admin",
+          role: cred.role,
+          method: "passkey",
+        });
+        throw new ApiError(
+          "FORBIDDEN_SCOPE",
+          "This account doesn't have portal access. Ask your administrator.",
+        );
+      }
+      grantedPermissions = permissionKeys(perms);
     }
 
     await audit(this.pool, cred.user_id, "user.login_passkey", "users", cred.user_id, {
       credential_id: cred.credential_id,
     });
-    return this.identity.issueSession({
+    const session = await this.identity.issueSession({
       user_id: cred.user_id,
       role: cred.role,
       congregation_id: cred.congregation_id,
     });
+    return grantedPermissions ? { ...session, permissions: grantedPermissions } : session;
   }
 }

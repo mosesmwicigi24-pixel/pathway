@@ -103,7 +103,7 @@ paths:
   /auth/login:
     post:
       tags: [auth]
-      summary: Email + password sign-in (argon2id verify). Generic error on bad credentials; 403 if suspended or (under scope=admin) a member signs into a staff console; 429 if locked after repeated failures.
+      summary: Email + password sign-in (argon2id verify). Generic error on bad credentials; 403 if suspended, if (under scope=admin) a member signs into a staff console, or if the account has scope=admin but grants NO portal permission at all; 429 if locked after repeated failures.
       security: []
       requestBody:
         required: true
@@ -118,7 +118,13 @@ paths:
                 scope:
                   type: string
                   enum: [admin]
-                  description: Sent by the admin consoles (web portal + iPad). Under this scope a self-registered member (Student role) is refused with 403; the member app omits it.
+                  description: >-
+                    Sent by the admin consoles (web portal + iPad). Under this
+                    scope a self-registered member (Student role, not
+                    elevated) is refused with 403, and so is any staff/elevated
+                    account whose effective RBAC permission set is empty (an
+                    Instructor with no role assigned, or a freshly-elevated
+                    member with no role/grant yet) — the member app omits it.
       responses:
         "200":
           description: A token pair, OR a 2FA challenge when the account has a second factor enabled.
@@ -5904,6 +5910,15 @@ components:
         refresh_token: { type: string, description: Rotating refresh token (returned once) }
         token_type: { type: string, enum: [Bearer] }
         expires_in: { type: integer, description: Access-token lifetime in seconds }
+        permissions:
+          type: array
+          items: { type: string }
+          description: >-
+            Present only on a scope="admin" login/passkey-verify: the caller's
+            granted permission keys ("module:capability"), or the full
+            module × capability grid for SuperAdmin/Admin. Absent for the
+            member app (never sends scope) and for the 2FA-completion
+            endpoint — also mirrored on GET /me for those cases.
     RefreshRequest:
       type: object
       required: [refresh_token]
@@ -5931,6 +5946,15 @@ components:
             locale: { type: string }
             is_minor: { type: boolean }
             mfa_enabled: { type: boolean, description: Whether the member has 2FA turned on }
+            role_keys: { type: array, items: { type: string }, description: Assigned RBAC role keys (rbac_user_roles) }
+            permissions:
+              type: array
+              items: { type: string }
+              description: >-
+                Effective granted permission keys ("module:capability") — role
+                grants ∪ direct per-user grants, or the full grid for
+                SuperAdmin/Admin. Empty for an ordinary member. The web/iPad
+                shells filter their sidebar to exactly these.
             row_version: { type: integer }
         enrollment:
           type: [object, "null"]

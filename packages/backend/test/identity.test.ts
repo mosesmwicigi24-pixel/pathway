@@ -217,13 +217,76 @@ describe("identity / auth", () => {
     expect(res.body.access_token).toBeTruthy();
   });
 
-  it("lets staff (Instructor and up) sign into the admin console under scope=admin", async () => {
-    await makePwUser("inst@dev.local", "right-pass-9", "active", "Instructor");
+  it("refuses staff (Instructor) under scope=admin when they hold NO RBAC permission at all (403, clear message)", async () => {
+    // Instructor role alone is not enough post-generalization: no rbac_user_roles
+    // row means an empty effective permission set — the console would be empty.
+    const userId = await makePwUser("inst-bare@dev.local", "right-pass-9", "active", "Instructor");
+    const res = await agent()
+      .post("/v1/auth/login")
+      .send({ email: "inst-bare@dev.local", password: "right-pass-9", scope: "admin" });
+    expect(res.status).toBe(403);
+    expect(res.body.access_token).toBeUndefined();
+    expect(res.body.error.message).toMatch(/doesn't have portal access/i);
+    const { rows } = await testPool().query(
+      "SELECT action FROM audit_log WHERE actor_id = $1 ORDER BY audit_id DESC LIMIT 1",
+      [userId],
+    );
+    expect(rows[0].action).toBe("user.login_denied_no_permissions");
+  });
+
+  it("refuses a freshly-elevated member (is_staff, no role/grant yet) under scope=admin (403)", async () => {
+    const userId = await makePwUser("elevated-bare@dev.local", "right-pass-9", "active", "Student");
+    await testPool().query("UPDATE users SET is_staff = TRUE WHERE user_id = $1", [userId]);
+    const res = await agent()
+      .post("/v1/auth/login")
+      .send({ email: "elevated-bare@dev.local", password: "right-pass-9", scope: "admin" });
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toMatch(/doesn't have portal access/i);
+  });
+
+  it("lets staff (Instructor and up) sign into the admin console under scope=admin once a role is assigned, and returns exactly that role's permission keys", async () => {
+    const userId = await makePwUser("inst@dev.local", "right-pass-9", "active", "Instructor");
+    // 'discipler' is a seeded RBAC role (08_rbac.sql) with a known, non-empty
+    // permission set: dashboard:view, cms:view, videos:view, cells:contribute
+    // (view/create/edit/export), members:contribute (same 4), reflections:view,
+    // events:view, certificates:view, badges:view.
+    await testPool().query(
+      "INSERT INTO rbac_user_roles (user_id, role_key) VALUES ($1, 'discipler')",
+      [userId],
+    );
     const res = await agent()
       .post("/v1/auth/login")
       .send({ email: "inst@dev.local", password: "right-pass-9", scope: "admin" });
     expect(res.status).toBe(200);
     expect(res.body.access_token).toBeTruthy();
+    expect(res.body.permissions).toEqual(
+      expect.arrayContaining(["dashboard:view", "cms:view", "videos:view", "reflections:view", "events:view"]),
+    );
+    expect(res.body.permissions).not.toContain("finance:view");
+    expect(res.body.permissions).not.toContain("users:view");
+  });
+
+  it("SuperAdmin sees the full permission grid on scope=admin login, with no RBAC role assignment needed", async () => {
+    await makePwUser("super@dev.local", "right-pass-9", "active", "SuperAdmin");
+    const res = await agent()
+      .post("/v1/auth/login")
+      .send({ email: "super@dev.local", password: "right-pass-9", scope: "admin" });
+    expect(res.status).toBe(200);
+    expect(res.body.permissions).toEqual(
+      expect.arrayContaining(["dashboard:view", "finance:approve", "users:delete", "rolesAdmin:edit"]),
+    );
+  });
+
+  it("GET /me surfaces the caller's effective permissions (additive to the profile)", async () => {
+    const cong = await createCongregation();
+    const user = await createUser({ congregationId: cong, role: "Instructor" });
+    await testPool().query(
+      "INSERT INTO rbac_user_roles (user_id, role_key) VALUES ($1, 'finance_officer')",
+      [user.user_id],
+    );
+    const me = (await svc().getMe(user.user_id)) as { profile: { permissions: string[] } };
+    expect(me.profile.permissions).toEqual(expect.arrayContaining(["finance:view", "finance:edit"]));
+    expect(me.profile.permissions).not.toContain("users:view");
   });
 
   // ---- Self-service register (POST /auth/register) ----

@@ -124,6 +124,8 @@ export interface CohortPage {
 export interface DevSession {
   access_token: string;
   refresh_token: string;
+  /** Present only on a scope="admin" login/passkey-verify — see MeProfile.permissions. */
+  permissions?: string[];
 }
 
 /** Returned by /auth/login when the account has 2FA on. */
@@ -514,6 +516,10 @@ export interface MeProfile {
   account_status: string;
   require_2fa: boolean;
   role_keys: string[];
+  /** Effective RBAC permission keys ("module:capability") — role grants ∪
+   *  direct grants, or the full grid for SuperAdmin/Admin. Drives the sidebar
+   *  and route guard (nav.tsx navItemVisible / pathPermissions). */
+  permissions: string[];
   row_version: number;
 }
 export interface MeActivityRow { audit_id: number; action: string; entity: string; entity_id: string | null; occurred_at: string }

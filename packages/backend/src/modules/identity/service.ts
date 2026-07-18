@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { UserRole } from "@nuru/shared";
 import type { Env } from "../../config/env.js";
 import { ApiError } from "../../http/errors.js";
+import { effectivePermissions, permissionKeys } from "../../http/auth.js";
 import { many, maybeOne, one, tx, recordChange, audit } from "../../db/db.js";
 import {
   signAccessToken,
@@ -31,6 +32,12 @@ export interface SessionTokens {
   refresh_token: string;
   token_type: "Bearer";
   expires_in: number;
+  /** Present only for a scope="admin" login/passkey-verify: the caller's
+   *  granted permission keys ("module:capability"), or the full set for
+   *  SuperAdmin/Admin. The member app never sends scope, so this is absent
+   *  there. Also mirrored on GET /me so it's available after MFA completion
+   *  or a session restore, without re-deriving it client-side. */
+  permissions?: string[];
 }
 
 /** Returned by password login when the account has 2FA on: the caller must
@@ -318,15 +325,36 @@ export class IdentityService {
     // reveals which emails are staff. The member app omits scope, so members still
     // sign into the app normally. Server-authoritative — a client can't bypass it
     // (§1.1, §5.4).
-    if (input.scope === "admin" && !IdentityService.STAFF_ROLES.has(row.role) && !row.is_staff) {
-      await audit(this.pool, row.user_id, "user.login_denied_scope", "users", row.user_id, {
-        scope: "admin",
-        role: row.role,
-      });
-      throw new ApiError(
-        "FORBIDDEN_SCOPE",
-        "This portal is for staff accounts. Members should sign in with the Nuru Pathway app.",
-      );
+    let grantedPermissions: string[] | undefined;
+    if (input.scope === "admin") {
+      if (!IdentityService.STAFF_ROLES.has(row.role) && !row.is_staff) {
+        await audit(this.pool, row.user_id, "user.login_denied_scope", "users", row.user_id, {
+          scope: "admin",
+          role: row.role,
+        });
+        throw new ApiError(
+          "FORBIDDEN_SCOPE",
+          "This portal is for staff accounts. Members should sign in with the Nuru Pathway app.",
+        );
+      }
+      // Generalized gate: staff role or elevation alone isn't enough — an
+      // Instructor with no RBAC role assigned, or a freshly-elevated member
+      // (is_staff=TRUE, not yet granted a role or a direct permission), has an
+      // EMPTY effective permission set and would land in a console with every
+      // sidebar item hidden and every request 403ing. Refuse at the front door
+      // instead, with a message that points at the actual fix.
+      const perms = await effectivePermissions(this.pool, row.user_id, row.role);
+      if (perms.length === 0) {
+        await audit(this.pool, row.user_id, "user.login_denied_no_permissions", "users", row.user_id, {
+          scope: "admin",
+          role: row.role,
+        });
+        throw new ApiError(
+          "FORBIDDEN_SCOPE",
+          "This account doesn't have portal access. Ask your administrator.",
+        );
+      }
+      grantedPermissions = permissionKeys(perms);
     }
 
     // 2FA gate: with a second factor enrolled, the password alone is not enough.
@@ -337,7 +365,8 @@ export class IdentityService {
       return { mfa_required: true, mfa_token: signMfaChallenge(this.env, row.user_id) };
     }
 
-    return this.issueSession({ user_id: row.user_id, role: row.role, congregation_id: row.congregation_id });
+    const session = await this.issueSession({ user_id: row.user_id, role: row.role, congregation_id: row.congregation_id });
+    return grantedPermissions ? { ...session, permissions: grantedPermissions } : session;
   }
 
   /**
@@ -657,7 +686,7 @@ export class IdentityService {
   }
 
   async getMe(userId: string): Promise<unknown> {
-    const profile = await one(
+    const profile = await one<{ user_id: string; role: string } & Record<string, unknown>>(
       this.pool,
       `SELECT u.user_id, u.email, u.full_name, u.phone_number, u.date_of_birth, u.year_of_salvation,
               u.is_baptized, u.cell_group_id, u.congregation_id, u.role, u.timezone, u.locale, u.is_minor,
@@ -674,7 +703,15 @@ export class IdentityService {
       `SELECT enrollment_id, current_level, state, started_at FROM enrollments WHERE user_id = $1`,
       [userId],
     );
-    return { profile, enrollment };
+    // Additive: the caller's granted permission keys ("module:capability"), or
+    // the full set for SuperAdmin/Admin. Present for every profile (member app
+    // included) — a Student not elevated to the console simply gets an empty
+    // array, since effectivePermissions() returns nothing for a role with no
+    // RBAC assignment. Lets the web/iPad shells show only the sidebar items a
+    // user can actually use, even after a session restore or MFA completion
+    // that skipped the login response.
+    const perms = await effectivePermissions(this.pool, profile.user_id, profile.role);
+    return { profile: { ...profile, permissions: permissionKeys(perms) }, enrollment };
   }
 
   /** The caller's own recent portal actions (Profile ▸ My Activity), from the audit log. */

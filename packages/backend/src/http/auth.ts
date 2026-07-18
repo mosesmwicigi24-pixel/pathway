@@ -57,6 +57,69 @@ export function requireRole(min: UserRole) {
 }
 
 /**
+ * Fixed RBAC dimensions (module × capability) mirrored in the web client
+ * (systemData) and the System ▸ Roles & Permissions matrix. Canonical home for
+ * both arrays — system/index.ts imports them rather than redeclaring, so the
+ * matrix UI, the effective-permission computation below, and the scope=admin
+ * login gate can never drift apart.
+ */
+export const PERM_MODULES = [
+  "dashboard", "levels", "cms", "quiz", "videos", "cells", "members",
+  "reflections", "events", "finance", "certificates", "badges",
+  "users", "rolesAdmin", "countries", "languages", "congregations",
+] as const;
+export const CAPABILITIES = ["view", "create", "edit", "delete", "approve", "export"] as const;
+
+export interface EffectivePermission {
+  module_id: string;
+  capability: string;
+}
+
+/** SuperAdmin/Admin are bridged past every requirePermission() check below, so
+ *  their effective grant is "everything" — the full module × capability grid,
+ *  rather than an empty (and misleading) array. */
+function fullPermissionGrid(): EffectivePermission[] {
+  const all: EffectivePermission[] = [];
+  for (const m of PERM_MODULES) for (const c of CAPABILITIES) all.push({ module_id: m, capability: c });
+  return all;
+}
+
+/**
+ * The caller's effective (module, capability) grants (§5.4): the legacy
+ * SuperAdmin/Admin bridge gets the full grid; everyone else gets the UNION of
+ * their assigned roles' grants (rbac_role_permissions via rbac_user_roles) and
+ * any direct per-user grant (rbac_user_permissions) — the same shape as
+ * GET /admin/users/:id/permissions' "effective" field. This is the single
+ * source of truth for (a) the scope=admin login refusal below — an account
+ * with an EMPTY effective set has no reason to be in the console — and (b) the
+ * `permissions` array surfaced on the login response and GET /me, which the
+ * web/iPad shells use to show only the sidebar items a user can actually use.
+ */
+export async function effectivePermissions(
+  q: Queryable,
+  userId: string,
+  role: string,
+): Promise<EffectivePermission[]> {
+  if (role === "SuperAdmin" || role === "Admin") return fullPermissionGrid();
+  return many<EffectivePermission>(
+    q,
+    `SELECT DISTINCT rp.module_id, rp.capability
+       FROM rbac_user_roles ur
+       JOIN rbac_roles r ON r.role_key = ur.role_key AND r.status = 'active'
+       JOIN rbac_role_permissions rp ON rp.role_key = ur.role_key
+      WHERE ur.user_id = $1
+     UNION
+     SELECT module_id, capability FROM rbac_user_permissions WHERE user_id = $1`,
+    [userId],
+  );
+}
+
+/** "module:capability" keys, deduped + sorted — the wire shape clients see. */
+export function permissionKeys(perms: EffectivePermission[]): string[] {
+  return Array.from(new Set(perms.map((p) => `${p.module_id}:${p.capability}`))).sort();
+}
+
+/**
  * Fine-grained permission gate (§5.4). A caller holds a (module_id, capability)
  * cell if EITHER an assigned *active* role grants it (rbac_role_permissions) OR
  * the user has a direct per-user grant (rbac_user_permissions). Effective
