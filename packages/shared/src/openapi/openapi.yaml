@@ -4348,11 +4348,11 @@ paths:
   /chat/conversations/{id}:
     get:
       tags: [progress]
-      summary: A conversation's messages (reactions, reply previews); 404 outside my membership/scope (no existence leak).
+      summary: A conversation's messages (reactions, reply previews); 404 outside my membership/scope (no existence leak). Head carries `type` (Chat Redesign C4) alongside `kind`.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: Conversation }
+        "200": { description: "Conversation — head includes type: SPACE|DIRECT|DISCIPLER|PASTORAL|BROADCAST|BROADCAST_RESPONSE." }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /chat/conversations/{id}/messages:
@@ -4395,6 +4395,27 @@ paths:
         "200": { description: Readers + recipient/read counts }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/messages/{id}/report:
+    post:
+      tags: [progress]
+      summary: >-
+        Report a message (Chat Redesign C4) — any ACTIVE participant of its
+        conversation, once (idempotent per reporter+message). Sets the
+        message's is_flagged so it surfaces in the existing Admin moderation
+        queue's `flagged` count — no parallel queue.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { reason: { type: string, maxLength: 500 } }
+      responses:
+        "201": { description: "{ message_id, reported: true, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /chat/messages/{id}:
     patch:
@@ -4626,6 +4647,18 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { description: "NOT_FOUND, details.no_pastor = true — no pastor resolves at all (no assignment, no default, no SuperAdmin)." }
+  /chat/pastoral/eligibility:
+    get:
+      tags: [progress]
+      summary: >-
+        Side-effect-free probe (Chat Redesign C4): have I EVER held a
+        pastor_assignments row as the pastor? No step-up (unlike the inbox
+        below) — reveals nothing private, only whether the Pastoral Inbox tab
+        applies to me. For a non-SuperAdmin assigned pastor's client to show
+        its own inbox entry without a failed, step-up-gated request first.
+      responses:
+        "200": { description: "{ is_pastor: boolean }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /chat/pastoral/inbox:
     get:
       tags: [progress]
@@ -4732,6 +4765,29 @@ paths:
     post:
       tags: [progress]
       summary: Leader curates a public space for the congregation (Instructor+); optional category tag (e.g. youth, marketplace).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [conversation_id, title]
+              properties:
+                conversation_id: { type: string, format: uuid }
+                title: { type: string, minLength: 3, maxLength: 200 }
+                topic: { type: string, maxLength: 300 }
+                category: { type: string, maxLength: 24 }
+                requires_approval:
+                  type: boolean
+                  default: false
+                  description: >-
+                    Chat Redesign C4 (migration 170). FALSE (default) is
+                    today's instant-join behaviour. TRUE refuses a direct
+                    POST /chat/spaces/{id}/join (403 FORBIDDEN_SCOPE,
+                    details.approval_required=true) for anyone not already an
+                    active member — the client falls back to
+                    POST /chat/spaces/{id}/join-requests for leader review.
+                client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
       responses:
         "201": { description: Created }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -4746,13 +4802,21 @@ paths:
   /chat/spaces/{id}/join:
     post:
       tags: [progress]
-      summary: Join a public space in my congregation.
+      summary: >-
+        Join a public space in my congregation. Chat Redesign C4: refused
+        (403 FORBIDDEN_SCOPE, details.approval_required=true) when the space
+        has requires_approval=true and I'm not already an active member — use
+        POST /chat/spaces/{id}/join-requests instead. Never applies to a
+        cell's own room: active cell members always direct-join it (unchanged,
+        access()'s auto-join).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
         "200": { description: Joined }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE, details.approval_required=true — this space requires leader review; use join-requests instead." }
         "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "UNPROCESSABLE — not a space (e.g. a cell room, which has no direct-join route at all)." }
   /chat/spaces/{id}/join-requests:
     post:
       tags: [progress]
@@ -6928,6 +6992,14 @@ components:
       properties:
         conversation_id: { type: string, format: uuid }
         kind: { type: string, enum: [dm, group, space] }
+        type:
+          type: string
+          enum: [SPACE, DIRECT, DISCIPLER, PASTORAL, BROADCAST, BROADCAST_RESPONSE]
+          description: >-
+            Chat Redesign C4: the security class (never inferred from title).
+            Additive field — existing clients that don't read it are
+            unaffected; new clients use it instead of heuristic de-duping by
+            kind/title.
         is_public: { type: boolean }
         title: { type: [string, "null"], description: "For a DM, the peer's name" }
         avatar_url: { type: [string, "null"] }
