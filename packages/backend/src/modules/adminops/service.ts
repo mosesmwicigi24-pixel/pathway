@@ -35,6 +35,11 @@ export class AdminOpsService {
          (SELECT count(*) FROM reflection_reviews WHERE state = 'pending')                     AS pending_reviews,
          (SELECT count(*) FROM reflection_reviews
            WHERE state = 'pending' AND submitted_at < now() - interval '3 days')               AS reviews_overdue,
+         (SELECT count(*) FROM users WHERE role = 'Student' AND deleted_at IS NULL
+           AND created_at >= now() - interval '14 days')                                       AS new_members_14d,
+         (SELECT count(*) FROM users WHERE role = 'Student' AND deleted_at IS NULL
+           AND created_at >= now() - interval '28 days'
+           AND created_at <  now() - interval '14 days')                                       AS new_members_prev_14d,
          (SELECT count(*) FROM modules WHERE status = 'published')                             AS modules_published,
          (SELECT count(*) FROM cell_groups)                                                    AS cohorts_running,
          (SELECT count(*) FROM attendance_logs

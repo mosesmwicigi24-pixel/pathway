@@ -249,11 +249,18 @@ export function Dashboard(): ReactElement {
       return { label: "Reflections (wk.)", value: String(overview.d.reflections_this_week), hint: `${overview.d.pending_reviews} awaiting review` };
     })(),
     (() => {
-      if (intel.s === "loading") return { label: "New members", value: <Skel w={46} h={20} dark />, hint: <Skel w={100} h={10} dark /> };
+      if (overview.s === "loading") return { label: "New members", value: <Skel w={46} h={20} dark />, hint: <Skel w={100} h={10} dark /> };
+      if (overview.s === "ready" && typeof overview.d.new_members_14d === "number") {
+        const cur = overview.d.new_members_14d;
+        const prev = overview.d.new_members_prev_14d;
+        const hint = prev > 0
+          ? `last 14 days · ${cur >= prev ? "▲" : "▼"} vs ${prev} prior`
+          : "joined in the last 14 days";
+        return { label: "New members", value: String(cur), hint };
+      }
       if (joinedThisMonth !== null) {
         return { label: "New members", value: String(joinedThisMonth), hint: `joined in ${new Date().toLocaleDateString("en-US", { month: "long" })}` };
       }
-      if (overview.s === "ready") return { label: "Active learners", value: String(overview.d.active_learners), hint: "enrolled and moving" };
       return { label: "New members", value: "—", hint: "not tracked yet" };
     })(),
   ];

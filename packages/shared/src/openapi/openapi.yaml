@@ -2526,7 +2526,7 @@ paths:
   /admin/reports/overview:
     get:
       tags: [portal]
-      summary: Admin. Dashboard KPI block (members, learners, engagement, certs, reviews…).
+      summary: Admin. Dashboard KPI block (members, learners, engagement, certs, reviews, new_members_14d/new_members_prev_14d…).
       responses:
         "200": { description: KPI aggregates }
         "403": { $ref: "#/components/responses/ForbiddenScope" }

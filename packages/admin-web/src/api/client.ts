@@ -219,6 +219,8 @@ export interface OverviewKpis {
   reflections_this_week: number;
   pending_reviews: number;
   reviews_overdue: number;
+  new_members_14d: number;
+  new_members_prev_14d: number;
   modules_published: number;
   cohorts_running: number;
   checked_in_this_week: number;
