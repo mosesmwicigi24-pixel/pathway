@@ -1406,6 +1406,168 @@ export interface RsvpRoster {
   no_response_scope: "cell" | "none";
 }
 
+// ---- Admin series API (EVENTS_ARCHITECTURE §3) — the console's source of truth ----
+
+/** Per-series automation config (§7), stored as JSONB and executed by worker crons. */
+export interface SeriesAutomation {
+  reminder_offsets_min?: number[];
+  auto_archive_days?: number | null;
+  low_rsvp_alert?: { threshold: number; offset_min?: number } | null;
+  qr_auto_ready?: boolean;
+}
+
+export type SeriesStatus = "draft" | "active";
+export type SeriesVisibility = "congregation" | "cell" | "leaders";
+
+/** Row from GET /admin/events/series — real windowed next_at, cadence, counts. */
+export interface AdminSeriesRow {
+  series_id: string;
+  congregation_id: string;
+  cell_group_id: string | null;
+  cell_name: string | null;
+  title: string;
+  description: string | null;
+  location: string | null;
+  category: string | null;
+  timezone: string;
+  dtstart_local: string;
+  duration_min: number;
+  rrule: string | null;
+  visibility: SeriesVisibility;
+  status: SeriesStatus;
+  is_paused: boolean;
+  is_featured: boolean;
+  show_on_home: boolean;
+  primary_image_url: string | null;
+  gallery_image_urls: string[] | null;
+  video_url: string | null;
+  rsvp_enabled: boolean;
+  qr_enabled: boolean;
+  manual_checkin_enabled: boolean;
+  reminders_enabled: boolean;
+  checkin_opens_min_before: number | null;
+  automation: SeriesAutomation | null;
+  split_from: string | null;
+  created_by: string;
+  created_at: string;
+  occurrence_count: number;
+  rsvp_count: number;
+  attendance_count: number;
+  follow_count: number;
+  cadence: string;
+  next_at: string | null;
+  next_occurrence_id: string | null;
+}
+
+export interface SeriesExceptionRow {
+  exception_id: string;
+  original_start_at: string;
+  is_cancelled: boolean;
+  new_start_at: string | null;
+  new_end_at: string | null;
+  note: string | null;
+}
+
+export interface SeriesLinkedAnnouncement {
+  announcement_id: string;
+  title: string;
+  status: "draft" | "scheduled" | "sent" | "cancelled";
+  sent_at: string | null;
+  scheduled_at: string | null;
+  archived_at: string | null;
+  attachment: "series" | "event";
+}
+
+/** GET /admin/events/series/:id — full command-center detail. */
+export interface AdminSeriesDetail extends AdminSeriesRow {
+  upcoming: Array<{
+    occurrence_id: string;
+    start_at: string;
+    original_start_at: string;
+    rescheduled: boolean;
+    going: number;
+    checked_in: number;
+  }>;
+  recent: Array<{
+    occurrence_id: string;
+    occurs_at: string;
+    archived_at: string | null;
+    going: number;
+    checked_in: number;
+    guests: number;
+  }>;
+  exceptions: SeriesExceptionRow[];
+  announcements: SeriesLinkedAnnouncement[];
+}
+
+/** GET /admin/events/series/:id/timeline — the audit-log slice (§3). */
+export interface SeriesTimelineEntry {
+  audit_id: number;
+  actor_id: string | null;
+  actor_name: string | null;
+  action: string;
+  entity: string;
+  entity_id: string | null;
+  metadata: Record<string, unknown> | null;
+  occurred_at: string;
+}
+
+/** GET /admin/events/search — archive-wide search (§3). */
+export interface EventsSearchResult {
+  series: Array<{
+    series_id: string;
+    title: string;
+    location: string | null;
+    category: string | null;
+    status: SeriesStatus;
+    is_paused: boolean;
+    dtstart_local: string;
+    rrule: string | null;
+  }>;
+  occurrences: Array<{ occurrence_id: string; series_id: string; title: string; occurs_at: string }>;
+  announcements: Array<{
+    announcement_id: string;
+    title: string;
+    status: "draft" | "scheduled" | "sent" | "cancelled";
+    sent_at: string | null;
+    archived_at: string | null;
+  }>;
+}
+
+/** GET /admin/events/insights — only numbers the schema knows (§6). */
+export interface EventsInsights {
+  conversion: { going: number; checked_in: number; rate: number | null };
+  first_time_guests_30d: number;
+  manual_checkins_7d: number;
+  recent_no_shows: Array<{ series_id: string; title: string; occurrence_id: string; occurs_at: string; absent: number }>;
+  upcoming: Array<{
+    occurrence_id: string;
+    title: string;
+    occurs_at: string;
+    series_id: string | null;
+    going: number;
+    threshold: number;
+    no_response: number | null;
+    low_rsvp: boolean;
+  }>;
+}
+
+/** GET /admin/events/:id/qr — the REAL HMAC scan token members validate (§6). */
+export interface EventQrPanel {
+  event_id: string;
+  scan_token: string;
+  checkin_url: string;
+  expires_at: string;
+  checkin_opens_at: string | null;
+  occurs_at: string;
+}
+
+/** POST /admin/events/series/:id/split — Google-style "this and following" (§2). */
+export interface SeriesSplitResult {
+  series: AdminSeriesRow;
+  new_series: AdminSeriesRow;
+}
+
 // Series row returned by pause/resume (calendar service, PR #127). Only the fields
 // the Events page reads are typed; the row carries more.
 export interface MomentRow {
@@ -1511,9 +1673,38 @@ export const OpsApi = {
   reflectionHistory: (id: string) =>
     api.get<{ data: ReflectionHistoryRow[] }>(`/admin/reflections/${id}/history`).then((r) => r.data.data),
 
+  // Windowed calendar read — callers page by VISIBLE RANGE (EVENTS_ARCHITECTURE
+  // §4; see useCalendarRange). Never a fixed "next 60 days" constant.
   calendar: (fromIso: string, toIso: string) =>
     api.get<{ data: CalendarOccurrence[] }>("/calendar", { params: { from: fromIso, to: toIso } }).then((r) => r.data.data),
   roster: (eventId: string) => api.get<EventRoster>(`/admin/events/${eventId}/attendance`).then((r) => r.data),
+  // ---- Admin series API (EVENTS_ARCHITECTURE §3) ----
+  adminSeriesList: (q: { status?: "all" | "active" | "draft" | "paused"; q?: string; limit?: number } = {}) =>
+    api.get<{ data: AdminSeriesRow[] }>("/admin/events/series", { params: q }).then((r) => r.data.data),
+  adminSeriesDetail: (seriesId: string) =>
+    api.get<AdminSeriesDetail>(`/admin/events/series/${seriesId}`).then((r) => r.data),
+  adminSeriesTimeline: (seriesId: string) =>
+    api.get<{ data: SeriesTimelineEntry[] }>(`/admin/events/series/${seriesId}/timeline`).then((r) => r.data.data),
+  splitSeries: (seriesId: string, body: { pivot_start_at: string; changes?: Record<string, unknown> }) =>
+    api.post<SeriesSplitResult>(`/admin/events/series/${seriesId}/split`, body).then((r) => r.data),
+  eventsSearch: (q: string, limit = 20) =>
+    api.get<EventsSearchResult>("/admin/events/search", { params: { q, limit } }).then((r) => r.data),
+  eventsInsights: () => api.get<EventsInsights>("/admin/events/insights").then((r) => r.data),
+  // Real QR (§6): the HMAC scan token the member check-in validator verifies.
+  eventQr: (eventId: string) => api.get<EventQrPanel>(`/admin/events/${eventId}/qr`).then((r) => r.data),
+  // Attendance CSV export (§6). Fetched through the authed axios instance (a bare
+  // <a href> would drop the Bearer header), then handed to the browser as a file.
+  downloadAttendanceCsv: async (eventId: string): Promise<void> => {
+    const res = await api.get<Blob>(`/admin/events/${eventId}/attendance.csv`, { responseType: "blob" });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `attendance-${eventId.replace(/[^A-Za-z0-9_-]/g, "_")}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
   rsvpRoster: (occurrenceId: string) =>
     api.get<RsvpRoster>(`/admin/events/${occurrenceId}/rsvps`).then((r) => r.data),
   manualCheckIn: (eventId: string, body: { user_id: string; note?: string }) =>
@@ -1568,29 +1759,54 @@ export interface AnnouncementRow {
   body: string;
   channels: AnnouncementChannel[];
   audience_kind: "all" | "cells" | "level";
+  audience_cells: string[] | null;
+  audience_level: number | null;
   status: "draft" | "scheduled" | "sent" | "cancelled";
   scheduled_at: string | null;
   sent_at: string | null;
+  banner_expires_at: string | null;
   created_at: string;
   delivered_count?: number;
   opened_count?: number;
   primary_image_url: string | null;
   gallery_image_urls: string[] | null;
+  video_url?: string | null;
   is_featured: boolean;
+  // §5 attachment — the three modes: standalone / series-attached / event-attached.
+  series_id: string | null;
+  event_occurrence_id: string | null;
+  archived_at: string | null;
 }
 
+/** Per-channel delivery stats — real numbers only (§5): nothing we cannot
+ *  measure is displayed. `opened` counts banner taps only. */
 export interface AnnouncementStats {
   channel: string;
   targeted: number;
   delivered: number;
+  queued: number;
   suppressed: number;
+  failed: number;
   opened: number;
+  suppressed_reasons: Record<string, number>;
 }
 
+/** The audience payload the Compose schema expects (discriminated union). */
+export type AnnouncementAudience =
+  | { kind: "all" }
+  | { kind: "cells"; cell_group_ids: string[] }
+  | { kind: "level"; level_number: number };
+
 export const AnnouncementsApi = {
-  list: (status?: string) =>
+  list: (q: { status?: string; archived?: boolean; limit?: number } = {}) =>
     api
-      .get<{ data: AnnouncementRow[] }>("/admin/announcements", { params: status ? { status } : {} })
+      .get<{ data: AnnouncementRow[] }>("/admin/announcements", {
+        params: {
+          ...(q.status ? { status: q.status } : {}),
+          ...(q.archived ? { archived: true } : {}),
+          ...(q.limit ? { limit: q.limit } : {}),
+        },
+      })
       .then((r) => r.data.data),
   create: (body: Record<string, unknown>) =>
     api.post<AnnouncementRow>("/admin/announcements", body).then((r) => r.data),
@@ -1602,6 +1818,10 @@ export const AnnouncementsApi = {
   update: (id: string, body: Record<string, unknown>) =>
     api.put<AnnouncementRow>(`/admin/announcements/${id}`, body).then((r) => r.data),
   remove: (id: string) => api.delete(`/admin/announcements/${id}`).then((r) => r.data),
+  // §5 lifecycle: duplicate (also "resend" / "use as template"), archive, restore.
+  duplicate: (id: string) => api.post<AnnouncementRow>(`/admin/announcements/${id}/duplicate`).then((r) => r.data),
+  archive: (id: string) => api.post<AnnouncementRow>(`/admin/announcements/${id}/archive`).then((r) => r.data),
+  restore: (id: string) => api.post<AnnouncementRow>(`/admin/announcements/${id}/restore`).then((r) => r.data),
   setHomepage: (id: string) =>
     api.post(`/admin/announcements/${id}/homepage`, {}).then((r) => r.data),
   clearHomepage: (id: string) =>
