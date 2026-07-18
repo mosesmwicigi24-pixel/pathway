@@ -20,6 +20,7 @@ import {
   Clock,
   Download,
   Eye,
+  Home,
   Image as ImageIcon,
   Mail,
   MapPin,
@@ -110,6 +111,7 @@ type UiOccurrence = {
   location: string;
   cellGroupId: string | null;
   visibility: string;
+  showOnHome: boolean;
 };
 
 const localIso = (d: Date): string =>
@@ -149,6 +151,7 @@ function toUi(occ: CalendarOccurrence): UiOccurrence {
     location: occ.location ?? "Location TBC",
     cellGroupId: occ.cell_group_id,
     visibility: occ.visibility,
+    showOnHome: occ.show_on_home ?? false,
   };
 }
 
@@ -1101,6 +1104,10 @@ export function Events(): ReactElement {
     return Array.from(m.values()).sort((a, b) => a.next.startsAt.localeCompare(b.next.startsAt)).slice(0, 6);
   }, [events, now, upcoming.length]);
 
+  // Distinct series currently flagged "Show on Home" — Home only ever shows the
+  // soonest 5, so the Create/Edit modal warns when curation exceeds that.
+  const showOnHomeCount = useMemo(() => new Set(events.filter((e) => e.showOnHome).map((e) => e.seriesId)).size, [events]);
+
   const drawerOcc = drawerOccId ? events.find((o) => o.id === drawerOccId) ?? null : null;
   const qrScreenOcc = showQrScreen ? events.find((o) => o.id === showQrScreen) ?? null : null;
   const rsvpDrawerOcc = rsvpDrawerId ? events.find((o) => o.id === rsvpDrawerId) ?? null : null;
@@ -1773,7 +1780,7 @@ export function Events(): ReactElement {
                 icon={<Pencil size={13} />}
                 label="Edit event"
                 onClick={() => {
-                  setEditEvent({ series_id: drawerOcc.seriesId, title: drawerOcc.title, location: drawerOcc.location });
+                  setEditEvent({ series_id: drawerOcc.seriesId, title: drawerOcc.title, location: drawerOcc.location, show_on_home: drawerOcc.showOnHome });
                   setDrawerOccId(null);
                 }}
               />
@@ -1990,6 +1997,7 @@ export function Events(): ReactElement {
             await refetch();
           }}
           onError={setError}
+          showOnHomeCount={showOnHomeCount}
         />
       )}
 
@@ -2004,6 +2012,7 @@ export function Events(): ReactElement {
             await refetch();
           }}
           onError={setError}
+          showOnHomeCount={showOnHomeCount}
         />
       )}
 
@@ -2499,9 +2508,24 @@ interface EditEventInit {
   primary_image_url?: string | null;
   gallery_image_urls?: string[] | null;
   is_featured?: boolean;
+  show_on_home?: boolean;
 }
 
-function CreateEventModal({ onClose, onCreated, onError, editing }: { onClose: () => void; onCreated: () => void; onError: (m: string) => void; editing?: EditEventInit }): ReactElement {
+function CreateEventModal({
+  onClose,
+  onCreated,
+  onError,
+  editing,
+  showOnHomeCount = 0,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+  onError: (m: string) => void;
+  editing?: EditEventInit;
+  // Series currently flagged "Show on Home" elsewhere (excludes this one) — powers
+  // the ">5 flagged" hint below the toggle.
+  showOnHomeCount?: number;
+}): ReactElement {
   const isEdit = !!editing;
   const [title, setTitle] = useState(editing?.title ?? "");
   const [typeLabel, setTypeLabel] = useState(EVENT_TYPES[0]!.label);
@@ -2518,8 +2542,12 @@ function CreateEventModal({ onClose, onCreated, onError, editing }: { onClose: (
   const [primaryImage, setPrimaryImage] = useState(editing?.primary_image_url ?? "");
   const [gallery, setGallery] = useState<string[]>(editing?.gallery_image_urls ?? []);
   const [featured, setFeatured] = useState(editing?.is_featured ?? false);
+  const [showOnHome, setShowOnHome] = useState(editing?.show_on_home ?? false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // showOnHomeCount includes this series if it's already flagged — subtract that
+  // so the ">5" hint counts every *other* flagged series, not this one twice.
+  const otherShowOnHomeCount = showOnHomeCount - (editing?.show_on_home ? 1 : 0);
 
   function buildRrule(): string | undefined {
     if (recurrence === "One-time") return undefined;
@@ -2556,6 +2584,9 @@ function CreateEventModal({ onClose, onCreated, onError, editing }: { onClose: (
       if (featured !== (editing.is_featured ?? false)) {
         if (featured) await OpsApi.setSeriesHomepage(editing.series_id);
         else await OpsApi.clearSeriesHomepage(editing.series_id);
+      }
+      if (showOnHome !== (editing.show_on_home ?? false)) {
+        await OpsApi.setSeriesShowOnHome(editing.series_id, showOnHome);
       }
       onCreated();
     } catch (e) {
@@ -2597,6 +2628,7 @@ function CreateEventModal({ onClose, onCreated, onError, editing }: { onClose: (
     try {
       const created = (await OpsApi.createSeries(body)) as { series_id?: string };
       if (featured && created?.series_id) await OpsApi.setSeriesHomepage(created.series_id);
+      if (showOnHome && created?.series_id) await OpsApi.setSeriesShowOnHome(created.series_id, true);
       onCreated();
     } catch (e) {
       const msg = errorMessage(e, "Could not create event.");
@@ -2727,6 +2759,12 @@ function CreateEventModal({ onClose, onCreated, onError, editing }: { onClose: (
 
         <SectionDivider label="Featured" />
         <Toggle on={featured} onChange={setFeatured} label="Feature on mobile — Home banner + the Events tab hero" icon={<Star size={13} />} />
+        <Toggle on={showOnHome} onChange={setShowOnHome} label="Show on Home — Upcoming events list" icon={<Home size={13} />} />
+        {showOnHome && otherShowOnHomeCount >= 5 ? (
+          <div style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: -8, paddingLeft: 2 }}>
+            {otherShowOnHomeCount + 1} events are flagged — Home shows the soonest 5.
+          </div>
+        ) : null}
       </div>
 
       {err ? (

@@ -1244,6 +1244,8 @@ export interface CalendarOccurrence {
   end_at: string;
   original_start_at: string;
   rescheduled?: boolean;
+  // Curated for the member Home "Upcoming events" list (up to 5, soonest first).
+  show_on_home?: boolean;
 }
 
 export interface EventExceptionBody {
@@ -1415,6 +1417,10 @@ export const OpsApi = {
     api.post(`/admin/events/series/${seriesId}/homepage`, {}).then((r) => r.data),
   clearSeriesHomepage: (seriesId: string) =>
     api.delete(`/admin/events/series/${seriesId}/homepage`).then((r) => r.data),
+  // Show/hide this series on the member Home "Upcoming events" list (up to 5,
+  // soonest first — any number may be flagged; the server caps the list).
+  setSeriesShowOnHome: (seriesId: string, showOnHome: boolean) =>
+    api.patch<{ show_on_home: boolean }>(`/admin/events/series/${seriesId}/show-on-home`, { show_on_home: showOnHome }).then((r) => r.data),
   pauseSeries: (seriesId: string) =>
     api.post<EventSeriesRow>(`/admin/events/series/${seriesId}/pause`, {}).then((r) => r.data),
   resumeSeries: (seriesId: string) =>
