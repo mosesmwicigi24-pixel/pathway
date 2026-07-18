@@ -212,6 +212,29 @@ export function registerCalendar(ctx: AppContext): Router {
     }),
   );
 
+  // Show / hide a series on the member Home "Upcoming events" list (up to 5,
+  // portal-curated — unlike the single `homepage` feature above, any number of
+  // series may be flagged; the server caps the list). Admin+.
+  r.patch(
+    "/admin/events/series/:id/show-on-home",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      const { show_on_home } = parseBody(z.object({ show_on_home: z.boolean() }), req.body ?? {});
+      res.json(await svc.setSeriesShowOnHome(requirePrincipal(req), req.params.id ?? "", show_on_home));
+    }),
+  );
+
+  // Home "Upcoming events" — up to 5 soonest occurrences from show_on_home
+  // series, soonest first. Server-capped; the client never decides the count.
+  r.get(
+    "/home/events",
+    auth,
+    handler(async (req, res) => {
+      const principal = requirePrincipal(req);
+      res.json({ data: await svc.homeEvents(principal.userId, principal.congregationId) });
+    }),
+  );
+
   // ---- Event Moments (community photo gallery) ----
   // Members read the congregation's moments; leaders (Instructor+) post / remove.
   r.get(
