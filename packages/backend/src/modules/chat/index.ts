@@ -103,6 +103,12 @@ export function registerChat(ctx: AppContext): Router {
     res.status(201).json(await svc.createOrGetDm(p.userId, input.user_id, p.role));
   }));
 
+  // My Discipler (Chat Redesign C2): resolve — lazily creating — my DISCIPLER
+  // thread with my CURRENT assignment. 404 {no_discipler:true} if none.
+  r.get("/chat/discipler/conversation", auth, handler(async (req, res) => {
+    res.json(await svc.openDisciplerConversation(requirePrincipal(req).userId));
+  }));
+
   // ---- Connections: consent-gated Chat (Chat Redesign C1/C2) ----
   // "No unsolicited DMs" — request/accept/decline/remove/block/unblock. See
   // chat/connections.ts and CreateDm's gate above for how the two meet.
