@@ -33,8 +33,9 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
     await video.transcodeAsset({ media_asset_id: String(p.media_asset_id), content_hash: String(p.content_hash) });
   });
 
-  // Features v2 §C.3: materialize a series' occurrences into events (idempotent).
-  const calendar = new CalendarService(ctx.db.primary, ctx.env.CAL_MATERIALIZE_HORIZON_DAYS, ctx.env.CAL_MAX_INSTANCES);
+  // Features v2 §C.3 / EVENTS_ARCHITECTURE §2: materialize a series' occurrences
+  // into events over the rolling default window (idempotent upsert).
+  const calendar = new CalendarService(ctx.db.primary, ctx.env.CAL_MAX_INSTANCES);
   handlers.set("calendar.materialize", async (p) => {
     await calendar.materialize(String(p.series_id));
   });

@@ -13,7 +13,6 @@ import { ApiError } from "../../http/errors.js";
 const ALLOWED_FREQ = new Set([RRule.DAILY, RRule.WEEKLY, RRule.MONTHLY]);
 const MAX_INTERVAL = 4;
 const MAX_COUNT = 260;
-const MAX_UNTIL_MONTHS = 18;
 
 export interface SeriesSpec {
   timezone: string; // IANA
@@ -41,19 +40,13 @@ export function validateRrule(rrule: string): void {
   if (opts.interval !== undefined && opts.interval !== null && opts.interval > MAX_INTERVAL) {
     throw new ApiError("UNPROCESSABLE", `RRULE INTERVAL must be ≤ ${MAX_INTERVAL}`);
   }
+  // Open-ended rules (no COUNT/UNTIL) are LEGAL (EVENTS_ARCHITECTURE §2):
+  // windowed expansion makes unbounded recurrence safe, so long-running series
+  // no longer die at an artificial horizon. INTERVAL/COUNT caps stay as DoS
+  // guards on rules that DO bound themselves.
   const hasCount = opts.count !== undefined && opts.count !== null;
-  const hasUntil = opts.until !== undefined && opts.until !== null;
-  if (!hasCount && !hasUntil) {
-    throw new ApiError("UNPROCESSABLE", "Recurring series must set COUNT or UNTIL (no unbounded rules)");
-  }
   if (hasCount && (opts.count as number) > MAX_COUNT) {
     throw new ApiError("UNPROCESSABLE", `RRULE COUNT must be ≤ ${MAX_COUNT}`);
-  }
-  if (hasUntil) {
-    const limit = DateTime.utc().plus({ months: MAX_UNTIL_MONTHS });
-    if (DateTime.fromJSDate(opts.until as Date) > limit) {
-      throw new ApiError("UNPROCESSABLE", `RRULE UNTIL must be within ${MAX_UNTIL_MONTHS} months`);
-    }
   }
 }
 
@@ -115,10 +108,18 @@ export function expandOccurrences(
   const opts = RRule.parseString(series.rrule);
   opts.dtstart = floatingDtstart;
   const rule = new RRule(opts);
-  rule.all((date, i) => {
-    if (i >= maxInstances) return false;
+  // EVENTS_ARCHITECTURE §2: expand with between() over the REQUESTED window —
+  // never enumerate from DTSTART — so the instance cap applies to occurrences
+  // emitted in-window rather than counted from the series anchor. (The old
+  // rule.all + index cap made any weekly series older than `maxInstances` weeks
+  // report no upcoming occurrences at all.) The naive window is padded ±1 day
+  // because rule dates are wall-clock while from/to are UTC instants; emit()
+  // re-filters precisely after timezone conversion.
+  const lo = new Date(fromUtc.getTime() - 86_400_000);
+  const hi = new Date(toUtc.getTime() + 86_400_000);
+  for (const date of rule.between(lo, hi, true)) {
+    if (out.length >= maxInstances) break;
     emit(date);
-    return true;
-  });
+  }
   return out;
 }

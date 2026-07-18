@@ -114,7 +114,10 @@ const EnvSchema = z.object({
   MEDIA_STORAGE_DIR: z.string().default("/tmp/nuru-media"),
   MEDIA_PUBLIC_BASE_URL: z.string().default("http://localhost:8080/media"),
   MEDIA_MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(524_288_000), // 500 MB
-  CAL_MATERIALIZE_HORIZON_DAYS: z.coerce.number().int().positive().default(35),
+  // CAL_MATERIALIZE_HORIZON_DAYS is gone (EVENTS_ARCHITECTURE §2): there is no
+  // fixed materialization horizon any more — readers window their own
+  // materialization and the nightly sweep keeps a rolling 90-day window. A
+  // leftover env var is simply ignored (zod strips unknown keys).
   CAL_MAX_INSTANCES: z.coerce.number().int().positive().default(500),
 
   // --- Radio Broadcast Studio streaming provider. "fake" (default) needs no

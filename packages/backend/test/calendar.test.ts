@@ -26,10 +26,14 @@ function futureWeekly(count: number, weeksAhead = 1): { dtstart_local: string; r
 }
 
 describe("RRULE recurrence engine (§C.0/§D.2/§C.4)", () => {
-  it("rejects disallowed or unbounded rules and accepts a valid one", () => {
+  it("rejects disallowed rules, accepts valid + open-ended ones", () => {
     expect(() => validateRrule("FREQ=YEARLY;COUNT=5")).toThrow();
     expect(() => validateRrule("FREQ=WEEKLY;INTERVAL=8;COUNT=5")).toThrow();
-    expect(() => validateRrule("FREQ=DAILY")).toThrow(); // unbounded
+    // EVENTS_ARCHITECTURE §2: open-ended rules are LEGAL — windowed expansion
+    // makes unbounded recurrence safe (the old rule silently killed long-running
+    // series). INTERVAL/COUNT caps stay as DoS guards.
+    expect(() => validateRrule("FREQ=DAILY")).not.toThrow();
+    expect(() => validateRrule("FREQ=WEEKLY;COUNT=9999")).toThrow(); // COUNT cap stays
     expect(() => validateRrule("FREQ=WEEKLY;BYDAY=SU;COUNT=4")).not.toThrow();
   });
 
@@ -348,14 +352,18 @@ describe("admin portal Create-event contract (POST /admin/events/series)", () =>
       visibility: "congregation", // "members" → congregation
       status: "active",
     });
-    // category is now persisted (Events make filter + badge); other presentational-only
-    // fields are still dropped, not rejected (no .strict() failure).
+    // category is now persisted (Events make filter + badge); presentational-only
+    // fields are still dropped, not rejected (no .strict() failure) — but
+    // manual_checkin_enabled is no longer one of them: EVENTS_ARCHITECTURE §3
+    // wires it as a real series column copied onto occurrences.
     expect((parsed as Record<string, unknown>).category).toBe("worship");
-    expect((parsed as Record<string, unknown>).manual_checkin_enabled).toBeUndefined();
+    expect((parsed as Record<string, unknown>).manual_checkin_enabled).toBe(true);
   });
 
-  it("bounds the portal's open-ended RRULE so it passes validation and creates", async () => {
-    // The modal emits FREQ=WEEKLY;BYDAY=SU with no COUNT/UNTIL — previously a 422.
+  it("keeps the portal's open-ended RRULE open-ended and creates (EVENTS_ARCHITECTURE §2)", async () => {
+    // The modal emits FREQ=WEEKLY;BYDAY=SU with no COUNT/UNTIL. The old code
+    // stamped a static UNTIL = creation + 12 months — series died a year in.
+    // Open-ended rules are now legal: windowed expansion makes them safe.
     const parsed = CalendarService.CreateSeries.parse({
       title: "Weekly Service",
       timezone: "Africa/Nairobi",
@@ -365,11 +373,14 @@ describe("admin portal Create-event contract (POST /admin/events/series)", () =>
       visibility: "members",
       rrule: "FREQ=WEEKLY;BYDAY=SU",
     });
-    expect(parsed.rrule).toMatch(/UNTIL=\d{8}T\d{6}Z$/);
+    expect(parsed.rrule).toBe("FREQ=WEEKLY;BYDAY=SU"); // no injected UNTIL
     const s = (await svc().createSeries(principal(admin, "Admin", cong), parsed)) as { series_id: string };
     const projected = await svc().projectRange(member, "2026-07-01T00:00:00Z", "2026-08-15T00:00:00Z");
     expect(projected.length).toBeGreaterThan(0);
     expect((projected[0] as { series_id: string }).series_id).toBe(s.series_id);
+    // …and it is still alive YEARS after creation (the 12-month death is gone).
+    const farOut = await svc().projectRange(member, "2029-07-01T00:00:00Z", "2029-08-15T00:00:00Z");
+    expect(farOut.filter((o) => (o as { series_id: string }).series_id === s.series_id).length).toBeGreaterThan(0);
   });
 
   it("Save as draft: hidden from members, visible to the admin, and not materialized", async () => {

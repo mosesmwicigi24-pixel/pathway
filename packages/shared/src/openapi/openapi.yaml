@@ -2351,22 +2351,58 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /admin/events/series:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:view). The console's series list — every series in
+        the caller's congregation with a REAL windowed next_at (never derived
+        from visible occurrences), cadence label, occurrence/RSVP/attendance/
+        follow counts, status and home flags. Filters: status (all|active|draft|
+        paused), q (title/location/category), limit.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [all, active, draft, paused], default: all } }
+        - { name: q, in: query, schema: { type: string, maxLength: 120 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+      responses:
+        "200": { description: Series list }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
     post:
       tags: [system]
       summary: >-
-        Leader+/Admin. Create an event series (validated RRULE). Accepts either the
-        canonical body (dtstart_local) or the portal's shape (start_date + start_time
-        / starts_at, and a members|public|leaders visibility vocabulary). Open-ended
-        RRULEs are bounded server-side (§C.4). status=draft records the series without
-        materializing occurrences or showing it to members until published.
+        Leader+/Admin (events:create). Create an event series (validated RRULE).
+        Accepts either the canonical body (dtstart_local) or the portal's shape
+        (start_date + start_time / starts_at, and a members|public|leaders
+        visibility vocabulary). Open-ended RRULEs (no COUNT/UNTIL) are legal —
+        windowed expansion makes them safe. status=draft records the series
+        without materializing occurrences or showing it to members until
+        published. Per-series `automation` (reminder_offsets_min,
+        auto_archive_days, low_rsvp_alert, qr_auto_ready) is validated JSONB.
       responses:
         "201": { description: Series created }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "422": { $ref: "#/components/responses/Unprocessable" }
   /admin/events/series/{id}:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:view). Command-center detail — series fields +
+        cadence + next_at, upcoming projected occurrences (with going/checked-in
+        counts), recent completed occurrences, exceptions, and linked
+        announcements (series- and event-attached).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Series detail }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
     put:
       tags: [system]
-      summary: Leader+/Admin. Edit a series (future occurrences).
+      summary: >-
+        Leader+/Admin (events:edit). Edit a series — now including the ops
+        toggles (rsvp_enabled, qr_enabled, manual_checkin_enabled,
+        reminders_enabled, checkin_opens_min_before), video_url and automation.
+        Materialized rows are reconciled synchronously (title/time refresh;
+        rows the edited rule no longer produces are cancelled with notice).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
@@ -2380,6 +2416,86 @@ paths:
       responses:
         "200": { description: Deleted }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/events/series/{id}/timeline:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:view). The audit-log slice for a series, its
+        occurrences and its linked announcements (created/edited/exception/
+        QR rotated/sent/…) — a filtered read over the existing audit trail.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Timeline entries }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/events/series/{id}/split:
+    post:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:edit). Google-style "this and following" — the old
+        series is bounded to UNTIL = pivot−1s and a new linked series
+        (split_from) starts at pivot_start_at carrying `changes`. Exceptions at/
+        after the pivot move over; RSVPs on matching instants migrate; orphaned
+        old occurrences are reconciled away (cancellation notice to RSVPs).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "201": { description: "{ series, new_series }" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /admin/events/search:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:view). Archive-wide search — series + upcoming
+        occurrences + announcements matched on title/location/category
+        (ILIKE, trigram-indexed). Congregation-scoped.
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 120 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        "200": { description: "{ series, occurrences, announcements }" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/events/insights:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:view). Real insights only (nothing fabricated):
+        RSVP→check-in conversion over the last 10 completed occurrences,
+        first-time guests (30d), manual check-ins (7d), RSVP'd-but-absent for
+        the latest occurrence of each active series, and upcoming events with
+        going counts / low-RSVP flags / cell no-response counts.
+      responses:
+        "200": { description: Insights }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/events/{id}/qr:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:edit; cell-scoped). The REAL check-in QR — issues
+        the same HMAC scan token the member POST /events/{id}/attendance
+        validator verifies. Time-boxed: the secret rotates once the token
+        expires (screenshots go stale); expires_at drives console auto-refresh.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ scan_token, checkin_url, expires_at, checkin_opens_at }" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /admin/events/{id}/attendance.csv:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:export; cell-scoped). Attendance export — one CSV
+        of checked-in members (with method), guests, and RSVP'd no-shows.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "text/csv attachment" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/events/series/{id}/exceptions:
     post:
       tags: [system]
@@ -3562,10 +3678,51 @@ paths:
         "200": { description: Deleted }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/announcements/{id}/duplicate:
+    post:
+      tags: [announcements]
+      summary: >-
+        Admin. Duplicate → a fresh draft clone (also "resend" = duplicate + send,
+        and "use as template" — no separate template entity).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "201": { description: Draft clone }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/announcements/{id}/archive:
+    post:
+      tags: [announcements]
+      summary: >-
+        Admin. Archive (distinct from delete) — leaves the default list and the
+        member feed, history preserved. A scheduled announcement must be
+        cancelled first (409).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Archived }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/announcements/{id}/restore:
+    post:
+      tags: [announcements]
+      summary: Admin. Restore an archived announcement.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Restored }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/announcements/{id}/send:
     post:
       tags: [announcements]
-      summary: Admin. Send now — fans out per recipient×channel (idempotent); push/email respect quiet hours.
+      summary: >-
+        Admin. Send now — fans out per recipient×channel (idempotent),
+        congregation-scoped audience. Channel honesty: push rides notifications
+        (quiet hours/caps), email rides the SMTP EmailProvider (delivered = SMTP
+        accepted), sms/whatsapp record suppressed(no_provider) until a provider
+        exists, banner is delivered in-app.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
@@ -6833,6 +6990,16 @@ components:
                 level_number: { type: integer, minimum: 1 }
         scheduled_at: { type: string, format: date-time, description: Omit to keep as draft until /send }
         banner_expires_at: { type: string, format: date-time }
+        primary_image_url: { type: ["string", "null"], maxLength: 2048 }
+        gallery_image_urls: { type: array, maxItems: 5, items: { type: string, maxLength: 2048 } }
+        series_id:
+          type: ["string", "null"]
+          format: uuid
+          description: "Attachment mode (EVENTS_ARCHITECTURE §5): series-attached. Mutually exclusive with event_occurrence_id."
+        event_occurrence_id:
+          type: ["string", "null"]
+          maxLength: 100
+          description: "Attachment mode: one occurrence (materialized or synthetic series:ISO id). Mutually exclusive with series_id."
     ReflectionSubmit:
       type: object
       required: [reflection_text]

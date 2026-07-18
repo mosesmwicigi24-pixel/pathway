@@ -20,6 +20,8 @@ import { EngagementService } from "./modules/engagement/service.js";
 import { PartitionMaintenance, refreshMinorFlags } from "./jobs/maintenance.js";
 import { GamificationService } from "./modules/gamification/service.js";
 import { AnnouncementService } from "./modules/announcements/service.js";
+import { CalendarService } from "./modules/calendar/service.js";
+import { buildEmailProvider } from "./modules/identity/email.js";
 import { FinancialService } from "./modules/financial/service.js";
 import { buildPaymentGateway } from "./modules/financial/gateway.js";
 import { buildMobileMoneyProviders } from "./modules/financial/providers.js";
@@ -49,7 +51,11 @@ function main(): void {
 
   // Scheduled announcements: dispatch any whose send time has arrived (B5).
   // dispatchDue() is idempotent per (recipient, channel), so overlap is safe.
-  const announcements = new AnnouncementService(db.primary);
+  // EVENTS_ARCHITECTURE §5: the email channel rides the same SMTP EmailProvider
+  // as password reset (Brevo in prod; logging fallback when SMTP env is absent,
+  // so dev/tests run offline). SMS/WhatsApp have NO provider bound — deliveries
+  // record suppressed(no_provider), never a fabricated "delivered".
+  const announcements = new AnnouncementService(db.primary, { email: buildEmailProvider(env, log) });
   const annTimer = setInterval(
     () => void announcements.dispatchDue().catch((err) => log.error({ err }, "announcement dispatch failed")),
     60_000,
@@ -95,8 +101,26 @@ function main(): void {
   const liturgy = new LiturgyService(db.primary, aiProvider);
   const communityIntel = new CommunityService(db.primary, intelNotifications);
 
+  // EVENTS_ARCHITECTURE §2/§7: the calendar's reconcile sweep + automation crons.
+  const calendar = new CalendarService(db.primary, env.CAL_MAX_INSTANCES);
+
   const tasks = [
     cron.schedule("0 2 * * *", safe("engagement recompute", () => engagement.runRecompute())),
+    // §2: nightly reconcile — materialize a rolling [now, now+90d] window for
+    // every active series AND refresh/prune drifted materialized rows.
+    cron.schedule("30 2 * * *", safe("events reconcile sweep", async () => {
+      const out = await calendar.reconcileSweep();
+      log.info(out, "events reconciled");
+    })),
+    // §7: per-series automations (auto-archive daily; low-RSVP alerts hourly).
+    cron.schedule("0 5 * * *", safe("events auto-archive", async () => {
+      const n = await calendar.runAutoArchive();
+      if (n > 0) log.info({ archived: n }, "occurrences auto-archived");
+    })),
+    cron.schedule("15 * * * *", safe("low-RSVP alerts", async () => {
+      const n = await calendar.runLowRsvpAlerts();
+      if (n > 0) log.info({ alerted: n }, "low-RSVP alerts sent");
+    })),
     cron.schedule("0 0 * * *", safe("intelligence reindex + story rebuild", async () => {
       await contentIndex.reindexAll();
       const { rebuilt } = await memberStory.rebuildAll();
