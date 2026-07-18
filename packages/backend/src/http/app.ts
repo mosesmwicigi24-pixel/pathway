@@ -50,6 +50,7 @@ import { registerProximity } from "../modules/proximity/index.js";
 import { registerActivity } from "../modules/activity/index.js";
 import { registerRadio } from "../modules/radio/index.js";
 import { registerDiscipleship } from "../modules/discipleship/index.js";
+import { registerPastoral } from "../modules/pastoral/index.js";
 
 export function createApp(ctx: AppContext): Express {
   const app = express();
@@ -184,6 +185,7 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerEncouragements(ctx));
   v1.use(registerRadio(ctx));
   v1.use(registerDiscipleship(ctx));
+  v1.use(registerPastoral(ctx));
   app.use("/v1", v1);
 
   // Terminal error handler — always emits the §3.2 envelope.
