@@ -102,11 +102,10 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | Finance (read-only) | /admin/finance/* | ✅ | ✅ | Parity (presentation reimagined on iPad) |
 | Certificates | /admin/certificates, /verify/{code} | ✅ | ✅ | Parity |
 | Badges | /admin/badges | ✅ | ✅ | Parity |
-| Curriculum Levels | reports/levels | ✅ | ✅ | Parity |
-| CMS — Curriculum | /admin/levels·modules·questions | ✅ | ✅ | Parity |
-| Level Detail | Web: dedicated `/cms/level/:id` editor · iPad: CMS view w/ full module editor | ✅ | ✅ | ~~D-02~~ **RESOLVED 2026-07-12** — the substance was the missing markdown toolbar + Write/Preview toggle; both added to ModuleEditorPane. (The dedicated-route difference is layout, not capability.) |
-| Quiz Builder | /admin/…/exam, questions | ✅ | ✅ | Parity |
-| Video Library | /admin/media (+external, chunk·finalize, thumbnail) | ✅ | ✅ | ~~D-03~~ **STALE — REFUTED 2026-07-12**: native has had the full 8MB-chunk uploader (≤500MB, progress). Thumbnail upload/clear added to native same day → full parity |
+| **Curriculum Dashboard** | `/admin/curriculum/{summary,validate,activity}` (one stats source) | ✅ | ✅ | **RE-ARCHITECTED 2026-07-18** (docs/CURRICULUM_ARCHITECTURE.md) — replaces Curriculum Levels + CMS Curriculum on BOTH consoles: health grid, clickable pipeline, ranked needs-attention (server validation), classified activity, grouped quick actions, collapsed analytics, one-Open level cards |
+| **Levels & Modules Workspace** | /admin/levels·modules·questions + `/admin/modules/{id}/media` | ✅ | ✅ | **RE-ARCHITECTED 2026-07-18** — replaces Level Detail: tree + sectioned module editor (Overview/Content/Media placements/Quiz/Publishing). Native gained EDITABLE module question banks (was read-only); exam settings + exam_status gate surfaced at the level node. Old routes redirect; native's duplicate `.levelDetail` entry deleted |
+| Quiz Builder (context-aware) | /admin/…/exam, questions | ✅ | ✅ | Specialized exam editor launched WITH context (web `?level=N`, native router preselect) — never re-selects; sidebar entries removed both consoles |
+| Video Library | /admin/media (+external, chunk·finalize, thumbnail, **placements**) | ✅ | ✅ | **PLACEMENT-AWARE 2026-07-18** — one asset, many module placements (level inferred, per-placement remove, 409 duplicate guard); the level-tag "attachment" and media→module title reverse-write are gone. (~~D-03~~ history: refuted stale 2026-07-12) |
 | Content Studio | /admin/growth/* + /admin/levels/:n/encouragements | ✅ | ✅ | ~~D-04~~ resolved — iPad Content Studio now has the Encouragements section |
 | **Intelligence** | Both: **`/admin/analytics/intelligence`** | ✅ | ✅ | ~~D-05~~ **RESOLVED** 2026-06-30 — iPad rebuilt on the canonical endpoint; devices/app-area/activity/location now real |
 | Users | /admin/users | ✅ | ✅ | Parity |
