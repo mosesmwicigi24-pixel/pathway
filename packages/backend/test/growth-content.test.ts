@@ -219,8 +219,16 @@ describe("reading plans — a day is earned, and the days are walked in order", 
     for (const [i, s] of segs.entries()) {
       const r = await agent().post(`/v1/growth/segments/${s.segment_id}/complete`).set(auth(meTok));
       expect(r.status).toBe(200);
+      const isLast = i === segs.length - 1;
       // The day rolls up on the LAST part, not before.
-      expect(r.body.day_completed).toBe(i === segs.length - 1);
+      expect(r.body.day_completed).toBe(isLast);
+      // Additive fields for the offline-sync race: the ack from the last
+      // segment says outright that day 1 sealed and day 2 is already open,
+      // authoritatively, in the same transaction as the write — so the
+      // client never has to trust a possibly-stale re-fetch.
+      expect(r.body.day_complete).toBe(isLast);
+      expect(r.body.next_day_number).toBe(isLast ? 2 : null);
+      expect(r.body.next_day_unlocked).toBe(isLast);
     }
 
     d = await detailOf(p.plan_id);
