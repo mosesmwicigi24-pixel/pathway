@@ -590,7 +590,7 @@ paths:
       tags: [growth]
       summary: The liturgy line for RIGHT NOW (EAT clock) — part (morning|midday|evening|night), church season, Sunday flag. AI-composed once per congregation per day; deterministic fallback when the model is down.
       responses:
-        "200": { description: "{ part, season, is_sunday, line, scripture_ref, art: { url, alt } } — art is the hour's tableau photograph (dawn/noon/dusk/night), deterministic per (part, EAT day)" }
+        "200": { description: "{ part, band, season, is_sunday, line, scripture_ref, art: { url, alt }, charge, verse_line: { reference, text } } — band is the finer 7-part clock (sunrise|morning|midday|afternoon|evening|night|midnight) driving art/charge/verse_line; art is the hour's tableau photograph, disjoint from the verse card's; charge is a second authored exhortation line for the band; verse_line is curated scripture for the band, distinct from `line`/`scripture_ref`" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /community/moments:
     get:
@@ -3649,7 +3649,7 @@ paths:
       tags: [progress]
       summary: My "Verse for today" — chosen from the mood library to meet the season I'm in (cached daily).
       responses:
-        "200": { description: "Tailored verse: { reference, version, theme, reason, mood?, text?, art?: { url, alt } } — art is the day's theme-matched tableau photograph, deterministic per (user, day)" }
+        "200": { description: "Tailored verse: { reference, version, theme, reason, mood?, text?, art?: { url, alt }, encouragement?: { text, author } } — art is the current 7-band tableau photograph (disjoint from the liturgy card's), deterministic per (band, day); encouragement is a short word alongside the verse — two historic voices matched to the theme's mood plus one pastoral line, rotated by EAT day" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/home/verse/reactions:
     get:

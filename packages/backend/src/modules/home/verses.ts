@@ -146,3 +146,74 @@ export function pickVerseArt(theme: VerseTheme | string, userId: string, dayKey:
   const pool = VERSE_ART[(theme as VerseTheme)] ?? Object.values(VERSE_ART).flat();
   return pool[hash(`${userId}|${dayKey}|art`) % pool.length]!;
 }
+
+// ========================= Verse encouragement ===============================
+// A short encouragement under the verse: two historic voices matched to the
+// theme's mood, plus one pastoral line in Pastor Moses' own voice, direct and
+// second-person. Server-chosen, rotated by EAT day so it's stable through the
+// day and fresh tomorrow — same congregation-wide determinism as the art.
+
+export interface Encouragement {
+  text: string;
+  author: string;
+}
+
+export const ENCOURAGEMENTS: Record<VerseTheme, [Encouragement, Encouragement, Encouragement]> = {
+  foundations: [
+    { text: "You have made us for yourself, O Lord, and our heart is restless until it rests in you.", author: "Augustine" },
+    { text: "What comes into our minds when we think about God is the most important thing about us.", author: "A.W. Tozer" },
+    { text: "You were dead, and now you are alive in Christ — this is who you really are today. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  return: [
+    { text: "There is no pit so deep that God's love is not deeper still.", author: "Corrie ten Boom" },
+    { text: "Grace grows best in winter.", author: "Charles Spurgeon" },
+    { text: "Wherever you've been, the Father is already running to meet you — come home today. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  prayer: [
+    { text: "Every great movement of God can be traced to a kneeling figure.", author: "D.L. Moody" },
+    { text: "According to the importance of prayer, so, generally, is the opposition made to it.", author: "George Müller" },
+    { text: "Prayer is not a performance — it is a child talking to a Father who is already listening. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  word: [
+    { text: "The Bible was not given for our information but for our transformation.", author: "D.L. Moody" },
+    { text: "Visit many good books, but live in the Bible.", author: "Charles Spurgeon" },
+    { text: "Don't just read the Word today — let it read you, and obey the part that stings. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  habits: [
+    { text: "By perseverance the snail reached the ark.", author: "Charles Spurgeon" },
+    { text: "Worry does not empty tomorrow of its sorrow, it empties today of its strength.", author: "Corrie ten Boom" },
+    { text: "Small, faithful, and daily — that is how a life is built that lasts into eternity. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  growth: [
+    { text: "Do the next thing.", author: "Elisabeth Elliot" },
+    { text: "God's work done in God's way will never lack God's supply.", author: "Hudson Taylor" },
+    { text: "Maturity is not knowing more verses — it is looking more like Jesus each week. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  fellowship: [
+    { text: "Find out how much God has given you and from it take what you need; the rest is needed by others.", author: "Augustine" },
+    { text: "It is not so much that God calls us to work for Him as that He calls us to walk with Him.", author: "Hudson Taylor" },
+    { text: "You were never meant to walk this out alone — find your people and let them find you. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  uplift: [
+    { text: "Never be afraid to trust an unknown future to a known God.", author: "Corrie ten Boom" },
+    { text: "Faith is the gaze of a soul upon a saving God.", author: "A.W. Tozer" },
+    { text: "Those who are strong in the Lord will not be anxious, and will have peace of heart. — Pastor Moses", author: "Pastor Moses" },
+  ],
+};
+
+/** Days since the Unix epoch for an EAT calendar day string ("YYYY-MM-DD"). */
+function epochDay(dayKey: string): number {
+  return Math.floor(Date.parse(`${dayKey}T00:00:00Z`) / 86_400_000);
+}
+
+/**
+ * Today's encouragement for a theme — rotated by EAT day (whole-congregation
+ * deterministic, like the art). Mood-library theme strings that aren't one of
+ * the fixed VerseTheme keys fall back to the union of every pool, same
+ * pattern as pickVerseArt.
+ */
+export function pickEncouragement(theme: VerseTheme | string, dayKey: string): Encouragement {
+  const pool = ENCOURAGEMENTS[(theme as VerseTheme)] ?? Object.values(ENCOURAGEMENTS).flat();
+  const idx = ((epochDay(dayKey) % pool.length) + pool.length) % pool.length;
+  return pool[idx]!;
+}

@@ -13,6 +13,11 @@ import { LITURGY_SYSTEM } from "./prompts.js";
 export type LiturgyPart = "morning" | "midday" | "evening" | "night";
 export type Season = "advent" | "christmas" | "lent" | "easter" | "ordinary";
 
+// Home breathes with SEVEN times of day (finer-grained than the 4-part liturgy
+// clock above). Composed prayer lines stay on the 4 windows — only imagery and
+// the new charge/verse-line content below key off this richer clock.
+export type DayBand = "sunrise" | "morning" | "midday" | "afternoon" | "evening" | "night" | "midnight";
+
 export interface LiturgyLine {
   line: string;
   scripture: string | null;
@@ -184,6 +189,58 @@ export function pickLiturgyArt(part: LiturgyPart, dayKey: string): LiturgyArt {
   return pool[idx]!;
 }
 
+// ==================== Band art (seven times of day, two cards) =============
+// The liturgy card and the verse card each need their own hour-fitting
+// photograph, and the two must never coincide. Rather than curate a fifth set
+// of pools, we slice the four verified LITURGY_ART pools above into the seven
+// bands, then split each band's slice into even/odd indices — one half for
+// the liturgy card, the other for the verse card. Same source list sliced two
+// ways is disjoint by construction, so no (band, day) pair can ever collide.
+function splitEvenOdd(pool: readonly LiturgyArt[]): { even: LiturgyArt[]; odd: LiturgyArt[] } {
+  const even: LiturgyArt[] = [];
+  const odd: LiturgyArt[] = [];
+  pool.forEach((art, i) => (i % 2 === 0 ? even : odd).push(art));
+  return { even, odd };
+}
+
+const BAND_SOURCE: Record<DayBand, LiturgyArt[]> = {
+  sunrise: LITURGY_ART.morning, // dawn imagery, unsliced
+  morning: LITURGY_ART.midday.slice(0, 15), // bright fresh daylight
+  midday: LITURGY_ART.midday.slice(15, 30),
+  afternoon: LITURGY_ART.evening.slice(0, 15), // golden slanting light
+  evening: LITURGY_ART.evening.slice(15, 30),
+  night: LITURGY_ART.night.slice(0, 15),
+  midnight: LITURGY_ART.night.slice(15, 30), // deep stars
+};
+
+export const BAND_ART: Record<"liturgy" | "verse", Record<DayBand, LiturgyArt[]>> = (() => {
+  const liturgy = {} as Record<DayBand, LiturgyArt[]>;
+  const verse = {} as Record<DayBand, LiturgyArt[]>;
+  for (const band of Object.keys(BAND_SOURCE) as DayBand[]) {
+    const { even, odd } = splitEvenOdd(BAND_SOURCE[band]);
+    liturgy[band] = even; // liturgy card: even indices
+    verse[band] = odd; // verse card: odd indices — guaranteed disjoint
+  }
+  return { liturgy, verse };
+})();
+
+const BAND_OFFSET: Record<DayBand, number> = {
+  sunrise: 0,
+  morning: 1,
+  midday: 2,
+  afternoon: 3,
+  evening: 4,
+  night: 5,
+  midnight: 6,
+};
+
+/** Today's photograph for a card + band — deterministic per (card, band, EAT day). */
+export function pickBandArt(card: "liturgy" | "verse", band: DayBand, dayKey: string): LiturgyArt {
+  const pool = BAND_ART[card][band];
+  const idx = ((epochDay(dayKey) + BAND_OFFSET[band]) % pool.length + pool.length) % pool.length;
+  return pool[idx]!;
+}
+
 /** Gregorian Easter Sunday (Meeus/Jones/Butcher computus). Month is 1-based. */
 export function easterOf(year: number): { month: number; day: number } {
   const a = year % 19;
@@ -253,6 +310,88 @@ export function partOf(now: Date = new Date()): LiturgyPart {
   return "night";
 }
 
+/** Which of the seven finer bands the EAT clock is in right now. */
+export function bandOf(now: Date = new Date()): DayBand {
+  const eatHour = (now.getUTCHours() + 3) % 24;
+  if (eatHour >= 6 && eatHour < 9) return "sunrise";
+  if (eatHour >= 9 && eatHour < 12) return "morning";
+  if (eatHour >= 12 && eatHour < 14) return "midday";
+  if (eatHour >= 14 && eatHour < 17) return "afternoon";
+  if (eatHour >= 17 && eatHour < 21) return "evening";
+  if (eatHour >= 21 && eatHour < 24) return "night";
+  return "midnight"; // 0–5:59
+}
+
+/** A second authored exhortation line per band — the liturgy card's "charge".
+ *  Two per band, rotated by the EAT day's parity (owner-approved voice, WEB). */
+export const CHARGES: Record<DayBand, readonly [string, string]> = {
+  sunrise: [
+    "Before the phone, the Father — give him the first word of your day.",
+    "The light you're watching rise — he spoke it. Start here.",
+  ],
+  morning: [
+    "Work as worship: whatever your hands find this morning, do it unto him.",
+    "The day is young and so is his mercy — walk into it unhurried.",
+  ],
+  midday: [
+    "Stop at the summit of the day. One breath, one thank-you, before the descent.",
+    "Half the day is his already — give him the other half on purpose.",
+  ],
+  afternoon: [
+    "The long stretch is where faithfulness is proved. Keep going — he sees.",
+    "Tired is not the same as finished. Lean on him for the last hours.",
+  ],
+  evening: [
+    "Come home to him before you come home to the couch.",
+    "Lay the day's weight down at the door — it was never yours to carry overnight.",
+  ],
+  night: [
+    "Review the day with grace: where did you see him? Thank him for that.",
+    "The dark is not empty — it is where he keeps watch.",
+  ],
+  midnight: [
+    "If you're awake at this hour, maybe it's because heaven wanted company.",
+    "Even now he is not asleep. Whisper — he hears the quietest hour.",
+  ],
+};
+
+export interface BandVerseLine {
+  reference: string;
+  text: string;
+}
+
+/** Curated scripture FOR that band — two per band, rotated by EAT day parity (WEB). */
+export const VERSE_LINES: Record<DayBand, readonly [BandVerseLine, BandVerseLine]> = {
+  sunrise: [
+    { reference: "Lamentations 3:22-23", text: "His mercies never come to an end; they are new every morning; great is your faithfulness." },
+    { reference: "Psalm 143:8", text: "Cause me to hear your loving kindness in the morning, for I trust in you." },
+  ],
+  morning: [
+    { reference: "Psalm 90:14", text: "Satisfy us in the morning with your loving kindness, that we may rejoice and be glad all our days." },
+    { reference: "Proverbs 16:3", text: "Commit your deeds to the LORD, and your plans shall succeed." },
+  ],
+  midday: [
+    { reference: "Psalm 121:5-6", text: "The LORD is your keeper... The sun will not harm you by day." },
+    { reference: "Philippians 4:5", text: "The Lord is at hand." },
+  ],
+  afternoon: [
+    { reference: "Galatians 6:9", text: "Let's not be weary in doing good, for we will reap in due season if we don't give up." },
+    { reference: "Isaiah 40:31", text: "Those who wait for the LORD will renew their strength... they will walk, and not faint." },
+  ],
+  evening: [
+    { reference: "Psalm 55:17", text: "Evening, morning, and at noon I will cry out in distress, and he will hear my voice." },
+    { reference: "Matthew 11:28", text: "Come to me, all you who labour and are heavily burdened, and I will give you rest." },
+  ],
+  night: [
+    { reference: "Psalm 139:23-24", text: "Search me, God, and know my heart... lead me in the everlasting way." },
+    { reference: "Psalm 4:8", text: "In peace I will both lay myself down and sleep, for you alone, LORD, make me live in safety." },
+  ],
+  midnight: [
+    { reference: "Psalm 63:6", text: "When I remember you on my bed, I meditate on you in the night watches." },
+    { reference: "Psalm 121:3-4", text: "He who keeps you will not slumber... He who keeps Israel will neither slumber nor sleep." },
+  ],
+};
+
 /** Served when the model is unavailable — never cached, always whole. */
 export const FALLBACK_LITURGY: LiturgyDay = {
   morning: { line: "Rise — his mercies are new for you this morning; meet him before the day meets you.", scripture: "Lamentations 3:22-23" },
@@ -311,13 +450,17 @@ export class LiturgyService {
   /** What the member's Home shows right now: the current part's line + context. */
   async current(congregationId: string | null, now: Date = new Date()): Promise<{
     part: LiturgyPart;
+    band: DayBand;
     season: Season;
     is_sunday: boolean;
     line: string;
     scripture_ref: string | null;
     art: LiturgyArt;
+    charge: string;
+    verse_line: BandVerseLine;
   }> {
     const part = partOf(now);
+    const band = bandOf(now);
     const season = seasonOf(now);
     const isSunday = eatDate(now).getUTCDay() === 0;
     let line = FALLBACK_LITURGY[part];
@@ -325,13 +468,18 @@ export class LiturgyService {
       const { day } = await this.composeFor(congregationId, now);
       line = day[part];
     }
+    const dayKey = ymd(eatDate(now));
+    const parity = epochDay(dayKey) % 2;
     return {
       part,
+      band,
       season,
       is_sunday: isSunday,
       line: line.line,
       scripture_ref: line.scripture,
-      art: pickLiturgyArt(part, ymd(eatDate(now))),
+      art: pickBandArt("liturgy", band, dayKey),
+      charge: CHARGES[band][parity]!,
+      verse_line: VERSE_LINES[band][parity]!,
     };
   }
 

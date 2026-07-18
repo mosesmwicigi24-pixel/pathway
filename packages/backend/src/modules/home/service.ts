@@ -9,7 +9,8 @@ import type { Pool } from "pg";
 import { one, maybeOne, tx } from "../../db/db.js";
 import { ScoresService, type ScoreBreakdown } from "../scores/service.js";
 import type { AiProvider } from "../assistant/provider.js";
-import { pickVerse, pickVerseArt, THEME_REASON, type VerseArt, type VerseTheme } from "./verses.js";
+import { pickVerse, pickEncouragement, THEME_REASON, type Encouragement, type VerseArt, type VerseTheme } from "./verses.js";
+import { bandOf, pickBandArt } from "../intelligence/liturgy.js";
 
 const TZ = "Africa/Nairobi";
 
@@ -50,7 +51,8 @@ export interface TailoredVerse {
   reason: string; // a warm "why this verse is for you" line
   mood?: string; // the season Nuru sensed (title-cased library theme), when mood-driven
   text?: string; // the verse text itself, when we hold it (the mood library)
-  art?: VerseArt; // the day's tableau photograph (theme-matched, deterministic per day)
+  art?: VerseArt; // the day's tableau photograph (band-matched, deterministic per day)
+  encouragement: Encouragement; // a short word alongside the verse (historic voices + Pastor Moses)
 }
 
 export class HomeService {
@@ -179,7 +181,8 @@ export class HomeService {
         reason: cached.reason,
         ...(cached.mood ? { mood: cached.mood } : {}),
         ...(cached.verse_text ? { text: cached.verse_text } : {}),
-        art: pickVerseArt(cached.theme, userId, day.d),
+        art: pickBandArt("verse", bandOf(), day.d),
+        encouragement: pickEncouragement(cached.theme, day.d),
       };
     }
     const u = await maybeOne<{ full_name: string }>(this.pool, `SELECT full_name FROM users WHERE user_id = $1`, [userId]);
@@ -206,7 +209,16 @@ export class HomeService {
            ON CONFLICT (user_id, day_date) DO NOTHING`,
           [userId, TZ, pick.reference, mood.theme, reason, pick.version, pick.verse_text, mood.label],
         );
-        return { reference: pick.reference, version: pick.version, theme: mood.theme, reason, mood: mood.label, text: pick.verse_text, art: pickVerseArt(mood.theme, userId, day.d) };
+        return {
+          reference: pick.reference,
+          version: pick.version,
+          theme: mood.theme,
+          reason,
+          mood: mood.label,
+          text: pick.verse_text,
+          art: pickBandArt("verse", bandOf(), day.d),
+          encouragement: pickEncouragement(mood.theme, day.d),
+        };
       }
     }
 
@@ -220,7 +232,7 @@ export class HomeService {
        ON CONFLICT (user_id, day_date) DO NOTHING`,
       [userId, TZ, reference, theme, reason],
     );
-    return { reference, version: "WEB", theme, reason, art: pickVerseArt(theme, userId, day.d) };
+    return { reference, version: "WEB", theme, reason, art: pickBandArt("verse", bandOf(), day.d), encouragement: pickEncouragement(theme, day.d) };
   }
 
   /**
