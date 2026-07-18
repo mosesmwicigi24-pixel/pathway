@@ -144,6 +144,21 @@ export class PastoralService {
   }
 
   /**
+   * Side-effect-free probe (Chat Redesign C4): has this caller EVER held a
+   * pastor_assignments row as the pastor (mirrors `inbox()`'s own gate check
+   * exactly — ANY row, active or ended, so a client that trusts `is_pastor`
+   * never gets a 403 the moment it actually opens the inbox). No step-up —
+   * unlike the inbox itself, this reveals nothing private, only "does this
+   * tab exist for me." Purpose-built for a non-SuperAdmin pastor: a
+   * SuperAdmin already reaches the inbox unconditionally via their role, so
+   * they have no need to probe this first (their own client already knows).
+   */
+  async isPastorEligible(userId: string): Promise<{ is_pastor: boolean }> {
+    const everPastor = await maybeOne(this.pool, `SELECT 1 FROM pastor_assignments WHERE pastor_user_id = $1 LIMIT 1`, [userId]);
+    return { is_pastor: !!everPastor };
+  }
+
+  /**
    * Pastoral Inbox — every PASTORAL thread the caller is a participant in
    * (their own assigned members, past + present — no-data-loss), or EVERY
    * PASTORAL thread for a SuperAdmin (the documented oversight/fallback
