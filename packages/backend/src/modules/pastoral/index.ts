@@ -25,6 +25,18 @@ export function registerPastoral(ctx: AppContext): Router {
     }),
   );
 
+  // Side-effect-free probe (Chat Redesign C4): "have I ever been assigned as
+  // a pastor" — so an assigned non-SuperAdmin pastor's client can show the
+  // Pastoral Inbox tab without a failed, step-up-gated GET first. NO
+  // step-up — unlike the inbox itself below, this reveals nothing private.
+  r.get(
+    "/chat/pastoral/eligibility",
+    auth,
+    handler(async (req, res) => {
+      res.json(await svc.isPastorEligible(requirePrincipal(req).userId));
+    }),
+  );
+
   // Pastor-facing: every thread I'm the pastor of (or every PASTORAL thread,
   // for a SuperAdmin's oversight/fallback reach). Password-gated (§5.3) — the
   // same posture as Broadcast: reading private pastoral answers needs a

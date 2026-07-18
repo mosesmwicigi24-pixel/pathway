@@ -76,6 +76,14 @@ export function registerChat(ctx: AppContext): Router {
     res.json(await svc.messageReaders(requirePrincipal(req).userId, id));
   }));
 
+  // Member-facing report (Chat Redesign C4): any active participant, once
+  // per message (idempotent). Surfaces in the existing moderation queue.
+  r.post("/chat/messages/:id/report", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const { reason } = parseBody(ChatService.ReportMessage, req.body);
+    res.status(201).json(await svc.reportMessage(requirePrincipal(req).userId, id, reason));
+  }));
+
   // Author-only edit / delete of a sent message (mobile three-dot "more actions").
   r.patch("/chat/messages/:id", auth, handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
