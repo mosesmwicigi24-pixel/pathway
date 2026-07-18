@@ -4385,9 +4385,137 @@ paths:
   /chat/dms:
     post:
       tags: [progress]
-      summary: Open (or fetch) a 1:1 DM with another member; minor-safe (D-M6); same congregation.
+      summary: >-
+        Open (or fetch) a 1:1 DM with another member; minor-safe (D-M6); same
+        congregation. Chat Redesign C1/C2 (docs/CHAT_REDESIGN.md): an EXISTING
+        thread (including any DM grandfathered as an accepted connection by
+        migration 162's backfill) is always just returned. Creating a NEW
+        thread between two ordinary members now requires an accepted
+        connection first (403 CONSENT_REQUIRED, details.hint = "send a
+        connection request first") — see /chat/connections/requests. Staff
+        (Admin/SuperAdmin) keep the "reach anyone" support exception on either
+        side of the pair.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
       responses:
         "201": { description: Conversation }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: FORBIDDEN_SCOPE (minor-safety, or cross-congregation) or CONSENT_REQUIRED (no accepted connection for a brand-new thread).
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/connections/requests:
+    post:
+      tags: [progress]
+      summary: >-
+        Ask to connect with another member — the consent handshake in front of
+        Chat (Chat Redesign C1/C2). Minor-safe (D-M6). If the OTHER party
+        already has a pending ask to the caller, both sides resolve to
+        accepted immediately (a mutual ask). 409 CONFLICT if a request is
+        already pending in either direction, or the pair is already connected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+                message: { type: string, maxLength: 500 }
+                client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
+      responses:
+        "201": { description: "{ request_id, status, duplicate, mutual }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "CONFLICT — already pending, or already connected." }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    get:
+      tags: [progress]
+      summary: My pending connection requests, incoming or outgoing.
+      parameters:
+        - name: direction
+          in: query
+          required: true
+          schema: { type: string, enum: [incoming, outgoing] }
+      responses:
+        "200": { description: "{ data: [{ request_id, status, message, created_at, user_id, full_name, avatar_url }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /chat/connections/requests/{id}/accept:
+    post:
+      tags: [progress]
+      summary: Accept a connection request — recipient only. Creates the accepted connection (does NOT auto-create the DM; POST /chat/dms still does that, now gated on this).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ request_id, status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/connections/requests/{id}/decline:
+    post:
+      tags: [progress]
+      summary: Decline a connection request — recipient only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ request_id, status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/connections/requests/{id}:
+    delete:
+      tags: [progress]
+      summary: Cancel a still-pending request I sent — requester only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ request_id, status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/connections:
+    get:
+      tags: [progress]
+      summary: My accepted connections — who I can already chat with.
+      responses:
+        "200": { description: "{ data: [{ user_id, full_name, avatar_url, status, established_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /chat/connections/{user_id}/remove:
+    post:
+      tags: [progress]
+      summary: Remove an accepted connection — either party. Existing DM history is kept (no-data-loss); a NEW thread needs a fresh accepted connection.
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ user_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/connections/{user_id}/block:
+    post:
+      tags: [progress]
+      summary: Block a member — stops NEW sends in both directions (existing history stays readable). Cancels any pending request between them.
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ user_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /chat/connections/{user_id}/unblock:
+    post:
+      tags: [progress]
+      summary: Unblock — blocker only. Reverts to "removed" (not connected); a fresh request is needed to chat again.
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ user_id, status }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -4489,6 +4617,119 @@ paths:
       responses:
         "200": { description: Joined }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/join-requests:
+    post:
+      tags: [progress]
+      summary: >-
+        Ask to join a space that doesn't auto-entitle me (a cell room I'm not
+        currently in, or a topical space) — Chat Redesign C1/C2. A no-op
+        success if I'm already an active member. Notifies the space's
+        leadership (original leader + any delegated leader/moderator).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { message: { type: string, maxLength: 500 } }
+      responses:
+        "201": { description: "{ status: already_member|pending, request_id? }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    get:
+      tags: [progress]
+      summary: Pending join requests for a space — leader/delegated moderator/Admin+ only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ data: [{ request_id, user_id, full_name, avatar_url, message, requested_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/join-requests/{reqId}/accept:
+    post:
+      tags: [progress]
+      summary: Accept a space join request — leader/delegated moderator/Admin+ only. Adds (or revives) an active chat_members row.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: reqId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ request_id, status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/join-requests/{reqId}/decline:
+    post:
+      tags: [progress]
+      summary: Decline a space join request — leader/delegated moderator/Admin+ only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: reqId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ request_id, status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/roles:
+    post:
+      tags: [progress]
+      summary: Delegate a co-leader/moderator role for a space — leader-level power only (original leader, a delegated leader, or Admin+; a delegated moderator cannot grant roles).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, role]
+              properties:
+                user_id: { type: string, format: uuid }
+                role: { type: string, enum: [leader, moderator] }
+      responses:
+        "201": { description: "{ conversation_id, user_id, role }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/roles/{user_id}/{role}:
+    delete:
+      tags: [progress]
+      summary: Revoke a delegated space role — leader-level power only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: role, in: path, required: true, schema: { type: string, enum: [leader, moderator] } }
+      responses:
+        "200": { description: "{ conversation_id, user_id, role, revoked }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/members/{user_id}/remove:
+    post:
+      tags: [progress]
+      summary: Remove a member from a space — leader/delegated moderator/Admin+ only. History is kept (chat_members.status), not deleted.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ conversation_id, user_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/members/{user_id}/suspend:
+    post:
+      tags: [progress]
+      summary: Suspend a member from a space — leader/delegated moderator/Admin+ only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ conversation_id, user_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
   /chat/conversations/{id}/invite:
     post:
