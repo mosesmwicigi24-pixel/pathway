@@ -91,6 +91,12 @@ export interface AuthState {
   error: string | null;
   /** Set when password sign-in returns a 2FA challenge; cleared once completed. */
   mfaToken: string | null;
+  /** The caller's effective RBAC permission keys ("module:capability"), from
+   *  GET /me (Layout hydrates this on every mount with a session). null =
+   *  not loaded yet — the sidebar/route guard fail OPEN while null (never
+   *  flash-hide/redirect before the real answer arrives); the server enforces
+   *  every route regardless of what the UI shows. */
+  permissions: string[] | null;
 }
 
 // Restore the session from the persisted access token on reload, so a refresh
@@ -104,6 +110,7 @@ const initialState: AuthState = {
   status: "idle",
   error: null,
   mfaToken: null,
+  permissions: null,
 };
 
 const authSlice = createSlice({
@@ -115,12 +122,17 @@ const authSlice = createSlice({
       state.email = null;
       state.role = null;
       state.mfaToken = null;
+      state.permissions = null;
       clearSession();
     },
     cancelMfa(state) {
       state.mfaToken = null;
       state.status = "idle";
       state.error = null;
+    },
+    /** Hydrated from GET /me (Layout) — the caller's effective permission keys. */
+    setPermissions(state, action: { payload: string[] | null }) {
+      state.permissions = action.payload;
     },
   },
   extraReducers: (b) => {
@@ -195,5 +207,5 @@ const authSlice = createSlice({
   },
 });
 
-export const { logout, cancelMfa } = authSlice.actions;
+export const { logout, cancelMfa, setPermissions } = authSlice.actions;
 export const authReducer = authSlice.reducer;
