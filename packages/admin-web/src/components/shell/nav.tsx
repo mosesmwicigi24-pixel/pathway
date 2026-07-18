@@ -1,8 +1,8 @@
 // Portal navigation model — the four sidebar groups + per-route page titles,
 // rebuilt to the "Final Pathway Portal" Figma make. Routes drive react-router.
 import {
-  BookOpen, LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
-  TrendingUp, MessageSquare, MessagesSquare, Video, Star, HelpCircle, AlignLeft, Bell,
+  LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
+  TrendingUp, MessageSquare, MessagesSquare, Video, Star, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
   Radio, SlidersVertical, ListMusic, UserCheck, HeartHandshake, HeartPulse, Megaphone, type LucideIcon,
 } from "lucide-react";
@@ -38,10 +38,13 @@ export const navGroups: NavGroup[] = [
   {
     label: "Curriculum",
     items: [
-      { path: "/curriculum-levels", label: "Curriculum Levels", icon: AlignLeft, permission: "levels:view" },
-      { path: "/cms", label: "CMS — Curriculum", icon: BookOpen, permission: "cms:view" },
-      { path: "/level-detail", label: "Level Detail", icon: Layers, permission: "cms:view" },
-      { path: "/quiz-builder", label: "Level Quiz Builder", icon: HelpCircle, permission: "quiz:view" },
+      // The two workspaces (docs/CURRICULUM_ARCHITECTURE.md §5): the Dashboard
+      // (health/attention/activity — one stats call) and the Levels & Modules
+      // workspace (tree + sectioned module editor). Quiz Builder keeps its
+      // route as a context-aware editor but has NO sidebar entry; the old
+      // five-page routes redirect here (App.tsx).
+      { path: "/curriculum", label: "Curriculum Dashboard", icon: AlignLeft, permission: "levels:view" },
+      { path: "/curriculum/workspace", label: "Levels & Modules", icon: Layers, permission: "cms:view" },
       // growth-content admin routes are requireRole("Admin") — coarse, no RBAC
       // permission to key off; stays visible (the server still enforces Admin+).
       { path: "/content-studio", label: "Content Studio", icon: Sparkles },
@@ -123,23 +126,25 @@ export function navItemVisible(item: NavItem, role: string | null, permissions: 
 // ── Route guard support (App.tsx) ──
 // Path → required permission key, flattened from the nav model above so the
 // sidebar and the route guard can never disagree about what a path needs.
-export const pathPermissions: Record<string, string> = Object.fromEntries(
-  navGroups.flatMap((g) => g.items).filter((i): i is NavItem & { permission: string } => !!i.permission)
-    .map((i) => [i.path, i.permission]),
-);
+export const pathPermissions: Record<string, string> = {
+  ...Object.fromEntries(
+    navGroups.flatMap((g) => g.items).filter((i): i is NavItem & { permission: string } => !!i.permission)
+      .map((i) => [i.path, i.permission]),
+  ),
+  // Quiz Builder kept its route (context-aware editor, no sidebar entry) and
+  // its original gate — same key the exam endpoints enforce server-side.
+  "/quiz-builder": "quiz:view",
+};
 export const superAdminOnlyPaths: string[] = navGroups.flatMap((g) => g.items).filter((i) => i.superAdminOnly).map((i) => i.path);
 // Router aliases that don't have their own nav entry but share a nav item's gate.
 export const pathAliases: Record<string, string> = {
   "/dashboard": "/",
-  "/module-editor": "/cms",
 };
 
 export const pageTitles: Record<string, string> = {
   "/": "Dashboard",
-  "/curriculum-levels": "Curriculum Levels",
-  "/cms": "CMS — Curriculum",
-  "/level-detail": "CMS — Level Detail",
-  "/module-editor": "Module Editor",
+  "/curriculum": "Curriculum Dashboard",
+  "/curriculum/workspace": "Levels & Modules",
   "/quiz-builder": "Level Quiz Builder",
   "/video-library": "Video Library",
   "/content-studio": "Content Studio",
@@ -174,6 +179,5 @@ export const pageTitles: Record<string, string> = {
 export function titleFor(pathname: string): string {
   if (pageTitles[pathname]) return pageTitles[pathname] as string;
   if (pathname.startsWith("/cell-engagement/")) return "Cell Detail";
-  if (pathname.startsWith("/cms/level/")) return "CMS — Level Detail";
   return "Nuru Pathway";
 }

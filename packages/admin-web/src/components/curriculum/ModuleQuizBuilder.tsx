@@ -3,8 +3,8 @@
 // questions live in question_bank, scoring/gating never originate on the client.
 //
 // Reused by both wiring contexts:
-//   - the per-MODULE quiz (LevelDetail → module question endpoints + updateModule settings)
-//   - the per-LEVEL final exam (QuizBuilder page → exit-exam module questions + updateExam settings)
+//   - the per-MODULE quiz (Workspace Quiz section → module question endpoints + updateModule settings)
+//   - the per-LEVEL final exam (Workspace Final Assessment / QuizBuilder page → exit-exam questions + updateExam settings)
 // The parent supplies a `moduleId` (where questions are stored) and a `settings`
 // save callback; everything else (load/encode/decode/save of questions) is here.
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";

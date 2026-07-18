@@ -1,10 +1,10 @@
-// Video Library — rebuilt to the "Final Pathway Portal" make, wired to the live
-// media API (PR #120). Real asset table/grid + the 4 summary counts (MediaApi.list
-// with server-side Status/Source/Level/Attached + q filters), a hosted upload
-// (createUpload → completeUpload) with a processing queue, a Register-external flow
-// (POST /admin/media/external), caption/level edits (PATCH /admin/media/:id), the
-// single mobile-app homepage welcome video (POST/DELETE …/homepage), attach to a
-// module (CurriculumApi.updateModule media_asset_id) and archive (soft delete).
+// Video Library — placement-aware (docs/CURRICULUM_ARCHITECTURE.md §5.3). One
+// asset, MANY placements: attach is a MODULE picker (level inferred and shown,
+// never asked); every asset lists ALL its placements; detaching removes ONE
+// placement, never the asset (MediaApi.addPlacement / removePlacement, §2.2).
+// Uploads (chunked to our storage), Register-external, homepage welcome video
+// and thumbnails are unchanged. Caption edits stay; the legacy level-tag write
+// is no longer presented as "attachment" (it remains a registration-time tag).
 // Access stays module-gated (§1.9); external links are best-effort gated only.
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode, type RefObject } from "react";
 import { useNavigate } from "react-router-dom";
@@ -13,10 +13,11 @@ import {
   Film, Filter, Grid3x3, Home, Link2, List, Loader2, Lock, Megaphone, Play, Plus, RotateCcw, Search,
   Settings, ShieldCheck, Sparkles, Trash2, Tv, Upload, Video as VideoIcon, X,
 } from "lucide-react";
+import axios from "axios";
 import {
   MediaApi, CurriculumApi, OpsApi, AnnouncementsApi,
-  type MediaAssetRow, type VideoSource, type AdminLevel, type AdminModuleSummary, type MediaListFilter,
-  type AnnouncementRow,
+  type MediaAssetRow, type VideoSource, type AdminModuleSummary, type MediaListFilter,
+  type AnnouncementRow, type AssetPlacement,
 } from "../../api/client";
 import { errorMessage } from "../../util/error";
 
@@ -32,7 +33,8 @@ function uiStatus(a: MediaAssetRow): UiStatus {
   if (a.status === "failed") return "Failed";
   if (a.status === "uploading") return "Uploading";
   if (a.status === "transcoding") return "Transcoding";
-  return a.attached_module_id ? "Ready" : "Unattached";
+  // placements[] is authoritative (§2.2); the mirror FK covers legacy rows.
+  return (a.placements ?? []).length > 0 || a.attached_module_id ? "Ready" : "Unattached";
 }
 
 type ProviderMeta = { label: string; bg: string; color: string };
@@ -67,9 +69,43 @@ const dur = (s: number | null): string => { if (!s) return "—"; const m = Math
 const fmtBytes = (n: number): string => { if (!n) return "0 MB"; const gb = n / 1073741824; if (gb >= 1) return `${gb.toFixed(2)} GB`; const mb = n / 1048576; return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`; };
 
 function assetTitle(a: MediaAssetRow): string {
-  if (a.attached_module_title) return a.attached_module_title;
+  // The asset's OWN title first — an asset is no longer named after one module
+  // (it may be placed in many, §2.2). Module title only as a legacy fallback.
+  if (a.title) return a.title;
   if (a.caption) return a.caption;
+  if (a.attached_module_title) return a.attached_module_title;
   return `${a.kind.replace(/_/g, " ")} · ${a.media_asset_id.slice(0, 8)}`;
+}
+/** All placements of an asset (authoritative list; mirror FK as legacy fallback). */
+function assetPlacements(a: MediaAssetRow): AssetPlacement[] {
+  const pl = a.placements ?? [];
+  if (pl.length > 0) return pl;
+  if (a.attached_module_id && a.attached_module_title) {
+    return [{ module_id: a.attached_module_id, module_title: a.attached_module_title, level_number: a.level_number ?? 0 }];
+  }
+  return [];
+}
+/** Level display — DERIVED from placements where present (§2.2); the stored
+ *  level_number is only a library tag fallback for unplaced assets. */
+function placementLevels(a: MediaAssetRow): string {
+  const pl = assetPlacements(a);
+  if (pl.length > 0) {
+    const levels = [...new Set(pl.map((p) => p.level_number).filter((n) => n > 0))].sort((x, y) => x - y);
+    return levels.length ? levels.map((n) => `L${n}`).join(" · ") : "—";
+  }
+  return a.level_number ? `Level ${a.level_number}` : "—";
+}
+function PlacementCell({ placements }: { placements: AssetPlacement[] }): ReactElement {
+  if (placements.length === 0) return <span style={{ fontSize: 12, color: "var(--muted-foreground)", fontStyle: "italic" }}>Not placed</span>;
+  const first = placements[0]!;
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap" style={{ maxWidth: 260 }}>
+      <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ background: "var(--secondary)", fontSize: 11, fontWeight: 600, color: "var(--foreground)" }}>
+        <span style={{ fontWeight: 800, color: "var(--nuru-gold)" }}>L{first.level_number}</span> {first.module_title}
+      </span>
+      {placements.length > 1 ? <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--muted-foreground)" }}>+{placements.length - 1} more</span> : null}
+    </div>
+  );
 }
 const relTime = (iso: string): string => { const t = new Date(iso).getTime(); if (Number.isNaN(t)) return ""; const d = Math.floor((Date.now() - t) / 86400000); return d <= 0 ? "Today" : d === 1 ? "Yesterday" : `${d} days ago`; };
 const posterOf = (a: MediaAssetRow): string | undefined =>
@@ -251,10 +287,26 @@ export function VideoLibrary(): ReactElement {
       setPreviewFor((p) => (p && p.media_asset_id === a.media_asset_id ? { ...p, is_homepage: !a.is_homepage } : p));
     } catch (e) { setError(errorMessage(e, "Could not update the homepage video.")); }
   }
-  async function saveMeta(a: MediaAssetRow, input: { caption?: string; level_number?: number | null }): Promise<void> {
+  async function saveMeta(a: MediaAssetRow, input: { caption?: string }): Promise<void> {
     setError(null);
     try { await MediaApi.patchAsset(a.media_asset_id, input); setNotice("Saved."); await load(); }
     catch (e) { setError(errorMessage(e, "Could not save changes.")); }
+  }
+  // Remove ONE placement (never the asset). The list rows carry {module_id};
+  // the placement id is resolved via the module's placement list (§2.2).
+  async function detachPlacement(a: MediaAssetRow, p: AssetPlacement): Promise<void> {
+    setError(null);
+    try {
+      const rows = await CurriculumApi.modulePlacements(p.module_id);
+      const hit = rows.find((r) => r.media_asset_id === a.media_asset_id);
+      if (!hit) { setError("That placement no longer exists — refreshing."); await load(); return; }
+      await MediaApi.removePlacement(hit.placement_id);
+      setNotice(`Removed from "${p.module_title}" — the asset stays in the library.`);
+      await load();
+      setPreviewFor((prev) => prev && prev.media_asset_id === a.media_asset_id
+        ? { ...prev, placements: (prev.placements ?? []).filter((x) => x.module_id !== p.module_id) }
+        : prev);
+    } catch (e) { setError(errorMessage(e, "Could not remove the placement.")); }
   }
 
   // The 4 summary counts come straight from the (filtered) list payload.
@@ -288,7 +340,7 @@ export function VideoLibrary(): ReactElement {
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="inline-flex items-center gap-1.5 rounded-lg px-2.5" style={{ height: 32, background: "rgba(245,199,126,0.14)", color: "#F5C77E", fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", border: "1px solid rgba(245,199,126,0.25)" }}><Sparkles size={11} /> Self-hosted · your storage</span>
-            <button onClick={() => navigate("/cms")} className="flex items-center gap-2 rounded-lg px-3" style={{ height: 32, background: "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 600, border: "1px solid rgba(255,255,255,0.15)" }}><Settings size={13} /> Curriculum</button>
+            <button onClick={() => navigate("/curriculum")} className="flex items-center gap-2 rounded-lg px-3" style={{ height: 32, background: "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 600, border: "1px solid rgba(255,255,255,0.15)" }}><Settings size={13} /> Curriculum</button>
             <button onClick={() => { linkInputRef.current?.focus(); linkInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }} className="flex items-center gap-2 rounded-lg px-3" style={{ height: 32, background: "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 600, border: "1px solid rgba(255,255,255,0.15)" }}><Link2 size={13} /> Register external</button>
             <button onClick={openFilePicker} disabled={uploading} className="flex items-center gap-2 rounded-lg px-3" style={{ height: 32, background: "var(--nuru-gold)", color: "#fff", fontSize: 12, fontWeight: 600, border: "none", opacity: uploading ? 0.6 : 1 }}>{uploading ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Upload video</button>
           </div>
@@ -428,7 +480,7 @@ export function VideoLibrary(): ReactElement {
 
           {view === "table" ? (
             <div className="overflow-x-auto"><table className="w-full" style={{ borderCollapse: "collapse" }}>
-              <thead><tr style={{ background: "var(--secondary)" }}>{["", "Title", "Attached module", "Level", "Duration", "Status", "Updated", ""].map((h, i) => <th key={i} style={{ fontSize: 11, fontWeight: 700, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: 0.6, textAlign: "left", padding: "10px 16px" }}>{h}</th>)}</tr></thead>
+              <thead><tr style={{ background: "var(--secondary)" }}>{["", "Title", "Placements", "Level", "Duration", "Status", "Updated", ""].map((h, i) => <th key={i} style={{ fontSize: 11, fontWeight: 700, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: 0.6, textAlign: "left", padding: "10px 16px" }}>{h}</th>)}</tr></thead>
               <tbody>
                 {filtered.map((a) => { const us = uiStatus(a); return (
                   <tr key={a.media_asset_id} style={{ borderTop: "1px solid var(--border)", height: 64 }} className="hover:bg-secondary/40 transition-colors">
@@ -441,8 +493,8 @@ export function VideoLibrary(): ReactElement {
                       </div>
                       <div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{a.kind.replace(/_/g, " ")}</div>
                     </td>
-                    <td style={{ padding: "8px 16px", fontSize: 12, color: a.attached_module_title ? "var(--foreground)" : "var(--muted-foreground)", fontStyle: a.attached_module_title ? "normal" : "italic" }}>{a.attached_module_title ?? "Not attached"}</td>
-                    <td style={{ padding: "8px 16px", fontSize: 12, color: "var(--muted-foreground)" }}>{a.level_number ? `Level ${a.level_number}` : "—"}</td>
+                    <td style={{ padding: "8px 16px" }}><PlacementCell placements={assetPlacements(a)} /></td>
+                    <td style={{ padding: "8px 16px", fontSize: 12, color: "var(--muted-foreground)" }}>{placementLevels(a)}</td>
                     <td style={{ padding: "8px 16px", fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--foreground)" }}>{dur(a.duration_sec)}</td>
                     <td style={{ padding: "8px 16px" }}><Pill status={us} /></td>
                     <td style={{ padding: "8px 16px", fontSize: 12, color: "var(--muted-foreground)" }}>{relTime(a.created_at)}</td>
@@ -473,7 +525,7 @@ export function VideoLibrary(): ReactElement {
                   </div>
                   <div className="p-4 flex flex-col flex-1">
                     <div style={{ fontSize: 14, fontWeight: 700, color: "var(--foreground)", lineHeight: 1.25 }}>{assetTitle(a)}</div>
-                    <div style={{ fontSize: 12, color: a.attached_module_title ? "var(--foreground)" : "var(--muted-foreground)", fontStyle: a.attached_module_title ? "normal" : "italic", marginTop: 4 }}>{a.attached_module_title ?? "Not attached to a module"}</div>
+                    <div style={{ marginTop: 4 }}><PlacementCell placements={assetPlacements(a)} /></div>
                     <div className="flex items-center gap-3 mt-2" style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}><span>{dur(a.duration_sec)}</span><span>·</span><span>{providerMeta[a.video_source].label}</span><span>·</span><span>{relTime(a.created_at)}</span></div>
                     <div className="mt-3">
                       {us === "Ready" ? <CompletionBar value={a.completion ?? 0} views={a.views ?? 0} /> : <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--muted-foreground)" }}>{us === "Failed" ? "Re-link to track engagement" : "Not released to members yet"}</span>}
@@ -503,7 +555,7 @@ export function VideoLibrary(): ReactElement {
         />
       ); })() : null}
 
-      {attachFor ? <AttachModal asset={attachFor} onClose={() => setAttachFor(null)} onDone={async () => { setAttachFor(null); await refreshAfter("Video attached to the module."); }} onError={setError} /> : null}
+      {attachFor ? <AttachModal asset={attachFor} onClose={() => setAttachFor(null)} onDone={async () => { setAttachFor(null); await refreshAfter("Video placed in the module."); }} onError={setError} /> : null}
       {attachEventFor ? <AttachEventModal asset={attachEventFor} onClose={() => setAttachEventFor(null)} onDone={async () => { setAttachEventFor(null); await refreshAfter("Video attached to the event."); }} onError={setError} /> : null}
       {attachAnnFor ? <AttachAnnouncementModal asset={attachAnnFor} onClose={() => setAttachAnnFor(null)} onDone={async () => { setAttachAnnFor(null); await refreshAfter("Video attached to the announcement."); }} onError={setError} /> : null}
 
@@ -516,13 +568,14 @@ export function VideoLibrary(): ReactElement {
           onDelete={() => { setDeleteFor(previewFor); setPreviewFor(null); }}
           onToggleHomepage={() => void toggleHomepage(previewFor)}
           onSaveMeta={(input) => void saveMeta(previewFor, input)}
+          onDetachPlacement={(p) => void detachPlacement(previewFor, p)}
           onThumbnailDone={(url) => { setPreviewFor((p) => (p ? { ...p, thumbnail_url: url } : p)); void load(); }}
         />
       ) : null}
 
       {deleteFor ? (
         <Modal onClose={() => { setDeleteFor(null); setDeleteText(""); }} title="Delete video asset?" subtitle="This archives the video. If attached to a module, members will no longer see it there." tone="danger">
-          <div className="rounded-xl p-3 flex items-start gap-2" style={{ background: "#FEF2F2", border: "1px solid #FCA5A5" }}><AlertTriangle size={14} style={{ color: "#DC2626", marginTop: 2 }} /><div style={{ fontSize: 12, color: "#B91C1C", lineHeight: 1.5 }}><strong>{assetTitle(deleteFor)}</strong> {deleteFor.attached_module_title ? `is attached to ${deleteFor.attached_module_title}.` : "will be archived."}</div></div>
+          <div className="rounded-xl p-3 flex items-start gap-2" style={{ background: "#FEF2F2", border: "1px solid #FCA5A5" }}><AlertTriangle size={14} style={{ color: "#DC2626", marginTop: 2 }} /><div style={{ fontSize: 12, color: "#B91C1C", lineHeight: 1.5 }}><strong>{assetTitle(deleteFor)}</strong> {assetPlacements(deleteFor).length > 0 ? `is placed in ${assetPlacements(deleteFor).length} module${assetPlacements(deleteFor).length === 1 ? "" : "s"} — archiving removes it from all of them.` : "will be archived."}</div></div>
           <Field label="Type DELETE to confirm" required>
             <input value={deleteText} onChange={(e) => setDeleteText(e.target.value)} placeholder="DELETE" className="w-full rounded-xl px-3 py-2.5 outline-none" style={{ background: "var(--input-background)", border: "1px solid var(--border)", fontFamily: "var(--font-mono)", fontSize: 14, letterSpacing: 1 }} />
           </Field>
@@ -622,50 +675,102 @@ function RegisterExternalPanel({ inputRef, onDone, onError }: { inputRef: RefObj
   );
 }
 
-/* ───────────────────────────── Attach modal ───────────────────────────── */
+/* ────────────── Attach modal — a MODULE picker (§5.3) ──────────────
+   Search across ALL modules; the level is an inferred label on each row, never
+   a separate dropdown. Attaching creates a placement (one asset, many modules);
+   a 409 duplicate pair gets the friendly "already placed there" message. */
+interface PickableModule extends AdminModuleSummary {
+  level_title: string;
+  level_color: string;
+}
 function AttachModal({ asset, onClose, onDone, onError }: { asset: MediaAssetRow; onClose: () => void; onDone: () => void; onError: (m: string) => void }): ReactElement {
-  const [levels, setLevels] = useState<AdminLevel[]>([]);
-  const [levelNo, setLevelNo] = useState<number | null>(null);
-  const [modules, setModules] = useState<AdminModuleSummary[]>([]);
-  const [moduleId, setModuleId] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [modules, setModules] = useState<PickableModule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [saving, setSaving] = useState<string | null>(null);
+  const placedIn = useMemo(() => new Set(assetPlacements(asset).map((p) => p.module_id)), [asset]);
 
-  useEffect(() => { void CurriculumApi.levels().then((ls) => { setLevels(ls); setLevelNo(ls[0]?.level_number ?? null); }).catch(() => {}); }, []);
-  useEffect(() => { if (levelNo == null) return; void CurriculumApi.modules(levelNo).then((ms) => { setModules(ms); setModuleId(ms[0]?.module_id ?? null); }).catch(() => setModules([])); }, [levelNo]);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const levels = await CurriculumApi.levels();
+        const perLevel = await Promise.all(levels.map(async (l) => {
+          const ms = await CurriculumApi.modules(l.level_number).catch(() => [] as AdminModuleSummary[]);
+          return ms
+            .filter((m) => m.status !== "archived")
+            .map((m): PickableModule => ({ ...m, level_title: l.title, level_color: l.color }));
+        }));
+        setModules(perLevel.flat());
+      } catch (e) { onError(errorMessage(e, "Could not load modules.")); }
+      finally { setLoading(false); }
+    })();
+  }, [onError]);
 
-  async function attach(): Promise<void> {
-    if (!moduleId) return;
-    setSaving(true);
-    try { await CurriculumApi.updateModule(moduleId, { media_asset_id: asset.media_asset_id }); onDone(); }
-    catch (e) { onError(errorMessage(e, "Attach failed.")); }
-    finally { setSaving(false); }
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? modules.filter((m) =>
+        m.title.toLowerCase().includes(q) ||
+        m.level_title.toLowerCase().includes(q) ||
+        `level ${m.level_number}`.includes(q) ||
+        `l${m.level_number}`.includes(q))
+    : modules;
+
+  async function attach(m: PickableModule): Promise<void> {
+    setSaving(m.module_id);
+    try { await MediaApi.addPlacement(asset.media_asset_id, { module_id: m.module_id }); onDone(); }
+    catch (e) {
+      if (axios.isAxiosError(e) && e.response?.status === 409) onError(`Already placed there — this video is in "${m.title}".`);
+      else onError(errorMessage(e, "Could not place the video."));
+      setSaving(null);
+    }
   }
 
   return (
-    <Modal onClose={onClose} title="Attach video to module" subtitle="Choose the curriculum module where this video should appear.">
+    <Modal onClose={onClose} title="Place video in a module" subtitle="Pick the module — its level is inferred automatically. The same video may be placed in many modules.">
       <div className="rounded-xl p-3 flex items-center gap-3" style={{ background: "var(--secondary)" }}>
         <Thumb hue={hueOf(asset.media_asset_id)} status={uiStatus(asset)} duration={dur(asset.duration_sec)} poster={posterOf(asset)} />
         <div style={{ minWidth: 0 }}>
           <div className="flex items-center gap-2"><span style={{ fontSize: 13, fontWeight: 700, color: "var(--foreground)" }}>{assetTitle(asset)}</span><ProviderBadge source={asset.video_source} /></div>
-          <div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{dur(asset.duration_sec)} · {providerMeta[asset.video_source].label}</div>
+          <div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>{dur(asset.duration_sec)} · {providerMeta[asset.video_source].label}{placedIn.size > 0 ? ` · placed in ${placedIn.size} module${placedIn.size === 1 ? "" : "s"}` : ""}</div>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="Select level" required>
-          <select value={levelNo ?? ""} onChange={(e) => setLevelNo(Number(e.target.value))} className="w-full rounded-xl px-3 py-2.5 outline-none" style={{ background: "var(--input-background)", border: "1px solid var(--border)", fontSize: 13 }}>
-            {levels.map((l) => <option key={l.level_number} value={l.level_number}>L{l.level_number} · {l.title}</option>)}
-          </select>
-        </Field>
-        <Field label="Select module" required>
-          <select value={moduleId ?? ""} onChange={(e) => setModuleId(e.target.value)} className="w-full rounded-xl px-3 py-2.5 outline-none" style={{ background: "var(--input-background)", border: "1px solid var(--border)", fontSize: 13 }}>
-            {modules.map((m) => <option key={m.module_id} value={m.module_id}>Module {m.module_sequence_number} — {m.title}</option>)}
-          </select>
-        </Field>
+      <div className="flex items-center gap-2 rounded-xl px-3" style={{ height: 38, background: "var(--input-background)", border: "1px solid var(--border)" }}>
+        <Search size={13} style={{ color: "var(--muted-foreground)" }} />
+        <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search modules across every level…" className="bg-transparent outline-none flex-1" style={{ fontSize: 13 }} />
       </div>
-      <div className="rounded-xl p-3 flex items-center gap-2" style={{ background: "#FFFBEB", border: "1px solid #F5E0A8" }}><Lock size={14} style={{ color: "#A87616" }} /><span style={{ fontSize: 12, color: "#7A5410" }}>Visible only when the module is unlocked for the member.</span></div>
+      <div className="rounded-xl overflow-y-auto" style={{ border: "1px solid var(--border)", maxHeight: 300 }}>
+        {loading ? (
+          <p style={{ padding: "18px 16px", fontSize: 12.5, color: "var(--muted-foreground)" }}>Loading modules…</p>
+        ) : filtered.length === 0 ? (
+          <p style={{ padding: "18px 16px", fontSize: 12.5, color: "var(--muted-foreground)" }}>No modules match.</p>
+        ) : filtered.map((m, i) => {
+          const already = placedIn.has(m.module_id);
+          return (
+            <button
+              key={m.module_id}
+              onClick={() => { if (!already && !saving) void attach(m); }}
+              disabled={already || !!saving}
+              className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--secondary)]"
+              style={{ background: "transparent", border: "none", borderTop: i === 0 ? "none" : "1px solid var(--border)", cursor: already ? "not-allowed" : "pointer", opacity: already ? 0.5 : saving && saving !== m.module_id ? 0.6 : 1 }}
+            >
+              <span className="rounded-md text-center shrink-0" style={{ minWidth: 26, fontSize: 9.5, fontWeight: 800, color: "#fff", background: m.level_color, padding: "3px 4px" }}>L{m.level_number}</span>
+              <div className="flex-1 min-w-0">
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--foreground)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Module {m.module_sequence_number} — {m.title}</div>
+                {/* Level shown as an INFERRED label — never a dropdown (§5.3). */}
+                <div style={{ fontSize: 10.5, color: "var(--muted-foreground)", marginTop: 1 }}>Level {m.level_number} · {m.level_title} · {m.status}</div>
+              </div>
+              {already
+                ? <span className="rounded-full px-2 py-0.5 shrink-0" style={{ fontSize: 9.5, fontWeight: 800, background: "#E8F6EE", color: "#0F6B33" }}>PLACED</span>
+                : saving === m.module_id
+                  ? <Loader2 size={13} className="animate-spin shrink-0" style={{ color: "var(--nuru-gold)" }} />
+                  : <Plus size={14} className="shrink-0" style={{ color: "var(--nuru-gold)" }} />}
+            </button>
+          );
+        })}
+      </div>
+      <div className="rounded-xl p-3 flex items-center gap-2" style={{ background: "#FFFBEB", border: "1px solid #F5E0A8" }}><Lock size={14} style={{ color: "#A87616" }} /><span style={{ fontSize: 12, color: "#7A5410" }}>Members see the video when ANY module it's placed in is unlocked for them.</span></div>
       <div className="flex items-center justify-end gap-2 pt-1">
-        <button onClick={onClose} className="rounded-xl px-4 py-2.5" style={{ background: "transparent", color: "var(--foreground)", fontSize: 13, fontWeight: 600, border: "none" }}>Cancel</button>
-        <button onClick={() => void attach()} disabled={!moduleId || saving} className="flex items-center gap-2 rounded-xl px-5 py-2.5" style={{ background: !moduleId || saving ? "var(--secondary)" : "var(--nuru-gold)", color: !moduleId || saving ? "var(--muted-foreground)" : "#fff", fontSize: 13, fontWeight: 600, border: "none", cursor: !moduleId || saving ? "not-allowed" : "pointer" }}><Link2 size={13} /> Attach video</button>
+        <button onClick={onClose} className="rounded-xl px-4 py-2.5" style={{ background: "transparent", color: "var(--foreground)", fontSize: 13, fontWeight: 600, border: "none" }}>Close</button>
       </div>
     </Modal>
   );
@@ -810,16 +915,16 @@ function AttachAnnouncementModal({ asset, onClose, onDone, onError }: { asset: M
 }
 
 /* ───────────────────────────── Preview drawer ───────────────────────────── */
-function PreviewDrawer({ asset, onClose, onAttachMenu, onReplace, onDelete, onToggleHomepage, onSaveMeta, onThumbnailDone }: {
+function PreviewDrawer({ asset, onClose, onAttachMenu, onReplace, onDelete, onToggleHomepage, onSaveMeta, onDetachPlacement, onThumbnailDone }: {
   asset: MediaAssetRow; onClose: () => void; onAttachMenu: (e: ReactMouseEvent) => void; onReplace: () => void; onDelete: () => void;
-  onToggleHomepage: () => void; onSaveMeta: (input: { caption?: string; level_number?: number | null }) => void;
+  onToggleHomepage: () => void; onSaveMeta: (input: { caption?: string }) => void;
+  onDetachPlacement: (p: AssetPlacement) => void;
   onThumbnailDone: (url: string | null) => void;
 }): ReactElement {
   const us = uiStatus(asset);
+  const placements = assetPlacements(asset);
   const [caption, setCaption] = useState(asset.caption ?? "");
-  const [level, setLevel] = useState<string>(asset.level_number ? String(asset.level_number) : "");
   const captionDirty = caption.trim() !== (asset.caption ?? "");
-  const levelDirty = (level ? Number(level) : null) !== (asset.level_number ?? null);
 
   // Thumbnail: pick an image OR capture a frame → preview → Save (persists).
   const [thumbBusy, setThumbBusy] = useState(false);
@@ -891,9 +996,31 @@ function PreviewDrawer({ asset, onClose, onAttachMenu, onReplace, onDelete, onTo
             { l: "Uploaded", v: relTime(asset.created_at) },
             { l: "Source", v: providerMeta[asset.video_source].label },
             { l: "Delivery", v: us === "Failed" ? "Link broken" : isExternal(asset.video_source) ? (asset.video_source === "private" ? "Signed · expiring" : `${providerMeta[asset.video_source].label} embed`) : "Gated HLS" },
-            { l: "Attached module", v: asset.attached_module_title ?? "Not attached" },
-            { l: "Level", v: asset.level_number ? `Level ${asset.level_number}` : "—" },
+            { l: "Placements", v: placements.length === 0 ? "Not placed" : `${placements.length} module${placements.length === 1 ? "" : "s"}` },
+            { l: "Levels", v: placementLevels(asset) },
           ].map((d) => <div key={d.l}><div style={{ fontSize: 10, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: 0.5 }}>{d.l}</div><div style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)", marginTop: 2 }}>{d.v}</div></div>)}
+        </div>
+
+        {/* Placements — every module this asset appears in (level · module).
+            Detaching removes ONE placement, never the asset (§5.3). */}
+        <div className="rounded-xl p-4 mt-4" style={{ background: "var(--secondary)", border: "1px solid var(--border)" }}>
+          <div className="flex items-center justify-between mb-2">
+            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--foreground)", textTransform: "uppercase", letterSpacing: 0.5 }}>Placements</span>
+            <button onClick={onAttachMenu} className="flex items-center gap-1 rounded-lg px-2.5 py-1.5" style={{ background: "var(--nuru-gold)", color: "#fff", fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer" }}><Plus size={11} /> Place</button>
+          </div>
+          {placements.length === 0 ? (
+            <p style={{ fontSize: 12, color: "var(--muted-foreground)" }}>Not placed in any module yet — members can't reach it through the curriculum.</p>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {placements.map((p) => (
+                <div key={p.module_id} className="flex items-center gap-2.5 rounded-lg px-2.5 py-2" style={{ background: "var(--card)", border: "1px solid var(--border)" }}>
+                  <span className="rounded-md text-center shrink-0" style={{ minWidth: 26, fontSize: 9.5, fontWeight: 800, color: "#fff", background: "var(--nuru-navy)", padding: "3px 4px" }}>L{p.level_number}</span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: "var(--foreground)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.module_title}</span>
+                  <button onClick={() => onDetachPlacement(p)} title="Remove this placement (keeps the video)" className="flex items-center gap-1 rounded-md px-2 py-1 shrink-0" style={{ background: "#FFF5F5", border: "1px solid #FECACA", color: "#DC2626", fontSize: 10.5, fontWeight: 700, cursor: "pointer" }}><X size={10} /> Remove</button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {asset.external_url ? (
@@ -904,22 +1031,16 @@ function PreviewDrawer({ asset, onClose, onAttachMenu, onReplace, onDelete, onTo
           </div>
         ) : null}
 
-        {/* Caption + level editing (PATCH) */}
+        {/* Caption editing (PATCH). The level is derived from placements now —
+            no longer edited here as if it were an attachment (§2.2). */}
         <div className="rounded-xl p-4 mt-4" style={{ background: "var(--secondary)", border: "1px solid var(--border)" }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: "var(--foreground)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Edit metadata</div>
-          <input value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Caption — a short line shown with the video" className="w-full rounded-lg px-3 py-2 outline-none mb-2" style={{ background: "var(--card)", border: "1px solid var(--border)", fontSize: 12.5 }} />
-          <div className="flex items-center gap-2 mb-3">
-            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: 0.5 }}>Level</span>
-            <select value={level} onChange={(e) => setLevel(e.target.value)} className="rounded-lg px-2 py-1.5 outline-none" style={{ background: "var(--card)", border: "1px solid var(--border)", fontSize: 12.5 }}>
-              <option value="">None</option>
-              {["1", "2", "3", "4", "5", "6"].map((n) => <option key={n} value={n}>Level {n}</option>)}
-            </select>
-          </div>
+          <input value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Caption — a short line shown with the video" className="w-full rounded-lg px-3 py-2 outline-none mb-3" style={{ background: "var(--card)", border: "1px solid var(--border)", fontSize: 12.5 }} />
           <button
-            onClick={() => onSaveMeta({ caption: caption.trim(), level_number: level ? Number(level) : null })}
-            disabled={!captionDirty && !levelDirty}
+            onClick={() => onSaveMeta({ caption: caption.trim() })}
+            disabled={!captionDirty}
             className="flex items-center gap-1.5 rounded-lg px-3 py-2"
-            style={{ background: captionDirty || levelDirty ? "var(--nuru-navy)" : "var(--secondary)", color: captionDirty || levelDirty ? "#fff" : "var(--muted-foreground)", fontSize: 12, fontWeight: 700, border: "none", cursor: captionDirty || levelDirty ? "pointer" : "not-allowed" }}
+            style={{ background: captionDirty ? "var(--nuru-navy)" : "var(--secondary)", color: captionDirty ? "#fff" : "var(--muted-foreground)", fontSize: 12, fontWeight: 700, border: "none", cursor: captionDirty ? "pointer" : "not-allowed" }}
           ><Check size={12} /> Save changes</button>
         </div>
 

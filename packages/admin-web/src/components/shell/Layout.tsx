@@ -122,7 +122,7 @@ export function Layout(): ReactElement {
                 <NavLink
                   key={path}
                   to={path}
-                  end={path === "/"}
+                  end={path === "/" || path === "/curriculum"}
                   title={collapsed ? label : undefined}
                   className="flex items-center"
                   style={({ isActive }) => ({

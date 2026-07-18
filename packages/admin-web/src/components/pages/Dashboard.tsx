@@ -387,7 +387,7 @@ export function Dashboard(): ReactElement {
             <button onClick={() => navigate("/reflection-queue")} className="flex items-center gap-2 rounded-lg px-3" style={{ height: 32, background: "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 600, border: "1px solid rgba(255,255,255,0.15)" }}>
               <ClipboardCheck size={13} /> Review queue
             </button>
-            <button onClick={() => navigate("/cms")} className="flex items-center gap-2 rounded-lg px-3" style={{ height: 32, background: "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 600, border: "1px solid rgba(255,255,255,0.15)" }}>
+            <button onClick={() => navigate("/curriculum")} className="flex items-center gap-2 rounded-lg px-3" style={{ height: 32, background: "rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, fontWeight: 600, border: "1px solid rgba(255,255,255,0.15)" }}>
               <BookOpen size={13} /> Curriculum
             </button>
             <button onClick={() => navigate("/members")} className="flex items-center gap-2 rounded-lg px-3" style={{ height: 32, background: "var(--nuru-gold)", color: "#fff", fontSize: 12, fontWeight: 600, border: "none" }}>
@@ -644,7 +644,7 @@ export function Dashboard(): ReactElement {
         {/* ── PULSE OF THE WORD — content row, each domain exactly once ── */}
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-5">
           {/* Curriculum */}
-          <div onClick={() => navigate("/cms")} className="rounded-2xl cursor-pointer flex flex-col gap-2" style={{ ...CARD, padding: "14px 16px" }}>
+          <div onClick={() => navigate("/curriculum")} className="rounded-2xl cursor-pointer flex flex-col gap-2" style={{ ...CARD, padding: "14px 16px" }}>
             <span className="flex items-center justify-center rounded-lg" style={{ width: 30, height: 30, background: "var(--tint-gold-bg)", color: "var(--tint-gold-fg)" }}><BookOpen size={14} /></span>
             <span style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--nuru-navy)", lineHeight: 1 }}>
               {overview.s === "loading" ? <Skel w={36} h={18} /> : overview.s === "error" ? "—" : overview.d.modules_published}
