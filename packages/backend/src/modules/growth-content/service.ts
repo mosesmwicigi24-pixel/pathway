@@ -404,6 +404,13 @@ export class GrowthContentService {
       );
       const dayComplete = remaining.n === 0;
       let progress: unknown = null;
+      // next_day_number / next_day_unlocked answer the exact question the
+      // client asks right after this call ("can I go on?") — computed here,
+      // in the same transaction as the write, so the client never has to
+      // guess or re-derive it from a possibly-stale plan fetch (§1.1: the
+      // server decides gating, never the client).
+      let nextDayNumber: number | null = null;
+      let nextDayUnlocked = false;
       if (dayComplete) {
         progress = await one(
           c,
@@ -418,8 +425,29 @@ export class GrowthContentService {
            RETURNING plan_id, current_day, completed_days, completed_at`,
           [userId, seg.plan_id, seg.day_number, seg.day_count],
         );
+        if (seg.day_number < seg.day_count) {
+          nextDayNumber = seg.day_number + 1;
+          // Re-derive "finished" post-write (authoritative, not assumed) and
+          // gate the next day the same way every other read path does.
+          const finishedAfter = await this.finishedDays(c, userId, seg.plan_id);
+          nextDayUnlocked = !dayLocked(nextDayNumber, finishedAfter, seg.day_count);
+        }
       }
-      return { segment_id: segmentId, day_number: seg.day_number, day_completed: dayComplete, progress };
+      return {
+        segment_id: segmentId,
+        day_number: seg.day_number,
+        day_completed: dayComplete,
+        // Additive fields for the offline-sync race (a client that fetches
+        // the next day before its queued completion lands otherwise caches a
+        // stale "locked" answer): the ack from the LAST segment of a day now
+        // says outright whether the day sealed and whether the next one is
+        // already open, so the client can act on this response directly
+        // instead of re-fetching into a race.
+        day_complete: dayComplete,
+        next_day_number: nextDayNumber,
+        next_day_unlocked: nextDayUnlocked,
+        progress,
+      };
     });
   }
 

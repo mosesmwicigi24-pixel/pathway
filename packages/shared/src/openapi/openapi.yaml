@@ -3720,7 +3720,16 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: "{ segment_id, day_number, day_completed, progress }" }
+        "200":
+          description: >-
+            { segment_id, day_number, day_completed, day_complete,
+            next_day_number, next_day_unlocked, progress }. day_complete and
+            day_completed are the same value (day_complete is the current
+            name; day_completed is kept for older clients). next_day_number /
+            next_day_unlocked are computed in the same transaction as the
+            write, so a client acting on the LAST segment's response — rather
+            than re-fetching the plan — never sees a stale "locked" answer
+            from a completion still in flight through the offline queue.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
