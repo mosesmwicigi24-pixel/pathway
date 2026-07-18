@@ -4509,7 +4509,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: "Conversation — head includes type: SPACE|DIRECT|DISCIPLER|PASTORAL|BROADCAST|BROADCAST_RESPONSE." }
+        "200": { description: "Conversation — head includes type: SPACE|DIRECT|DISCIPLER|PASTORAL|BROADCAST|BROADCAST_RESPONSE, plus muted: boolean (migration 172, mine only)." }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /chat/conversations/{id}/messages:
@@ -4531,6 +4531,45 @@ paths:
       responses:
         "200": { description: Read }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/conversations/{id}/mute:
+    put:
+      tags: [progress]
+      summary: >-
+        Mute this conversation's push nudges for me (Chat Redesign C4,
+        migration 172) — active participant only; idempotent (re-muting
+        overwrites the prior expiry). Suppresses every typed nudge
+        (chat_dm_message / chat_discipler_message / chat_pastoral_message /
+        chat_broadcast) for this recipient in this conversation while active;
+        never affects the other participant, in-app unread state, or message
+        delivery itself.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                until:
+                  type: [string, "null"]
+                  format: date-time
+                  description: "ISO timestamp to mute through; omitted or null = muted forever."
+      responses:
+        "200": { description: "{ conversation_id, muted: true, muted_until }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [progress]
+      summary: Unmute (Chat Redesign C4, migration 172) — active participant only; idempotent.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ conversation_id, muted: false }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
   /chat/messages/{id}/reactions:
     post:
@@ -7185,4 +7224,10 @@ components:
         unread: { type: integer }
         message_count: { type: integer }
         reaction_count: { type: integer }
+        muted:
+          type: boolean
+          description: >-
+            Chat Redesign C4 (migration 172): true when I have an ACTIVE mute
+            on this conversation (muted_until NULL = forever, or still in the
+            future). Additive, MINE only — never the other participant's state.
         signature: { type: string, description: "HMAC-SHA256 detached signature (§5.5 KMS stand-in)" }

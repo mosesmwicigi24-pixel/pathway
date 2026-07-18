@@ -64,6 +64,19 @@ export function registerChat(ctx: AppContext): Router {
     res.json(await svc.markRead(requirePrincipal(req).userId, id));
   }));
 
+  // Mute (Chat Redesign C4, migration 172): active-participant only, idempotent.
+  // `until` omitted/null = forever; an ISO timestamp mutes through that instant.
+  r.put("/chat/conversations/:id/mute", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const { until } = parseBody(ChatService.MuteConversation, req.body);
+    res.json(await svc.muteConversation(requirePrincipal(req).userId, id, until));
+  }));
+
+  r.delete("/chat/conversations/:id/mute", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await svc.unmuteConversation(requirePrincipal(req).userId, id));
+  }));
+
   r.post("/chat/messages/:id/reactions", auth, handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
     const body = parseBody(ChatService.ToggleReaction.omit({ message_id: true }), req.body);
