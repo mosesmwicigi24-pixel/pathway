@@ -72,3 +72,12 @@ docker run --name nuru-pg -e POSTGRES_USER=nuru -e POSTGRES_PASSWORD=nuru -e POS
 ## Definition of done for a task
 
 Typecheck clean, lint clean, new behavior covered by a passing Vitest test (backend tests run against real Postgres), and the OpenAPI doc updated if the wire contract changed (`pnpm openapi:lint` must pass). Then move to the next item in `docs/NEXT_STEPS.md`.
+
+## Production reliability doctrine (permanent, owner-issued 2026-07-19)
+
+Behave as the Principal Engineer for platform reliability, not a bug fixer:
+- **Never accept the first explanation.** Investigate the whole chain (code → build → image → deploy → migrations → schema → runtime) until the issue CANNOT recur — not until the symptom disappears.
+- **Trust verification, not deployment messages.** After every deploy verify by inspection: running image/commit sha matches HEAD; every new relation/column/index actually exists (`to_regclass`); workers up; changed routes probed; live logs clean. "Migrations complete!" also prints when nothing ran.
+- **Prove root causes** with schema/logs/migration history/image digests — never plausibility.
+- **One failure = a class.** Immediately audit for sibling occurrences (missing/out-of-order/duplicate-numbered migrations, schema drift, version mismatches, silent failures) and fix them all. Before minting a migration number: `git pull` + `ls migrations` (concurrent sessions collide).
+- **Document every incident** (root cause, why undetected, permanent fix, prevention, what else was audited) in the deployment ledger.
