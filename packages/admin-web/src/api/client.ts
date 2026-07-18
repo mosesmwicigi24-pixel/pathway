@@ -818,6 +818,108 @@ export interface ModuleVersion {
   created_at: string;
 }
 
+// ---- One stats source (docs/CURRICULUM_ARCHITECTURE.md §3) ----
+// The Curriculum Dashboard reads GET /admin/curriculum/summary in ONE call;
+// shapes mirror backend curriculum/stats.ts (CurriculumStatsService.summary).
+export interface CurriculumSummaryTotals {
+  levels: { published: number; draft: number; in_review: number; total: number };
+  modules: { published: number; draft: number; archived: number; total: number };
+  modules_missing_video: number;
+  modules_missing_quiz: number;
+  modules_missing_content: number;
+  learners_active: number;
+  avg_completion_pct: number;
+  avg_quiz_score: number | null;
+  certificates_issued: number;
+  badges_configured: number;
+  reflection_queue: number;
+  level_reviews_waiting: number;
+  video_assets: { attached: number; unattached: number; total: number };
+}
+export interface CurriculumLevelCard {
+  level_number: number;
+  title: string;
+  theme: string | null;
+  color: string;
+  status: LevelStatus;
+  locked: boolean;
+  duration: string | null;
+  modules_published: number;
+  modules_draft: number;
+  modules_total: number;
+  modules_archived: number;
+  quiz: { exam_exists: boolean; exam_published: boolean; exam_question_count: number | null; question_count: number };
+  videos_attached: number;
+  estimated_minutes: number;
+  learners: number;
+  completion_pct: number;
+  certificates: number;
+  last_updated: string | null;
+  validation: { errors: number; warnings: number; status: "errors" | "warnings" | "ok" };
+}
+export interface CurriculumPipeline { drafts: number; in_review: number; locked: number; live: number }
+export interface CurriculumSummary {
+  totals: CurriculumSummaryTotals;
+  pipeline: CurriculumPipeline;
+  levels: CurriculumLevelCard[];
+}
+
+/** One row of the completeness report (GET /admin/curriculum/validate). */
+export interface CurriculumValidationIssue {
+  severity: "error" | "warning" | "info";
+  level_number: number;
+  module_id: string | null;
+  code: string;
+  message: string;
+}
+
+export type CurriculumActivityKind =
+  | "published" | "edited" | "review" | "video" | "quiz" | "module" | "milestone";
+/** Audit-log slice classified SERVER-side (GET /admin/curriculum/activity). */
+export interface CurriculumActivityRow {
+  audit_id: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  action: string;
+  entity: string;
+  entity_id: string | null;
+  metadata: Record<string, unknown> | null;
+  occurred_at: string;
+  kind: CurriculumActivityKind;
+}
+
+// ---- Media placements (§2.2 — one asset, many modules) ----
+/** A placement as listed for a MODULE (GET /admin/modules/:id/media) — carries
+ *  the asset's library fields so the workspace Media section renders directly. */
+export interface ModulePlacementRow {
+  placement_id: string;
+  media_asset_id: string;
+  position: number;
+  required: boolean;
+  title: string | null;
+  caption: string | null;
+  duration_sec: number | null;
+  status: MediaStatus;
+  thumbnail_url: string | null;
+  video_source: VideoSource;
+  external_url: string | null;
+}
+/** A placement as carried on a media LIST row (GET /admin/media rows.placements[]).
+ *  The level is derived from the module — never stored, never asked for twice. */
+export interface AssetPlacement {
+  module_id: string;
+  module_title: string;
+  level_number: number;
+}
+/** Row returned by POST /admin/media/:id/placements. */
+export interface PlacementCreated {
+  placement_id: string;
+  media_asset_id: string;
+  module_id: string;
+  position: number;
+  required: boolean;
+}
+
 // A member who passed a level exam and is AWAITING their discipler to usher them
 // into the next level. Server-scoped to the signed-in leader's cells (§5.4).
 export interface LevelReviewRow {
@@ -832,9 +934,28 @@ export interface LevelReviewRow {
 const unwrap = <T>(p: Promise<{ data: { data: T } }>): Promise<T> => p.then((r) => r.data.data);
 
 export const CurriculumApi = {
+  // One stats source (§3): dashboard payload / completeness report / classified
+  // activity. summary() is a bare object; validate()/activity() use {data:[…]}.
+  curriculumSummary: () =>
+    api.get<CurriculumSummary>("/admin/curriculum/summary").then((r) => r.data),
+  curriculumValidate: () =>
+    unwrap(api.get<{ data: CurriculumValidationIssue[] }>("/admin/curriculum/validate")),
+  curriculumActivity: (limit?: number) =>
+    unwrap(
+      api.get<{ data: CurriculumActivityRow[] }>(
+        "/admin/curriculum/activity",
+        limit ? { params: { limit } } : undefined,
+      ),
+    ),
+  // Placements of ONE module, position-ordered, with the asset's library fields.
+  modulePlacements: (id: string) =>
+    unwrap(api.get<{ data: ModulePlacementRow[] }>(`/admin/modules/${id}/media`)),
+
   levels: () => unwrap(api.get<{ data: AdminLevel[] }>("/admin/levels")),
   createLevel: (body: Record<string, unknown>) =>
     api.post<AdminLevel>("/admin/levels", body).then((r) => r.data),
+  // ONE editor per entity (§2.5): updateLevel no longer accepts
+  // required_exam_pass_mark — exam fields go through updateExam ONLY.
   updateLevel: (n: number, body: Record<string, unknown>) =>
     api.put<AdminLevel>(`/admin/levels/${n}`, body).then((r) => r.data),
   updateExam: (
@@ -1659,6 +1780,7 @@ export interface MediaAssetRow {
   video_source: VideoSource;
   external_url: string | null;
   external_video_id: string | null;
+  title: string | null;
   caption: string | null;
   level_number: number | null;
   is_homepage: boolean;
@@ -1666,8 +1788,11 @@ export interface MediaAssetRow {
   duration_sec: number | null;
   error_detail: string | null;
   created_at: string;
+  /** Legacy single-module mirror fields (transition) — placements[] is authoritative. */
   attached_module_title: string | null;
   attached_module_id: string | null;
+  /** Authoritative attachment list (§2.2): every module this asset is placed in. */
+  placements: AssetPlacement[];
   is_stuck: boolean;
   views: number | null;
   completion: number | null;
@@ -1816,6 +1941,14 @@ export const MediaApi = {
     api.delete<{ is_homepage: false }>(`/admin/media/${assetId}/homepage`).then((r) => r.data),
   archive: (assetId: string) =>
     api.delete<{ archived: boolean }>(`/admin/media/${assetId}`).then((r) => r.data),
+  // Placements (§2.2): place an asset in a module (level inferred server-side
+  // from the module — never asked). 409 CONFLICT on the duplicate (asset,
+  // module) pair. Removing deletes ONE placement, never the asset; the module's
+  // media_asset_id mirror column follows automatically.
+  addPlacement: (assetId: string, body: { module_id: string; position?: number; required?: boolean }) =>
+    api.post<PlacementCreated>(`/admin/media/${assetId}/placements`, body).then((r) => r.data),
+  removePlacement: (placementId: string) =>
+    api.delete<{ deleted: boolean }>(`/admin/media/placements/${placementId}`).then((r) => r.data),
 };
 
 // ---- Chat (oversight console over the member-facing mobile chat; chat module) ----

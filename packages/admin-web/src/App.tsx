@@ -3,16 +3,15 @@
 // structure; each inner page is rebuilt to the make and replaces its placeholder
 // in a later phase (see docs / task list P4–P7).
 import { type ReactElement } from "react";
-import { createBrowserRouter, RouterProvider, Navigate, useLocation } from "react-router-dom";
+import { createBrowserRouter, RouterProvider, Navigate, useLocation, useParams } from "react-router-dom";
 import { useAppSelector } from "./store/hooks";
 import { pathPermissions, superAdminOnlyPaths, pathAliases } from "./components/shell/nav";
 import { Layout } from "./components/shell/Layout";
 import { Login } from "./components/pages/Login";
 import { ResetPassword } from "./components/pages/ResetPassword";
 import { Dashboard } from "./components/pages/Dashboard";
-import { CurriculumLevels } from "./components/pages/CurriculumLevels";
-import { CmsCurriculum } from "./components/pages/CmsCurriculum";
-import { LevelDetail } from "./components/pages/LevelDetail";
+import { CurriculumDashboard } from "./components/pages/CurriculumDashboard";
+import { CurriculumWorkspace } from "./components/pages/CurriculumWorkspace";
 import { QuizBuilder } from "./components/pages/QuizBuilder";
 import { VideoLibrary } from "./components/pages/VideoLibrary";
 import { GrowthContent } from "./components/pages/GrowthContent";
@@ -66,6 +65,13 @@ function Guarded({ children }: { children: ReactElement }): ReactElement {
   return children;
 }
 
+/** Old deep link /cms/level/:id → the workspace's ?level=N deep link. */
+function RedirectCmsLevel(): ReactElement {
+  const { id } = useParams<{ id: string }>();
+  const n = id ? parseInt(id, 10) : NaN;
+  return <Navigate to={Number.isFinite(n) ? `/curriculum/workspace?level=${n}` : "/curriculum/workspace"} replace />;
+}
+
 const router = createBrowserRouter([
   { path: "/login", element: <Login /> },
   { path: "/reset-password", element: <ResetPassword /> },
@@ -79,10 +85,15 @@ const router = createBrowserRouter([
       // sub-pages and profile), a redirect to "/" otherwise.
       { index: true, element: <Guarded><Dashboard /></Guarded> },
       { path: "dashboard", element: <Guarded><Dashboard /></Guarded> },
-      { path: "curriculum-levels", element: <Guarded><CurriculumLevels /></Guarded> },
-      { path: "cms", element: <Guarded><CmsCurriculum /></Guarded> },
-      { path: "cms/level/:id", element: <Guarded><LevelDetail /></Guarded> },
-      { path: "level-detail", element: <Guarded><LevelDetail /></Guarded> },
+      // The two curriculum workspaces (docs/CURRICULUM_ARCHITECTURE.md §5).
+      { path: "curriculum", element: <Guarded><CurriculumDashboard /></Guarded> },
+      { path: "curriculum/workspace", element: <Guarded><CurriculumWorkspace /></Guarded> },
+      // Old five-page CMS routes REDIRECT into the two workspaces.
+      { path: "curriculum-levels", element: <Navigate to="/curriculum" replace /> },
+      { path: "cms", element: <Navigate to="/curriculum" replace /> },
+      { path: "level-detail", element: <Navigate to="/curriculum/workspace" replace /> },
+      { path: "cms/level/:id", element: <RedirectCmsLevel /> },
+      // Kept as a context-aware editor (?level=N) — no sidebar entry.
       { path: "quiz-builder", element: <Guarded><QuizBuilder /></Guarded> },
       { path: "video-library", element: <Guarded><VideoLibrary /></Guarded> },
       { path: "content-studio", element: <Guarded><GrowthContent /></Guarded> },
