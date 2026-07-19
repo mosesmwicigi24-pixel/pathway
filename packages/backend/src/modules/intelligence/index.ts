@@ -20,6 +20,7 @@ import { LiturgyService } from "./liturgy.js";
 import { CommunityService, type BlessingKind } from "./community.js";
 import { EchoesService } from "./echoes.js";
 import { WalkService } from "./walk.js";
+import { PrayerAiService } from "./prayer.js";
 import { ApiError } from "../../http/errors.js";
 
 export const intelligenceRouter: Router = Router();
@@ -35,6 +36,7 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   const liturgy = new LiturgyService(ctx.db.primary, provider);
   const community = new CommunityService(ctx.db.primary, notifications);
   const echoes = new EchoesService(ctx.db.primary);
+  const prayerAi = new PrayerAiService(ctx.db.primary, provider);
   const auth = authenticate(ctx.env);
   const r = intelligenceRouter;
 
@@ -49,6 +51,16 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
 
   r.post("/me/letters/:id/read", auth, handler(async (req, res) => {
     res.json(await letters.markRead(requirePrincipal(req).userId, String(req.params.id ?? "")));
+  }));
+
+  // --- AI Prayer Points (Prayer Room tab 4) — consent-gated (§1.1) ---
+  r.post("/me/prayer/assist", auth, handler(async (req, res) => {
+    const input = parseBody(PrayerAiService.Assist, req.body ?? {});
+    res.json(await prayerAi.assist(requirePrincipal(req).userId, input));
+  }));
+
+  r.post("/me/prayer/points", auth, handler(async (req, res) => {
+    res.json(await prayerAi.points(requirePrincipal(req).userId));
   }));
 
   // --- AI personalization consent (the covenant switch) ---
