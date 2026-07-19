@@ -16,7 +16,7 @@ describe("portal nav model", () => {
 
   it("exposes Communication (Chat) and Settings (Users, Roles, Congregations, Countries, Languages)", () => {
     const comms = navGroups.find((g) => g.label === "Communication");
-    expect(comms?.items.map((i) => i.path)).toEqual(["/chat"]);
+    expect(comms?.items.map((i) => i.path)).toEqual(["/chat", "/broadcast"]);
     const settings = navGroups.find((g) => g.label === "Settings");
     expect(settings?.items.map((i) => i.path)).toEqual(["/users", "/roles", "/congregations", "/countries", "/languages"]);
   });
