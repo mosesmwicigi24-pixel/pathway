@@ -573,6 +573,38 @@ paths:
       responses:
         "200": { description: "{ opt_out }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/prayer/assist:
+    post:
+      tags: [progress]
+      summary: >-
+        Gemini-in-Gmail style prayer draft — composes a short prayer in the
+        member's own voice from a few seed points (or a gentle starter when
+        none are given). Returns a SUGGESTION only; nothing is posted or
+        persisted, the member always prays/sends it themselves. Consent-gated.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                seed: { type: string, maxLength: 4000, description: A few seed points/thoughts in the member's own words. Omit for a gentle starter prayer. }
+      responses:
+        "200": { description: "{ suggestion }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: CONSENT_REQUIRED — the member has opted out of AI personalization (POST /me/ai/consent to opt back in). }
+  /me/prayer/points:
+    post:
+      tags: [progress]
+      summary: >-
+        The corpus generator — reads ACROSS the member's own Selah thoughts,
+        private prayer journal, and published prayer-wall posts and distills
+        them into concise prayer points. Read-only over the caller's own data
+        only. Consent-gated.
+      responses:
+        "200": { description: "{ points: string[] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: CONSENT_REQUIRED — the member has opted out of AI personalization (POST /me/ai/consent to opt back in). }
   /admin/intelligence/reindex:
     post:
       tags: [admin]
@@ -3498,6 +3530,43 @@ paths:
     delete:
       tags: [progress]
       summary: Remove a verse from my library.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Deleted (idempotent) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/thoughts:
+    get:
+      tags: [progress]
+      summary: Selah — My Thoughts. My private rich-text journal, newest first (private — no leader/admin read path exists).
+      responses:
+        "200": { description: "{ data: [{ thought_id, title, body, body_spans, drawing_urls, created_at, updated_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [progress]
+      summary: Create/update a thought (client-generated id; LWW; offline-queueable).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ThoughtUpsert" }
+      responses:
+        "200": { description: Upserted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /me/thoughts/{id}:
+    get:
+      tags: [progress]
+      summary: One of my thoughts. Not-mine and not-found both resolve to 404 (private ground — never confirms another member's content exists).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: The thought }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [progress]
+      summary: Hard-delete a thought (privacy); tombstoned to all devices.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
@@ -7001,6 +7070,34 @@ components:
         version: { type: string, maxLength: 12, default: KJV }
         verse_text: { type: [string, "null"], maxLength: 2000 }
         note: { type: [string, "null"], maxLength: 2000 }
+        client_mutation_id: { type: string, format: uuid }
+    ThoughtUpsert:
+      type: object
+      required: [thought_id, body]
+      properties:
+        thought_id: { type: string, format: uuid, description: Client-generated (offline-first) }
+        title: { type: [string, "null"], maxLength: 200 }
+        body: { type: string, maxLength: 20000, description: Portable markdown }
+        body_spans:
+          type: [array, "null"]
+          maxItems: 2000
+          description: WYSIWYG span attributes (bold/italic/color/font ranges) the client editor needs to reconstruct exact formatting.
+          items:
+            type: object
+            required: [start, end]
+            properties:
+              start: { type: integer, minimum: 0 }
+              end: { type: integer, minimum: 0 }
+              bold: { type: boolean }
+              italic: { type: boolean }
+              color: { type: string, maxLength: 20 }
+              font: { type: string, maxLength: 60 }
+        drawing_urls:
+          type: array
+          maxItems: 50
+          items: { type: string, format: uri, maxLength: 2048 }
+          description: Cloudinary secure_urls from the existing chat/media sign flow (POST /chat/attachments/sign) — pen/stylus strokes.
+        updated_at: { type: string, format: date-time, description: LWW anchor — stale replays are no-ops }
         client_mutation_id: { type: string, format: uuid }
     AnnouncementCompose:
       type: object
