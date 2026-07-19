@@ -78,6 +78,19 @@ const EnvSchema = z.object({
   // Public base URL used to build links in emails (e.g. the password-reset page).
   APP_PUBLIC_URL: z.string().url().default("https://pathway.nuruplace.org"),
 
+  // --- Reading & Social R1 invite deep links (spec §6; docs/READING_SOCIAL_PLAN.md
+  // §5). The public /join/{token} page attempts this custom scheme first (the
+  // one confirmed piece of existing deep-link plumbing — nuru:// already
+  // switches tabs on both native apps' home-screen widgets), then falls back
+  // to the platform store after a short timeout. READING_INVITE_IOS_STORE_URL
+  // is left unset by default: Apple Store links need a numeric app id we don't
+  // have yet, not the bundle id (org.nuruplace.member) — set it once the app
+  // is listed. Android's package (com.nuruplace) is already known, so that
+  // default is real. ---
+  READING_INVITE_APP_SCHEME: z.string().default("nuru"),
+  READING_INVITE_ANDROID_STORE_URL: z.string().default("https://play.google.com/store/apps/details?id=com.nuruplace"),
+  READING_INVITE_IOS_STORE_URL: z.string().optional(),
+
   // --- Passkeys / WebAuthn (§5.3 strong auth). The RP ID is the domain passkeys
   // are bound to; the origin is what signed clientData must match. Both default
   // to APP_PUBLIC_URL (hostname / origin) — prod: pathway.nuruplace.org. Override
