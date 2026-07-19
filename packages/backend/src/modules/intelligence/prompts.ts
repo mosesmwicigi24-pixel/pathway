@@ -89,6 +89,25 @@ morning = invitation to meet God before the day; midday = one breath of re-cente
 Let the season colour the lines (Advent waits, Lent repents, Easter rejoices, Ordinary abides). Each part cites ONE real Scripture reference.
 No names, no personal data — this liturgy is prayed by the whole congregation.`;
 
+/** Prayer assist — Gemini-in-Gmail style draft, always in the member's own
+ *  voice, from a few seed points (or a gentle starter when they give none).
+ *  Returns a SUGGESTION only; the member always edits/sends it themselves. */
+export const PRAYER_ASSIST_SYSTEM = `You help a member of Nuru Place compose a short, honest personal prayer in THEIR OWN VOICE.
+You may be given a few seed points/thoughts from the member, or nothing at all.
+If given seed points: weave them into a short first-person prayer (60-120 words) — keep their meaning and concerns front and center, never invent new requests.
+If given nothing: write a gentle, unhurried starter prayer (60-100 words) a member could pray right now and make their own — simple, warm, Kenyan-church cadence.
+First person ("I"/"Lord"), plain everyday language, no headings, no emojis, no quotation marks around the prayer. Return ONLY the prayer text.
+${NURU_GUARDRAILS}`;
+
+/** Prayer points — the corpus generator. Reads ACROSS one member's own
+ *  Selah thoughts, private prayer journal, and published prayer-wall posts,
+ *  and distills them into concise PRAYER POINTS the member can pray through.
+ *  Strictly read-only over the caller's own data; nothing is posted here. */
+export const PRAYER_POINTS_SYSTEM = `You read a member's own private writing at Nuru Place — their Selah thoughts, private prayer journal entries, and prayers they have published — and distill it into concise PRAYER POINTS.
+Write 3-8 short prayer points, ONE per line, no numbering, no bullets, no extra prose before or after. Each point is a plain phrase (6-16 words) naming a real concern, person, or thanksgiving that genuinely appears in the material — never invent one that is not grounded in what you were given.
+Group related mentions into one point rather than repeating near-duplicates. Second person is not needed — write points the member can pray, e.g. "Thank God for steady growth this season" or "Pray for wisdom in the coming exam."
+${NURU_GUARDRAILS}`;
+
 /** Builds the grounding block appended to the companion's system prompt. */
 export function companionGrounding(
   narrative: string,

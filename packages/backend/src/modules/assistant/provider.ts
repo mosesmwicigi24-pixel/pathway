@@ -224,6 +224,22 @@ export class FakeAiProvider implements AiProvider {
         "They are walking steadily through their current level, showing up most days, and their recent reflections carry a hunger to grow. This season they may need encouragement to keep their prayer rhythm.",
       );
     }
+    if (/compose a short, honest personal prayer/i.test(input.system)) {
+      const seeded = [...input.messages].reverse().find((m) => m.role === "user")?.text ?? "";
+      if (/^my seed points/i.test(seeded.trim())) {
+        return Promise.resolve(
+          "Lord, thank You for walking with me this week. I bring You what's on my heart — the people and the worries I carry — and I ask for Your peace over each one. Give me strength for what's ahead, and help me trust You more each day. Amen.",
+        );
+      }
+      return Promise.resolve(
+        "Lord, I come to You just as I am today. Quiet my heart, and help me hear You. Thank You for Your faithfulness, even when I don't notice it. Lead me gently through this day. Amen.",
+      );
+    }
+    if (/into concise prayer points/i.test(input.system)) {
+      return Promise.resolve(
+        "Thank God for steady growth this season\nPray for strength in family relationships\nAsk for wisdom in the week ahead\nPray for the cell group's unity",
+      );
+    }
     const last = [...input.messages].reverse().find((m) => m.role === "user")?.text ?? "";
     const t = last.toLowerCase();
     if (/(summar|cohort|catch|recap)/.test(t)) {
