@@ -4089,6 +4089,183 @@ paths:
         "200": { description: Mentor }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  # --- Reading & Social R1: "Read with a Friend" (spec §3/§6) ---
+  /reading/groups:
+    post:
+      tags: [progress]
+      summary: >-
+        Create-or-get my shared plan group for a plan. If I already have an
+        active group for this plan_id, that SAME group is returned (never a
+        duplicate). Any member_user_ids named must already be an accepted
+        connection of mine (else 403 CONSENT_REQUIRED, details.hint =
+        "connect first") and are sent a targeted invite (idempotent — an
+        existing pending invite to the same person is a no-op).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan_id]
+              properties:
+                plan_id: { type: string, format: uuid }
+                member_user_ids: { type: array, maxItems: 7, items: { type: string, format: uuid } }
+                name: { type: string, maxLength: 120 }
+      responses:
+        "201": { description: "Group — { group_id, plan_id, created_by, name, created_at, archived_at, plan, members: [...] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE (minor-safety) or CONSENT_REQUIRED (an entry in member_user_ids is not yet an accepted connection)." }
+        "404": { $ref: "#/components/responses/NotFound" }
+    get:
+      tags: [progress]
+      summary: My active shared plan groups — plan summary + full member list, each with current_day/completed_days/days_done/completed_at (scoped to co-members of the same group, never a bare private-progress lookup).
+      responses:
+        "200": { description: "{ data: [Group, ...] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /reading/groups/{id}:
+    get:
+      tags: [progress]
+      summary: Full group detail — active member only. 403 (not 404) for a non-member, so a stray id never confirms a group's existence to a stranger.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Group }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reading/groups/{id}/archive:
+    post:
+      tags: [progress]
+      summary: End a shared plan — creator only. Soft state; membership + history are kept. Idempotent.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ group_id, archived_at }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reading/groups/{id}/leave:
+    post:
+      tags: [progress]
+      summary: Leave a shared plan group — any active member (including the creator; ownership is not reassigned). Idempotent.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ group_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reading/groups/{id}/invites:
+    post:
+      tags: [progress]
+      summary: >-
+        Mint an invite in an existing group — active member only. user_id set
+        → targeted invite (requires an already-accepted connection, else 403
+        CONSENT_REQUIRED). user_id omitted → mints a fresh open share-link
+        invite (no connection gate, no expiry) that MULTIPLE friends may
+        redeem, since it never leaves 'pending' on accept. Idempotent on
+        client_mutation_id.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: string, format: uuid }
+                message: { type: string, maxLength: 500 }
+                client_mutation_id: { type: string, format: uuid }
+      responses:
+        "201": { description: Invite }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "CONFLICT — already an active member, or the group has ended." }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    get:
+      tags: [progress]
+      summary: Pending + past invites for a group — active member only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ data: [Invite, ...] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reading/groups/{id}/invites/{invite_id}/revoke:
+    post:
+      tags: [progress]
+      summary: Revoke a pending invite — the inviter or the group's creator. Idempotent.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: invite_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ invite_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reading/invites/{token}:
+    get:
+      tags: [progress]
+      summary: Authenticated in-app invite preview (plan title/cover/description/day_count, inviter name, message, active member_count) — what the app calls right after a deep link opens it while logged in.
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: InvitePreview }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "NOT_FOUND — unknown, expired, revoked, or declined token." }
+  /reading/invites/{token}/accept:
+    post:
+      tags: [progress]
+      summary: >-
+        Redeem an invite: joins the group, enrolls in the underlying plan,
+        and establishes an accepted connection with the inviter if none
+        exists yet (creates one on the spot rather than requiring it
+        pre-exist — docs/READING_SOCIAL_PLAN.md Open Question 2). A targeted
+        invite must belong to the caller (else 403). Idempotent: replaying an
+        already-accepted targeted invite by the same caller is a no-op; an
+        open-link invite never leaves 'pending', so it stays redeemable by
+        other friends.
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "{ group_id, status, joined }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — this invite targets someone else, the connection is blocked, or a minor is involved." }
+        "404": { description: "NOT_FOUND — unknown, expired, revoked, or declined token." }
+        "409": { description: "CONFLICT — the shared plan has ended." }
+  /reading/invites/{token}/decline:
+    post:
+      tags: [progress]
+      summary: Decline a targeted invite — the named invitee only (403 on an open share-link — there is no single party to decline it for everyone).
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "{ status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /join/{token}:
+    get:
+      tags: [progress]
+      summary: >-
+        PUBLIC, unauthenticated deep-link landing page (spec §6). Not a JSON
+        route — server-rendered HTML with OpenGraph/Twitter-card meta (plan
+        title, cover image, description, day count, inviter first name),
+        escaped against XSS, plus an inline script that attempts the app's
+        `nuru://` custom-scheme deep link and falls back to the platform
+        store after ~1.2s. A crawler (WhatsApp/iMessage preview bots) reads
+        only the meta tags and never runs the script. Bad/expired/revoked/
+        declined tokens render a friendly 404 HTML page, never the JSON error
+        envelope.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "OG-rich HTML landing page", content: { text/html: { schema: { type: string } } } }
+        "404": { description: "HTML 404 page — unknown, expired, revoked, or declined token.", content: { text/html: { schema: { type: string } } } }
+
   /home/disciplers:
     get:
       tags: [progress]

@@ -23,6 +23,9 @@ export function testEnv(): Env {
     MEDIA_STORAGE_DIR: "/tmp/nuru-media-test",
     MEDIA_PUBLIC_BASE_URL: "http://localhost/media",
     MEDIA_MAX_UPLOAD_BYTES: 2_147_483_648,
+    APP_PUBLIC_URL: "https://pathway.nuruplace.org",
+    READING_INVITE_APP_SCHEME: "nuru",
+    READING_INVITE_ANDROID_STORE_URL: "https://play.google.com/store/apps/details?id=com.nuruplace",
   } as Env;
 }
 

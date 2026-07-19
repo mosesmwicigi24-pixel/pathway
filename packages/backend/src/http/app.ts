@@ -52,6 +52,7 @@ import { registerActivity } from "../modules/activity/index.js";
 import { registerRadio } from "../modules/radio/index.js";
 import { registerDiscipleship } from "../modules/discipleship/index.js";
 import { registerPastoral } from "../modules/pastoral/index.js";
+import { registerReadingSocial, registerReadingSocialJoin } from "../modules/reading-social/index.js";
 
 export function createApp(ctx: AppContext): Express {
   const app = express();
@@ -188,7 +189,13 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerRadio(ctx));
   v1.use(registerDiscipleship(ctx));
   v1.use(registerPastoral(ctx));
+  v1.use(registerReadingSocial(ctx));
   app.use("/v1", v1);
+
+  // Public deep-link landing page (spec §6) — deliberately at the domain
+  // root, NOT under /v1, so it can double as the Universal Link/App Link
+  // target once that native infra lands (docs/READING_SOCIAL_PLAN.md §5).
+  app.use(registerReadingSocialJoin(ctx));
 
   // Terminal error handler — always emits the §3.2 envelope.
   app.use(
