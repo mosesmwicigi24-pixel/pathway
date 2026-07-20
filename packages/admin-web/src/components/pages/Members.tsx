@@ -6,7 +6,7 @@
 // filter (incl. Graduated) + cell filter. Add-member modal captures the Figma
 // fields (engagement band is server-computed and never collected). Export = a
 // client-only print/PDF of the loaded roster. Graduate / un-graduate per member.
-import { useCallback, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Search, Plus, ChevronDown, ArrowRight, Mail, UserCheck, UserPlus, Users as UsersIcon,
@@ -108,41 +108,110 @@ export function Members(): ReactElement {
   const [countries, setCountries] = useState<Country[]>([]);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"All" | StatusKey>("All");
-  const [cellFilter, setCellFilter] = useState<string>("All");
+  const [cellFilter, setCellFilter] = useState<string>("All"); // cell_group_id or "All" (server-side)
   const [countryFilter, setCountryFilter] = useState<string>("All"); // ISO-2 code or "All"
   const [addOpen, setAddOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [resultsId, setResultsId] = useState<string | null>(null);
   const [pwResetFor, setPwResetFor] = useState<{ userId: string; name: string } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
-  const [menuFor, setMenuFor] = useState<string | null>(null);
+  // Row action menu is rendered fixed-position (see `menu` below) so the card's
+  // overflow-hidden can never clip it on a short/filtered list.
+  const [menu, setMenu] = useState<{ userId: string; right: number; top?: number | undefined; bottom?: number | undefined } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Keyset pagination: the server pages by user_id and returns next_cursor. We
+  // load page 1 on filter change, then append pages via infinite scroll / "Load
+  // more" so the whole directory is reachable — never just the first 50.
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const PAGE = 100;
+  // Every server-accepted filter in one place (search/band/country/cell go to the
+  // DB; "graduated" is a derived flag with no server filter — handled client-side).
+  const serverQuery = useCallback((): { search?: string; band?: string; country_code?: string; cell_group_id?: string } => {
+    const q: { search?: string; band?: string; country_code?: string; cell_group_id?: string } = {};
+    if (query.trim()) q.search = query.trim();
+    if (status !== "All" && status !== "graduated") q.band = status;
+    if (countryFilter !== "All") q.country_code = countryFilter;
+    if (cellFilter !== "All") q.cell_group_id = cellFilter;
+    return q;
+  }, [query, status, countryFilter, cellFilter]);
 
   const load = useCallback(async () => {
     try {
-      // Band filter goes to the server; "graduated" is derived (server-side filter
-      // doesn't accept it), so it filters client-side on the loaded rows.
-      const q: { search?: string; band?: string; country_code?: string } = {};
-      if (query.trim()) q.search = query.trim();
-      if (status !== "All" && status !== "graduated") q.band = status;
-      if (countryFilter !== "All") q.country_code = countryFilter;
-      const r = await OpsApi.members(q);
+      const r = await OpsApi.members({ ...serverQuery(), limit: PAGE });
       setRows(r.data);
+      setNextCursor(r.next_cursor);
     } catch (e) { setError(errorMessage(e, "Could not load members.")); }
-  }, [query, status, countryFilter]);
+  }, [serverQuery]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const r = await OpsApi.members({ ...serverQuery(), limit: PAGE, cursor: nextCursor });
+      setRows((prev) => {
+        const seen = new Set(prev.map((m) => m.user_id));
+        return [...prev, ...r.data.filter((m) => !seen.has(m.user_id))];
+      });
+      setNextCursor(r.next_cursor);
+    } catch (e) { setError(errorMessage(e, "Could not load more members.")); }
+    finally { setLoadingMore(false); }
+  }, [nextCursor, loadingMore, serverQuery]);
 
   useEffect(() => { const t = setTimeout(() => void load(), 250); return () => clearTimeout(t); }, [load]);
+
+  // "Graduated" has no server filter, so to show every graduate we must page the
+  // whole set. Auto-advance through the pages while that filter is active.
+  useEffect(() => {
+    if (status === "graduated" && nextCursor && !loadingMore) void loadMore();
+  }, [status, nextCursor, loadingMore, loadMore]);
+
+  // Infinite scroll: load the next page as the sentinel nears the viewport.
+  const sentinel = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || !nextCursor) return;
+    const io = new IntersectionObserver((entries) => { if (entries[0]?.isIntersecting) void loadMore(); }, { rootMargin: "500px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [nextCursor, loadMore, rows.length]);
+
+  // A fixed-position menu must close when the page scrolls (its anchor moves).
+  useEffect(() => {
+    if (!menu) return;
+    const close = (): void => setMenu(null);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => { window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); };
+  }, [menu]);
+
+  function openRowMenu(e: ReactMouseEvent, userId: string): void {
+    e.stopPropagation();
+    if (menu?.userId === userId) { setMenu(null); return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    const flipUp = r.bottom + 250 > window.innerHeight;
+    setMenu({
+      userId,
+      right: Math.max(12, window.innerWidth - r.right),
+      top: flipUp ? undefined : Math.round(r.bottom + 6),
+      bottom: flipUp ? Math.round(window.innerHeight - r.top + 6) : undefined,
+    });
+  }
   useEffect(() => { void AdminApi.engagementReport().then((r) => setCells(r.cells)).catch(() => {}); }, []);
   useEffect(() => { void SystemApi.countries().then(setCountries).catch(() => {}); }, []);
 
   const countryByCode = useMemo(() => new Map(countries.map((c) => [c.code, c])), [countries]);
-  const cellNames = useMemo(() => ["All", ...Array.from(new Set(rows.map((m) => m.cell_name).filter(Boolean) as string[]))], [rows]);
+  // Cell filter cycles the FULL cell list (by id) and is applied server-side, so
+  // it finds members on any page — not just those already loaded.
+  const cellOptions = useMemo(() => ["All", ...cells.map((c) => c.cell_group_id)], [cells]);
+  const cellLabel = useCallback((id: string): string => (id === "All" ? "All" : cells.find((c) => c.cell_group_id === id)?.name ?? "Cell"), [cells]);
 
   const filtered = useMemo(
-    () => rows.filter((m) =>
-      (cellFilter === "All" || m.cell_name === cellFilter) &&
-      (status !== "graduated" || m.status === "graduated")),
-    [rows, cellFilter, status],
+    // Only "graduated" is client-side (no server filter); every other filter is
+    // already applied by the query, so this operates on the fully-paged set.
+    () => rows.filter((m) => status !== "graduated" || m.status === "graduated"),
+    [rows, status],
   );
 
   // "By country" chips: counts over the loaded roster (post search/band/country filter).
@@ -162,7 +231,7 @@ export function Members(): ReactElement {
   };
 
   async function graduate(userId: string, next: boolean): Promise<void> {
-    setMenuFor(null);
+    setMenu(null);
     try { await OpsApi.setGraduation(userId, next); await load(); }
     catch (e) { setError(errorMessage(e, "Could not update graduation.")); }
   }
@@ -171,7 +240,7 @@ export function Members(): ReactElement {
   // They keep their Student membership + member-app access, but gain admin-console
   // sign-in and appear on System ▸ Users, where roles/permissions are assigned.
   async function elevate(userId: string, name: string): Promise<void> {
-    setMenuFor(null);
+    setMenu(null);
     if (!window.confirm(`Make ${name} a portal user? They'll be able to sign in to the admin portal and will appear on System ▸ Users, where you can assign their roles and permissions. Their member access is unchanged.`)) return;
     try {
       await OpsApi.elevateMember(userId);
@@ -181,7 +250,7 @@ export function Members(): ReactElement {
   }
 
   return (
-    <div className="min-h-full" style={{ background: "var(--background)" }} onClick={() => setMenuFor(null)}>
+    <div className="min-h-full" style={{ background: "var(--background)" }} onClick={() => setMenu(null)}>
       <div style={{ background: "var(--nuru-dark)", padding: "22px clamp(16px,4vw,48px) 24px" }}>
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-1.5" style={{ fontSize: 11, color: "rgba(232,239,245,0.55)", letterSpacing: "0.04em" }}><span>Nuru Pathway</span><ChevronRight size={10} /><span style={{ color: "#fff", fontWeight: 600 }}>Members</span></div>
@@ -230,7 +299,7 @@ export function Members(): ReactElement {
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <button onClick={() => setStatus(STATUS_ORDER[(STATUS_ORDER.indexOf(status) + 1) % STATUS_ORDER.length] as "All" | StatusKey)} className="flex items-center gap-1.5 rounded-lg" style={{ height: 38, padding: "0 12px", background: "var(--input-background)", fontSize: 12, fontWeight: 600, color: "var(--nuru-navy)", border: "1px solid var(--border)" }}>Band: {status === "All" ? "All" : statusMeta[status].label} <ChevronDown size={12} /></button>
-            <button onClick={() => setCellFilter(cellNames[(cellNames.indexOf(cellFilter) + 1) % cellNames.length] ?? "All")} className="flex items-center gap-1.5 rounded-lg" style={{ height: 38, padding: "0 12px", background: "var(--input-background)", fontSize: 12, fontWeight: 600, color: "var(--nuru-navy)", border: "1px solid var(--border)" }}>Cell: {cellFilter} <ChevronDown size={12} /></button>
+            <button onClick={() => setCellFilter(cellOptions[(cellOptions.indexOf(cellFilter) + 1) % cellOptions.length] ?? "All")} className="flex items-center gap-1.5 rounded-lg" style={{ height: 38, padding: "0 12px", background: "var(--input-background)", fontSize: 12, fontWeight: 600, color: "var(--nuru-navy)", border: "1px solid var(--border)" }}>Cell: {cellLabel(cellFilter)} <ChevronDown size={12} /></button>
           </div>
         </div>
 
@@ -262,7 +331,6 @@ export function Members(): ReactElement {
                   const sk = (m.status ?? "steady") as StatusKey;
                   const sm = statusMeta[sk] ?? statusMeta.steady;
                   const isThriving = m.status === "thriving";
-                  const isGraduated = m.status === "graduated";
                   const progress = pct(m.e_score);
                   const country = m.country_code ? countryByCode.get(m.country_code) ?? null : null;
                   return (
@@ -315,17 +383,7 @@ export function Members(): ReactElement {
                         <div className="flex items-center justify-end gap-1.5">
                           <button onClick={(e) => { e.stopPropagation(); setResultsId(m.user_id); }} title="View results" className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 34, height: 34, background: "var(--input-background)", color: "var(--nuru-gold)", border: "1px solid var(--border)" }}><BarChart3 size={15} /></button>
                           <button onClick={(e) => { e.stopPropagation(); navigate(`/member-profile?id=${m.user_id}`); }} title="See profile" className="flex items-center justify-center rounded-lg shrink-0 transition-all group-hover:bg-[var(--nuru-navy)] group-hover:text-white" style={{ width: 34, height: 34, background: "var(--input-background)", color: "var(--nuru-navy)", border: "1px solid var(--border)" }}><ArrowRight size={15} /></button>
-                          <div className="relative shrink-0">
-                            <button onClick={(e) => { e.stopPropagation(); setMenuFor(menuFor === m.user_id ? null : m.user_id); }} className="flex items-center justify-center rounded-lg" style={{ width: 32, height: 32, background: "var(--input-background)", color: "var(--muted-foreground)", border: "1px solid var(--border)" }}><MoreVertical size={15} /></button>
-                            {menuFor === m.user_id ? (
-                              <div onClick={(e) => e.stopPropagation()} className="absolute right-0 mt-1 rounded-xl z-20" style={{ background: "#fff", border: "1px solid var(--border)", boxShadow: "0 12px 32px rgba(11,31,51,0.18)", minWidth: 168, overflow: "hidden" }}>
-                                <button onClick={() => { setMenuFor(null); setEditId(m.user_id); }} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none" }}><Pencil size={14} style={{ color: "var(--nuru-gold)" }} /> Edit member</button>
-                                <button onClick={() => { setMenuFor(null); setPwResetFor({ userId: m.user_id, name: m.full_name }); }} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><KeyRound size={14} style={{ color: "#0E7490" }} /> Reset password</button>
-                                <button onClick={() => void elevate(m.user_id, m.full_name)} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><ShieldPlus size={14} style={{ color: "var(--nuru-gold)" }} /> Make portal user</button>
-                                <button onClick={() => void graduate(m.user_id, !isGraduated)} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><GraduationCap size={14} style={{ color: "#7C3AED" }} /> {isGraduated ? "Un-graduate" : "Mark graduated"}</button>
-                              </div>
-                            ) : null}
-                          </div>
+                          <button onClick={(e) => openRowMenu(e, m.user_id)} className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 32, height: 32, background: menu?.userId === m.user_id ? "var(--nuru-navy)" : "var(--input-background)", color: menu?.userId === m.user_id ? "#fff" : "var(--muted-foreground)", border: "1px solid var(--border)" }} aria-label="Member actions"><MoreVertical size={15} /></button>
                         </div>
                       </td>
                     </tr>
@@ -336,11 +394,42 @@ export function Members(): ReactElement {
           </div>
         )}
 
-        <div className="flex items-center justify-between mt-6">
-          <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>Showing {filtered.length} of {rows.length} loaded</span>
-          <div className="flex items-center gap-1.5"><CheckCircle2 size={12} style={{ color: "#16A34A" }} /><span style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}>Live from the directory</span></div>
+        {/* Infinite-scroll sentinel: crossing it near the viewport loads the next page. */}
+        {nextCursor ? <div ref={sentinel} style={{ height: 1 }} /> : null}
+
+        <div className="flex items-center justify-between mt-6 flex-wrap gap-3">
+          <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
+            Showing {filtered.length}{nextCursor ? " so far" : ` of ${filtered.length}`}
+            {loadingMore ? " · loading more…" : ""}
+          </span>
+          {nextCursor ? (
+            <button onClick={() => void loadMore()} disabled={loadingMore} className="flex items-center gap-2 rounded-lg px-4" style={{ height: 34, background: "var(--nuru-navy)", color: "#fff", fontSize: 12.5, fontWeight: 600, border: "none", opacity: loadingMore ? 0.6 : 1 }}>
+              {loadingMore ? "Loading…" : "Load more"} <ChevronDown size={13} />
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5"><CheckCircle2 size={12} style={{ color: "#16A34A" }} /><span style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}>All members loaded</span></div>
+          )}
         </div>
       </div>
+
+      {/* Row action menu — rendered fixed at the page root so no ancestor's
+          overflow-hidden can clip it (the bug when filtering to a short list). */}
+      {menu ? (() => {
+        const m = rows.find((r) => r.user_id === menu.userId);
+        if (!m) return null;
+        const isGraduated = m.status === "graduated";
+        return (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setMenu(null)} />
+            <div onClick={(e) => e.stopPropagation()} className="fixed z-50 rounded-xl" style={{ right: menu.right, top: menu.top, bottom: menu.bottom, background: "#fff", border: "1px solid var(--border)", boxShadow: "0 12px 32px rgba(11,31,51,0.18)", minWidth: 176, overflow: "hidden" }}>
+              <button onClick={() => { setMenu(null); setEditId(m.user_id); }} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none" }}><Pencil size={14} style={{ color: "var(--nuru-gold)" }} /> Edit member</button>
+              <button onClick={() => { setMenu(null); setPwResetFor({ userId: m.user_id, name: m.full_name }); }} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><KeyRound size={14} style={{ color: "#0E7490" }} /> Reset password</button>
+              <button onClick={() => void elevate(m.user_id, m.full_name)} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><ShieldPlus size={14} style={{ color: "var(--nuru-gold)" }} /> Make portal user</button>
+              <button onClick={() => void graduate(m.user_id, !isGraduated)} className="flex items-center gap-2 w-full text-left px-3 py-2.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--nuru-navy)", background: "none", border: "none", borderTop: "1px solid var(--border)" }}><GraduationCap size={14} style={{ color: "#7C3AED" }} /> {isGraduated ? "Un-graduate" : "Mark graduated"}</button>
+            </div>
+          </>
+        );
+      })() : null}
 
       {addOpen ? <AddMemberModal cells={cells} countries={countries} onClose={() => setAddOpen(false)} onCreated={async () => { setAddOpen(false); await load(); }} /> : null}
       {editId ? <EditMemberModal userId={editId} row={rows.find((r) => r.user_id === editId)} cells={cells} countries={countries} onClose={() => setEditId(null)} onSaved={async () => { setEditId(null); await load(); }} /> : null}

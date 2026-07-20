@@ -1605,6 +1605,7 @@ export const OpsApi = {
       programme?: Programme;
       country_code?: string;
       cursor?: string;
+      limit?: number;
     } = {},
   ) => api.get<{ data: MemberRow[]; next_cursor: string | null }>("/admin/members", { params: q }).then((r) => r.data),
   memberDetail: (userId: string) => api.get<MemberDetail>(`/admin/members/${userId}`).then((r) => r.data),
