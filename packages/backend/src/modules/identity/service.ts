@@ -503,12 +503,16 @@ export class IdentityService {
   async requestPasswordReset(
     input: z.infer<typeof IdentityService.ForgotPasswordSchema>,
   ): Promise<{ sent: true; dev_token?: string; dev_code?: string }> {
-    const row = await maybeOne<{ user_id: string; password_hash: string | null; full_name: string | null }>(
+    const row = await maybeOne<{ user_id: string; password_hash: string | null; full_name: string | null; role: string; is_staff: boolean }>(
       this.pool,
-      `SELECT user_id, password_hash, full_name FROM users WHERE email = $1 AND deleted_at IS NULL`,
+      `SELECT user_id, password_hash, full_name, role, is_staff FROM users WHERE email = $1 AND deleted_at IS NULL`,
       [input.email],
     );
     if (!row || !row.password_hash) return { sent: true };
+    // Staff (portal users) reset on the web, so they get the reset LINK; members
+    // never sign in to the portal, so they get a code-only email (no link to a
+    // backend they can't use) and enter the code in the Nuru Place app.
+    const isStaff = IdentityService.STAFF_ROLES.has(row.role) || row.is_staff;
     const raw = randomBytes(32).toString("hex");
     const tokenHash = createHash("sha256").update(raw).digest("hex");
     const code = generateResetCode();
@@ -525,11 +529,11 @@ export class IdentityService {
     // copyable for pasting into the mobile app. Best-effort: a delivery
     // failure must not change the (no-enumeration) response, so we never
     // surface it.
-    const link = `${this.env.APP_PUBLIC_URL}/reset-password?token=${raw}&code=${encodeURIComponent(code)}`;
     const firstName = row.full_name?.trim().split(/\s+/)[0];
     const email = renderPasswordReset({
       code,
-      link,
+      // Link only for staff; members get a code-only email.
+      ...(isStaff ? { link: `${this.env.APP_PUBLIC_URL}/reset-password?token=${raw}&code=${encodeURIComponent(code)}` } : {}),
       minutes: 30,
       ...(firstName ? { name: firstName } : {}),
     });

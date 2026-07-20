@@ -428,9 +428,9 @@ describe("identity / auth", () => {
     await expect(rotateRefreshToken(testPool(), old.token, env)).rejects.toThrow();
   });
 
-  it("emails a reset link containing the token to the account address (and nothing for unknown emails)", async () => {
+  it("emails a MEMBER a code-only reset email — no backend link (they can't sign in to the portal)", async () => {
     const cong = await createCongregation();
-    const u = await createUser({ congregationId: cong, email: "mailme@dev.local" });
+    const u = await createUser({ congregationId: cong, email: "mailme@dev.local" }); // role defaults to Student (member)
     const argon2 = (await import("argon2")).default;
     await testPool().query("UPDATE users SET password_hash=$2 WHERE user_id=$1", [
       u.user_id,
@@ -444,13 +444,33 @@ describe("identity / auth", () => {
     expect(res.sent).toBe(true);
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toBe("mailme@dev.local");
-    expect(sent[0]!.text).toContain("/reset-password?token=");
-    expect(sent[0]!.text).toContain(res.dev_token as string); // link carries the real token
-    expect(sent[0]!.text).toContain(res.dev_code as string); // code is the primary, prominent credential
-    expect(sent[0]!.text).toContain(`&code=${encodeURIComponent(res.dev_code as string)}`); // link also carries the code
-    expect(sent[0]!.subject).toContain(res.dev_code as string); // subject line surfaces the code for a glance
+    // The code is present and prominent (subject + body); the reset LINK is NOT.
+    expect(sent[0]!.text).toContain(res.dev_code as string);
+    expect(sent[0]!.subject).toContain(res.dev_code as string);
+    expect(sent[0]!.text).not.toContain("/reset-password?token="); // no backend link for members
+    expect(sent[0]!.html).not.toContain("/reset-password?token=");
 
     await s.requestPasswordReset({ email: "ghost@dev.local" }); // unknown → no email
     expect(sent).toHaveLength(1);
+  });
+
+  it("emails a STAFF user the code AND the web reset link (they reset in the portal)", async () => {
+    const cong = await createCongregation();
+    const u = await createUser({ congregationId: cong, email: "staff@dev.local", role: "Admin" });
+    const argon2 = (await import("argon2")).default;
+    await testPool().query("UPDATE users SET password_hash=$2 WHERE user_id=$1", [
+      u.user_id,
+      await argon2.hash("pw-123456", { type: argon2.argon2id }),
+    ]);
+    const sent: EmailMessage[] = [];
+    const fakeMailer: EmailProvider = { send: (m) => { sent.push(m); return Promise.resolve(); } };
+    const s = new IdentityService(testPool(), env, fakeMailer);
+
+    const res = await s.requestPasswordReset({ email: "staff@dev.local" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.text).toContain(res.dev_code as string); // code still primary
+    expect(sent[0]!.text).toContain("/reset-password?token="); // staff keep the link
+    expect(sent[0]!.text).toContain(res.dev_token as string);
+    expect(sent[0]!.text).toContain(`&code=${encodeURIComponent(res.dev_code as string)}`);
   });
 });
