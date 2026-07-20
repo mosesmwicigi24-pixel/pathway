@@ -7258,7 +7258,7 @@ components:
         body_spans:
           type: [array, "null"]
           maxItems: 2000
-          description: WYSIWYG span attributes (bold/italic/color/font ranges) the client editor needs to reconstruct exact formatting.
+          description: WYSIWYG span attributes (bold/italic/color/font/spacing ranges) the client editor needs to reconstruct exact formatting.
           items:
             type: object
             required: [start, end]
@@ -7269,6 +7269,7 @@ components:
               italic: { type: boolean }
               color: { type: string, maxLength: 20 }
               font: { type: string, maxLength: 60 }
+              spacing: { type: number, minimum: 0.8, maximum: 2.5, description: Per-span line-height multiplier; global reading spacing applies on top at render time. }
         drawing_urls:
           type: array
           maxItems: 50

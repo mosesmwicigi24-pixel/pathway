@@ -16,6 +16,10 @@ const ThoughtSpan = z.object({
   italic: z.boolean().optional(),
   color: z.string().max(20).optional(),
   font: z.string().max(60).optional(),
+  // Per-span line-height multiplier (1.0 = default, 2.5 = max). Lets a Selah
+  // note carry its own line spacing so it round-trips — the global reading
+  // spacing preference is applied on top of this at render time.
+  spacing: z.number().min(0.8).max(2.5).optional(),
 });
 
 export interface ThoughtRow {

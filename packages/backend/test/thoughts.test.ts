@@ -65,10 +65,10 @@ describe("Selah — My Thoughts (private, offline-synced)", () => {
     expect(pull.body.tombstones.member_thoughts).toContain(uuid(1));
   });
 
-  it("stores rich-text span attributes (bold/italic/color/font) and drawing URLs", async () => {
+  it("stores rich-text span attributes (bold/italic/color/font/spacing) and drawing URLs", async () => {
     const spans = [
       { start: 0, end: 5, bold: true },
-      { start: 6, end: 12, italic: true, color: "#FF00AA", font: "Inter-Medium" },
+      { start: 6, end: 12, italic: true, color: "#FF00AA", font: "Inter-Medium", spacing: 1.6 },
     ];
     const put = await agent()
       .put("/v1/me/thoughts")
