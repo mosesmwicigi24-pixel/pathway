@@ -66,6 +66,26 @@ import {
 
 type Phase = "idle" | "countdown" | "live" | "paused";
 
+// Schedule time snaps to 15-minute marks (:00/:15/:30/:45) — cleaner airtime
+// and matches the auto-air worker's granularity. `snapLocal15` rounds a
+// datetime-local string; `snapIsoTo15` rounds a Date on save.
+function snapLocal15(v: string): string {
+  if (!v) return v;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return v;
+  d.setMinutes(Math.round(d.getMinutes() / 15) * 15, 0, 0);
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+// Duration runs from 15 min to a full 24 hours (1440), in 15-minute steps.
+const MAX_DURATION_MIN = 1440;
+function clampDuration(v: string): string {
+  if (!v) return v;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return v;
+  return String(Math.min(MAX_DURATION_MIN, Math.max(0, Math.round(n / 15) * 15)));
+}
+
 const CATEGORIES = ["Sermon", "Worship", "Prayer", "Bible Study", "Conference"] as const;
 type Category = (typeof CATEGORIES)[number];
 
@@ -575,9 +595,9 @@ export function RadioStudio(): ReactElement {
     if (form.timezone.trim()) body.timezone = form.timezone.trim();
     const tags = form.tags.split(",").map((t) => t.trim()).filter(Boolean);
     if (tags.length) body.tags = tags;
-    if (form.scheduled_at) body.scheduled_at = new Date(form.scheduled_at).toISOString();
-    const dur = Number(form.duration_min);
-    if (form.duration_min && Number.isFinite(dur)) body.duration_min = dur;
+    if (form.scheduled_at) body.scheduled_at = new Date(snapLocal15(form.scheduled_at)).toISOString();
+    const dur = Number(clampDuration(form.duration_min));
+    if (form.duration_min && Number.isFinite(dur) && dur > 0) body.duration_min = dur;
     if (form.audio_url.trim()) body.audio_url = form.audio_url.trim();
     if (form.audio_duration_sec != null) body.audio_duration_sec = form.audio_duration_sec;
     body.auto_go_live = form.auto_go_live;
@@ -1292,10 +1312,27 @@ export function RadioStudio(): ReactElement {
                       </div>
                     </div>
                     <Field label="Scheduled at (optional)">
-                      <input type="datetime-local" value={form.scheduled_at} onChange={(e) => setForm((f) => ({ ...f, scheduled_at: e.target.value }))} style={inputStyle} />
+                      <input
+                        type="datetime-local"
+                        step={900}
+                        value={form.scheduled_at}
+                        onChange={(e) => setForm((f) => ({ ...f, scheduled_at: e.target.value }))}
+                        onBlur={(e) => setForm((f) => ({ ...f, scheduled_at: snapLocal15(e.target.value) }))}
+                        style={inputStyle}
+                      />
                     </Field>
-                    <Field label="Duration (min)">
-                      <input type="number" min={0} value={form.duration_min} onChange={(e) => setForm((f) => ({ ...f, duration_min: e.target.value }))} placeholder="45" style={inputStyle} />
+                    <Field label="Duration — up to 24h (min)">
+                      <input
+                        type="number"
+                        min={0}
+                        max={MAX_DURATION_MIN}
+                        step={15}
+                        value={form.duration_min}
+                        onChange={(e) => setForm((f) => ({ ...f, duration_min: e.target.value }))}
+                        onBlur={(e) => setForm((f) => ({ ...f, duration_min: clampDuration(e.target.value) }))}
+                        placeholder="e.g. 480"
+                        style={inputStyle}
+                      />
                     </Field>
                     <Field label="Repeat">
                       <select value={form.repeat} onChange={(e) => setForm((f) => ({ ...f, repeat: e.target.value }))} style={inputStyle}>
