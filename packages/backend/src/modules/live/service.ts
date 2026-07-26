@@ -34,6 +34,10 @@ export interface LiveNowRow {
   kind: LiveKind;
   started_at: string;
   hls_url: string;
+  /** Present only on church-scope rows when LIVE_CDN_BASE is configured — the
+   *  direct, relative, low-latency URL to fail over to if the CDN copy 404s
+   *  (e.g. the publisher hasn't caught up to a just-started stream yet). */
+  hls_fallback_url?: string;
   started_by_name: string;
   viewer_count: number;
 }
@@ -86,6 +90,10 @@ export class LiveService {
     private readonly recordingsDir = "/opt/pathway/mediamtx/recordings",
     private readonly rtmpBaseUrl = "rtmp://pathway.nuruplace.org:1935",
     notifications?: NotificationService,
+    /** L1.5 (docs/LIVE_STREAMING.md) — set from env LIVE_CDN_BASE. When present,
+     *  church-scope /live/now rows get an absolute CDN hls_url instead of the
+     *  direct relative one. No trailing slash, e.g. "https://pub-xxxx.r2.dev". */
+    private readonly cdnBase?: string,
   ) {
     this.notifications = notifications ?? new NotificationService(pool);
   }
@@ -343,11 +351,25 @@ export class LiveService {
       if (r.scope === "cell" && !(await this.canWatchCell(principal, r.cell_id!))) continue;
       const path = pathFor(r.scope, r.cell_id);
       const viewerCount = await this.activeViewerCount(r.stream_id);
-      data.push({
-        stream_id: r.stream_id, scope: r.scope, cell_id: r.cell_id, title: r.title, kind: r.kind,
-        started_at: r.started_at, hls_url: `/live/${path}/index.m3u8`,
-        started_by_name: r.started_by_name, viewer_count: viewerCount,
-      });
+      const directUrl = `/live/${path}/index.m3u8`;
+      // L1.5 (docs/LIVE_STREAMING.md): church-scope only — infinite fan-out
+      // rides Cloudflare R2 instead of the VPS's own uplink. Cell streams keep
+      // the direct low-latency relative URL unconditionally (small audience,
+      // no fan-out problem to solve).
+      const row: LiveNowRow =
+        r.scope === "church" && this.cdnBase
+          ? {
+              stream_id: r.stream_id, scope: r.scope, cell_id: r.cell_id, title: r.title, kind: r.kind,
+              started_at: r.started_at, hls_url: `${this.cdnBase}/live-cdn/church/index.m3u8`,
+              hls_fallback_url: directUrl,
+              started_by_name: r.started_by_name, viewer_count: viewerCount,
+            }
+          : {
+              stream_id: r.stream_id, scope: r.scope, cell_id: r.cell_id, title: r.title, kind: r.kind,
+              started_at: r.started_at, hls_url: directUrl,
+              started_by_name: r.started_by_name, viewer_count: viewerCount,
+            };
+      data.push(row);
     }
     return { data };
   }

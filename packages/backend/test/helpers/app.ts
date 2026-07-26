@@ -29,15 +29,15 @@ export function testEnv(): Env {
   } as Env;
 }
 
-export function makeApp() {
-  const env = testEnv();
+export function makeApp(envOverrides?: Partial<Env>) {
+  const env = { ...testEnv(), ...envOverrides };
   const pool = testPool();
   const ctx = { env, db: { primary: pool, replica: pool }, log: pino({ level: "silent" }) };
   return createApp(ctx);
 }
 
-export function agent() {
-  return supertest(makeApp());
+export function agent(envOverrides?: Partial<Env>) {
+  return supertest(makeApp(envOverrides));
 }
 
 export function bearer(claims: AccessClaims): string {

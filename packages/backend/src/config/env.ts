@@ -173,6 +173,19 @@ const EnvSchema = z.object({
   // ?user=<stream_id>&pass=<stream_key>. ---
   LIVE_RECORDINGS_DIR: z.string().default("/opt/pathway/mediamtx/recordings"),
   LIVE_RTMP_BASE_URL: z.string().default("rtmp://pathway.nuruplace.org:1935"),
+
+  // --- Nuru Live L1.5 (infinite fan-out — docs/LIVE_STREAMING.md). Optional;
+  // when set, a VPS-local publisher daemon (ops/live-cdn/) mirrors the CHURCH
+  // HLS playlist/segments to a Cloudflare R2 public bucket (R2 fronts however
+  // many viewers show up — the VPS's own uplink no longer caps church-scope
+  // fan-out). GET /live/now then returns an ABSOLUTE hls_url built from this
+  // base for church-scope rows only ("<base>/live-cdn/church/index.m3u8"),
+  // plus hls_fallback_url (the direct relative URL) so clients can fail over
+  // if the CDN copy 404s (e.g. publisher hasn't caught up yet). Cell streams
+  // are unaffected — always the direct low-latency relative URL — the
+  // fan-out problem is a church-wide-audience problem, not a small-cell one.
+  // No trailing slash, e.g. "https://pub-xxxx.r2.dev". ---
+  LIVE_CDN_BASE: z.string().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

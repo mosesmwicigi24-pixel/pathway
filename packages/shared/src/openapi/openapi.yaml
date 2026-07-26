@@ -6328,10 +6328,19 @@ paths:
   /live/now:
     get:
       tags: [live]
-      summary: Streams currently live that the caller may watch — church always; cell streams only for that cell's members (or Admin/SuperAdmin/live:manage).
+      summary: >-
+        Streams currently live that the caller may watch — church always; cell
+        streams only for that cell's members (or Admin/SuperAdmin/live:manage).
+        L1.5 (infinite fan-out, docs/LIVE_STREAMING.md): when the server has
+        LIVE_CDN_BASE configured, a church-scope row's hls_url is the ABSOLUTE
+        Cloudflare R2 CDN URL (a VPS-local publisher daemon mirrors the church
+        HLS playlist/segments there) and an additional hls_fallback_url field
+        carries the direct relative URL for clients to fail over to if the CDN
+        copy 404s. Without LIVE_CDN_BASE, or for cell-scope rows, hls_url is
+        always the direct relative URL and hls_fallback_url is absent.
       responses:
         "200":
-          description: "{ data: [{ stream_id, scope, cell_id, title, kind, started_at, hls_url, started_by_name, viewer_count }, ...] }"
+          description: "{ data: [{ stream_id, scope, cell_id, title, kind, started_at, hls_url, hls_fallback_url?, started_by_name, viewer_count }, ...] }"
         "401": { $ref: "#/components/responses/Unauthorized" }
   /live/streams/{id}/heartbeat:
     post:

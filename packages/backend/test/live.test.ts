@@ -195,6 +195,48 @@ describe("Live streaming — /live/now visibility", () => {
   });
 });
 
+describe("Live streaming — L1.5 CDN switch (LIVE_CDN_BASE)", () => {
+  it("without LIVE_CDN_BASE, church and cell rows both keep the direct relative hls_url and carry no hls_fallback_url", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "cdn-off-1@dev.local" });
+    const adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const cell = await createCellGroup(cong, "Cell A");
+    await agent().post("/v1/live/streams").set(auth(adminTok)).send({ scope: "church", title: "Sunday", kind: "video" });
+    await agent().post("/v1/live/streams").set(auth(adminTok)).send({ scope: "cell", cell_id: cell, title: "Cell meeting", kind: "video" });
+
+    const now = await agent().get("/v1/live/now").set(auth(adminTok));
+    expect(now.status).toBe(200);
+    const church = now.body.data.find((s: { scope: string }) => s.scope === "church");
+    const cellRow = now.body.data.find((s: { scope: string }) => s.scope === "cell");
+    expect(church.hls_url).toBe("/live/church/index.m3u8");
+    expect(church.hls_fallback_url).toBeUndefined();
+    expect(cellRow.hls_url).toBe(`/live/cell/${cell}/index.m3u8`);
+    expect(cellRow.hls_fallback_url).toBeUndefined();
+  });
+
+  it("with LIVE_CDN_BASE set, the church row gets an absolute CDN hls_url + a direct hls_fallback_url; the cell row is unaffected", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "cdn-on-1@dev.local" });
+    const adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const cell = await createCellGroup(cong, "Cell A");
+    const cdnBase = "https://pub-example.r2.dev";
+    const overrides = { LIVE_CDN_BASE: cdnBase };
+
+    await agent(overrides).post("/v1/live/streams").set(auth(adminTok)).send({ scope: "church", title: "Sunday", kind: "video" });
+    await agent(overrides).post("/v1/live/streams").set(auth(adminTok)).send({ scope: "cell", cell_id: cell, title: "Cell meeting", kind: "video" });
+
+    const now = await agent(overrides).get("/v1/live/now").set(auth(adminTok));
+    expect(now.status).toBe(200);
+    const church = now.body.data.find((s: { scope: string }) => s.scope === "church");
+    const cellRow = now.body.data.find((s: { scope: string }) => s.scope === "cell");
+
+    expect(church.hls_url).toBe(`${cdnBase}/live-cdn/church/index.m3u8`);
+    expect(church.hls_fallback_url).toBe("/live/church/index.m3u8");
+
+    // Cell scope always keeps the direct relative URL, CDN base or not.
+    expect(cellRow.hls_url).toBe(`/live/cell/${cell}/index.m3u8`);
+    expect(cellRow.hls_fallback_url).toBeUndefined();
+  });
+});
+
 describe("Live streaming — end", () => {
   it("the broadcaster can end their own stream; replay is idempotent", async () => {
     const admin = await createUser({ congregationId: cong, role: "Admin", email: "c1@dev.local" });
