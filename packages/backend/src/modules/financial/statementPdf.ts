@@ -30,6 +30,9 @@ export interface ReceiptFacts {
   ref: string;
   amountLabel: string;
   fund: string;
+  /** "Named giving" (custom sheet, optional): the member's own label for this
+   *  gift (e.g. "Building Fund", a loved one's name) — shown under the fund. */
+  giftName?: string | null;
   methodLabel: string;
   statusLabel: string;
   feeLabel: string;
@@ -49,6 +52,7 @@ export function renderReceiptPdf(f: ReceiptFacts): Buffer {
     "Received with thanks",
     "",
     `${f.amountLabel}   ${f.fund}`,
+    ...(f.giftName ? [`"${f.giftName}"`] : []),
     `Ref ${f.ref}   -   ${f.statusLabel}`,
     "",
     "TRANSACTION JOURNEY",

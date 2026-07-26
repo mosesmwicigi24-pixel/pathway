@@ -3,7 +3,7 @@
 // exercised in CI (no network/secrets, CLAUDE.md). Settlement still rides the
 // existing webhook → processed_webhooks → ledger path (covered by financial.test).
 import { describe, it, expect } from "vitest";
-import { DarajaMpesaProvider } from "../src/modules/financial/providers.js";
+import { DarajaMpesaProvider, sanitizeAccountReference } from "../src/modules/financial/providers.js";
 
 const provider = new DarajaMpesaProvider({
   consumerKey: "k",
@@ -70,5 +70,41 @@ describe("DarajaMpesaProvider.verifyCallback", () => {
 
   it("never surfaces a receipt on a failed callback", () => {
     expect(provider.verifyCallback(callback(1032, "ws_CO_FAIL")).receipt).toBeUndefined();
+  });
+});
+
+// "Named giving" (custom sheet, optional): the member's gift name rides the
+// STK push AccountReference, sanitized to Daraja's alphanumeric+space, 12-char
+// field. Pure function, unit-tested directly (initiate() itself makes live
+// Safaricom calls and is never exercised in CI).
+describe("sanitizeAccountReference (named giving → M-Pesa AccountReference)", () => {
+  it("passes clean alphanumeric+space names through untouched", () => {
+    expect(sanitizeAccountReference("Tithe")).toBe("Tithe");
+    expect(sanitizeAccountReference("Building Fund")).toBe("Building Fun"); // 12-char cap
+  });
+
+  it("strips emoji and symbols, keeping only alphanumerics and spaces", () => {
+    expect(sanitizeAccountReference("Thanksgiving 🎉!!")).toBe("Thanksgiving"); // exactly 12 chars, no truncation
+    expect(sanitizeAccountReference("Mom's 60th ❤️")).toBe("Moms 60th");
+    expect(sanitizeAccountReference("R&D @ Church#1")).toBe("RD Church1");
+  });
+
+  it("truncates to Daraja's 12-char AccountReference limit", () => {
+    const long = "Thanksgiving Offering For The Whole Family";
+    const out = sanitizeAccountReference(long);
+    expect(out).toBe(long.slice(0, 12));
+    expect(out!.length).toBe(12);
+  });
+
+  it("collapses internal whitespace before truncating", () => {
+    expect(sanitizeAccountReference("A   B    C")).toBe("A B C");
+  });
+
+  it("returns undefined for empty, whitespace-only, absent, or symbols-only input", () => {
+    expect(sanitizeAccountReference(undefined)).toBeUndefined();
+    expect(sanitizeAccountReference(null)).toBeUndefined();
+    expect(sanitizeAccountReference("")).toBeUndefined();
+    expect(sanitizeAccountReference("   ")).toBeUndefined();
+    expect(sanitizeAccountReference("🎉🎉🎉")).toBeUndefined();
   });
 });

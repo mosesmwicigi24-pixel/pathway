@@ -7168,6 +7168,16 @@ components:
         currency: { type: string, minLength: 3, maxLength: 3 }
         method: { type: string, enum: [card, mpesa, airtel], default: card }
         phone_number: { type: string, description: "Mobile money only — where the STK push lands; defaults to the profile phone" }
+        account_name:
+          type: string
+          maxLength: 60
+          description: >-
+            "Named giving" (custom sheet, optional): a member-chosen label for
+            this gift (e.g. "Tithe", "Building Fund"), trimmed. Persists on the
+            transaction for receipts/statements/portal Finance. For mpesa/airtel,
+            a sanitized (alphanumeric + spaces, truncated to 12 chars) version
+            rides the STK push AccountReference so it shows on the church's
+            M-Pesa statement; absent falls back to the existing default reference.
         idempotency_key: { type: string, minLength: 8, maxLength: 255, description: Client-supplied; replays return the same transaction }
     GivingIntentResult:
       type: object
@@ -7200,6 +7210,7 @@ components:
         status: { type: string }
         fund: { type: [string, "null"] }
         receipt_code: { type: [string, "null"], description: M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL); null for older or non-mobile-money gifts }
+        account_name: { type: [string, "null"], description: "Named giving: the member's own label for this gift, as entered; null when not used" }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
 
@@ -7215,6 +7226,7 @@ components:
         method: { type: string }
         provider_ref: { type: [string, "null"] }
         receipt_code: { type: [string, "null"], description: M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL); null for older or non-mobile-money gifts }
+        account_name: { type: [string, "null"], description: "Named giving: the member's own label for this gift, as entered; null when not used" }
         schedule_id: { type: [string, "null"], format: uuid }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }

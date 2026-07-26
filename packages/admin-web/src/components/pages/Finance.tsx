@@ -449,7 +449,7 @@ export function Finance(): ReactElement {
     const q = search.trim().toLowerCase();
     if (!q) return txns;
     return txns.filter((t) =>
-      `${t.full_name ?? ""} ${t.fund ?? ""} ${methodLabel(t.method)} ${Math.round(t.amount_minor / 100)} ${t.transaction_id}`
+      `${t.full_name ?? ""} ${t.fund ?? ""} ${t.account_name ?? ""} ${methodLabel(t.method)} ${Math.round(t.amount_minor / 100)} ${t.transaction_id}`
         .toLowerCase()
         .includes(q),
     );
@@ -1154,7 +1154,7 @@ function TransactionsTab({
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search member, fund, method, amount, reference"
+              placeholder="Search member, fund, gift name, method, amount, reference"
               style={{ height: 34, padding: "0 12px 0 30px", background: "var(--input-background)", border: `1px solid ${BORDER}`, borderRadius: 10, width: 280, fontSize: 13 }}
             />
           </div>
@@ -1190,6 +1190,7 @@ function TransactionsTab({
               <th style={thStyle}>Date</th>
               <th style={thStyle}>Member</th>
               <th style={thStyle}>Fund</th>
+              <th style={thStyle}>Gift Name</th>
               <th style={thStyle}>Method</th>
               <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
               <th style={thStyle}>Payment Status</th>
@@ -1210,6 +1211,7 @@ function TransactionsTab({
                   <td style={{ padding: "9px 16px", fontSize: 12, color: NAVY, fontFamily: MONO, whiteSpace: "nowrap" }}>{fmtDate(t.created_at)}</td>
                   <td style={{ padding: "9px 16px", fontSize: 13, fontWeight: 600, color: NAVY, whiteSpace: "nowrap" }}>{t.full_name ?? "Anonymous"}</td>
                   <td style={{ padding: "9px 16px", fontSize: 12, color: MUTED }}>{t.fund ?? "—"}</td>
+                  <td style={{ padding: "9px 16px", fontSize: 12, color: MUTED }}>{t.account_name ?? "—"}</td>
                   <td style={{ padding: "9px 16px", fontSize: 12, color: MUTED }}>{methodLabel(t.method)}</td>
                   <td style={{ padding: "9px 16px", fontSize: 13, fontWeight: 700, color: NAVY, fontFamily: MONO, textAlign: "right", whiteSpace: "nowrap" }}>{money(t.amount_minor, t.currency)}</td>
                   <td style={{ padding: "9px 16px" }}>
@@ -1234,7 +1236,7 @@ function TransactionsTab({
             })}
             {txns.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ padding: "24px 16px", textAlign: "center", fontSize: 13, color: MUTED }}>
+                <td colSpan={10} style={{ padding: "24px 16px", textAlign: "center", fontSize: 13, color: MUTED }}>
                   No transactions match.
                 </td>
               </tr>
@@ -1693,6 +1695,10 @@ function TxDrawer({
         <div style={cellStyle}>
           <div style={labelStyle}>Fund</div>
           <div style={{ fontSize: 13, color: NAVY }}>{t.fund_name ?? t.fund ?? "—"}</div>
+        </div>
+        <div style={cellStyle}>
+          <div style={labelStyle}>Gift name</div>
+          <div style={{ fontSize: 13, color: NAVY }}>{t.account_name ?? "—"}</div>
         </div>
         <div style={cellStyle}>
           <div style={labelStyle}>Method</div>

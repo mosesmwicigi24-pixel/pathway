@@ -75,6 +75,23 @@ export class FakeMobileMoneyProvider implements MobileMoneyProvider {
   }
 }
 
+/**
+ * M-Pesa AccountReference sanitizer ("named giving"): Daraja's AccountReference
+ * is alphanumeric + spaces only and capped at 12 chars — it's what shows up on
+ * the church's M-Pesa statement, so a member-entered gift name (which may carry
+ * emoji/punctuation) must be cleaned before it rides the STK push. Collapses
+ * whitespace, strips everything else, then truncates. Empty after cleaning (or
+ * absent) → undefined, so callers fall back to their own default reference.
+ */
+export function sanitizeAccountReference(raw: string | undefined | null): string | undefined {
+  if (!raw) return undefined;
+  const cleaned = raw
+    .replace(/[^a-zA-Z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.length > 0 ? cleaned.slice(0, 12) : undefined;
+}
+
 /** E.164 / local → Daraja MSISDN (2547XXXXXXXX, no plus). */
 function toMsisdn(phone: string): string {
   let d = phone.replace(/\D/g, "");
@@ -137,7 +154,10 @@ export class DarajaMpesaProvider implements MobileMoneyProvider {
     const timestamp = yyyymmddhhmmss(new Date());
     const password = Buffer.from(`${this.cfg.shortcode}${this.cfg.passkey}${timestamp}`).toString("base64");
     const amount = Math.max(1, Math.round(input.amountMinor / 100)); // Daraja takes whole KES
-    const account = (input.metadata.reference ?? input.metadata.fund ?? "NuruGiving").slice(0, 12);
+    const account =
+      sanitizeAccountReference(input.metadata.reference) ??
+      sanitizeAccountReference(input.metadata.fund) ??
+      "NuruGiving";
     const json = (await this.fetchJson(`${this.base}/mpesa/stkpush/v1/processrequest`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
