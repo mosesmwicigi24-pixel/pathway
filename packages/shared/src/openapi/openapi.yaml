@@ -24,6 +24,7 @@ tags:
   - name: announcements
   - name: proximity
   - name: radio
+  - name: live
   - name: system
 
 security:
@@ -6246,6 +6247,118 @@ paths:
         "400": { description: Validation failed }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  # --- Nuru Live (docs/LIVE_STREAMING.md, phase L1) — self-hosted MediaMTX;
+  # L0 infra (RTMP ingest, HLS out, fMP4 recordings) already lives on the VPS. ---
+  /live/streams:
+    post:
+      tags: [live]
+      summary: >-
+        Mint a stream + one-time publish key (permission live:go). Church scope
+        additionally requires the caller be staff (the "unscoped" grant); cell
+        scope requires Admin/SuperAdmin or the cell in the caller's
+        leader_assignments. Refused if that scope target already has a live
+        stream (409).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, title, kind]
+              properties:
+                scope: { type: string, enum: [church, cell] }
+                cell_id: { type: string, format: uuid, description: "Required when scope=cell; omitted for scope=church." }
+                title: { type: string, maxLength: 200 }
+                kind: { type: string, enum: [video, audio] }
+      responses:
+        "201":
+          description: Minted stream + publish credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stream_id, rtmp_url, stream_key, path]
+                properties:
+                  stream_id: { type: string, format: uuid }
+                  rtmp_url: { type: string, description: "Publish target; the broadcaster appends ?user=<stream_id>&pass=<stream_key>." }
+                  stream_key: { type: string, description: "One-time plaintext publish key — only sha256 is stored server-side." }
+                  path: { type: string, description: "MediaMTX path — 'church' or 'cell/{cell_id}'." }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: "NOT_FOUND — unknown cell_id." }
+        "409": { description: "CONFLICT — that scope target already has a live stream." }
+  /live/auth:
+    post:
+      tags: [live]
+      summary: >-
+        MediaMTX authHTTP webhook (UNAUTHENTICATED — no bearer JWT; MediaMTX has
+        no user session, only the stream's own publish key. Reachable only from
+        localhost in prod). action=publish validates stream_id/password/path
+        strictly against live_streams; any other action (read/playback/…) is
+        left open for now.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user, path, action]
+              properties:
+                user: { type: string, description: "The stream_id." }
+                password: { type: string }
+                path: { type: string }
+                action: { type: string }
+      responses:
+        "200": { description: Authorized }
+        "401": { description: Rejected }
+  /live/streams/{id}/end:
+    post:
+      tags: [live]
+      summary: End a live stream — the broadcaster, a live:manage holder, or Admin/SuperAdmin. Idempotent. Best-effort inline recording registration.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: "{ stream_id, status, ended_at }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /live/now:
+    get:
+      tags: [live]
+      summary: Streams currently live that the caller may watch — church always; cell streams only for that cell's members (or Admin/SuperAdmin/live:manage).
+      responses:
+        "200":
+          description: "{ data: [{ stream_id, scope, cell_id, title, kind, started_at, hls_url, started_by_name, viewer_count }, ...] }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /live/streams/{id}/heartbeat:
+    post:
+      tags: [live]
+      summary: Viewer presence heartbeat — upserts (stream, caller, last_seen=now), updates viewer_peak, opportunistically prunes stale rows.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: "{ ok: true }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /live/recordings:
+    get:
+      tags: [live]
+      summary: Ended streams with a registered recording (VOD), same visibility rules as /live/now.
+      parameters:
+        - name: scope
+          in: query
+          schema: { type: string, enum: [church, cell] }
+        - name: cell_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: "{ data: [{ stream_id, scope, cell_id, title, kind, started_at, ended_at, recording_url }, ...] }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
 components:
   securitySchemes:

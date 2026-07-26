@@ -66,9 +66,15 @@ export function requireRole(min: UserRole) {
 export const PERM_MODULES = [
   "dashboard", "levels", "cms", "quiz", "videos", "cells", "members",
   "reflections", "events", "finance", "certificates", "badges",
-  "users", "rolesAdmin", "countries", "languages", "congregations",
+  "users", "rolesAdmin", "countries", "languages", "congregations", "live",
 ] as const;
-export const CAPABILITIES = ["view", "create", "edit", "delete", "approve", "export"] as const;
+// `go`/`manage` are Nuru Live's (module `live`) capability pair — broadcast
+// start vs. end-anyone's-stream oversight (docs/LIVE_STREAMING.md). They ride
+// the same fixed CAPABILITIES dimension as every other module (mirrored 1:1 in
+// the web client's systemData) rather than a hidden carve-out, per the
+// module's registration instructions — unused for the other 17 modules,
+// exactly like several of the generic 6 already are for some of them.
+export const CAPABILITIES = ["view", "create", "edit", "delete", "approve", "export", "go", "manage"] as const;
 
 export interface EffectivePermission {
   module_id: string;
