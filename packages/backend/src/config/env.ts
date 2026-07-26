@@ -162,6 +162,17 @@ const EnvSchema = z.object({
   LIQUIDSOAP_HARBOR_PORT: z.string().default("8005"),
   LIQUIDSOAP_HARBOR_MOUNT: z.string().default("/mic"),
   LIQUIDSOAP_MEDIA_DIR: z.string().default("/var/www/pathway-media"),
+
+  // --- Nuru Live (self-hosted MediaMTX — docs/LIVE_STREAMING.md). L0 infra
+  // (RTMP ingest :1935, HLS out behind nginx /live/*) is already on the VPS;
+  // these two just point the backend at it. LIVE_RECORDINGS_DIR is the
+  // HOST-side directory MediaMTX's `runOnRecordSegmentComplete` writes fMP4
+  // segments into (%path/ sub-folders per stream path) — the recording
+  // registrar scans it every ~2 min. LIVE_RTMP_BASE_URL is what POST
+  // /live/streams echoes back as the publish target; the broadcaster appends
+  // ?user=<stream_id>&pass=<stream_key>. ---
+  LIVE_RECORDINGS_DIR: z.string().default("/opt/pathway/mediamtx/recordings"),
+  LIVE_RTMP_BASE_URL: z.string().default("rtmp://pathway.nuruplace.org:1935"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
