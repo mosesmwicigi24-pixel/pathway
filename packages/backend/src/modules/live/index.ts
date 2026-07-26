@@ -46,6 +46,12 @@ export function registerLive(ctx: AppContext): Router {
   // which is validated strictly inside the service. Reachable only from
   // localhost in prod (see OPS FOLLOW-UP above / L0 firewall).
   r.post("/live/auth", handler(async (req, res) => {
+    // Non-publish actions (read/playback/api/…) are ALWAYS allowed — and must
+    // be answered BEFORE strict parsing: MediaMTX probes reads with empty
+    // user/password, and any non-2xx here reads as deny (it 401'd the HLS
+    // poll that drives the CDN publisher).
+    const action = (req.body as { action?: unknown } | undefined)?.action;
+    if (action !== "publish") { res.sendStatus(200); return; }
     const input = parseBody(LiveService.AuthWebhook, req.body);
     const ok = await svc.authWebhook(input);
     res.sendStatus(ok ? 200 : 401);
