@@ -1,0 +1,21 @@
+[Unit]
+Description=Nuru Live L1.5 — CDN publisher (mirrors church HLS to Cloudflare R2)
+Documentation=https://github.com/nuru-place/pathway/blob/main/docs/LIVE_STREAMING.md
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /opt/pathway/live-cdn/publisher.py
+Restart=always
+RestartSec=3
+# The publisher itself is defensive (retries on missing rclone/unreachable
+# R2/MediaMTX rather than crashing); this Restart=always is the outer safety
+# net for the process itself dying unexpectedly.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nuru-live-cdn
+
+[Install]
+WantedBy=multi-user.target

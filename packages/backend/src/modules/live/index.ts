@@ -19,17 +19,22 @@ import { authenticate, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { LiveService } from "./service.js";
 
-export const liveRouter: Router = Router();
-
 export function registerLive(ctx: AppContext): Router {
   const svc = new LiveService(
     ctx.db.primary,
     ctx.env.LIVE_RECORDINGS_DIR ?? "/opt/pathway/mediamtx/recordings",
     ctx.env.LIVE_RTMP_BASE_URL ?? "rtmp://pathway.nuruplace.org:1935",
+    undefined,
+    ctx.env.LIVE_CDN_BASE,
   );
   const auth = authenticate(ctx.env);
   const perm = requirePermission(ctx.db.replica);
-  const r = liveRouter;
+  // A fresh Router per call — registerLive runs once per createApp() in prod,
+  // but tests build a new app (and a new `svc` closed over that call's env)
+  // per test; a module-level singleton here would stack every test's handlers
+  // onto ONE router object, so only the very first-ever registered handler
+  // (and its stale env/svc) would ever actually match a request.
+  const r: Router = Router();
 
   r.post("/live/streams", auth, perm("live", "go"), handler(async (req, res) => {
     const input = parseBody(LiveService.CreateStream, req.body);
