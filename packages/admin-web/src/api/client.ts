@@ -1886,6 +1886,9 @@ export interface TransactionRow {
   currency: string;
   status: string;
   fund: string | null;
+  // "Named giving": the member's own label for this gift (e.g. "Tithe",
+  // "Building Fund"), as entered on the custom giving sheet. Null when unused.
+  account_name: string | null;
   method: string | null;
   created_at: string;
   settled_at: string | null;

@@ -65,6 +65,25 @@ describe("financial / giving (§1.10 C, §3.5)", () => {
     expect(rows[0].n).toBe(1);
   });
 
+  it("named giving: account_name is stored for card gifts too and surfaced on the admin transactions register + detail", async () => {
+    const intent = (await svc.createGivingIntent(user, {
+      fund: "tithe",
+      amount_minor: 3000,
+      currency: "kes",
+      account_name: "First Fruits",
+      idempotency_key: "give-name-card",
+    })) as { transaction_id: string };
+
+    const list = await svc.listTransactions({ limit: 50 } as never);
+    const row = (list.data as Array<{ transaction_id: string; account_name: string | null }>).find(
+      (r) => r.transaction_id === intent.transaction_id,
+    );
+    expect(row?.account_name).toBe("First Fruits");
+
+    const detail = await svc.transactionDetail(intent.transaction_id);
+    expect((detail!.transaction as { account_name: string | null }).account_name).toBe("First Fruits");
+  });
+
   it("listGiving surfaces method + provider_ref for the mobile statement", async () => {
     // Card (Stripe) gift → provider 'stripe' is surfaced as method 'card', and
     // provider_ref falls back to the Stripe payment-intent id.
@@ -267,6 +286,23 @@ describe("financial / giving (§1.10 C, §3.5)", () => {
     const body = pdf.toString("latin1");
     expect(body).toContain("GIVING STATEMENT");
     expect(body).toContain("%%EOF");
+  });
+
+  it("receiptPdf and statementPdf print the named-giving label when set", async () => {
+    const intent = (await svc.createGivingIntent(user, {
+      fund: "tithe",
+      amount_minor: 4500,
+      currency: "kes",
+      account_name: "Thanksgiving",
+      idempotency_key: "give-name-receipt",
+    })) as { transaction_id: string };
+    await svc.handleWebhook(succeeded(gw.lastIntentId), "valid");
+
+    const receipt = (await svc.receiptPdf(user, intent.transaction_id)).toString("latin1");
+    expect(receipt).toContain("Thanksgiving");
+
+    const statement = (await svc.statementPdf(user)).toString("latin1");
+    expect(statement).toContain("Thanksgiving");
   });
 
   it("receiptPdf renders a valid one-gift receipt; 404 for someone else's", async () => {

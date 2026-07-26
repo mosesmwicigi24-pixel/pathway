@@ -30,6 +30,16 @@ export class FinancialService {
     currency: z.string().length(3),
     method: z.enum(["card", "mpesa", "airtel", "paypal"]).default("card"),
     phone_number: z.string().min(7).max(32).optional(), // mobile money; defaults to the profile phone
+    // "Named giving" (custom sheet, optional): a member-chosen label for the
+    // gift — like an M-Pesa Paybill account name. Trimmed; empty → absent so
+    // behavior is unchanged when the field isn't used. Sanitized separately
+    // (providers.ts) before it rides the M-Pesa AccountReference.
+    account_name: z
+      .string()
+      .trim()
+      .max(60)
+      .optional()
+      .transform((v) => (v && v.length > 0 ? v : undefined)),
     idempotency_key: z.string().min(8).max(255).optional(),
   });
 
@@ -82,20 +92,27 @@ export class FinancialService {
         amountMinor: input.amount_minor,
         currency,
         phoneNumber: phone,
-        metadata: { user_id: userId, fund: input.fund },
+        metadata: {
+          user_id: userId,
+          fund: input.fund,
+          // Named giving: only set `reference` when the member entered a name —
+          // absent, the provider falls back to its existing fund/default ref.
+          ...(input.account_name ? { reference: input.account_name } : {}),
+        },
       });
       const txn = await one<{ transaction_id: string; status: string }>(
         this.pool,
-        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id)
-         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8)
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name)
+         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9)
          RETURNING transaction_id, status`,
-        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null],
+        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null, input.account_name ?? null],
       );
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor,
         currency,
         fund: input.fund,
         method: input.method,
+        account_name: input.account_name ?? null,
       });
       return {
         transaction_id: txn.transaction_id,
@@ -112,13 +129,13 @@ export class FinancialService {
       const order = await this.paypalGw().createOrder({ amountMinor: input.amount_minor, reference: `${userId}:${input.fund}` });
       const txn = await one<{ transaction_id: string; status: string }>(
         this.pool,
-        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id)
-         VALUES ($1, $2, $3, 'USD', 'processing', 'paypal', $4, $5, $6)
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name)
+         VALUES ($1, $2, $3, 'USD', 'processing', 'paypal', $4, $5, $6, $7)
          RETURNING transaction_id, status`,
-        [userId, fund.fund_id, input.amount_minor, order.orderId, key, scheduleId ?? null],
+        [userId, fund.fund_id, input.amount_minor, order.orderId, key, scheduleId ?? null, input.account_name ?? null],
       );
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
-        amount_minor: input.amount_minor, currency: "USD", fund: input.fund, method: "paypal",
+        amount_minor: input.amount_minor, currency: "USD", fund: input.fund, method: "paypal", account_name: input.account_name ?? null,
       });
       return {
         transaction_id: txn.transaction_id,
@@ -139,16 +156,17 @@ export class FinancialService {
 
     const txn = await one<{ transaction_id: string; status: string }>(
       this.pool,
-      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, stripe_payment_intent, idempotency_key, schedule_id)
-       VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7)
+      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, stripe_payment_intent, idempotency_key, schedule_id, account_name)
+       VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8)
        RETURNING transaction_id, status`,
-      [userId, fund.fund_id, input.amount_minor, currency, intent.id, key, scheduleId ?? null],
+      [userId, fund.fund_id, input.amount_minor, currency, intent.id, key, scheduleId ?? null, input.account_name ?? null],
     );
     await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
       amount_minor: input.amount_minor,
       currency,
       fund: input.fund,
       method: "card",
+      account_name: input.account_name ?? null,
     });
     return {
       transaction_id: txn.transaction_id,
@@ -364,7 +382,7 @@ export class FinancialService {
       `SELECT t.transaction_id, t.amount_minor, t.currency, t.status, f.code AS fund,
               t.provider,
               COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref,
-              t.receipt_code,
+              t.receipt_code, t.account_name,
               t.created_at, t.settled_at
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
         WHERE t.user_id = $1 ORDER BY t.created_at DESC`,
@@ -385,7 +403,7 @@ export class FinancialService {
       this.pool,
       `SELECT t.transaction_id, t.amount_minor, t.currency, t.status, f.code AS fund,
               t.provider, COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref,
-              t.receipt_code,
+              t.receipt_code, t.account_name,
               t.schedule_id, t.created_at, t.settled_at
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
         WHERE t.transaction_id = $1 AND t.user_id = $2`,
@@ -411,7 +429,7 @@ export class FinancialService {
   /** Render the caller's giving statement as a PDF (dep-free), grouped by month
    *  with settled-only totals — what the mobile "Download" action saves. */
   async statementPdf(userId: string): Promise<Buffer> {
-    const rows = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; provider_ref: string | null; receipt_code: string | null; created_at: string }>;
+    const rows = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string }>;
     const me = await maybeOne<{ full_name: string; congregation: string | null }>(
       this.pool,
       `SELECT u.full_name, c.name AS congregation FROM users u LEFT JOIN congregations c ON c.congregation_id = u.congregation_id WHERE u.user_id = $1`,
@@ -442,7 +460,7 @@ export class FinancialService {
           const ref = r.receipt_code
             ? r.receipt_code.replace(/[^a-zA-Z0-9]/g, "").toUpperCase()
             : (r.provider_ref ?? "").replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase();
-          return `${r.fund[0]!.toUpperCase()}${r.fund.slice(1)}  ${ksh(r.amount_minor)}  ${timeLabel(r.created_at)}  ${methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}`;
+          return `${r.fund[0]!.toUpperCase()}${r.fund.slice(1)}  ${ksh(r.amount_minor)}  ${timeLabel(r.created_at)}  ${methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}${r.account_name ? `  "${r.account_name}"` : ""}`;
         }),
       }));
     const total = rows.reduce((s, r) => s + (settled(r.status) ? r.amount_minor : 0), 0);
@@ -459,10 +477,10 @@ export class FinancialService {
   /** Render ONE of the caller's gifts as a downloadable receipt PDF (the in-app
    *  "Giving receipt"). Owner-scoped (404 otherwise). Money stays server-side. */
   async receiptPdf(userId: string, transactionId: string): Promise<Buffer> {
-    const t = await maybeOne<{ amount_minor: number; currency: string; status: string; fund: string | null; provider: string | null; provider_ref: string | null; receipt_code: string | null; created_at: unknown; settled_at: unknown }>(
+    const t = await maybeOne<{ amount_minor: number; currency: string; status: string; fund: string | null; provider: string | null; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: unknown; settled_at: unknown }>(
       this.pool,
       `SELECT t.amount_minor, t.currency, t.status, f.code AS fund, t.provider,
-              COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref, t.receipt_code, t.created_at, t.settled_at
+              COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref, t.receipt_code, t.account_name, t.created_at, t.settled_at
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
         WHERE t.transaction_id = $1 AND t.user_id = $2`,
       [transactionId, userId],
@@ -489,6 +507,7 @@ export class FinancialService {
       ref,
       amountLabel: ksh(Number(t.amount_minor)),
       fund,
+      giftName: t.account_name,
       methodLabel,
       statusLabel: settled(t.status) ? "Completed" : t.status[0]!.toUpperCase() + t.status.slice(1),
       feeLabel: ksh(0),
@@ -683,7 +702,7 @@ export class FinancialService {
     const rows = await many<Record<string, unknown>>(
       this.pool,
       `SELECT t.transaction_id, u.full_name, t.amount_minor, t.currency, t.status,
-              f.code AS fund, t.created_at, t.settled_at,
+              f.code AS fund, t.account_name, t.created_at, t.settled_at,
               COALESCE(t.provider, CASE WHEN t.stripe_payment_intent IS NOT NULL THEN 'card' END) AS method
          FROM transactions t
          LEFT JOIN funds f ON f.fund_id = t.fund_id
@@ -772,7 +791,7 @@ export class FinancialService {
     const txn = await maybeOne<Record<string, unknown>>(
       this.pool,
       `SELECT t.transaction_id, u.full_name, t.amount_minor, t.currency, t.status,
-              f.code AS fund, f.name AS fund_name, t.created_at, t.settled_at,
+              f.code AS fund, f.name AS fund_name, t.account_name, t.created_at, t.settled_at,
               COALESCE(t.provider, CASE WHEN t.stripe_payment_intent IS NOT NULL THEN 'card' END) AS method,
               t.provider_ref, t.stripe_payment_intent, t.idempotency_key
          FROM transactions t
