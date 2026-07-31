@@ -11,6 +11,16 @@ returns an absolute R2 URL as `hls_url` for the church row (plus
 the CDN copy briefly 404s — e.g. right at stream start before the publisher
 has caught up).
 
+**L1.5b (per-stream paths, flicker fix — see `docs/LIVE_CDN_PERSTREAM.md`):**
+this publisher now mirrors every broadcast to BOTH the legacy static path
+(`live-cdn/church/index.m3u8`, unconditionally) AND a per-stream path
+(`live-cdn/church/<stream_id>/index.m3u8`, once it resolves the live
+stream's id from the backend's `GET /v1/live/church/current`). The backend
+only switches `hls_url` to the per-stream path when its `LIVE_CDN_PER_STREAM`
+env flag is on (default off) — read `docs/LIVE_CDN_PERSTREAM.md` for the
+required rollout order (daemon before flag, not the other way round) before
+touching either.
+
 Files in this directory (all copied onto the VPS by the operator — nothing
 here runs in CI or in the repo's own containers):
 
@@ -146,3 +156,13 @@ at least a day ago, never anything currently referenced by a live playlist.
   actually reachable locally with `curl -sI 'http://127.0.0.1:8888/church/index.m3u8?cookieCheck=1'`
   while a church stream is running — should be 200. If that 404s, the issue
   is upstream of this daemon (MediaMTX/backend), not the publisher.
+- **"could not resolve stream_id from the backend — only the legacy CDN path
+  will be updated for this broadcast"**: the publisher's
+  `GET http://127.0.0.1:8080/v1/live/church/current` lookup failed (backend
+  down/unreachable on that host:port, or this box's backend predates the
+  route). Harmless for playback as long as `LIVE_CDN_PER_STREAM` is off on
+  the backend (the default) — fix the lookup before turning that flag on, or
+  every church viewer's `hls_url` will 404 while this keeps failing.
+  `curl -s http://127.0.0.1:8080/v1/live/church/current` should return
+  `{"stream_id":"<uuid>"}` while a church stream is live, `{"stream_id":null}`
+  otherwise.
