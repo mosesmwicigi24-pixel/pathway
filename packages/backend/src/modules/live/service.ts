@@ -53,6 +53,42 @@ export interface RecordingRow {
   recording_url: string;
 }
 
+// ---- L5 interactions (docs/LIVE_INTERACTIVE.md) ---------------------------
+
+export type ReactionEmoji = "like" | "love";
+export type GuestStatus = "invited" | "accepted" | "declined" | "removed" | "ended";
+
+export interface LiveMessageRow {
+  message_id: string;
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  body: string;
+  sent_at: string;
+}
+
+export interface LiveHandRow {
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  raised_at: string;
+}
+
+export interface LiveGuestRow {
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  status: GuestStatus;
+}
+
+export interface LivePulse {
+  viewer_count: number;
+  reactions: { like: number; love: number };
+  recent_reactions: { emoji: ReactionEmoji; at: string }[];
+  hands: LiveHandRow[];
+  guests: LiveGuestRow[];
+}
+
 interface StreamRow {
   stream_id: string;
   scope: LiveScope;
@@ -115,6 +151,28 @@ export class LiveService {
   static readonly RecordingsQuery = z.object({
     scope: z.enum(["church", "cell"]).optional(),
     cell_id: z.string().uuid().optional(),
+  });
+
+  // ---- L5 interactions (docs/LIVE_INTERACTIVE.md) ----------------------
+
+  static readonly React = z.object({
+    emoji: z.enum(["like", "love"]),
+  });
+
+  static readonly SetHand = z.object({
+    raised: z.boolean(),
+  });
+
+  static readonly MessagesQuery = z.object({
+    since: z.string().datetime({ offset: true }).optional(),
+  });
+
+  static readonly SendMessage = z.object({
+    body: z.string().trim().min(1).max(500),
+  });
+
+  static readonly GuestRespond = z.object({
+    accept: z.boolean(),
   });
 
   // ---- internals ------------------------------------------------------
@@ -196,6 +254,26 @@ export class LiveService {
          FROM live_streams WHERE stream_id = $1`,
       [streamId],
     );
+  }
+
+  /** L5 (docs/LIVE_INTERACTIVE.md): fetch a stream or 404. Every interaction
+   *  endpoint (reactions, hand, messages, pulse, guests) starts here. */
+  private async streamOrThrow(streamId: string): Promise<StreamRow> {
+    const stream = await this.streamById(this.pool, streamId);
+    if (!stream) throw new ApiError("NOT_FOUND", "Live stream not found");
+    return stream;
+  }
+
+  /** Same cell-membership visibility rule as heartbeat/listNow/listRecordings. */
+  private async assertVisible(principal: Principal, stream: StreamRow): Promise<void> {
+    if (stream.scope === "cell" && !(await this.canWatchCell(principal, stream.cell_id!))) {
+      throw new ApiError("FORBIDDEN_SCOPE", "This stream is not visible to you");
+    }
+  }
+
+  /** All L5 writes except pulse + messages GET require the stream to still be live (409 CONFLICT). */
+  private assertLive(stream: StreamRow): void {
+    if (stream.status !== "live") throw new ApiError("CONFLICT", "This live stream has ended");
   }
 
   /** Best-effort: match one MediaMTX segment covering the window and stamp
@@ -323,6 +401,14 @@ export class LiveService {
         c, `UPDATE live_streams SET status = 'ended', ended_at = now() WHERE stream_id = $1 AND status = 'live' RETURNING ended_at`,
         [streamId],
       );
+      // L5 (docs/LIVE_INTERACTIVE.md): stream end sweeps every still-active
+      // guest (invited or accepted) to 'ended' — a per-stream grant that never
+      // outlives the stream it was granted on.
+      await c.query(
+        `UPDATE live_stream_guests SET status = 'ended', responded_at = COALESCE(responded_at, now())
+          WHERE stream_id = $1 AND status IN ('invited', 'accepted')`,
+        [streamId],
+      );
       await audit(c, principal.userId, "live.stream_ended", "live_streams", streamId, {});
       return row;
     });
@@ -436,6 +522,263 @@ export class LiveService {
       });
     }
     return { data };
+  }
+
+  // ---- L5 interactions (docs/LIVE_INTERACTIVE.md) -----------------------
+
+  /**
+   * Append a reaction event. Rate-limited to >=1s/user (any emoji) via a
+   * single atomic `INSERT ... WHERE NOT EXISTS` — no separate check-then-write
+   * race, no in-memory bucket (works the same across horizontally scaled
+   * instances since the guard lives in the row itself).
+   */
+  async react(principal: Principal, streamId: string, input: z.infer<typeof LiveService.React>): Promise<void> {
+    const stream = await this.streamOrThrow(streamId);
+    await this.assertVisible(principal, stream);
+    this.assertLive(stream);
+
+    const inserted = await maybeOne<{ reaction_id: string }>(
+      this.pool,
+      `INSERT INTO live_stream_reactions (stream_id, user_id, emoji)
+       SELECT $1, $2, $3
+        WHERE NOT EXISTS (
+          SELECT 1 FROM live_stream_reactions
+           WHERE stream_id = $1 AND user_id = $2 AND occurred_at > now() - interval '1 second'
+        )
+       RETURNING reaction_id`,
+      [streamId, principal.userId, input.emoji],
+    );
+    if (!inserted) throw new ApiError("RATE_LIMITED", "One reaction per second");
+  }
+
+  /**
+   * Idempotent upsert of one hand state per (stream, user). Raising only ever
+   * moves raised_at forward; lowering only ever moves lowered_at forward —
+   * "currently raised" is computed at read time (pulse) as
+   * `raised_at IS NOT NULL AND (lowered_at IS NULL OR raised_at > lowered_at)`,
+   * so repeated identical calls never create a second row or change the
+   * logical state.
+   */
+  async setHand(principal: Principal, streamId: string, input: z.infer<typeof LiveService.SetHand>): Promise<void> {
+    const stream = await this.streamOrThrow(streamId);
+    await this.assertVisible(principal, stream);
+    this.assertLive(stream);
+
+    await this.pool.query(
+      `INSERT INTO live_stream_hands (stream_id, user_id, raised_at, lowered_at)
+       VALUES ($1, $2, CASE WHEN $3 THEN now() ELSE NULL END, CASE WHEN $3 THEN NULL ELSE now() END)
+       ON CONFLICT (stream_id, user_id) DO UPDATE SET
+         raised_at = CASE WHEN $3 THEN now() ELSE live_stream_hands.raised_at END,
+         lowered_at = CASE WHEN $3 THEN live_stream_hands.lowered_at ELSE now() END`,
+      [streamId, principal.userId, input.raised],
+    );
+  }
+
+  /** Ascending, cap 200/poll. Allowed while the stream has ended (grace read) —
+   *  visibility still applies. `since` omitted returns the most recent 200. */
+  async listMessages(
+    principal: Principal,
+    streamId: string,
+    q: z.infer<typeof LiveService.MessagesQuery>,
+  ): Promise<{ messages: LiveMessageRow[] }> {
+    const stream = await this.streamOrThrow(streamId);
+    await this.assertVisible(principal, stream);
+
+    // sent_at is formatted server-side at MICROSECOND precision (to_char, not
+    // the driver's default JS-Date parse) — a plain Date round-trips through
+    // JSON at millisecond precision, which would round a message's own
+    // `since` cursor UP past itself and re-include it on the next poll.
+    const messages = q.since
+      ? await many<LiveMessageRow>(
+          this.pool,
+          `SELECT m.message_id, m.user_id, u.full_name, u.avatar_url, m.body,
+                  to_char(m.sent_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sent_at
+             FROM live_stream_messages m JOIN users u ON u.user_id = m.user_id
+            WHERE m.stream_id = $1 AND m.sent_at > $2
+            ORDER BY m.sent_at ASC LIMIT 200`,
+          [streamId, q.since],
+        )
+      : await many<LiveMessageRow>(
+          this.pool,
+          `SELECT recent.message_id, recent.user_id, recent.full_name, recent.avatar_url, recent.body,
+                  to_char(recent.sent_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sent_at
+             FROM (
+               SELECT m.message_id, m.user_id, u.full_name, u.avatar_url, m.body, m.sent_at
+                 FROM live_stream_messages m JOIN users u ON u.user_id = m.user_id
+                WHERE m.stream_id = $1
+                ORDER BY m.sent_at DESC LIMIT 200
+             ) recent ORDER BY recent.sent_at ASC`,
+          [streamId],
+        );
+    return { messages };
+  }
+
+  /** POST .../messages — trimmed non-empty, <=500 chars (enforced by SendMessage). */
+  async sendMessage(
+    principal: Principal,
+    streamId: string,
+    input: z.infer<typeof LiveService.SendMessage>,
+  ): Promise<LiveMessageRow> {
+    const stream = await this.streamOrThrow(streamId);
+    await this.assertVisible(principal, stream);
+    this.assertLive(stream);
+
+    const row = await one<{ message_id: string; sent_at: string }>(
+      this.pool,
+      `INSERT INTO live_stream_messages (stream_id, user_id, body) VALUES ($1, $2, $3)
+       RETURNING message_id, to_char(sent_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sent_at`,
+      [streamId, principal.userId, input.body],
+    );
+    const user = await one<{ full_name: string; avatar_url: string | null }>(
+      this.pool, `SELECT full_name, avatar_url FROM users WHERE user_id = $1`, [principal.userId],
+    );
+    return {
+      message_id: row.message_id, user_id: principal.userId,
+      full_name: user.full_name, avatar_url: user.avatar_url,
+      body: input.body, sent_at: row.sent_at,
+    };
+  }
+
+  /**
+   * One snapshot for the whole overlay — the only two L5 reads allowed once a
+   * stream has ended (grace read: the client's last poll can still resolve).
+   * viewer_count reuses the exact same live_viewers window as /live/now and
+   * heartbeat; guests are limited to the still-active pair (invited/accepted) —
+   * once a stream ends they're all swept to 'ended' by endStream and this list
+   * empties out naturally.
+   */
+  async pulse(principal: Principal, streamId: string): Promise<LivePulse> {
+    const stream = await this.streamOrThrow(streamId);
+    await this.assertVisible(principal, stream);
+
+    const viewerCount = await this.activeViewerCount(streamId);
+
+    const totals = await many<{ emoji: ReactionEmoji; n: string }>(
+      this.pool, `SELECT emoji, count(*)::text AS n FROM live_stream_reactions WHERE stream_id = $1 GROUP BY emoji`, [streamId],
+    );
+    const reactions = { like: 0, love: 0 };
+    for (const t of totals) reactions[t.emoji] = Number(t.n);
+
+    const recent = await many<{ emoji: ReactionEmoji; occurred_at: string }>(
+      this.pool,
+      `SELECT emoji, occurred_at FROM live_stream_reactions WHERE stream_id = $1 ORDER BY occurred_at DESC LIMIT 20`,
+      [streamId],
+    );
+    const recent_reactions = recent.map((r) => ({ emoji: r.emoji, at: r.occurred_at }));
+
+    const hands = await many<LiveHandRow>(
+      this.pool,
+      `SELECT h.user_id, u.full_name, u.avatar_url, h.raised_at
+         FROM live_stream_hands h JOIN users u ON u.user_id = h.user_id
+        WHERE h.stream_id = $1 AND h.raised_at IS NOT NULL AND (h.lowered_at IS NULL OR h.raised_at > h.lowered_at)
+        ORDER BY h.raised_at ASC`,
+      [streamId],
+    );
+
+    const guests = await many<LiveGuestRow>(
+      this.pool,
+      `SELECT g.user_id, u.full_name, u.avatar_url, g.status
+         FROM live_stream_guests g JOIN users u ON u.user_id = g.user_id
+        WHERE g.stream_id = $1 AND g.status IN ('invited', 'accepted')
+        ORDER BY g.invited_at ASC`,
+      [streamId],
+    );
+
+    return { viewer_count: viewerCount, reactions, recent_reactions, hands, guests };
+  }
+
+  /**
+   * L6 scaffolding (video is its own later phase against this contract):
+   * broadcaster-only, cap 6 active (invited+accepted) guests, target may not
+   * be the broadcaster themselves. Re-inviting an already invited/accepted
+   * guest is an idempotent no-op (does not re-count against the cap). Fires
+   * the existing best-effort push path with template `live_guest_invite`.
+   */
+  async inviteGuest(principal: Principal, streamId: string, targetUserId: string): Promise<void> {
+    const stream = await this.streamOrThrow(streamId);
+    this.assertLive(stream);
+    if (principal.userId !== stream.started_by) {
+      throw new ApiError("FORBIDDEN_SCOPE", "Only the broadcaster may invite guests");
+    }
+    if (targetUserId === stream.started_by) {
+      throw new ApiError("VALIDATION_FAILED", "The broadcaster cannot invite themselves as a guest");
+    }
+    const target = await maybeOne(this.pool, `SELECT 1 FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [targetUserId]);
+    if (!target) throw new ApiError("NOT_FOUND", "User not found");
+
+    const invited = await tx(this.pool, async (c) => {
+      const existing = await maybeOne<{ status: GuestStatus }>(
+        c, `SELECT status FROM live_stream_guests WHERE stream_id = $1 AND user_id = $2 FOR UPDATE`,
+        [streamId, targetUserId],
+      );
+      if (existing && (existing.status === "invited" || existing.status === "accepted")) {
+        return false; // already active — idempotent no-op, does not re-count against the cap
+      }
+      const active = await one<{ n: string }>(
+        c, `SELECT count(*)::text AS n FROM live_stream_guests WHERE stream_id = $1 AND status IN ('invited', 'accepted')`,
+        [streamId],
+      );
+      if (Number(active.n) >= 6) {
+        throw new ApiError("CONFLICT", "This stream already has 6 active guests");
+      }
+      await c.query(
+        `INSERT INTO live_stream_guests (stream_id, user_id, status, invited_at, responded_at)
+         VALUES ($1, $2, 'invited', now(), NULL)
+         ON CONFLICT (stream_id, user_id) DO UPDATE SET status = 'invited', invited_at = now(), responded_at = NULL`,
+        [streamId, targetUserId],
+      );
+      await audit(c, principal.userId, "live.guest_invited", "live_stream_guests", streamId, { user_id: targetUserId });
+      return true;
+    });
+
+    if (invited) {
+      await this.notify(targetUserId, "live_guest_invite", { stream_id: streamId, title: stream.title });
+    }
+  }
+
+  /** Invitee only; the invite must currently be 'invited' (a stale/absent one 404s). */
+  async respondGuestInvite(
+    principal: Principal,
+    streamId: string,
+    input: z.infer<typeof LiveService.GuestRespond>,
+  ): Promise<void> {
+    const stream = await this.streamOrThrow(streamId);
+    this.assertLive(stream);
+
+    await tx(this.pool, async (c) => {
+      const existing = await maybeOne<{ status: GuestStatus }>(
+        c, `SELECT status FROM live_stream_guests WHERE stream_id = $1 AND user_id = $2 FOR UPDATE`,
+        [streamId, principal.userId],
+      );
+      if (!existing || existing.status !== "invited") {
+        throw new ApiError("NOT_FOUND", "No pending guest invite for you on this stream");
+      }
+      await c.query(
+        `UPDATE live_stream_guests SET status = $3, responded_at = now() WHERE stream_id = $1 AND user_id = $2`,
+        [streamId, principal.userId, input.accept ? "accepted" : "declined"],
+      );
+      await audit(c, principal.userId, "live.guest_responded", "live_stream_guests", streamId, { accepted: input.accept });
+    });
+  }
+
+  /** Broadcaster (remove) or the guest themselves (leave). Idempotent — removing
+   *  an already-terminal (or never-invited) row is a silent no-op. */
+  async removeGuest(principal: Principal, streamId: string, targetUserId: string): Promise<void> {
+    const stream = await this.streamOrThrow(streamId);
+    this.assertLive(stream);
+    const allowed = principal.userId === stream.started_by || principal.userId === targetUserId;
+    if (!allowed) throw new ApiError("FORBIDDEN_SCOPE", "Only the broadcaster or the guest themselves may remove this guest");
+
+    await tx(this.pool, async (c) => {
+      const res = await c.query(
+        `UPDATE live_stream_guests SET status = 'removed', responded_at = now()
+          WHERE stream_id = $1 AND user_id = $2 AND status IN ('invited', 'accepted')`,
+        [streamId, targetUserId],
+      );
+      if ((res.rowCount ?? 0) > 0) {
+        await audit(c, principal.userId, "live.guest_removed", "live_stream_guests", streamId, { user_id: targetUserId });
+      }
+    });
   }
 
   /**

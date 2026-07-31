@@ -6369,6 +6369,169 @@ paths:
           description: "{ data: [{ stream_id, scope, cell_id, title, kind, started_at, ended_at, recording_url }, ...] }"
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  # ---- L5 interactions (docs/LIVE_INTERACTIVE.md) — PINNED wire contract ----
+  /live/streams/{id}/reactions:
+    post:
+      tags: [live]
+      summary: >-
+        Append a like/love reaction event. Server-rate-limited to >=1s/user
+        (429 RATE_LIMITED on a faster repeat). 409 CONFLICT once the stream
+        has ended.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: { type: string, enum: [like, love] }
+      responses:
+        "204": { description: Reaction recorded }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { description: "RATE_LIMITED — faster than one reaction per second." }
+  /live/streams/{id}/hand:
+    post:
+      tags: [live]
+      summary: >-
+        Idempotent upsert of one raise-hand state per (stream, caller). 409
+        CONFLICT once the stream has ended.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [raised]
+              properties:
+                raised: { type: boolean }
+      responses:
+        "204": { description: Hand state updated }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /live/streams/{id}/messages:
+    get:
+      tags: [live]
+      summary: >-
+        Live chat, ascending, capped at 200/poll. Allowed while the stream has
+        ended (grace read for the client's last poll).
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - name: since
+          in: query
+          description: ISO 8601 timestamp cursor; omit for the most recent 200.
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: "{ messages: [{ message_id, user_id, full_name, avatar_url, body, sent_at }, ...] }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [live]
+      summary: Send a live chat message (trimmed, 1-500 chars). 409 CONFLICT once the stream has ended.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "201":
+          description: "{ message_id, user_id, full_name, avatar_url, body, sent_at }"
+        "400": { description: Validation failed — empty or over 500 chars. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /live/streams/{id}/pulse:
+    get:
+      tags: [live]
+      summary: >-
+        One snapshot for the whole interactive overlay — viewer_count (same
+        window as /live/now), reaction totals + last ~20 events, currently
+        raised hands, and active (invited/accepted) guests. Poll every 3s
+        (broadcaster) / 5s (viewer). Allowed while the stream has ended (grace
+        read).
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: >-
+            { viewer_count, reactions: { like, love }, recent_reactions:
+            [{ emoji, at }, ...], hands: [{ user_id, full_name, avatar_url,
+            raised_at }, ...], guests: [{ user_id, full_name, avatar_url,
+            status }, ...] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /live/streams/{id}/guests/{userId}:
+    post:
+      tags: [live]
+      summary: >-
+        Invite a viewer as an L6 on-stage guest — broadcaster only, cap 6
+        active (invited+accepted), target may not be the broadcaster
+        themselves. Re-inviting an already invited/accepted guest is an
+        idempotent no-op. Rides the existing push path (template
+        `live_guest_invite`) to knock the invitee even if backgrounded. 409
+        CONFLICT once the stream has ended, or once the cap is reached.
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - { $ref: "#/components/parameters/UserIdPath" }
+      responses:
+        "204": { description: Invited }
+        "400": { description: "VALIDATION_FAILED — target is the broadcaster." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [live]
+      summary: >-
+        Remove a guest — the broadcaster, or the guest themselves (leave).
+        Idempotent (an already-terminal or never-invited row is a silent
+        no-op). 409 CONFLICT once the stream has ended.
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - { $ref: "#/components/parameters/UserIdPath" }
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /live/streams/{id}/guests/respond:
+    post:
+      tags: [live]
+      summary: >-
+        Accept or decline a pending guest invite — invitee only. 404 if there
+        is no invite currently in 'invited' status for the caller. 409
+        CONFLICT once the stream has ended.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accept]
+              properties:
+                accept: { type: boolean }
+      responses:
+        "204": { description: Response recorded }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -6376,6 +6539,11 @@ components:
   parameters:
     IdPath:
       name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UserIdPath:
+      name: userId
       in: path
       required: true
       schema: { type: string, format: uuid }
