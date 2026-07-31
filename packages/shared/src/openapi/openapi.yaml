@@ -6294,10 +6294,17 @@ paths:
       tags: [live]
       summary: >-
         MediaMTX authHTTP webhook (UNAUTHENTICATED — no bearer JWT; MediaMTX has
-        no user session, only the stream's own publish key. Reachable only from
-        localhost in prod). action=publish validates stream_id/password/path
-        strictly against live_streams; any other action (read/playback/…) is
-        left open for now.
+        no user session, only the stream's own publish key or a guest token.
+        Reachable only from localhost in prod). action=publish on a
+        church/cell path validates stream_id/password/path strictly against
+        live_streams; other church/cell actions (read/playback/…) are left
+        open. L6a (docs/LIVE_INTERACTIVE.md): on a guest WebRTC path
+        (path="guest/{streamId}/{userId}"), action=publish is allowed only
+        for that (stream,user)'s 'accepted' guest row presenting its own
+        matching guest_token while the stream is live; action=read is allowed
+        for either the stream's own owner publish key or any 'accepted'
+        guest's own token on the SAME stream (guests may preview each other).
+        Every other action on any path is left open, unchanged.
       security: []
       requestBody:
         required: true
@@ -6471,7 +6478,12 @@ paths:
             { viewer_count, reactions: { like, love }, recent_reactions:
             [{ emoji, at }, ...], hands: [{ user_id, full_name, avatar_url,
             raised_at }, ...], guests: [{ user_id, full_name, avatar_url,
-            status }, ...] }
+            status, whep_url? }, ...] }. L6a (docs/LIVE_INTERACTIVE.md):
+            whep_url is ADDITIVE and owner-only — present on each guest entry
+            only when the caller is the stream's own broadcaster (the device
+            that subscribes to each guest's WebRTC feed to composite it
+            locally); absent for every other caller, including the guests
+            themselves.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -6531,6 +6543,30 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  # ---- L6a — guest WebRTC publish authorization (docs/LIVE_INTERACTIVE.md) --
+  /live/streams/{id}/guests/me/ingest:
+    get:
+      tags: [live]
+      summary: >-
+        The caller's own WHIP publish credentials for this stream's guest
+        slot — call once accepted, before starting the WebRTC publish.
+        403 unless the caller is currently an 'accepted' guest of a LIVE
+        stream (never invited, still 'invited', declined, removed, or the
+        stream has since ended all 403 here).
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: >-
+            { whip_url, token, path }. whip_url =
+            "<LIVE_WEBRTC_BASE_URL>/guest/{id}/{callerUserId}/whip" — the
+            caller WHIP-publishes camera+mic there, authenticating with
+            `token` (query/user-pass credentials, matching the existing
+            rtmp_url convention). `path` is the bare MediaMTX path, same value
+            embedded in whip_url.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
 components:
   securitySchemes:

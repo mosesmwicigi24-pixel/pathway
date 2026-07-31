@@ -186,6 +186,14 @@ const EnvSchema = z.object({
   // fan-out problem is a church-wide-audience problem, not a small-cell one.
   // No trailing slash, e.g. "https://pub-xxxx.r2.dev". ---
   LIVE_CDN_BASE: z.string().optional(),
+
+  // --- Nuru Live L6a (guest WebRTC publish — docs/LIVE_INTERACTIVE.md). L0/L6
+  // infra (MediaMTX webrtc: yes, path pattern
+  // ~^guest/[0-9a-zA-Z-]+/[0-9a-zA-Z-]+$, nginx TLS termination) is already on
+  // the VPS; this is the public WHIP/WHEP signaling base GET
+  // /live/streams/:id/guests/me/ingest echoes back as
+  // "<base>/guest/<streamId>/<userId>/whip". No trailing slash. ---
+  LIVE_WEBRTC_BASE_URL: z.string().default("https://pathway.nuruplace.org/webrtc"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

@@ -30,6 +30,7 @@ export function registerLive(ctx: AppContext): Router {
     ctx.env.LIVE_RTMP_BASE_URL ?? "rtmp://pathway.nuruplace.org:1935",
     undefined,
     ctx.env.LIVE_CDN_BASE,
+    ctx.env.LIVE_WEBRTC_BASE_URL ?? "https://pathway.nuruplace.org/webrtc",
   );
   const auth = authenticate(ctx.env);
   const perm = requirePermission(ctx.db.replica);
@@ -54,8 +55,17 @@ export function registerLive(ctx: AppContext): Router {
     // be answered BEFORE strict parsing: MediaMTX probes reads with empty
     // user/password, and any non-2xx here reads as deny (it 401'd the HLS
     // poll that drives the CDN publisher).
-    const action = (req.body as { action?: unknown } | undefined)?.action;
-    if (action !== "publish") { res.sendStatus(200); return; }
+    //
+    // L6a (docs/LIVE_INTERACTIVE.md) exception: guest WebRTC paths
+    // (`guest/<streamId>/<userId>`) now gate action=read too (owner publish
+    // key, or any accepted guest's own token, for that stream) — so those
+    // fall through to the real service check instead of this early exit. The
+    // church/cell short-circuit above is otherwise byte-identical.
+    const body = req.body as { action?: unknown; path?: unknown } | undefined;
+    const action = body?.action;
+    const path = typeof body?.path === "string" ? body.path : "";
+    const isGuestPath = path.startsWith("guest/");
+    if (action !== "publish" && !isGuestPath) { res.sendStatus(200); return; }
     const input = parseBody(LiveService.AuthWebhook, req.body);
     const ok = await svc.authWebhook(input);
     res.sendStatus(ok ? 200 : 401);
@@ -119,6 +129,13 @@ export function registerLive(ctx: AppContext): Router {
     const input = parseBody(LiveService.GuestRespond, req.body);
     await svc.respondGuestInvite(requirePrincipal(req), id, input);
     res.sendStatus(204);
+  }));
+
+  // L6a (docs/LIVE_INTERACTIVE.md) — different HTTP method + path depth than
+  // the :userId routes below, so no ordering conflict with them.
+  r.get("/live/streams/:id/guests/me/ingest", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await svc.guestIngest(requirePrincipal(req), id));
   }));
 
   r.post("/live/streams/:id/guests/:userId", auth, handler(async (req, res) => {

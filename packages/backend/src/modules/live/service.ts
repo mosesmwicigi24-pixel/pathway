@@ -79,6 +79,17 @@ export interface LiveGuestRow {
   full_name: string;
   avatar_url: string | null;
   status: GuestStatus;
+  /** L6a (docs/LIVE_INTERACTIVE.md) — ADDITIVE, owner-only: the WHEP URL the
+   *  broadcaster's own device subscribes to for this guest's WebRTC video, to
+   *  composite it locally. Absent for every caller other than the stream's
+   *  own owner (build 91 iOS clients decode tolerantly either way). */
+  whep_url?: string;
+}
+
+export interface GuestIngest {
+  whip_url: string;
+  token: string;
+  path: string;
 }
 
 export interface LivePulse {
@@ -113,6 +124,20 @@ function pathFor(scope: LiveScope, cellId: string | null): string {
   return scope === "church" ? "church" : `cell/${cellId}`;
 }
 
+/** L6a (docs/LIVE_INTERACTIVE.md): the MediaMTX WebRTC path for one guest's
+ *  slot on a stream — matches the deployed path pattern
+ *  ~^guest/[0-9a-zA-Z-]+/[0-9a-zA-Z-]+$. */
+function guestPathFor(streamId: string, userId: string): string {
+  return `guest/${streamId}/${userId}`;
+}
+
+/** L6a: matches MediaMTX's deployed guest path pattern and captures the two
+ *  UUIDs strictly (the looser `[0-9a-zA-Z-]+` MediaMTX pattern is intentionally
+ *  broader than what this backend ever actually mints, so a non-UUID segment
+ *  here just falls through to "not a guest path" — never a 500). */
+const GUEST_PATH_RE =
+  /^guest\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
 /** Postgres unique_violation (23505) — the DB-level one-live-per-path guard. */
 function isUniqueViolation(err: unknown): boolean {
   return typeof err === "object" && err !== null && (err as { code?: string }).code === "23505";
@@ -130,6 +155,10 @@ export class LiveService {
      *  church-scope /live/now rows get an absolute CDN hls_url instead of the
      *  direct relative one. No trailing slash, e.g. "https://pub-xxxx.r2.dev". */
     private readonly cdnBase?: string,
+    /** L6a (docs/LIVE_INTERACTIVE.md) — set from env LIVE_WEBRTC_BASE_URL. The
+     *  public WHIP/WHEP signaling base MediaMTX's nginx TLS front sits behind.
+     *  No trailing slash. */
+    private readonly webrtcBaseUrl = "https://pathway.nuruplace.org/webrtc",
   ) {
     this.notifications = notifications ?? new NotificationService(pool);
   }
@@ -373,6 +402,18 @@ export class LiveService {
    * a 401, not a 500.
    */
   async authWebhook(input: z.infer<typeof LiveService.AuthWebhook>): Promise<boolean> {
+    // L6a (docs/LIVE_INTERACTIVE.md): guest WebRTC paths get their own rules
+    // for publish AND read, dispatched first — everything below this branch
+    // (church/cell publish, and the non-publish default) is untouched.
+    const guestMatch = GUEST_PATH_RE.exec(input.path);
+    if (guestMatch) {
+      const streamId = guestMatch[1]!;
+      const userId = guestMatch[2]!;
+      if (input.action === "publish") return this.authGuestPublish(streamId, userId, input.user, input.password);
+      if (input.action === "read") return this.authGuestRead(streamId, userId, input.user, input.password);
+      return true; // other actions (api probes, etc.) stay open, same default as below
+    }
+
     if (input.action !== "publish") return true;
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRe.test(input.user)) return false;
@@ -384,6 +425,47 @@ export class LiveService {
     if (!stream || stream.status !== "live") return false;
     if (sha256Hex(input.password) !== stream.stream_key_hash) return false;
     return input.path === pathFor(stream.scope, stream.cell_id);
+  }
+
+  /**
+   * L6a guest publish (WHIP): allowed iff the (stream, userId) guest row is
+   * 'accepted', its guest_token matches the request's password, the request's
+   * user self-identifies as that same userId (a token never authorizes
+   * publishing under a different guest's identity), and the stream is still
+   * live.
+   */
+  private async authGuestPublish(streamId: string, userId: string, user: string, password: string): Promise<boolean> {
+    if (user !== userId) return false;
+    const stream = await maybeOne<{ status: string }>(this.pool, `SELECT status FROM live_streams WHERE stream_id = $1`, [streamId]);
+    if (!stream || stream.status !== "live") return false;
+    const guest = await maybeOne<{ status: GuestStatus; guest_token: string | null }>(
+      this.pool,
+      `SELECT status, guest_token FROM live_stream_guests WHERE stream_id = $1 AND user_id = $2`,
+      [streamId, userId],
+    );
+    return !!guest && guest.status === "accepted" && guest.guest_token !== null && guest.guest_token === password;
+  }
+
+  /**
+   * L6a guest read (WHEP): allowed iff the caller presents EITHER the
+   * stream's own owner publish key (user=stream_id, password=stream_key — so
+   * the host can subscribe to composite locally) OR any accepted guest's own
+   * (user_id, guest_token) pair for the SAME stream (guests may preview each
+   * other later). The userId segment in the path itself is not otherwise
+   * consulted — read access is scoped to the stream, not to one guest slot.
+   */
+  private async authGuestRead(streamId: string, _userId: string, user: string, password: string): Promise<boolean> {
+    const stream = await maybeOne<{ stream_key_hash: string }>(
+      this.pool, `SELECT stream_key_hash FROM live_streams WHERE stream_id = $1`, [streamId],
+    );
+    if (!stream) return false;
+    if (user === streamId && sha256Hex(password) === stream.stream_key_hash) return true;
+    const guest = await maybeOne(
+      this.pool,
+      `SELECT 1 FROM live_stream_guests WHERE stream_id = $1 AND user_id = $2 AND status = 'accepted' AND guest_token = $3`,
+      [streamId, user, password],
+    );
+    return !!guest;
   }
 
   /** Starter, live:manage, or Admin/SuperAdmin (covered by hasCap's bridge). Idempotent. */
@@ -403,9 +485,11 @@ export class LiveService {
       );
       // L5 (docs/LIVE_INTERACTIVE.md): stream end sweeps every still-active
       // guest (invited or accepted) to 'ended' — a per-stream grant that never
-      // outlives the stream it was granted on.
+      // outlives the stream it was granted on. L6a: also clears guest_token —
+      // an ended guest's publish/read credential is revoked, not just their
+      // status.
       await c.query(
-        `UPDATE live_stream_guests SET status = 'ended', responded_at = COALESCE(responded_at, now())
+        `UPDATE live_stream_guests SET status = 'ended', responded_at = COALESCE(responded_at, now()), guest_token = NULL
           WHERE stream_id = $1 AND status IN ('invited', 'accepted')`,
         [streamId],
       );
@@ -675,7 +759,7 @@ export class LiveService {
       [streamId],
     );
 
-    const guests = await many<LiveGuestRow>(
+    const guestRows = await many<LiveGuestRow>(
       this.pool,
       `SELECT g.user_id, u.full_name, u.avatar_url, g.status
          FROM live_stream_guests g JOIN users u ON u.user_id = g.user_id
@@ -683,6 +767,14 @@ export class LiveService {
         ORDER BY g.invited_at ASC`,
       [streamId],
     );
+    // L6a (docs/LIVE_INTERACTIVE.md): ADDITIVE — only the stream's own owner
+    // (the one whose device composites the guests locally) gets each guest's
+    // whep_url. Every other caller (viewers, the guests themselves) sees the
+    // same shape as before this field existed.
+    const guests: LiveGuestRow[] =
+      principal.userId === stream.started_by
+        ? guestRows.map((g) => ({ ...g, whep_url: `${this.webrtcBaseUrl}/${guestPathFor(streamId, g.user_id)}/whep` }))
+        : guestRows;
 
     return { viewer_count: viewerCount, reactions, recent_reactions, hands, guests };
   }
@@ -721,10 +813,13 @@ export class LiveService {
       if (Number(active.n) >= 6) {
         throw new ApiError("CONFLICT", "This stream already has 6 active guests");
       }
+      // L6a: re-inviting a lapsed (declined/removed/ended) guest also clears
+      // any stale guest_token from a prior accepted stint — a fresh invite
+      // gets a fresh accept before it can publish/read again.
       await c.query(
-        `INSERT INTO live_stream_guests (stream_id, user_id, status, invited_at, responded_at)
-         VALUES ($1, $2, 'invited', now(), NULL)
-         ON CONFLICT (stream_id, user_id) DO UPDATE SET status = 'invited', invited_at = now(), responded_at = NULL`,
+        `INSERT INTO live_stream_guests (stream_id, user_id, status, invited_at, responded_at, guest_token)
+         VALUES ($1, $2, 'invited', now(), NULL, NULL)
+         ON CONFLICT (stream_id, user_id) DO UPDATE SET status = 'invited', invited_at = now(), responded_at = NULL, guest_token = NULL`,
         [streamId, targetUserId],
       );
       await audit(c, principal.userId, "live.guest_invited", "live_stream_guests", streamId, { user_id: targetUserId });
@@ -736,7 +831,11 @@ export class LiveService {
     }
   }
 
-  /** Invitee only; the invite must currently be 'invited' (a stale/absent one 404s). */
+  /** Invitee only; the invite must currently be 'invited' (a stale/absent one
+   *  404s). L6a (docs/LIVE_INTERACTIVE.md): accepting mints a fresh random
+   *  guest_token — the WebRTC WHIP/WHEP credential for this guest's slot on
+   *  this stream, valid for exactly as long as status stays 'accepted'.
+   *  Declining leaves guest_token NULL (it was never accepted). */
   async respondGuestInvite(
     principal: Principal,
     streamId: string,
@@ -753,16 +852,19 @@ export class LiveService {
       if (!existing || existing.status !== "invited") {
         throw new ApiError("NOT_FOUND", "No pending guest invite for you on this stream");
       }
+      const token = input.accept ? randomBytes(16).toString("hex") : null;
       await c.query(
-        `UPDATE live_stream_guests SET status = $3, responded_at = now() WHERE stream_id = $1 AND user_id = $2`,
-        [streamId, principal.userId, input.accept ? "accepted" : "declined"],
+        `UPDATE live_stream_guests SET status = $3, responded_at = now(), guest_token = $4 WHERE stream_id = $1 AND user_id = $2`,
+        [streamId, principal.userId, input.accept ? "accepted" : "declined", token],
       );
       await audit(c, principal.userId, "live.guest_responded", "live_stream_guests", streamId, { accepted: input.accept });
     });
   }
 
   /** Broadcaster (remove) or the guest themselves (leave). Idempotent — removing
-   *  an already-terminal (or never-invited) row is a silent no-op. */
+   *  an already-terminal (or never-invited) row is a silent no-op. L6a: also
+   *  revokes guest_token — removal/leaving kills the WebRTC publish/read
+   *  credential immediately, not just the status label. */
   async removeGuest(principal: Principal, streamId: string, targetUserId: string): Promise<void> {
     const stream = await this.streamOrThrow(streamId);
     this.assertLive(stream);
@@ -771,7 +873,7 @@ export class LiveService {
 
     await tx(this.pool, async (c) => {
       const res = await c.query(
-        `UPDATE live_stream_guests SET status = 'removed', responded_at = now()
+        `UPDATE live_stream_guests SET status = 'removed', responded_at = now(), guest_token = NULL
           WHERE stream_id = $1 AND user_id = $2 AND status IN ('invited', 'accepted')`,
         [streamId, targetUserId],
       );
@@ -779,6 +881,27 @@ export class LiveService {
         await audit(c, principal.userId, "live.guest_removed", "live_stream_guests", streamId, { user_id: targetUserId });
       }
     });
+  }
+
+  /**
+   * L6a (docs/LIVE_INTERACTIVE.md): the accepted guest's own WHIP publish
+   * credentials for this stream. 404 for an unknown stream_id (matches every
+   * other L5/L6 endpoint's streamOrThrow pattern); FORBIDDEN_SCOPE for every
+   * other way the caller isn't currently an accepted guest of a LIVE stream
+   * (not live, never invited, declined, removed, or already swept to ended).
+   */
+  async guestIngest(principal: Principal, streamId: string): Promise<GuestIngest> {
+    const stream = await this.streamOrThrow(streamId);
+    const guest = await maybeOne<{ status: GuestStatus; guest_token: string | null }>(
+      this.pool,
+      `SELECT status, guest_token FROM live_stream_guests WHERE stream_id = $1 AND user_id = $2`,
+      [streamId, principal.userId],
+    );
+    if (stream.status !== "live" || !guest || guest.status !== "accepted" || !guest.guest_token) {
+      throw new ApiError("FORBIDDEN_SCOPE", "You are not an accepted guest of a live stream");
+    }
+    const path = guestPathFor(streamId, principal.userId);
+    return { whip_url: `${this.webrtcBaseUrl}/${path}/whip`, token: guest.guest_token, path };
   }
 
   /**
