@@ -63,10 +63,42 @@ Notifications: a guest invite rides the existing FCM/notification path
 (`live_guest_invite` template) so an invited viewer gets a knock even if they
 backgrounded the app.
 
+## L6a — guest WebRTC auth contract (shipped)
+
+Guest video rides the same `POST /v1/live/auth` MediaMTX webhook as the
+church/cell broadcaster path, dispatched first by a `guest/<streamId>/
+<userId>` path prefix (`GUEST_PATH_RE` in `packages/backend/src/modules/live/
+service.ts`):
+
+- **Publish (WHIP)**: allowed iff `user === <userId>` (self-identifies as the
+  path's own guest — a token never authorizes publishing under a different
+  guest's identity), the `live_stream_guests` row for `(streamId, userId)` is
+  `accepted`, its `guest_token` is non-null and matches the posted `password`,
+  and the stream is still `live`. `guest_token` is minted on accept and
+  cleared (revoked) on decline, removal, self-leave, re-invite, or stream end.
+- **Read (WHEP)**: allowed iff the caller presents EITHER the stream owner's
+  own publish key (`user=<streamId>`, `password=<stream_key>` — lets the host
+  device composite locally) OR any `accepted` guest's own `(user_id,
+  guest_token)` pair **for the same stream** (guests may preview each other).
+  The userId segment in the path is not otherwise consulted — read access is
+  scoped to the stream, not to one guest's slot.
+- **Any other action** on a guest path (api probes, etc.) stays open, same
+  default as the church/cell early-exit.
+- **Deny, never error, on anything unparseable.** An auth webhook is reached
+  by an untrusted caller with no session — a malformed or empty body (most
+  notably: MediaMTX v1.19.3 sends an EMPTY `user` for WHIP/WHEP unless the
+  client used HTTP Basic auth — see `docs/LIVE_STREAMING.md`) must resolve to
+  a plain 401 deny, exactly like a credential that doesn't match. It must
+  never surface as a 400 validation error or a 500 — both leak implementation
+  detail to an endpoint reachable without authentication, and a 400 in
+  particular reads to MediaMTX as "give up," which is what broke guest video
+  in production before this was root-caused (2026-07-31).
+
 ## Definition of done
 
 L5: backend tests green (reactions rate-limit, hand idempotence, messages
 cursor, pulse shape, guest state machine + 6-cap + owner-only), OpenAPI
 updated, deployed + relations verified; iOS broadcaster + viewer UI live on
 device. Android parity follows as its own pass. L6 client video work is its own
-phase against this contract.
+phase against this contract. L6a (guest WebRTC auth) is shipped — see the
+section above for the pinned allow/deny rules.

@@ -244,8 +244,20 @@ export class LiveService {
     kind: z.enum(["video", "audio"]),
   });
 
+  // `user` is tolerant (absent/empty both parse to "") on purpose: MediaMTX
+  // v1.19.3 forwards an EMPTY `user` for WHIP/WHEP publish/read unless the
+  // client authenticates with HTTP Basic (query-param creds are ignored —
+  // confirmed by direct experiment against prod; see docs/LIVE_STREAMING.md).
+  // An auth webhook must never answer "I can't parse this" with a validation
+  // error — that's the same null-vs-absent bug class `cell_id` hit (fixed in
+  // c65c353). An empty user is not malformed input; it's simply a credential
+  // that will fail every authorization check below (uuid match / guest-token
+  // match) and correctly fall through to a 401 deny. `authWebhook` and its
+  // authGuestPublish/authGuestRead helpers are the ones that decide allow vs.
+  // deny — this schema's only job is to let a well-formed-but-empty request
+  // reach them instead of dying at the parse gate.
   static readonly AuthWebhook = z.object({
-    user: z.string().min(1).max(200),
+    user: z.string().max(200).optional().default(""),
     password: z.string().max(200).optional().default(""),
     path: z.string().min(1).max(200),
     action: z.string().min(1).max(40),
