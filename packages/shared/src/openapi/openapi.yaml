@@ -6316,7 +6316,16 @@ paths:
         matching guest_token while the stream is live; action=read is allowed
         for either the stream's own owner publish key or any 'accepted'
         guest's own token on the SAME stream (guests may preview each other).
-        Every other action on any path is left open, unchanged.
+        Every other action on any path is left open, unchanged. `user` is
+        intentionally OPTIONAL: MediaMTX v1.19.3 sends no `user` at all for
+        WHIP/WHEP publish/read unless the client authenticates with HTTP
+        Basic (query-param creds are ignored — docs/LIVE_STREAMING.md); an
+        absent/empty `user` is simply a credential that fails every
+        allow-check below and is denied, not a malformed request. Any body
+        this endpoint cannot parse at all also resolves to 401, never
+        400/500 — an authentication webhook must always answer allow/deny,
+        never "your request was invalid" (that broke MediaMTX's own retry
+        logic in production).
       security: []
       requestBody:
         required: true
@@ -6324,15 +6333,15 @@ paths:
           application/json:
             schema:
               type: object
-              required: [user, path, action]
+              required: [path, action]
               properties:
-                user: { type: string, description: "The stream_id." }
+                user: { type: string, description: "The stream_id (church/cell publish), or the guest's own user_id (guest publish/read). Optional/empty for actions MediaMTX doesn't attach credentials to." }
                 password: { type: string }
                 path: { type: string }
                 action: { type: string }
       responses:
         "200": { description: Authorized }
-        "401": { description: Rejected }
+        "401": { description: "Rejected — either the credentials don't authorize this action/path, or the body itself couldn't be parsed. Never 400." }
   /live/streams/{id}/end:
     post:
       tags: [live]

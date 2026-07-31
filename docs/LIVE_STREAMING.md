@@ -95,3 +95,29 @@ Zero licensing. The real ceiling is VPS bandwidth: 60 viewers × 6 Mbps
 ≈ 360 Mbps peak — fine on Hostinger's port for tonight's church size; if the
 congregation grows past ~150 concurrent viewers, add a $6 companion VPS as an
 HLS edge (rsync/proxy_cache) — still no per-minute vendor.
+
+## Hard-won operational facts (do not re-derive)
+
+- **MediaMTX v1.19.3 requires HTTP Basic auth for WHIP/WHEP credentials —
+  `?user=&pass=` query params are silently ignored.** Confirmed by direct
+  experiment against prod (2026-07-31): a WHIP/WHEP client presenting
+  credentials via query-param reaches our `POST /live/auth` webhook with an
+  EMPTY `user`/`password` regardless of what was in the URL; the same client
+  switched to an `Authorization: Basic base64(user:pass)` header reaches the
+  webhook with the real values. This cost us the entire L6a guest-video
+  feature in production before it was diagnosed — every guest WHIP publish
+  attempt authenticated as an empty user and was denied. **Any WebRTC
+  (WHIP/WHEP) client integration MUST send credentials via HTTP Basic auth,
+  never query params.** RTMP publish (the church/cell broadcaster path) is
+  unaffected — MediaMTX forwards RTMP username/password to the auth webhook
+  correctly either way.
+- **The auth webhook (`POST /live/auth`) must always answer with a decision
+  (200 allow / 401 deny), never a validation error.** Because MediaMTX itself
+  has no session and treats any non-2xx as "deny, and log it as an auth
+  failure, not a bug," a malformed/empty body must resolve to 401, not
+  400/500. `LiveService.AuthWebhook` accepts an absent/empty `user` on purpose
+  (see the fact above) and the route (`packages/backend/src/modules/live/
+  index.ts`) turns any remaining zod failure into a logged 401 instead of
+  letting it become a 400 through the normal `parseBody`/error-middleware
+  path. See `docs/LIVE_INTERACTIVE.md`'s L6a section for the guest-specific
+  allow/deny rules this feeds into.

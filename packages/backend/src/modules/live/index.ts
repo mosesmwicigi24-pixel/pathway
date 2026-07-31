@@ -78,13 +78,48 @@ export function registerLive(ctx: AppContext): Router {
     // key, or any accepted guest's own token, for that stream) — so those
     // fall through to the real service check instead of this early exit. The
     // church/cell short-circuit above is otherwise byte-identical.
-    const body = req.body as { action?: unknown; path?: unknown } | undefined;
+    const body = req.body as { action?: unknown; path?: unknown; user?: unknown } | undefined;
     const action = body?.action;
     const path = typeof body?.path === "string" ? body.path : "";
     const isGuestPath = path.startsWith("guest/");
     if (action !== "publish" && !isGuestPath) { res.sendStatus(200); return; }
-    const input = parseBody(LiveService.AuthWebhook, req.body);
-    const ok = await svc.authWebhook(input);
+
+    // PRODUCTION INCIDENT (2026-07-31): this route used to run the body
+    // through parseBody(), which throws ApiError("VALIDATION_FAILED") on any
+    // schema mismatch and lets the terminal error handler turn that into a
+    // 400. An authentication webhook must NEVER answer a request it can't
+    // make sense of with a validation error — MediaMTX (and anything else
+    // that can reach this route without a session) can't tell a 400 apart
+    // from a server fault, a 400 leaks our internal schema shape to an
+    // unauthenticated caller, and — as happened here — it silently breaks a
+    // whole feature while looking like someone else's problem (MediaMTX
+    // logged "failed to authenticate: server replied with code 400" and gave
+    // up). Any input this route cannot parse is a DENY, exactly like a
+    // credential that doesn't match: 401, never 400/500.
+    const parsed = LiveService.AuthWebhook.safeParse(req.body);
+    if (!parsed.success) {
+      ctx.log.warn(
+        {
+          path,
+          action,
+          userSupplied: typeof body?.user === "string" && body.user.length > 0,
+          issues: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+        },
+        "live auth webhook: unparseable body, denying",
+      );
+      res.sendStatus(401);
+      return;
+    }
+    const ok = await svc.authWebhook(parsed.data);
+    if (!ok) {
+      // info, not warn — an unmatched credential is routine (viewer probes,
+      // an expired guest token, a genuinely empty MediaMTX WHIP/WHEP `user`).
+      // Never log parsed.data.password or any guest_token — only shape.
+      ctx.log.info(
+        { path: parsed.data.path, action: parsed.data.action, userSupplied: parsed.data.user.length > 0 },
+        "live auth webhook: denied",
+      );
+    }
     res.sendStatus(ok ? 200 : 401);
   }));
 
