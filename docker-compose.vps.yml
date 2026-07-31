@@ -29,6 +29,13 @@ services:
       # stream had recording_url NULL while the files sat on disk).
       - /opt/pathway/mediamtx/recordings:/opt/pathway/mediamtx/recordings:ro
     environment:
+      # Nuru Live CDN (L1.5 / L1.5b). MUST live here, not only in .env — compose
+      # only passes what's in an environment block into the container (a scp of
+      # this file on 2026-07-31 dropped LIVE_CDN_BASE and silently disabled the
+      # R2 fan-out until it was caught). LIVE_CDN_PER_STREAM scopes church HLS
+      # objects by stream_id (flicker fix, docs/LIVE_CDN_PERSTREAM.md).
+      LIVE_CDN_BASE: ${LIVE_CDN_BASE:-}
+      LIVE_CDN_PER_STREAM: ${LIVE_CDN_PER_STREAM:-false}
       MEDIA_STORAGE_DIR: ${MEDIA_STORAGE_DIR:-/data/media}
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://pathway.nuruplace.org/media}
       # Live radio via self-hosted Icecast (source-driven). Values from the VPS-only
