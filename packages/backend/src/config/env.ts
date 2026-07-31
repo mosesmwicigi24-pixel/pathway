@@ -207,6 +207,18 @@ const EnvSchema = z.object({
   // /live/streams/:id/guests/me/ingest echoes back as
   // "<base>/guest/<streamId>/<userId>/whip". No trailing slash. ---
   LIVE_WEBRTC_BASE_URL: z.string().default("https://pathway.nuruplace.org/webrtc"),
+
+  // --- Nuru Live: publisher-liveness sweep (prod incident — a live_streams
+  // row can sit status='live' for hours with ZERO RTMP publishers connected
+  // once a broadcaster's app/network dies abnormally, and the one-live-per-
+  // scope unique index then 409s every attempt to go live again until the
+  // old 12h orphan fallback finally clears it). MediaMTX's HTTP control API
+  // (v3/paths/list) reports whether a path has an actual connected
+  // publisher; this is its base URL as reachable from the backend's docker
+  // network (the MediaMTX container's own service name), used by both the
+  // ~2min worker sweep and createStream's owner self-recovery. No trailing
+  // slash. ---
+  LIVE_MEDIAMTX_API_BASE: z.string().default("http://nuru-mediamtx:9997"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

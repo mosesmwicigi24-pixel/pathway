@@ -164,6 +164,28 @@ function isUniqueViolation(err: unknown): boolean {
   return typeof err === "object" && err !== null && (err as { code?: string }).code === "23505";
 }
 
+/**
+ * Publisher-liveness sweep grace (prod incident fix — see docs/LIVE_STREAMING.md):
+ * a stream is only auto-ended once MediaMTX has shown NO publisher for at
+ * least this long. 90s is chosen to comfortably clear a broadcaster's own
+ * RTMP reconnect/backoff (3 attempts over ~17s observed on real devices) —
+ * the grace clock only starts on the FIRST tick that observes "no
+ * publisher" (see `missingPublisherSince` below), so a mid-broadcast drop
+ * that reconnects within one sweep interval (~2min) never gets anywhere
+ * near this threshold before the publisher reappears and the clock is
+ * cleared.
+ */
+const PUBLISHER_GRACE_MS = 90_000;
+
+interface MediaMtxPathItem {
+  name?: string;
+  ready?: boolean;
+  source?: unknown;
+}
+interface MediaMtxPathsList {
+  items?: MediaMtxPathItem[];
+}
+
 export class LiveService {
   private readonly notifications: NotificationService;
 
@@ -190,9 +212,27 @@ export class LiveService {
      *  BEFORE the VPS publisher daemon is updated to actually write the
      *  per-stream path (see the doc for the rollout order). */
     private readonly cdnPerStream = false,
+    /** Publisher-liveness sweep (docs/LIVE_STREAMING.md) — set from env
+     *  LIVE_MEDIAMTX_API_BASE. MediaMTX's HTTP control API base as reachable
+     *  from the backend's docker network. No trailing slash. */
+    private readonly mediamtxApiBase = "http://nuru-mediamtx:9997",
   ) {
     this.notifications = notifications ?? new NotificationService(pool);
   }
+
+  /**
+   * In-memory only, deliberately not a DB column: the wall-clock moment
+   * (per the `now` a sweep tick was called with — real time in prod, but
+   * caller-controlled in tests) each currently-live stream_id was FIRST
+   * observed to have no MediaMTX publisher. Cleared the instant a publisher
+   * is seen again, or the stream leaves 'live'. A worker restart mid-outage
+   * just costs one extra sweep tick before detection — a fine trade against
+   * a schema migration for a value nothing else needs. Multiple worker
+   * replicas each keep their own clock; whichever gets there first wins
+   * (the end UPDATE is guarded by WHERE status='live' and treats "0 rows"
+   * as a no-op), so this never double-ends or races unsafely.
+   */
+  private readonly missingPublisherSince = new Map<string, number>();
 
   static readonly CreateStream = z.object({
     scope: z.enum(["church", "cell"]),
@@ -390,6 +430,103 @@ export class LiveService {
     }
   }
 
+  /**
+   * MediaMTX HTTP control API (v3/paths/list): does `path` currently have a
+   * connected publisher? true = yes (ready && source present); false = no —
+   * MediaMTX has no publisher for it, INCLUDING the path never having been
+   * created at all (a path nobody has ever published to is exactly as
+   * "no publisher" as one that hung up); null = the API call itself failed
+   * (timeout, network, non-2xx, unparsable body) — callers MUST treat null
+   * as "unknown, do nothing": never mass-end (or refuse to self-recover)
+   * live broadcasts just because the MediaMTX control plane had a blip.
+   */
+  private async publisherConnected(path: string): Promise<boolean | null> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const res = await fetch(`${this.mediamtxApiBase}/v3/paths/list?itemsPerPage=100`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) return null;
+      const body = (await res.json()) as MediaMtxPathsList;
+      const item = body.items?.find((i) => i.name === path);
+      if (!item) return false;
+      return item.ready === true && item.source != null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /**
+   * Owner self-recovery (production incident — see the module doc at the top
+   * of this file): called only from createStream's unique_violation catch,
+   * once the DB has told us this scope target already has a live stream.
+   * Either ends that stream (it's the caller's own — or the caller holds
+   * live:manage — AND MediaMTX confirms no publisher is actually connected)
+   * and returns so the caller can retry the insert, or throws CONFLICT:
+   *   - the caller has no standing over the existing stream (not its owner,
+   *     no live:manage) — same plain 409 as before this feature existed;
+   *   - a publisher genuinely IS connected (a real double-go-live) — 409
+   *     with an actionable `details.reason = "publisher_connected"` so a
+   *     client can offer "End the previous broadcast?" instead of a bare
+   *     error;
+   *   - MediaMTX is unreachable — same actionable 409, since we have no
+   *     evidence the old stream is actually dead (never guess).
+   */
+  private async recoverStaleConflict(principal: Principal, scope: LiveScope, cellId: string | null, path: string): Promise<void> {
+    const existing = await maybeOne<{ stream_id: string; started_by: string }>(
+      this.pool,
+      `SELECT stream_id, started_by FROM live_streams
+        WHERE status = 'live' AND scope = $1 AND cell_id IS NOT DISTINCT FROM $2
+        LIMIT 1`,
+      [scope, cellId],
+    );
+    if (!existing) return; // it ended between our failed INSERT and this check — scope is free, just retry
+
+    const isOwner = existing.started_by === principal.userId;
+    const canRecover = isOwner || (await this.hasCap(principal, "manage"));
+    if (!canRecover) {
+      throw new ApiError("CONFLICT", "A live stream is already running for this scope");
+    }
+
+    const connected = await this.publisherConnected(path);
+    if (connected !== false) {
+      // true (a real publisher) OR null (MediaMTX unreachable — never guess) both keep the 409.
+      throw new ApiError(
+        "CONFLICT",
+        isOwner
+          ? "You already have a live broadcast running for this scope. End it before starting a new one."
+          : "A live stream is already running for this scope.",
+        { reason: "publisher_connected", stream_id: existing.stream_id, started_by: existing.started_by },
+      );
+    }
+
+    let endedAt: string | null = null;
+    await tx(this.pool, async (c) => {
+      const row = await maybeOne<{ ended_at: string }>(
+        c,
+        `UPDATE live_streams SET status = 'ended', ended_at = now() WHERE stream_id = $1 AND status = 'live' RETURNING ended_at`,
+        [existing.stream_id],
+      );
+      if (!row) return; // a concurrent sweep tick/replica already ended it — fine, just retry the insert
+      endedAt = row.ended_at;
+      await audit(c, principal.userId, "live.stream_auto_ended", "live_streams", existing.stream_id, {
+        reason: "publisher_gone",
+        trigger: "create_conflict",
+      });
+    });
+    if (endedAt) {
+      const stream = await this.streamById(this.pool, existing.stream_id);
+      if (stream) {
+        // Best-effort — mirrors endStream's inline attempt; the sweep is the backstop.
+        await this.tryRegisterRecording({ stream_id: stream.stream_id, scope: stream.scope, cell_id: stream.cell_id, started_at: stream.started_at, ended_at: stream.ended_at });
+      }
+    }
+    this.missingPublisherSince.delete(existing.stream_id);
+  }
+
   // ---- public API -------------------------------------------------------
 
   /**
@@ -425,12 +562,11 @@ export class LiveService {
     const scope = input.scope;
     const cellId = input.cell_id ?? null;
     const path = pathFor(scope, cellId);
-    const streamKey = randomBytes(16).toString("hex"); // 32 hex chars
-    const keyHash = sha256Hex(streamKey);
 
-    let streamId: string;
-    try {
-      streamId = await tx(this.pool, async (c) => {
+    const insertOnce = async (): Promise<{ streamId: string; streamKey: string }> => {
+      const streamKey = randomBytes(16).toString("hex"); // 32 hex chars
+      const keyHash = sha256Hex(streamKey);
+      const streamId = await tx(this.pool, async (c) => {
         const created = await one<{ stream_id: string }>(
           c,
           `INSERT INTO live_streams (scope, cell_id, started_by, title, kind, stream_key_hash)
@@ -442,17 +578,36 @@ export class LiveService {
         });
         return created.stream_id;
       });
+      return { streamId, streamKey };
+    };
+
+    let result: { streamId: string; streamKey: string };
+    try {
+      result = await insertOnce();
     } catch (err) {
-      if (isUniqueViolation(err)) {
-        throw new ApiError("CONFLICT", "A live stream is already running for this scope");
+      if (!isUniqueViolation(err)) throw err;
+      // Owner self-recovery (production incident — module doc at the top of
+      // this file): rather than make every broadcaster whose previous
+      // session died abnormally wait for the 12h fallback sweep, the SAME
+      // caller (or a live:manage holder) retrying "go live" gets one chance
+      // to recover automatically. recoverStaleConflict either ends the
+      // confirmed-stale stream and returns (we retry the insert below), or
+      // throws CONFLICT itself when recovery isn't warranted/possible.
+      await this.recoverStaleConflict(principal, scope, cellId, path);
+      try {
+        result = await insertOnce(); // scope should now be free
+      } catch (err2) {
+        if (isUniqueViolation(err2)) {
+          throw new ApiError("CONFLICT", "A live stream is already running for this scope");
+        }
+        throw err2;
       }
-      throw err;
     }
 
     // Push fan-out runs AFTER commit (best-effort; never blocks/reverts the stream).
-    await this.notifyStreamStarted(streamId, scope, cellId, input.title, principal.userId);
+    await this.notifyStreamStarted(result.streamId, scope, cellId, input.title, principal.userId);
 
-    return { stream_id: streamId, rtmp_url: `${this.rtmpBaseUrl}/${path}`, stream_key: streamKey, path };
+    return { stream_id: result.streamId, rtmp_url: `${this.rtmpBaseUrl}/${path}`, stream_key: result.streamKey, path };
   }
 
   /**
@@ -1060,13 +1215,82 @@ export class LiveService {
   }
 
   /**
-   * Worker sweep (~2min tick, per docs/LIVE_STREAMING.md L1): auto-ends streams
-   * whose broadcaster crashed (status='live' older than 12h) and registers a
-   * recording_url for any status='ended' stream that doesn't have one yet.
-   * Each stream is isolated in try/catch so one failure never aborts the sweep.
+   * Publisher-liveness pass of the sweep (production incident — module doc
+   * at the top of this file): for every currently-live stream, ask MediaMTX
+   * whether its path has a connected publisher. No publisher, past the
+   * PUBLISHER_GRACE_MS debounce (see `missingPublisherSince`), auto-ends it
+   * and (best-effort) registers its recording — the exact same shape as a
+   * normal endStream, just server-initiated. MediaMTX being unreachable
+   * (publisherConnected returns null) is a deliberate no-op for that stream
+   * THIS tick — never mass-end live broadcasts on a control-plane outage;
+   * the 12h absolute fallback below is what still guarantees no stream can
+   * stay 'live' forever if the outage is sustained. Each stream is isolated
+   * in try/catch so one failure never aborts the rest of the sweep.
+   */
+  private async sweepPublisherLiveness(now: Date): Promise<number> {
+    let ended = 0;
+    const live = await many<{ stream_id: string; scope: LiveScope; cell_id: string | null; started_at: string }>(
+      this.pool,
+      `SELECT stream_id, scope, cell_id, started_at FROM live_streams WHERE status = 'live'`,
+    );
+    const liveIds = new Set(live.map((s) => s.stream_id));
+    for (const id of this.missingPublisherSince.keys()) {
+      if (!liveIds.has(id)) this.missingPublisherSince.delete(id); // ended/gone by some other path — stop tracking
+    }
+
+    for (const s of live) {
+      try {
+        const path = pathFor(s.scope, s.cell_id);
+        const connected = await this.publisherConnected(path);
+        if (connected === null) continue; // MediaMTX unreachable this tick — unknown state, do nothing
+        if (connected) {
+          this.missingPublisherSince.delete(s.stream_id);
+          continue;
+        }
+
+        const firstMissingAt = this.missingPublisherSince.get(s.stream_id);
+        if (firstMissingAt === undefined) {
+          this.missingPublisherSince.set(s.stream_id, now.getTime());
+          continue; // just noticed — start the grace clock, give a reconnect a chance
+        }
+        if (now.getTime() - firstMissingAt < PUBLISHER_GRACE_MS) continue; // still within grace
+
+        let endedAt: string | null = null;
+        await tx(this.pool, async (c) => {
+          const row = await maybeOne<{ ended_at: string }>(
+            c,
+            `UPDATE live_streams SET status = 'ended', ended_at = now() WHERE stream_id = $1 AND status = 'live' RETURNING ended_at`,
+            [s.stream_id],
+          );
+          if (!row) return; // a concurrent tick/replica already ended it
+          endedAt = row.ended_at;
+          await audit(c, null, "live.stream_auto_ended", "live_streams", s.stream_id, { reason: "publisher_gone" });
+        });
+        this.missingPublisherSince.delete(s.stream_id);
+        if (endedAt) {
+          ended += 1;
+          await this.tryRegisterRecording({ stream_id: s.stream_id, scope: s.scope, cell_id: s.cell_id, started_at: s.started_at, ended_at: endedAt });
+        }
+      } catch {
+        /* one stream's failure must not abort the sweep; next tick retries */
+      }
+    }
+    return ended;
+  }
+
+  /**
+   * Worker sweep (~2min tick, per docs/LIVE_STREAMING.md L1): first, the
+   * publisher-liveness pass above (fast — usually seconds after a
+   * broadcaster's session actually dies); then the 12h absolute fallback
+   * below, which auto-ends anything STILL 'live' regardless of MediaMTX
+   * reachability (a sustained control-API outage must never let a stream
+   * stay 'live' forever); finally registers a recording_url for any
+   * status='ended' stream that doesn't have one yet. Each stream is
+   * isolated in try/catch so one failure never aborts the sweep.
    */
   async sweep(now: Date = new Date()): Promise<{ auto_ended: number; registered: number }> {
-    let autoEnded = 0;
+    let autoEnded = await this.sweepPublisherLiveness(now);
+
     const orphans = await many<{ stream_id: string }>(
       this.pool,
       `SELECT stream_id FROM live_streams WHERE status = 'live' AND started_at <= $1::timestamptz - interval '12 hours'`,

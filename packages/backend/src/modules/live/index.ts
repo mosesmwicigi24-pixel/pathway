@@ -47,6 +47,7 @@ export function registerLive(ctx: AppContext): Router {
     ctx.env.LIVE_CDN_BASE,
     ctx.env.LIVE_WEBRTC_BASE_URL ?? "https://pathway.nuruplace.org/webrtc",
     ctx.env.LIVE_CDN_PER_STREAM,
+    ctx.env.LIVE_MEDIAMTX_API_BASE ?? "http://nuru-mediamtx:9997",
   );
   const auth = authenticate(ctx.env);
   const perm = requirePermission(ctx.db.replica);
