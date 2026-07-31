@@ -1,6 +1,14 @@
 -- Widen the live reaction emoji set: 🔥 joins like/love (docs/LIVE_INTERACTIVE.md,
 -- owner viewer-redesign ask). Forward-only: 180's CHECK is already applied.
-ALTER TABLE live_stream_reactions DROP CONSTRAINT live_stream_reactions_emoji_check;
+--
+-- The `-- Up Migration` marker below is REQUIRED, not decoration: without it
+-- node-pg-migrate treats the ENTIRE file as the up migration, so this ran its own
+-- down section immediately after its up section — widening the CHECK and then
+-- narrowing it right back — while recording 182 as applied. Migration 184 repairs
+-- the databases that already ran it that way.
+
+-- Up Migration
+ALTER TABLE live_stream_reactions DROP CONSTRAINT IF EXISTS live_stream_reactions_emoji_check;
 ALTER TABLE live_stream_reactions ADD CONSTRAINT live_stream_reactions_emoji_check
   CHECK (emoji IN ('like', 'love', 'fire'));
 
@@ -12,6 +20,6 @@ ALTER TABLE live_stream_reactions ADD CONSTRAINT live_stream_reactions_emoji_che
 -- point: this file having NO down section broke the reversibility check on
 -- every commit after it landed).
 DELETE FROM live_stream_reactions WHERE emoji = 'fire';
-ALTER TABLE live_stream_reactions DROP CONSTRAINT live_stream_reactions_emoji_check;
+ALTER TABLE live_stream_reactions DROP CONSTRAINT IF EXISTS live_stream_reactions_emoji_check;
 ALTER TABLE live_stream_reactions ADD CONSTRAINT live_stream_reactions_emoji_check
   CHECK (emoji IN ('like', 'love'));
