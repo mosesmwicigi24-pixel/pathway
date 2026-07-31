@@ -82,10 +82,23 @@ function main(): void {
   );
   stops.push(() => clearInterval(radioTimer));
 
-  // Nuru Live (docs/LIVE_STREAMING.md L1): auto-end orphaned streams (broadcaster
-  // crashed, still 'live' past 12h) + register a recording_url once MediaMTX's
-  // fMP4 segment for the window shows up on disk. ~2min tick.
-  const live = new LiveService(db.primary, env.LIVE_RECORDINGS_DIR, env.LIVE_RTMP_BASE_URL);
+  // Nuru Live (docs/LIVE_STREAMING.md L1): auto-end orphaned streams — first
+  // the publisher-liveness check (MediaMTX confirms no publisher, past a 90s
+  // grace) which is how most broadcaster-crashed streams actually get
+  // cleared within minutes; the 12h absolute fallback still catches anything
+  // left over from a sustained MediaMTX control-API outage. Also registers a
+  // recording_url once MediaMTX's fMP4 segment for the window shows up on
+  // disk. ~2min tick.
+  const live = new LiveService(
+    db.primary,
+    env.LIVE_RECORDINGS_DIR,
+    env.LIVE_RTMP_BASE_URL,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    env.LIVE_MEDIAMTX_API_BASE,
+  );
   const liveTimer = setInterval(
     () => void live.sweep().catch((err) => log.error({ err }, "live sweep failed")),
     2 * 60_000,

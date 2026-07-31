@@ -6258,7 +6258,12 @@ paths:
         additionally requires the caller be staff (the "unscoped" grant); cell
         scope requires Admin/SuperAdmin or the cell in the caller's
         leader_assignments. Refused if that scope target already has a live
-        stream (409).
+        stream (409) — UNLESS the caller is the stream's own owner (or holds
+        live:manage) AND MediaMTX confirms no publisher is actually connected
+        to it (a previous session that died abnormally — crash, network loss),
+        in which case the stale stream is auto-ended and the new one is minted
+        instead of erroring. A non-owner without live:manage always gets the
+        plain 409.
       requestBody:
         required: true
         content:
@@ -6288,7 +6293,14 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { description: "NOT_FOUND — unknown cell_id." }
-        "409": { description: "CONFLICT — that scope target already has a live stream." }
+        "409":
+          description: >-
+            CONFLICT — that scope target already has a live stream, AND either
+            (a) the caller is not its owner and holds no live:manage (plain
+            409, no details), or (b) MediaMTX confirms a publisher is still
+            actually connected — details.reason = "publisher_connected",
+            details.stream_id + details.started_by name the still-live
+            stream, so a client can offer "End the previous broadcast?".
   /live/auth:
     post:
       tags: [live]
