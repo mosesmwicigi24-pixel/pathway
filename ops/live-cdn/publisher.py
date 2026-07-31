@@ -60,7 +60,7 @@ R2_REMOTE = "r2:nuru-live/live-cdn/church"
 # network — same assumption/caveat as MediaMTX's own authHTTPAddress
 # (packages/backend/src/modules/live/index.ts OPS FOLLOW-UP #2); adjust both
 # together if that ever changes.
-BACKEND_CURRENT_STREAM_URL = "http://127.0.0.1:8080/v1/live/church/current"
+BACKEND_CURRENT_STREAM_URL = "http://127.0.0.1:8090/v1/live/church/current"
 
 POLL_INTERVAL_SEC = 3
 SYNC_INTERVAL_SEC = 2
