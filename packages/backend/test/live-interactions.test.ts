@@ -438,3 +438,13 @@ describe("Live interactions — guest invite state machine (L6 scaffolding)", ()
     expect(res.status).toBe(401);
   });
 });
+
+describe("CreateStream tolerance — Android kotlinx body", () => {
+  it("accepts an explicit cell_id: null for a church stream (kotlinx encodeDefaults)", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "kx@dev.local" });
+    const tok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const res = await agent().post("/v1/live/streams").set(auth(tok))
+      .send({ scope: "church", cell_id: null, title: "test 12", kind: "video" });
+    expect(res.status).toBe(201);
+  });
+});

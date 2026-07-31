@@ -186,7 +186,10 @@ export class LiveService {
 
   static readonly CreateStream = z.object({
     scope: z.enum(["church", "cell"]),
-    cell_id: z.string().uuid().optional(),
+    // nullish, not optional: kotlinx-serialization (encodeDefaults=true +
+    // explicitNulls default) sends "cell_id": null for church streams — null
+    // and absent must both mean "no cell" (Android Go Live 400'd since L3).
+    cell_id: z.string().uuid().nullish(),
     title: z.string().trim().min(1).max(200),
     kind: z.enum(["video", "audio"]),
   });
