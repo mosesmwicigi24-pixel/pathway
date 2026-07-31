@@ -41,6 +41,17 @@ describe("Live interactions — reactions", () => {
     expect(rows.rows[0].n).toBe(1);
   });
 
+  it("accepts the fire emoji and reports it in pulse totals", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "fire@dev.local" });
+    const tok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const streamId = await createChurchStream(tok);
+
+    const res = await agent().post(`/v1/live/streams/${streamId}/reactions`).set(auth(tok)).send({ emoji: "fire" });
+    expect(res.status).toBe(204);
+    const pulse = await agent().get(`/v1/live/streams/${streamId}/pulse`).set(auth(tok));
+    expect(pulse.body.reactions.fire).toBe(1);
+  });
+
   it("401s without a bearer token", async () => {
     const admin = await createUser({ congregationId: cong, role: "Admin", email: "r2@dev.local" });
     const tok = bearer({ sub: admin.user_id, role: "Admin", cong });

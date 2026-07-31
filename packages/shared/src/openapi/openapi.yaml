@@ -6381,7 +6381,7 @@ paths:
     post:
       tags: [live]
       summary: >-
-        Append a like/love reaction event. Server-rate-limited to >=1s/user
+        Append a like/love/fire reaction event. Server-rate-limited to >=1s/user
         (429 RATE_LIMITED on a faster repeat). 409 CONFLICT once the stream
         has ended.
       parameters: [{ $ref: "#/components/parameters/IdPath" }]
@@ -6393,7 +6393,7 @@ paths:
               type: object
               required: [emoji]
               properties:
-                emoji: { type: string, enum: [like, love] }
+                emoji: { type: string, enum: [like, love, fire] }
       responses:
         "204": { description: Reaction recorded }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -6475,7 +6475,7 @@ paths:
       responses:
         "200":
           description: >-
-            { viewer_count, reactions: { like, love }, recent_reactions:
+            { viewer_count, reactions: { like, love, fire }, recent_reactions:
             [{ emoji, at }, ...], hands: [{ user_id, full_name, avatar_url,
             raised_at }, ...], guests: [{ user_id, full_name, avatar_url,
             status, whep_url? }, ...] }. L6a (docs/LIVE_INTERACTIVE.md):

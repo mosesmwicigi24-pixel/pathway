@@ -55,7 +55,7 @@ export interface RecordingRow {
 
 // ---- L5 interactions (docs/LIVE_INTERACTIVE.md) ---------------------------
 
-export type ReactionEmoji = "like" | "love";
+export type ReactionEmoji = "like" | "love" | "fire";
 export type GuestStatus = "invited" | "accepted" | "declined" | "removed" | "ended";
 
 export interface LiveMessageRow {
@@ -94,7 +94,7 @@ export interface GuestIngest {
 
 export interface LivePulse {
   viewer_count: number;
-  reactions: { like: number; love: number };
+  reactions: { like: number; love: number; fire: number };
   recent_reactions: { emoji: ReactionEmoji; at: string }[];
   hands: LiveHandRow[];
   guests: LiveGuestRow[];
@@ -185,7 +185,7 @@ export class LiveService {
   // ---- L5 interactions (docs/LIVE_INTERACTIVE.md) ----------------------
 
   static readonly React = z.object({
-    emoji: z.enum(["like", "love"]),
+    emoji: z.enum(["like", "love", "fire"]),
   });
 
   static readonly SetHand = z.object({
@@ -740,7 +740,7 @@ export class LiveService {
     const totals = await many<{ emoji: ReactionEmoji; n: string }>(
       this.pool, `SELECT emoji, count(*)::text AS n FROM live_stream_reactions WHERE stream_id = $1 GROUP BY emoji`, [streamId],
     );
-    const reactions = { like: 0, love: 0 };
+    const reactions = { like: 0, love: 0, fire: 0 };
     for (const t of totals) reactions[t.emoji] = Number(t.n);
 
     const recent = await many<{ emoji: ReactionEmoji; occurred_at: string }>(
