@@ -22,6 +22,12 @@ services:
       # FCM push (§D-M9): the Firebase Admin service-account JSON, read-only.
       # Path matches FCM_SERVICE_ACCOUNT in the shared backend-env anchor.
       - /opt/pathway/secrets/fcm-service-account.json:/run/secrets/fcm.json:ro
+      # Nuru Live recordings: MediaMTX writes fMP4s here on the host; the
+      # registrar (inline at /end here, sweep backstop in worker) matches files
+      # to streams by time-window and mints recording_url. Without this mount
+      # the registrar was silently dead (INCIDENT 2026-07-31: every ended
+      # stream had recording_url NULL while the files sat on disk).
+      - /opt/pathway/mediamtx/recordings:/opt/pathway/mediamtx/recordings:ro
     environment:
       MEDIA_STORAGE_DIR: ${MEDIA_STORAGE_DIR:-/data/media}
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://pathway.nuruplace.org/media}
@@ -68,3 +74,5 @@ services:
   worker:
     volumes:
       - /opt/pathway/secrets/fcm-service-account.json:/run/secrets/fcm.json:ro
+      # rw: the sweep registers recordings AND (follow-up) unlinks soft-deleted ones.
+      - /opt/pathway/mediamtx/recordings:/opt/pathway/mediamtx/recordings
