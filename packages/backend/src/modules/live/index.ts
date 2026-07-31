@@ -14,10 +14,14 @@
 //      MediaMTX's container/network — 127.0.0.1:8080 assumes the same-host
 //      default from L0; adjust if the backend binds elsewhere.)
 import { Router } from "express";
+import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
 import { authenticate, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { LiveService } from "./service.js";
+
+const IdParam = z.object({ id: z.string().uuid() });
+const GuestParam = z.object({ id: z.string().uuid(), userId: z.string().uuid() });
 
 export function registerLive(ctx: AppContext): Router {
   const svc = new LiveService(
@@ -72,6 +76,61 @@ export function registerLive(ctx: AppContext): Router {
   r.get("/live/recordings", auth, handler(async (req, res) => {
     const q = parseBody(LiveService.RecordingsQuery, req.query);
     res.json(await svc.listRecordings(requirePrincipal(req), q));
+  }));
+
+  // ---- L5 interactions (docs/LIVE_INTERACTIVE.md) — PINNED wire contract ----
+
+  r.post("/live/streams/:id/reactions", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const input = parseBody(LiveService.React, req.body);
+    await svc.react(requirePrincipal(req), id, input);
+    res.sendStatus(204);
+  }));
+
+  r.post("/live/streams/:id/hand", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const input = parseBody(LiveService.SetHand, req.body);
+    await svc.setHand(requirePrincipal(req), id, input);
+    res.sendStatus(204);
+  }));
+
+  r.get("/live/streams/:id/messages", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const q = parseBody(LiveService.MessagesQuery, req.query);
+    res.json(await svc.listMessages(requirePrincipal(req), id, q));
+  }));
+
+  r.post("/live/streams/:id/messages", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const input = parseBody(LiveService.SendMessage, req.body);
+    res.status(201).json(await svc.sendMessage(requirePrincipal(req), id, input));
+  }));
+
+  r.get("/live/streams/:id/pulse", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await svc.pulse(requirePrincipal(req), id));
+  }));
+
+  // Literal "respond" segment MUST be registered before the ":userId" param
+  // route below — otherwise Express would match "/guests/respond" as a
+  // (non-uuid) :userId and 400 on parseBody instead of dispatching here.
+  r.post("/live/streams/:id/guests/respond", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const input = parseBody(LiveService.GuestRespond, req.body);
+    await svc.respondGuestInvite(requirePrincipal(req), id, input);
+    res.sendStatus(204);
+  }));
+
+  r.post("/live/streams/:id/guests/:userId", auth, handler(async (req, res) => {
+    const { id, userId } = parseBody(GuestParam, req.params);
+    await svc.inviteGuest(requirePrincipal(req), id, userId);
+    res.sendStatus(204);
+  }));
+
+  r.delete("/live/streams/:id/guests/:userId", auth, handler(async (req, res) => {
+    const { id, userId } = parseBody(GuestParam, req.params);
+    await svc.removeGuest(requirePrincipal(req), id, userId);
+    res.sendStatus(204);
   }));
 
   return r;
