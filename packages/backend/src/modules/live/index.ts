@@ -13,6 +13,15 @@
 //      (host:port must match wherever the backend actually listens from
 //      MediaMTX's container/network — 127.0.0.1:8080 assumes the same-host
 //      default from L0; adjust if the backend binds elsewhere.)
+//   3. Recording stewardship (DELETE /live/recordings/:id) only soft-deletes
+//      the DB row today — the on-disk fMP4 segment is never unlinked. Neither
+//      the api nor worker service mounts LIVE_RECORDINGS_DIR as a volume in
+//      docker-compose.prod.yml/docker-compose.vps.yml, so no in-repo process
+//      can reach the file to delete it. Fix: bind-mount the MediaMTX
+//      recordings dir (read-write) into the worker service in
+//      docker-compose.vps.yml, then extend the sweep in service.ts to unlink
+//      the file for any row with recording_deleted_at set and reachable on
+//      disk.
 import { Router } from "express";
 import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
@@ -86,6 +95,19 @@ export function registerLive(ctx: AppContext): Router {
   r.get("/live/recordings", auth, handler(async (req, res) => {
     const q = parseBody(LiveService.RecordingsQuery, req.query);
     res.json(await svc.listRecordings(requirePrincipal(req), q));
+  }));
+
+  // Recording stewardship (owner-managed keep/delete). No ordering hazard with
+  // the DELETE .../:id route below — different HTTP method, and there is no
+  // GET .../:id counterpart for "mine" to collide with.
+  r.get("/live/recordings/mine", auth, handler(async (req, res) => {
+    res.json(await svc.listMyRecordings(requirePrincipal(req)));
+  }));
+
+  r.delete("/live/recordings/:id", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    await svc.deleteRecording(requirePrincipal(req), id);
+    res.sendStatus(204);
   }));
 
   // ---- L5 interactions (docs/LIVE_INTERACTIVE.md) — PINNED wire contract ----

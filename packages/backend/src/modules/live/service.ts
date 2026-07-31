@@ -53,6 +53,26 @@ export interface RecordingRow {
   recording_url: string;
 }
 
+/**
+ * Recording stewardship (owner-managed keep/delete). A "recording" is 1:1
+ * with the stream that produced it (live_streams has at most one
+ * recording_url), so recording_id === stream_id — there is no separate
+ * recordings table. duration/size are NOT modeled anywhere in this schema
+ * (MediaMTX writes the segment; the backend only ever learns its URL), so
+ * this row deliberately omits them rather than fabricate a value.
+ */
+export interface MyRecordingRow {
+  recording_id: string;
+  stream_id: string;
+  scope: LiveScope;
+  cell_id: string | null;
+  title: string;
+  kind: LiveKind;
+  started_at: string;
+  ended_at: string;
+  url: string;
+}
+
 // ---- L5 interactions (docs/LIVE_INTERACTIVE.md) ---------------------------
 
 export type ReactionEmoji = "like" | "love" | "fire";
@@ -113,6 +133,7 @@ interface StreamRow {
   ended_at: string | null;
   viewer_peak: number;
   recording_url: string | null;
+  recording_deleted_at: string | null;
 }
 
 function sha256Hex(s: string): string {
@@ -279,7 +300,7 @@ export class LiveService {
     return maybeOne<StreamRow>(
       c,
       `SELECT stream_id, scope, cell_id, started_by, title, kind, status, stream_key_hash,
-              started_at, ended_at, viewer_peak, recording_url
+              started_at, ended_at, viewer_peak, recording_url, recording_deleted_at
          FROM live_streams WHERE stream_id = $1`,
       [streamId],
     );
@@ -585,13 +606,13 @@ export class LiveService {
     return { ok: true };
   }
 
-  /** Ended streams with a registered recording, same visibility rules as listNow. */
+  /** Ended streams with a registered, non-deleted recording, same visibility rules as listNow. */
   async listRecordings(principal: Principal, q: z.infer<typeof LiveService.RecordingsQuery>): Promise<{ data: RecordingRow[] }> {
     const rows = await many<Pick<StreamRow, "stream_id" | "scope" | "cell_id" | "title" | "kind" | "started_at" | "ended_at" | "recording_url">>(
       this.pool,
       `SELECT stream_id, scope, cell_id, title, kind, started_at, ended_at, recording_url
          FROM live_streams
-        WHERE status = 'ended' AND recording_url IS NOT NULL
+        WHERE status = 'ended' AND recording_url IS NOT NULL AND recording_deleted_at IS NULL
           AND ($1::text IS NULL OR scope = $1)
           AND ($2::uuid IS NULL OR cell_id = $2)
         ORDER BY ended_at DESC NULLS LAST`,
@@ -606,6 +627,71 @@ export class LiveService {
       });
     }
     return { data };
+  }
+
+  /**
+   * Recording stewardship (owner-managed keep/delete, mirrors listRecordings'
+   * shape). "Mine" = streams the caller personally started; a live:manage
+   * holder instead sees every non-deleted recording (oversight, same bridge
+   * used throughout this module — endStream, removeGuest). Cell-membership
+   * visibility does NOT gate this list — ownership/manage is the only test,
+   * same as who may delete.
+   */
+  async listMyRecordings(principal: Principal): Promise<{ data: MyRecordingRow[] }> {
+    const manage = await this.hasCap(principal, "manage");
+    const rows = await many<Pick<StreamRow, "stream_id" | "scope" | "cell_id" | "title" | "kind" | "started_at" | "ended_at" | "recording_url">>(
+      this.pool,
+      `SELECT stream_id, scope, cell_id, title, kind, started_at, ended_at, recording_url
+         FROM live_streams
+        WHERE status = 'ended' AND recording_url IS NOT NULL AND recording_deleted_at IS NULL
+          AND ($1::boolean OR started_by = $2)
+        ORDER BY ended_at DESC NULLS LAST`,
+      [manage, principal.userId],
+    );
+    return {
+      data: rows.map((r) => ({
+        recording_id: r.stream_id, stream_id: r.stream_id, scope: r.scope, cell_id: r.cell_id,
+        title: r.title, kind: r.kind, started_at: r.started_at, ended_at: r.ended_at ?? "",
+        url: r.recording_url ?? "",
+      })),
+    };
+  }
+
+  /**
+   * Delete (hide) one recording. Allowed for the stream's own owner OR a
+   * live:manage holder — same bridge as endStream. SOFT-delete only
+   * (recording_deleted_at) — the row, and the on-disk file, are untouched;
+   * this just excludes it from every listing/replay surface everywhere the
+   * module reads recording_url (listRecordings, listMyRecordings). Idempotent:
+   * a second delete of the same recording is a silent no-op, matching
+   * removeGuest's idiom (audit only fires on the call that actually changed
+   * something).
+   *
+   * On-disk file removal is a documented follow-up, not done here: neither
+   * the `api` nor `worker` container mounts the MediaMTX recordings directory
+   * in docker-compose.prod.yml/docker-compose.vps.yml as they stand today (no
+   * bind mount for LIVE_RECORDINGS_DIR on either service) — so there is no
+   * verified in-repo path to touch the file from either process. Soft-delete
+   * still fully achieves "gone from every list a member/leader can see";
+   * reclaiming the disk space is ops work (mount the dir into the worker and
+   * have the sweep unlink recording_deleted_at rows) tracked separately.
+   */
+  async deleteRecording(principal: Principal, streamId: string): Promise<void> {
+    const stream = await this.streamById(this.pool, streamId);
+    if (!stream) throw new ApiError("NOT_FOUND", "Live stream not found");
+    if (!stream.recording_url) throw new ApiError("NOT_FOUND", "This stream has no recording");
+    const allowed = principal.userId === stream.started_by || (await this.hasCap(principal, "manage"));
+    if (!allowed) throw new ApiError("FORBIDDEN_SCOPE", "Only the stream's owner or a live:manage holder may delete this recording");
+
+    await tx(this.pool, async (c) => {
+      const res = await c.query(
+        `UPDATE live_streams SET recording_deleted_at = now() WHERE stream_id = $1 AND recording_deleted_at IS NULL`,
+        [streamId],
+      );
+      if ((res.rowCount ?? 0) > 0) {
+        await audit(c, principal.userId, "live.recording_deleted", "live_streams", streamId, {});
+      }
+    });
   }
 
   // ---- L5 interactions (docs/LIVE_INTERACTIVE.md) -----------------------
