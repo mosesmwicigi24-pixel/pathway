@@ -47,11 +47,19 @@ exceptions + `ensureOccurrence` are **right** and stay. Changes:
   exceptions query (one query, grouped).
 - `materialize(seriesId, from, to)` is **window-parameterized**; the fixed horizon
   constant is deleted. Every reader of the `events` table (`homeEvents`, `myRsvps`,
-  rosters) ensure-materializes its own window first (cheap upsert, `DO NOTHING`).
+  rosters) ensure-materializes its own window first (one batched upsert, `DO NOTHING`).
+  The **default window is `[now−90d, now+90d]`, not `[now, now+90d]`** (amended
+  2026-07-31): a strictly-forward window could never realize an occurrence that was
+  already past the first time anything materialized the series — a back-dated event,
+  an imported/restored series — so those occurrences projected on `/calendar` but had
+  no `events` row, and every past-facing reader (command-center "recent occurrences",
+  attendance roster, QR panel, CSV export) silently showed nothing.
 - **Nightly reconcile sweep** (worker cron): for every active series, materialize a
-  rolling `[now, now+90d]` window AND reconcile — refresh times of rescheduled rows,
+  rolling `[now−90d, now+90d]` window AND reconcile — refresh times of rescheduled rows,
   soft-cancel materialized rows no longer produced by the rrule/exceptions
   (RSVP'd rows get an exception-style cancellation notice, unattended rows are pruned).
+  The reconcile (refresh + prune) half stays **forward-only from `now`**: past rows are
+  history — never re-timed, never pruned, never retro-notified as cancelled.
   The same reconcile runs synchronously on series update.
 - **Open-ended series are legal**: drop the static UNTIL stamp; windowed expansion
   makes unbounded rules safe. Validation keeps INTERVAL/COUNT caps as DoS guards.
