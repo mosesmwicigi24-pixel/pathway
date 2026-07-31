@@ -427,3 +427,135 @@ describe("Live streaming — recordings list", () => {
     expect(visible.body.data[0].recording_url).toBe("/live-recordings/cell/x/seg.mp4");
   });
 });
+
+describe("Live streaming — recording stewardship (GET /live/recordings/mine, DELETE /live/recordings/:id)", () => {
+  async function endedStreamWithRecording(
+    ownerId: string,
+    opts: { scope?: "church" | "cell"; cellId?: string | null; title?: string } = {},
+  ): Promise<string> {
+    const scope = opts.scope ?? "church";
+    const { rows } = await testPool().query<{ stream_id: string }>(
+      `INSERT INTO live_streams (scope, cell_id, started_by, title, kind, stream_key_hash, status, started_at, ended_at, recording_url)
+       VALUES ($1, $2, $3, $4, 'video', 'deadbeef', 'ended', now() - interval '1 hour', now(), '/live-recordings/x/seg.mp4')
+       RETURNING stream_id`,
+      [scope, opts.cellId ?? null, ownerId, opts.title ?? "Recorded"],
+    );
+    return rows[0]!.stream_id;
+  }
+
+  it("GET /mine lists only the caller's own recordings, newest first", async () => {
+    // Plain Student roles (not Admin/SuperAdmin — that bridge grants the full
+    // permission grid, including live:manage, which would make this see
+    // everyone's recordings instead of proving the ownership filter).
+    const owner = await createUser({ congregationId: cong, email: "mine1@dev.local" });
+    const ownerTok = bearer({ sub: owner.user_id, role: "Student", cong });
+    const other = await createUser({ congregationId: cong, email: "mine2@dev.local" });
+
+    const older = await endedStreamWithRecording(owner.user_id, { title: "Older" });
+    await testPool().query(`UPDATE live_streams SET ended_at = now() - interval '2 hours' WHERE stream_id = $1`, [older]);
+    const newer = await endedStreamWithRecording(owner.user_id, { title: "Newer" });
+    await endedStreamWithRecording(other.user_id, { title: "Not mine" });
+
+    const res = await agent().get("/v1/live/recordings/mine").set(auth(ownerTok));
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((r: { stream_id: string }) => r.stream_id)).toEqual([newer, older]);
+    expect(res.body.data[0]).toMatchObject({ recording_id: newer, stream_id: newer, title: "Newer", url: "/live-recordings/x/seg.mp4" });
+  });
+
+  it("GET /mine shows a live:manage holder every caller's recordings, not just their own", async () => {
+    const owner = await createUser({ congregationId: cong, role: "Admin", email: "mine3@dev.local" });
+    const streamId = await endedStreamWithRecording(owner.user_id, { title: "Someone else's" });
+
+    const overseer = await createUser({ congregationId: cong, role: "Instructor", email: "mine4@dev.local" });
+    await grantRole(overseer.user_id, "national_director"); // live:manage
+    const overseerTok = bearer({ sub: overseer.user_id, role: "Instructor", cong });
+
+    const res = await agent().get("/v1/live/recordings/mine").set(auth(overseerTok));
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((r: { stream_id: string }) => r.stream_id)).toContain(streamId);
+  });
+
+  it("a plain member with neither ownership nor live:manage sees an empty /mine list", async () => {
+    const owner = await createUser({ congregationId: cong, role: "Admin", email: "mine5@dev.local" });
+    await endedStreamWithRecording(owner.user_id);
+
+    const stranger = await createUser({ congregationId: cong, email: "mine6@dev.local" });
+    const strangerTok = bearer({ sub: stranger.user_id, role: "Student", cong });
+    const res = await agent().get("/v1/live/recordings/mine").set(auth(strangerTok));
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it("DELETE lets the owner delete their own recording; it then vanishes from every list", async () => {
+    const owner = await createUser({ congregationId: cong, role: "Admin", email: "del1@dev.local" });
+    const ownerTok = bearer({ sub: owner.user_id, role: "Admin", cong });
+    const streamId = await endedStreamWithRecording(owner.user_id);
+
+    const del = await agent().delete(`/v1/live/recordings/${streamId}`).set(auth(ownerTok));
+    expect(del.status).toBe(204);
+
+    const mine = await agent().get("/v1/live/recordings/mine").set(auth(ownerTok));
+    expect(mine.body.data).toEqual([]);
+    const list = await agent().get("/v1/live/recordings").set(auth(ownerTok));
+    expect(list.body.data.map((r: { stream_id: string }) => r.stream_id)).not.toContain(streamId);
+
+    const row = await testPool().query(`SELECT recording_url, recording_deleted_at FROM live_streams WHERE stream_id = $1`, [streamId]);
+    expect(row.rows[0].recording_url).not.toBeNull(); // soft-delete only — row/URL untouched
+    expect(row.rows[0].recording_deleted_at).not.toBeNull();
+
+    const auditRow = await testPool().query(`SELECT action FROM audit_log WHERE entity_id = $1 AND action = 'live.recording_deleted'`, [streamId]);
+    expect(auditRow.rows).toHaveLength(1);
+  });
+
+  it("DELETE lets a live:manage holder delete someone else's recording", async () => {
+    const owner = await createUser({ congregationId: cong, role: "Admin", email: "del2@dev.local" });
+    const streamId = await endedStreamWithRecording(owner.user_id);
+
+    const overseer = await createUser({ congregationId: cong, role: "Instructor", email: "del3@dev.local" });
+    await grantRole(overseer.user_id, "national_director");
+    const overseerTok = bearer({ sub: overseer.user_id, role: "Instructor", cong });
+
+    const res = await agent().delete(`/v1/live/recordings/${streamId}`).set(auth(overseerTok));
+    expect(res.status).toBe(204);
+  });
+
+  it("DELETE 403s a stranger with neither ownership nor live:manage", async () => {
+    const owner = await createUser({ congregationId: cong, role: "Admin", email: "del4@dev.local" });
+    const streamId = await endedStreamWithRecording(owner.user_id);
+
+    const stranger = await createUser({ congregationId: cong, role: "Instructor", email: "del5@dev.local" });
+    await grantRole(stranger.user_id, "events_coordinator"); // live:go only, not manage
+    const strangerTok = bearer({ sub: stranger.user_id, role: "Instructor", cong });
+
+    const res = await agent().delete(`/v1/live/recordings/${streamId}`).set(auth(strangerTok));
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN_SCOPE");
+  });
+
+  it("DELETE 404s an unknown stream_id and a stream that never had a recording", async () => {
+    const owner = await createUser({ congregationId: cong, role: "Admin", email: "del6@dev.local" });
+    const ownerTok = bearer({ sub: owner.user_id, role: "Admin", cong });
+
+    const unknown = await agent().delete(`/v1/live/recordings/00000000-0000-0000-0000-000000000000`).set(auth(ownerTok));
+    expect(unknown.status).toBe(404);
+
+    const created = await agent().post("/v1/live/streams").set(auth(ownerTok)).send({ scope: "church", title: "Never recorded", kind: "video" });
+    await agent().post(`/v1/live/streams/${created.body.stream_id}/end`).set(auth(ownerTok));
+    const noRecording = await agent().delete(`/v1/live/recordings/${created.body.stream_id}`).set(auth(ownerTok));
+    expect(noRecording.status).toBe(404);
+  });
+
+  it("DELETE is idempotent — a repeat delete of an already-deleted recording is a silent no-op, not an error", async () => {
+    const owner = await createUser({ congregationId: cong, role: "Admin", email: "del7@dev.local" });
+    const ownerTok = bearer({ sub: owner.user_id, role: "Admin", cong });
+    const streamId = await endedStreamWithRecording(owner.user_id);
+
+    const first = await agent().delete(`/v1/live/recordings/${streamId}`).set(auth(ownerTok));
+    expect(first.status).toBe(204);
+    const second = await agent().delete(`/v1/live/recordings/${streamId}`).set(auth(ownerTok));
+    expect(second.status).toBe(204);
+
+    const auditRow = await testPool().query(`SELECT action FROM audit_log WHERE entity_id = $1 AND action = 'live.recording_deleted'`, [streamId]);
+    expect(auditRow.rows).toHaveLength(1); // only the first delete actually changed something
+  });
+});

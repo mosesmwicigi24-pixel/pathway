@@ -6376,6 +6376,41 @@ paths:
           description: "{ data: [{ stream_id, scope, cell_id, title, kind, started_at, ended_at, recording_url }, ...] }"
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  # ---- Recording stewardship (owner-managed keep/delete) --------------------
+  /live/recordings/mine:
+    get:
+      tags: [live]
+      summary: >-
+        Recordings belonging to streams the caller started; a live:manage
+        holder instead sees every non-deleted recording (oversight). A
+        "recording" is 1:1 with the stream that produced it, so recording_id
+        equals stream_id — there is no separate recordings table.
+        duration/size are not modeled anywhere in this schema and are
+        deliberately omitted rather than fabricated. Newest (by ended_at)
+        first.
+      responses:
+        "200":
+          description: "{ data: [{ recording_id, stream_id, scope, cell_id, title, kind, started_at, ended_at, url }, ...] }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /live/recordings/{id}:
+    delete:
+      tags: [live]
+      summary: >-
+        Delete (hide) one recording — the stream's own owner or a live:manage
+        holder. SOFT-delete only: sets recording_deleted_at and the row is
+        excluded from /live/recordings and /live/recordings/mine everywhere
+        after; the on-disk file is not removed (see OPS FOLLOW-UP in
+        src/modules/live/index.ts — neither the api nor worker container
+        currently mounts the MediaMTX recordings directory). Idempotent — a
+        repeat delete of an already-deleted recording is a silent no-op, not
+        an error. 404 if the stream doesn't exist or never had a recording.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "204": { description: Recording deleted (or already deleted) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ---- L5 interactions (docs/LIVE_INTERACTIVE.md) — PINNED wire contract ----
   /live/streams/{id}/reactions:
     post:
