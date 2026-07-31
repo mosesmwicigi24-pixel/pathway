@@ -6344,11 +6344,32 @@ paths:
         HLS playlist/segments there) and an additional hls_fallback_url field
         carries the direct relative URL for clients to fail over to if the CDN
         copy 404s. Without LIVE_CDN_BASE, or for cell-scope rows, hls_url is
-        always the direct relative URL and hls_fallback_url is absent.
+        always the direct relative URL and hls_fallback_url is absent. L1.5b
+        (docs/LIVE_CDN_PERSTREAM.md): when the server ALSO has
+        LIVE_CDN_PER_STREAM enabled, the church hls_url is scoped by
+        stream_id ("<LIVE_CDN_BASE>/live-cdn/church/<stream_id>/index.m3u8")
+        instead of the legacy static path — fixes a flicker bug where a new
+        broadcast could briefly serve the previous stream's cached CDN
+        manifest/segments. Default off; hls_fallback_url is unaffected either
+        way.
       responses:
         "200":
           description: "{ data: [{ stream_id, scope, cell_id, title, kind, started_at, hls_url, hls_fallback_url?, started_by_name, viewer_count }, ...] }"
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /live/church/current:
+    get:
+      tags: [live]
+      summary: >-
+        L1.5b (docs/LIVE_CDN_PERSTREAM.md): the currently-live church stream's
+        id, or null. Deliberately UNAUTHENTICATED — same trust boundary as the
+        MediaMTX authHTTP webhook (POST /live/auth): meant to be reachable
+        only from the VPS's own loopback, polled by the CDN publisher daemon
+        (ops/live-cdn/publisher.py) to learn which stream_id to mirror
+        per-stream CDN objects under. Reveals nothing a member's own GET
+        /live/now wouldn't already show.
+      responses:
+        "200":
+          description: "{ stream_id: string | null }"
   /live/streams/{id}/heartbeat:
     post:
       tags: [live]

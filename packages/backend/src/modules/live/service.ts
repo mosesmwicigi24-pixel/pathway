@@ -4,7 +4,7 @@
 // scoping), the MediaMTX authHTTP webhook, live_streams/live_viewers, viewer
 // presence, the recording registrar, and the auto-end-orphans sweep.
 import { randomBytes, createHash } from "node:crypto";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Pool } from "pg";
 import { z } from "zod";
@@ -180,6 +180,16 @@ export class LiveService {
      *  public WHIP/WHEP signaling base MediaMTX's nginx TLS front sits behind.
      *  No trailing slash. */
     private readonly webrtcBaseUrl = "https://pathway.nuruplace.org/webrtc",
+    /** L1.5b (docs/LIVE_CDN_PERSTREAM.md) — set from env LIVE_CDN_PER_STREAM,
+     *  default false. When true (and cdnBase is set), the church hls_url is
+     *  scoped to "<cdnBase>/live-cdn/church/<stream_id>/index.m3u8" instead of
+     *  the legacy static "<cdnBase>/live-cdn/church/index.m3u8" — fixes the
+     *  flicker bug where a brand-new broadcast could briefly serve the
+     *  PREVIOUS stream's manifest/segments because every broadcast shared one
+     *  R2 object path. Gated behind a flag so the backend can ship this
+     *  BEFORE the VPS publisher daemon is updated to actually write the
+     *  per-stream path (see the doc for the rollout order). */
+    private readonly cdnPerStream = false,
   ) {
     this.notifications = notifications ?? new NotificationService(pool);
   }
@@ -329,16 +339,45 @@ export class LiveService {
     if (stream.status !== "live") throw new ApiError("CONFLICT", "This live stream has ended");
   }
 
-  /** Best-effort: match one MediaMTX segment covering the window and stamp
-   *  recording_url. Never throws — a missing/absent recordings dir (e.g. local
-   *  dev) is just "not registered yet", not an error. */
+  /** Filenames under this path's recordings directory already claimed by some
+   *  OTHER stream's recording_url — queried fresh (not cached) so a sweep tick
+   *  processing several pending streams in the same path never lets two of
+   *  them claim the same file, even though each stream's own row commits
+   *  before the loop moves to the next one. */
+  private async claimedRecordingFilenames(path: string, excludeStreamId: string): Promise<Set<string>> {
+    const prefix = `/live-recordings/${path}/`;
+    const rows = await many<{ recording_url: string }>(
+      this.pool,
+      `SELECT recording_url FROM live_streams
+        WHERE recording_url IS NOT NULL AND stream_id <> $1 AND recording_url LIKE $2`,
+      [excludeStreamId, `${prefix}%`],
+    );
+    return new Set(rows.map((r) => r.recording_url.slice(prefix.length)));
+  }
+
+  /** Best-effort: match the best MediaMTX segment covering the window and
+   *  stamp recording_url (recordings.ts owns the actual matching algorithm —
+   *  see its module doc for the prod incident this fixes). Never throws — a
+   *  missing/absent recordings dir (e.g. local dev) is just "not registered
+   *  yet", not an error. */
   private async tryRegisterRecording(row: { stream_id: string; scope: LiveScope; cell_id: string | null; started_at: string; ended_at: string | null }): Promise<boolean> {
     if (!row.ended_at) return false;
     try {
       const path = pathFor(row.scope, row.cell_id);
       const dir = join(this.recordingsDir, path);
-      const files = await readdir(dir);
-      const match = matchRecordingFile(files, new Date(row.started_at), new Date(row.ended_at));
+      const filenames = await readdir(dir);
+      const claimed = await this.claimedRecordingFilenames(path, row.stream_id);
+      const candidates = await Promise.all(
+        filenames.map(async (name) => {
+          try {
+            const st = await stat(join(dir, name));
+            return { name, sizeBytes: st.size };
+          } catch {
+            return { name }; // stat can race a concurrent segment write/rotate — fall back to no size
+          }
+        }),
+      );
+      const match = matchRecordingFile(candidates, new Date(row.started_at), new Date(row.ended_at), { claimed });
       if (!match) return false;
       const recordingUrl = `/live-recordings/${path}/${match}`;
       const res = await this.pool.query(
@@ -527,6 +566,26 @@ export class LiveService {
     return { stream_id: streamId, status: "ended", ended_at: updated.ended_at };
   }
 
+  /**
+   * L1.5b (docs/LIVE_CDN_PERSTREAM.md): the currently-live church stream's id,
+   * or null. Backs the unauthenticated GET /live/church/current route the VPS
+   * CDN publisher daemon (ops/live-cdn/publisher.py) polls to learn which
+   * stream_id to write per-stream R2 objects under — the daemon has no other
+   * way to learn this (MediaMTX's own publish auth never reaches it; it only
+   * sees HLS bytes). Same trust boundary as the MediaMTX authHTTP webhook
+   * (POST /live/auth): meant to be reachable only from the VPS's own
+   * loopback, and deliberately reveals nothing a member's own GET /live/now
+   * wouldn't already show them. The partial unique index on
+   * live_streams(scope) WHERE status='live' guarantees at most one row.
+   */
+  async currentChurchStreamId(): Promise<string | null> {
+    const row = await maybeOne<{ stream_id: string }>(
+      this.pool,
+      `SELECT stream_id FROM live_streams WHERE scope = 'church' AND status = 'live' LIMIT 1`,
+    );
+    return row?.stream_id ?? null;
+  }
+
   /** What's live that the caller may watch: church always; cell only for its members
    *  (or Admin/SuperAdmin/live:manage — oversight). */
   async listNow(principal: Principal): Promise<{ data: LiveNowRow[] }> {
@@ -550,11 +609,18 @@ export class LiveService {
       // rides Cloudflare R2 instead of the VPS's own uplink. Cell streams keep
       // the direct low-latency relative URL unconditionally (small audience,
       // no fan-out problem to solve).
+      // L1.5b (docs/LIVE_CDN_PERSTREAM.md): with cdnPerStream on, the CDN path
+      // is scoped by stream_id — fixes the flicker bug where every broadcast
+      // shared one static object path and a new stream's first seconds could
+      // serve the PREVIOUS stream's manifest/segments off R2's edge cache.
+      const cdnUrl = this.cdnPerStream
+        ? `${this.cdnBase}/live-cdn/church/${r.stream_id}/index.m3u8`
+        : `${this.cdnBase}/live-cdn/church/index.m3u8`;
       const row: LiveNowRow =
         r.scope === "church" && this.cdnBase
           ? {
               stream_id: r.stream_id, scope: r.scope, cell_id: r.cell_id, title: r.title, kind: r.kind,
-              started_at: r.started_at, hls_url: `${this.cdnBase}/live-cdn/church/index.m3u8`,
+              started_at: r.started_at, hls_url: cdnUrl,
               hls_fallback_url: directUrl,
               started_by_name: r.started_by_name, viewer_count: viewerCount,
             }

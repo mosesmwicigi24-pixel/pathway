@@ -22,6 +22,12 @@
 //      docker-compose.vps.yml, then extend the sweep in service.ts to unlink
 //      the file for any row with recording_deleted_at set and reachable on
 //      disk.
+//   4. nginx (docs/LIVE_CDN_PERSTREAM.md): GET /live/church/current is
+//      unauthenticated by design (same boundary as #2's authHTTP webhook) —
+//      confirm it is NOT publicly proxied (same nginx rule/exclusion already
+//      needed for POST /live/auth covers this too if both are under the same
+//      location block). It leaks nothing a member's own GET /live/now
+//      wouldn't already show.
 import { Router } from "express";
 import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
@@ -40,6 +46,7 @@ export function registerLive(ctx: AppContext): Router {
     undefined,
     ctx.env.LIVE_CDN_BASE,
     ctx.env.LIVE_WEBRTC_BASE_URL ?? "https://pathway.nuruplace.org/webrtc",
+    ctx.env.LIVE_CDN_PER_STREAM,
   );
   const auth = authenticate(ctx.env);
   const perm = requirePermission(ctx.db.replica);
@@ -86,6 +93,16 @@ export function registerLive(ctx: AppContext): Router {
 
   r.get("/live/now", auth, handler(async (req, res) => {
     res.json(await svc.listNow(requirePrincipal(req)));
+  }));
+
+  // L1.5b (docs/LIVE_CDN_PERSTREAM.md) — deliberately UNAUTHENTICATED, same
+  // trust boundary as POST /live/auth above: polled by the VPS-local CDN
+  // publisher daemon (ops/live-cdn/publisher.py) over loopback to learn which
+  // stream_id to write per-stream R2 objects under. Reveals only whatever a
+  // member's own GET /live/now already shows (church live or not, and its
+  // id) — never anything more sensitive.
+  r.get("/live/church/current", handler(async (_req, res) => {
+    res.json({ stream_id: await svc.currentChurchStreamId() });
   }));
 
   r.post("/live/streams/:id/heartbeat", auth, handler(async (req, res) => {

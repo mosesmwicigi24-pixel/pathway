@@ -21,7 +21,23 @@ Defensive by design: a missing ffmpeg/rclone binary, or an unreachable R2, is
 logged and retried on the next tick — this process never crash-loops. Stdlib
 only (no pip install on the VPS). Runs as systemd nuru-live-cdn.service
 (root), started/managed per ops/live-cdn/README.md.
+
+L1.5b per-stream CDN paths (docs/LIVE_CDN_PERSTREAM.md) — fixes a flicker bug:
+every broadcast used to share the exact same R2 object path
+(live-cdn/church/index.m3u8), so a brand-new stream's first seconds could
+serve the PREVIOUS stream's manifest/segments off R2's edge cache. This
+publisher now mirrors to BOTH the legacy static path (unconditionally — older
+app builds in the field, and any deploy where the backend's
+LIVE_CDN_PER_STREAM flag is still off, depend on it) AND a per-stream path
+live-cdn/church/<stream_id>/, once it has resolved the live stream's id by
+polling the backend's GET /v1/live/church/current (unauthenticated,
+loopback-only — see that route's own doc comment in
+packages/backend/src/modules/live/index.ts). If that lookup ever fails
+(backend momentarily unreachable, or this daemon predates the backend route
+existing), the per-stream upload is skipped for that broadcast and ONLY the
+legacy path is written — never a hard failure.
 """
+import json
 import os
 import shutil
 import signal
@@ -40,10 +56,17 @@ PLAYLIST = os.path.join(OUT_DIR, "index.m3u8")
 SEGMENT_PATTERN = os.path.join(OUT_DIR, "seg_%05d.ts")
 R2_REMOTE = "r2:nuru-live/live-cdn/church"
 
+# host:port must match wherever the backend actually listens from this VPS's
+# network — same assumption/caveat as MediaMTX's own authHTTPAddress
+# (packages/backend/src/modules/live/index.ts OPS FOLLOW-UP #2); adjust both
+# together if that ever changes.
+BACKEND_CURRENT_STREAM_URL = "http://127.0.0.1:8080/v1/live/church/current"
+
 POLL_INTERVAL_SEC = 3
 SYNC_INTERVAL_SEC = 2
 FFMPEG_RESTART_BACKOFF_SEC = 3
 RCLONE_TIMEOUT_SEC = 20
+BACKEND_LOOKUP_TIMEOUT_SEC = 5
 
 FFMPEG_CMD = [
     "ffmpeg", "-loglevel", "warning",
@@ -83,6 +106,26 @@ def source_is_live() -> bool:
     except Exception as e:  # noqa: BLE001 — deliberately broad; must never crash
         log(f"poll: MediaMTX unreachable ({e}) — treating as not-live")
         return False
+
+
+def fetch_current_stream_id() -> "str | None":
+    """L1.5b: resolve the live church stream's id from the backend so this
+    broadcast's segments/playlist can also be mirrored to a per-stream R2
+    path. Called once per IDLE->LIVE transition (a stream's id never changes
+    mid-broadcast). Any failure — backend down, non-200, bad JSON, no stream
+    actually live server-side — returns None and is logged, never raised:
+    the caller falls back to legacy-path-only for that broadcast."""
+    try:
+        with urllib.request.urlopen(BACKEND_CURRENT_STREAM_URL, timeout=BACKEND_LOOKUP_TIMEOUT_SEC) as resp:
+            if resp.status != 200:
+                log(f"current-stream lookup: unexpected HTTP {resp.status} — per-stream CDN path skipped for this broadcast")
+                return None
+            body = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:  # noqa: BLE001 — must never crash the main loop
+        log(f"current-stream lookup failed ({e}) — per-stream CDN path skipped for this broadcast")
+        return None
+    stream_id = body.get("stream_id") if isinstance(body, dict) else None
+    return stream_id if isinstance(stream_id, str) and stream_id else None
 
 
 # --- ffmpeg child process management ---------------------------------------
@@ -173,34 +216,65 @@ def run_rclone(args: list, label: str) -> bool:
     return True
 
 
-def sync_segments_then_playlist() -> None:
-    """One sync pass: new .ts segments first, THEN the .m3u8 — a playlist
-    uploaded before its segments would let a viewer's player 404 on a segment
-    it just learned about. Best-effort; failures just retry next tick."""
+def per_stream_remote(stream_id: str) -> str:
+    return f"{R2_REMOTE}/{stream_id}"
+
+
+def sync_one_remote(remote: str, label: str) -> None:
+    """Segments first, THEN the .m3u8 — a playlist uploaded before its
+    segments would let a viewer's player 404 on a segment it just learned
+    about. Applied independently per remote (legacy and per-stream each get
+    their own consistent segments-then-playlist ordering)."""
+    run_rclone(["copy", OUT_DIR, remote, "--include", "*.ts", "--no-traverse"], f"{label} segment copy")
+    if os.path.isfile(PLAYLIST):
+        run_rclone(["copyto", PLAYLIST, f"{remote}/index.m3u8"], f"{label} playlist copyto")
+
+
+def sync_segments_then_playlist(stream_id: "str | None") -> None:
+    """One sync pass, mirrored to up to two R2 destinations. Best-effort;
+    failures just retry next tick.
+
+    L1.5b (docs/LIVE_CDN_PERSTREAM.md): the legacy static path is ALWAYS
+    written — older app builds in the field, and any deploy where the
+    backend's LIVE_CDN_PER_STREAM flag is still off, depend on it existing
+    regardless of backend/daemon deploy order. The per-stream path is
+    additive and only written once `stream_id` has been resolved for this
+    broadcast (see fetch_current_stream_id)."""
     if not rclone_available():
         log("rclone not found on PATH; skipping sync (will retry next tick)")
         return
     if not os.path.isdir(OUT_DIR):
         return
-    run_rclone(["copy", OUT_DIR, R2_REMOTE, "--include", "*.ts", "--no-traverse"], "segment copy")
-    if os.path.isfile(PLAYLIST):
-        run_rclone(["copyto", PLAYLIST, f"{R2_REMOTE}/index.m3u8"], "playlist copyto")
+    sync_one_remote(R2_REMOTE, "legacy")
+    if stream_id:
+        sync_one_remote(per_stream_remote(stream_id), f"per-stream({stream_id})")
+
+
+class StreamState:
+    """Shared between the main thread (sets stream_id once per IDLE->LIVE
+    transition) and the Syncer thread (reads it every sync tick). Plain
+    attribute get/set on a str-or-None is atomic under the GIL for this
+    single-writer/single-reader use — no lock needed."""
+
+    def __init__(self) -> None:
+        self.stream_id: "str | None" = None
 
 
 class Syncer(threading.Thread):
     """Background thread: while `live_event` is set, syncs every 2s. Runs for
     the process lifetime; `stop_event` ends it on shutdown."""
 
-    def __init__(self, live_event: threading.Event, stop_event: threading.Event) -> None:
+    def __init__(self, live_event: threading.Event, stop_event: threading.Event, state: StreamState) -> None:
         super().__init__(name="live-cdn-syncer", daemon=True)
         self.live_event = live_event
         self.stop_event = stop_event
+        self.state = state
 
     def run(self) -> None:
         while not self.stop_event.is_set():
             if self.live_event.is_set():
                 try:
-                    sync_segments_then_playlist()
+                    sync_segments_then_playlist(self.state.stream_id)
                 except Exception as e:  # noqa: BLE001 — a sync-thread crash must not kill the daemon
                     log(f"sync thread error: {e}")
             self.stop_event.wait(SYNC_INTERVAL_SEC)
@@ -239,17 +313,18 @@ def clean_out_dir() -> None:
             log(f"cleanup: could not remove {path}: {e}")
 
 
-def finalize_stream() -> None:
+def finalize_stream(stream_id: "str | None") -> None:
     log("stream ended — finalizing CDN playlist (EXT-X-ENDLIST) and cleaning up")
     try:
         append_endlist_if_missing()
     except OSError as e:
         log(f"could not append EXT-X-ENDLIST: {e}")
-    # One last upload — segments before the ENDLIST playlist, same ordering rule.
+    # One last upload to both remotes — segments before the ENDLIST playlist,
+    # same ordering rule as the live sync loop.
     if rclone_available() and os.path.isdir(OUT_DIR):
-        run_rclone(["copy", OUT_DIR, R2_REMOTE, "--include", "*.ts", "--no-traverse"], "final segment copy")
-        if os.path.isfile(PLAYLIST):
-            run_rclone(["copyto", PLAYLIST, f"{R2_REMOTE}/index.m3u8"], "final playlist copyto")
+        sync_one_remote(R2_REMOTE, "final legacy")
+        if stream_id:
+            sync_one_remote(per_stream_remote(stream_id), f"final per-stream({stream_id})")
     else:
         log("rclone unavailable — could not upload the final ENDLIST playlist")
     clean_out_dir()
@@ -269,7 +344,8 @@ def main() -> None:
     ffmpeg = FfmpegRunner()
     live_event = threading.Event()
     stop_event = threading.Event()
-    syncer = Syncer(live_event, stop_event)
+    state = StreamState()
+    syncer = Syncer(live_event, stop_event, state)
     syncer.start()
 
     def handle_signal(signum: int, _frame: object) -> None:
@@ -288,6 +364,11 @@ def main() -> None:
             if is_live and not was_live:
                 log("church stream detected LIVE")
                 was_live = True
+                state.stream_id = fetch_current_stream_id()
+                if state.stream_id:
+                    log(f"resolved stream_id={state.stream_id} — mirroring to the per-stream CDN path too")
+                else:
+                    log("could not resolve stream_id from the backend — only the legacy CDN path will be updated for this broadcast")
                 live_event.set()
                 ffmpeg.ensure_running()
             elif is_live and was_live:
@@ -297,7 +378,8 @@ def main() -> None:
                 was_live = False
                 live_event.clear()
                 ffmpeg.stop()
-                finalize_stream()
+                finalize_stream(state.stream_id)
+                state.stream_id = None
             # not is_live and not was_live: idle, nothing to do this tick.
         except Exception as e:  # noqa: BLE001 — the main loop must never die
             log(f"main loop error (continuing): {e}")

@@ -237,6 +237,90 @@ describe("Live streaming — L1.5 CDN switch (LIVE_CDN_BASE)", () => {
   });
 });
 
+describe("Live streaming — L1.5b per-stream CDN paths (LIVE_CDN_PER_STREAM, docs/LIVE_CDN_PERSTREAM.md)", () => {
+  it("LIVE_CDN_BASE set but LIVE_CDN_PER_STREAM off (the default): church hls_url stays the legacy static path", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "cdnps-off@dev.local" });
+    const adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const cdnBase = "https://pub-example.r2.dev";
+    const created = await agent({ LIVE_CDN_BASE: cdnBase }).post("/v1/live/streams").set(auth(adminTok)).send({ scope: "church", title: "Sunday", kind: "video" });
+
+    const now = await agent({ LIVE_CDN_BASE: cdnBase }).get("/v1/live/now").set(auth(adminTok));
+    const church = now.body.data.find((s: { scope: string }) => s.scope === "church");
+    expect(church.hls_url).toBe(`${cdnBase}/live-cdn/church/index.m3u8`);
+    expect(church.hls_url).not.toContain(created.body.stream_id);
+  });
+
+  it("LIVE_CDN_BASE + LIVE_CDN_PER_STREAM=true: church hls_url is scoped by stream_id; fallback and cell rows unaffected", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "cdnps-on@dev.local" });
+    const adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const cell = await createCellGroup(cong, "Cell A");
+    const cdnBase = "https://pub-example.r2.dev";
+    const overrides = { LIVE_CDN_BASE: cdnBase, LIVE_CDN_PER_STREAM: true };
+
+    const created = await agent(overrides).post("/v1/live/streams").set(auth(adminTok)).send({ scope: "church", title: "Sunday", kind: "video" });
+    await agent(overrides).post("/v1/live/streams").set(auth(adminTok)).send({ scope: "cell", cell_id: cell, title: "Cell meeting", kind: "video" });
+
+    const now = await agent(overrides).get("/v1/live/now").set(auth(adminTok));
+    const church = now.body.data.find((s: { scope: string }) => s.scope === "church");
+    const cellRow = now.body.data.find((s: { scope: string }) => s.scope === "cell");
+
+    expect(church.hls_url).toBe(`${cdnBase}/live-cdn/church/${created.body.stream_id}/index.m3u8`);
+    expect(church.hls_fallback_url).toBe("/live/church/index.m3u8"); // fallback untouched by the flag
+
+    expect(cellRow.hls_url).toBe(`/live/cell/${cell}/index.m3u8`);
+    expect(cellRow.hls_fallback_url).toBeUndefined();
+  });
+
+  it("a SECOND church broadcast gets a DIFFERENT per-stream path than the first (the actual flicker fix)", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "cdnps-two@dev.local" });
+    const adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const overrides = { LIVE_CDN_BASE: "https://pub-example.r2.dev", LIVE_CDN_PER_STREAM: true };
+
+    const first = await agent(overrides).post("/v1/live/streams").set(auth(adminTok)).send({ scope: "church", title: "First", kind: "video" });
+    const now1 = await agent(overrides).get("/v1/live/now").set(auth(adminTok));
+    const firstUrl = now1.body.data.find((s: { scope: string }) => s.scope === "church").hls_url;
+    expect(firstUrl).toContain(first.body.stream_id);
+
+    await agent(overrides).post(`/v1/live/streams/${first.body.stream_id}/end`).set(auth(adminTok));
+    const second = await agent(overrides).post("/v1/live/streams").set(auth(adminTok)).send({ scope: "church", title: "Second", kind: "video" });
+    const now2 = await agent(overrides).get("/v1/live/now").set(auth(adminTok));
+    const secondUrl = now2.body.data.find((s: { scope: string }) => s.scope === "church").hls_url;
+    expect(secondUrl).toContain(second.body.stream_id);
+    expect(secondUrl).not.toBe(firstUrl);
+  });
+});
+
+describe("Live streaming — GET /live/church/current (unauthenticated, VPS-daemon-only)", () => {
+  it("returns null when no church stream is live", async () => {
+    const res = await agent().get("/v1/live/church/current"); // no Authorization header at all
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ stream_id: null });
+  });
+
+  it("returns the live church stream's id once one is live, and null again after it ends", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "current-1@dev.local" });
+    const adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const created = await agent().post("/v1/live/streams").set(auth(adminTok)).send({ scope: "church", title: "Sunday", kind: "video" });
+
+    const live = await agent().get("/v1/live/church/current");
+    expect(live.body).toEqual({ stream_id: created.body.stream_id });
+
+    await agent().post(`/v1/live/streams/${created.body.stream_id}/end`).set(auth(adminTok));
+    const ended = await agent().get("/v1/live/church/current");
+    expect(ended.body).toEqual({ stream_id: null });
+  });
+
+  it("ignores a live CELL stream — only reports church", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "current-2@dev.local" });
+    const adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    const cell = await createCellGroup(cong, "Cell A");
+    await agent().post("/v1/live/streams").set(auth(adminTok)).send({ scope: "cell", cell_id: cell, title: "Cell", kind: "video" });
+
+    const res = await agent().get("/v1/live/church/current");
+    expect(res.body).toEqual({ stream_id: null });
+  });
+});
+
 describe("Live streaming — end", () => {
   it("the broadcaster can end their own stream; replay is idempotent", async () => {
     const admin = await createUser({ congregationId: cong, role: "Admin", email: "c1@dev.local" });
@@ -346,9 +430,98 @@ describe("Live streaming — auto-end sweep + recording registrar", () => {
     const row = await testPool().query(`SELECT recording_url FROM live_streams WHERE stream_id = $1`, [rows[0]!.stream_id]);
     expect(row.rows[0].recording_url).toBeNull();
   });
+
+  // Prod incident (docs on recordings.ts): 10 ended streams, only 1 had
+  // recording_url even though the recordings dir had plenty of .mp4 files —
+  // the old matcher's [started_at - 24h, ended_at] window + "exactly one
+  // candidate or bust" rule failed on every realistic case. These sweep-level
+  // tests exercise the fixed algorithm against realistic MediaMTX conditions.
+
+  it("registers the LARGER of two files the SAME stream produced (segment rollover / the app auto-reconnecting mid-stream)", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "rollover1@dev.local" });
+    const startedAt = new Date(Date.UTC(2026, 6, 31, 9, 0, 0));
+    const endedAt = new Date(Date.UTC(2026, 6, 31, 9, 40, 0));
+    const { rows } = await testPool().query<{ stream_id: string }>(
+      `INSERT INTO live_streams (scope, started_by, title, kind, stream_key_hash, status, started_at, ended_at)
+       VALUES ('church', $1, 'Reconnected mid-stream', 'video', 'deadbeef', 'ended', $2, $3)
+       RETURNING stream_id`,
+      [admin.user_id, startedAt.toISOString(), endedAt.toISOString()],
+    );
+    const recordingsDir = mkdtempSync(join(tmpdir(), "nuru-live-rec-rollover-"));
+    mkdirSync(join(recordingsDir, "church"), { recursive: true });
+    // Real prod filename shape: MediaMTX's %f microseconds suffix.
+    const firstSegment = "2026-07-31_09-00-05-346775.mp4"; // small — the connection that dropped
+    const secondSegment = "2026-07-31_09-03-22-981004.mp4"; // large — the reconnect that finished the stream
+    writeFileSync(join(recordingsDir, "church", firstSegment), Buffer.alloc(1_000));
+    writeFileSync(join(recordingsDir, "church", secondSegment), Buffer.alloc(50_000));
+
+    const svc = new LiveService(testPool(), recordingsDir);
+    const result = await svc.sweep();
+    expect(result.registered).toBe(1);
+    const row = await testPool().query(`SELECT recording_url FROM live_streams WHERE stream_id = $1`, [rows[0]!.stream_id]);
+    expect(row.rows[0].recording_url).toBe(`/live-recordings/church/${secondSegment}`);
+  });
+
+  it("never steals a file another stream has already claimed, even when it also falls inside the new stream's window (rapid consecutive test streams)", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "noclaim1@dev.local" });
+    const recordingsDir = mkdtempSync(join(tmpdir(), "nuru-live-rec-noclaim-"));
+    mkdirSync(join(recordingsDir, "church"), { recursive: true });
+    const onlyFile = "2026-07-31_09-05-00-000000.mp4";
+    writeFileSync(join(recordingsDir, "church", onlyFile), Buffer.alloc(1_000));
+
+    // Stream A already claimed the only file on disk.
+    await testPool().query(
+      `INSERT INTO live_streams (scope, started_by, title, kind, stream_key_hash, status, started_at, ended_at, recording_url)
+       VALUES ('church', $1, 'Stream A', 'video', 'deadbeef', 'ended', $2, $3, $4)`,
+      [admin.user_id, new Date(Date.UTC(2026, 6, 31, 9, 0, 0)).toISOString(), new Date(Date.UTC(2026, 6, 31, 9, 8, 0)).toISOString(), `/live-recordings/church/${onlyFile}`],
+    );
+    // Stream B started minutes later — its OWN window also plausibly covers
+    // that same file, but it must not steal it.
+    const { rows } = await testPool().query<{ stream_id: string }>(
+      `INSERT INTO live_streams (scope, started_by, title, kind, stream_key_hash, status, started_at, ended_at)
+       VALUES ('church', $1, 'Stream B', 'video', 'deadbeef', 'ended', $2, $3)
+       RETURNING stream_id`,
+      [admin.user_id, new Date(Date.UTC(2026, 6, 31, 9, 3, 0)).toISOString(), new Date(Date.UTC(2026, 6, 31, 9, 10, 0)).toISOString()],
+    );
+
+    const svc = new LiveService(testPool(), recordingsDir);
+    const result = await svc.sweep();
+    expect(result.registered).toBe(0); // nothing left for B to plausibly claim
+    const row = await testPool().query(`SELECT recording_url FROM live_streams WHERE stream_id = $1`, [rows[0]!.stream_id]);
+    expect(row.rows[0].recording_url).toBeNull();
+  });
+
+  it("heals the whole backlog on the next sweep tick once matching files exist — confirms no separate maintenance endpoint is needed", async () => {
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "heal1@dev.local" });
+    const recordingsDir = mkdtempSync(join(tmpdir(), "nuru-live-rec-heal-"));
+    mkdirSync(join(recordingsDir, "church"), { recursive: true });
+    const { rows } = await testPool().query<{ stream_id: string }>(
+      `INSERT INTO live_streams (scope, started_by, title, kind, stream_key_hash, status, started_at, ended_at)
+       VALUES ('church', $1, 'Backlogged', 'video', 'deadbeef', 'ended', $2, $3)
+       RETURNING stream_id`,
+      [admin.user_id, new Date(Date.UTC(2026, 6, 31, 9, 0, 0)).toISOString(), new Date(Date.UTC(2026, 6, 31, 9, 10, 0)).toISOString()],
+    );
+    const svc = new LiveService(testPool(), recordingsDir);
+
+    // Tick 1: no file on disk yet (e.g. MediaMTX hadn't flushed the segment) — stays unregistered.
+    const tick1 = await svc.sweep();
+    expect(tick1.registered).toBe(0);
+    const afterTick1 = await testPool().query(`SELECT recording_url FROM live_streams WHERE stream_id = $1`, [rows[0]!.stream_id]);
+    expect(afterTick1.rows[0].recording_url).toBeNull();
+
+    // The file lands on disk between ticks (this is exactly what "the sweep
+    // already re-attempts every ~2 min" means in practice).
+    writeFileSync(join(recordingsDir, "church", "2026-07-31_09-00-10-000000.mp4"), Buffer.alloc(1_000));
+
+    // Tick 2: same still-unregistered row is picked up again and now resolves.
+    const tick2 = await svc.sweep();
+    expect(tick2.registered).toBe(1);
+    const afterTick2 = await testPool().query(`SELECT recording_url FROM live_streams WHERE stream_id = $1`, [rows[0]!.stream_id]);
+    expect(afterTick2.rows[0].recording_url).toBe("/live-recordings/church/2026-07-31_09-00-10-000000.mp4");
+  });
 });
 
-describe("matchRecordingFile (pure)", () => {
+describe("matchRecordingFile (pure) — docs/LIVE_STREAMING.md prod incident fixtures", () => {
   it("picks the single candidate segment covering the window", () => {
     const started = new Date(Date.UTC(2026, 0, 5, 10, 0, 0));
     const ended = new Date(Date.UTC(2026, 0, 5, 10, 45, 0));
@@ -356,11 +529,82 @@ describe("matchRecordingFile (pure)", () => {
     expect(matchRecordingFile(files, started, ended)).toBe("2026-01-05_10-00-00-000000.mp4");
   });
 
-  it("returns null when multiple segments plausibly overlap (spans a segment boundary)", () => {
+  it("matches a real prod filename (MediaMTX's %f microsecond suffix)", () => {
+    const started = new Date(Date.UTC(2026, 6, 31, 9, 3, 0));
+    const ended = new Date(Date.UTC(2026, 6, 31, 9, 20, 0));
+    const files = ["2026-07-31_09-03-22-346775.mp4"];
+    expect(matchRecordingFile(files, started, ended)).toBe("2026-07-31_09-03-22-346775.mp4");
+  });
+
+  it("no longer gives up when a stream spans a segment boundary — picks the earliest-starting of its OWN two segments instead of returning null", () => {
+    // Both files genuinely belong to THIS stream's tight window (a real
+    // MediaMTX segment-rotation mid-broadcast). The OLD matcher refused to
+    // pick either the moment more than one candidate existed; the new one
+    // picks the primary (earliest-starting, sizes unknown here) segment.
+    const started = new Date(Date.UTC(2026, 0, 5, 9, 59, 0));
+    const ended = new Date(Date.UTC(2026, 0, 5, 10, 5, 0));
+    const files = ["2026-01-05_10-00-00-000000.mp4", "2026-01-05_10-02-00-000000.mp4"];
+    // Neither file's size is known here — falls back to earliest-starting (the primary segment).
+    expect(matchRecordingFile(files, started, ended)).toBe("2026-01-05_10-00-00-000000.mp4");
+  });
+
+  it("excludes a neighbouring stream's file that sits just outside the grace window (rapid consecutive test streams)", () => {
+    // This is the actual shape of the old bug: 09:00 and 10:00 files, 55
+    // minutes apart, both fell inside the old 24h look-back and jointly
+    // caused a total refusal. With a tight (default 2 min) grace window, the
+    // unrelated 09:00 file is correctly excluded and the real 10:00 segment
+    // is matched cleanly.
     const started = new Date(Date.UTC(2026, 0, 5, 9, 55, 0));
     const ended = new Date(Date.UTC(2026, 0, 5, 10, 5, 0));
     const files = ["2026-01-05_09-00-00-000000.mp4", "2026-01-05_10-00-00-000000.mp4"];
-    expect(matchRecordingFile(files, started, ended)).toBeNull();
+    expect(matchRecordingFile(files, started, ended)).toBe("2026-01-05_10-00-00-000000.mp4");
+  });
+
+  it("tolerates a couple of minutes of clock skew at the window edges, but not more", () => {
+    const started = new Date(Date.UTC(2026, 0, 5, 10, 0, 0));
+    const ended = new Date(Date.UTC(2026, 0, 5, 10, 30, 0));
+    // 90s early — within the default 2-minute grace.
+    expect(matchRecordingFile(["2026-01-05_09-58-30-000000.mp4"], started, ended)).toBe("2026-01-05_09-58-30-000000.mp4");
+    // 90s after ended_at — also within grace.
+    expect(matchRecordingFile(["2026-01-05_10-31-30-000000.mp4"], started, ended)).toBe("2026-01-05_10-31-30-000000.mp4");
+    // 5 minutes early — outside the default grace, excluded.
+    expect(matchRecordingFile(["2026-01-05_09-55-00-000000.mp4"], started, ended)).toBeNull();
+  });
+
+  it("prefers the larger (longer) of several same-stream segments when sizes are known — segment rollover / mid-stream reconnect", () => {
+    const started = new Date(Date.UTC(2026, 6, 31, 9, 0, 0));
+    const ended = new Date(Date.UTC(2026, 6, 31, 9, 40, 0));
+    const files = [
+      { name: "2026-07-31_09-00-05-346775.mp4", sizeBytes: 1_000 }, // dropped connection
+      { name: "2026-07-31_09-03-22-981004.mp4", sizeBytes: 50_000 }, // the reconnect that ran to completion
+    ];
+    expect(matchRecordingFile(files, started, ended)).toBe("2026-07-31_09-03-22-981004.mp4");
+  });
+
+  it("falls back to earliest-starting when sizes are unknown or tied", () => {
+    const started = new Date(Date.UTC(2026, 6, 31, 9, 0, 0));
+    const ended = new Date(Date.UTC(2026, 6, 31, 9, 40, 0));
+    const files = [
+      { name: "2026-07-31_09-10-00-000000.mp4", sizeBytes: 5_000 },
+      { name: "2026-07-31_09-05-00-000000.mp4", sizeBytes: 5_000 }, // tied size, starts earlier
+    ];
+    expect(matchRecordingFile(files, started, ended)).toBe("2026-07-31_09-05-00-000000.mp4");
+  });
+
+  it("never returns a file already claimed by another stream", () => {
+    const started = new Date(Date.UTC(2026, 6, 31, 9, 0, 0));
+    const ended = new Date(Date.UTC(2026, 6, 31, 9, 10, 0));
+    const files = ["2026-07-31_09-01-00-000000.mp4", "2026-07-31_09-02-00-000000.mp4"];
+    // The earlier (would-be-preferred) file is already claimed — matcher must
+    // fall through to the other still-unclaimed candidate.
+    expect(matchRecordingFile(files, started, ended, { claimed: new Set(["2026-07-31_09-01-00-000000.mp4"]) }))
+      .toBe("2026-07-31_09-02-00-000000.mp4");
+    // Both claimed — nothing left to give.
+    expect(
+      matchRecordingFile(files, started, ended, {
+        claimed: new Set(["2026-07-31_09-01-00-000000.mp4", "2026-07-31_09-02-00-000000.mp4"]),
+      }),
+    ).toBeNull();
   });
 
   it("returns null when nothing matches", () => {

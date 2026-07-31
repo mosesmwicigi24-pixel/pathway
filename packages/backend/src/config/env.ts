@@ -187,6 +187,19 @@ const EnvSchema = z.object({
   // No trailing slash, e.g. "https://pub-xxxx.r2.dev". ---
   LIVE_CDN_BASE: z.string().optional(),
 
+  // --- Nuru Live L1.5b (per-stream CDN paths — fixes the "flicker" bug where
+  // a NEW church broadcast's first seconds could show the PREVIOUS stream's
+  // manifest/segments, because every broadcast reused the exact same static
+  // R2 object path). Default OFF: gates the switch to
+  // "<base>/live-cdn/church/<stream_id>/index.m3u8" behind this flag so the
+  // backend can ship the capability BEFORE the VPS publisher daemon
+  // (ops/live-cdn/publisher.py) is updated/redeployed to actually write that
+  // per-stream path — turning this on before the daemon writes per-stream
+  // objects would make hls_url 404 for every church stream. See
+  // docs/LIVE_CDN_PERSTREAM.md for the rollout sequence. No effect unless
+  // LIVE_CDN_BASE is also set. ---
+  LIVE_CDN_PER_STREAM: z.string().optional().default("false").transform((v) => v === "true" || v === "1"),
+
   // --- Nuru Live L6a (guest WebRTC publish — docs/LIVE_INTERACTIVE.md). L0/L6
   // infra (MediaMTX webrtc: yes, path pattern
   // ~^guest/[0-9a-zA-Z-]+/[0-9a-zA-Z-]+$, nginx TLS termination) is already on
