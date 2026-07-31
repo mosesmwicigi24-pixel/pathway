@@ -960,10 +960,10 @@ export class IdentityService {
     userId: string,
     input: {
       platform: string;
-      app_version?: string | undefined;
-      model?: string | undefined;
-      push_token?: string | undefined;
-      network?: string | undefined;
+      app_version?: string | null | undefined;
+      model?: string | null | undefined;
+      push_token?: string | null | undefined;
+      network?: string | null | undefined;
     },
   ): Promise<{ device_id: string }> {
     return tx(this.pool, async (c) => {

@@ -22,7 +22,8 @@ export class PrayerAiService {
     private readonly provider: AiProvider,
   ) {}
 
-  static readonly Assist = z.object({ seed: z.string().max(4000).optional() }).strict();
+  // nullish, not optional: Android's kotlinx Json sends "seed": null when unset.
+  static readonly Assist = z.object({ seed: z.string().max(4000).nullish() }).strict();
 
   private async assertConsent(userId: string): Promise<void> {
     const row = await maybeOne<{ ai_opt_out: boolean }>(

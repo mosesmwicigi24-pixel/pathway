@@ -294,10 +294,12 @@ export function registerIdentity(ctx: AppContext): Router {
       const input = parseBody(
         z.object({
           platform: z.enum(["ios", "android"]),
-          app_version: z.string().max(20).optional(),
-          model: z.string().trim().max(80).optional(),
-          push_token: z.string().max(512).optional(),
-          network: z.enum(["wifi", "cellular", "other"]).optional(),
+          // nullish, not optional: Android's kotlinx Json (encodeDefaults=true +
+          // explicitNulls default) sends null for unset fields.
+          app_version: z.string().max(20).nullish(),
+          model: z.string().trim().max(80).nullish(),
+          push_token: z.string().max(512).nullish(),
+          network: z.enum(["wifi", "cellular", "other"]).nullish(),
         }),
         req.body,
       );

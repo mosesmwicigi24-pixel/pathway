@@ -52,7 +52,8 @@ export class ConnectionsService {
 
   static readonly RequestConnection = z.object({
     user_id: z.string().uuid(),
-    message: z.string().max(500).optional(),
+    // nullish, not optional: Android's kotlinx Json sends "message": null when unset.
+    message: z.string().max(500).nullish(),
     client_mutation_id: z.string().uuid().optional(),
   });
 

@@ -1639,7 +1639,8 @@ export class ChatService {
     return [...ids];
   }
 
-  static readonly RequestJoinSpace = z.object({ message: z.string().max(500).optional() });
+  // nullish, not optional: Android's kotlinx Json sends "message": null when unset.
+  static readonly RequestJoinSpace = z.object({ message: z.string().max(500).nullish() });
 
   /**
    * Ask to join a space that doesn't auto-entitle the caller (a cell room they
