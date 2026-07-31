@@ -6645,6 +6645,116 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  # ---- Share links (docs/LIVE_SHARE.md "Share a broadcast") -----------------
+  # The public GET /w/{token} landing page is a server-rendered web page, not
+  # a JSON API route — it's mounted outside /v1 and gets only a minimal stub
+  # entry below (for the §3.7 route-parity guard), with the real
+  # documentation living in docs/LIVE_SHARE.md instead, mirroring how
+  # /join/{token} does the same thing elsewhere in this file.
+  /live/replays/{id}/share:
+    post:
+      tags: [live]
+      summary: >-
+        Mint (or return the still-active) a public share link for a
+        broadcast's recording. Same visibility rule as watching it (church
+        always; cell requires membership, Admin/SuperAdmin, or live:manage).
+        404 if the broadcast has no recording (or it was deleted). Idempotent
+        while the token is still active; a previously revoked token is
+        replaced with a fresh one rather than resurrected.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: "{ url, title, started_at, expires_at }. url = \"<PUBLIC_WEB_BASE>/w/<token>\". expires_at is always null — the link itself never expires, only DELETE (revoke) kills it."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, title, started_at, expires_at]
+                properties:
+                  url: { type: string, format: uri }
+                  title: { type: string }
+                  started_at: { type: string, format: date-time }
+                  expires_at: { type: [string, "null"], format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [live]
+      summary: >-
+        Revoke a broadcast's share link — same entitlement rule as minting
+        it. Idempotent: revoking a never-shared or already-revoked broadcast
+        is a silent no-op, not an error.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "204": { description: Revoked (or already revoked/never shared) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /live/replays/{id}/media:
+    get:
+      tags: [live]
+      summary: >-
+        Signed, UNAUTHENTICATED media hand-off backing the public share
+        page's <video> element — no bearer JWT; the HMAC query signature
+        (`t`) + expiry (`e`) IS the authorization, since the page has no
+        session to present. On success, delegates the actual bytes to nginx
+        via an X-Accel-Redirect response header (docs/LIVE_SHARE.md has the
+        exact nginx block) so Node never proxies the file and Range/seeking
+        keep working; the JSON response body is empty. Only ever serves
+        scope='church' recordings — refuses even a validly-signed request for
+        a cell-scope stream (defense in depth; nothing in this API ever mints
+        such a signature).
+      security: []
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - name: t
+          in: query
+          required: true
+          schema: { type: string }
+          description: HMAC-SHA256(streamId + "." + e), base64url.
+        - name: e
+          in: query
+          required: true
+          schema: { type: integer }
+          description: Unix seconds the signature expires at.
+      responses:
+        "200": { description: "X-Accel-Redirect issued; nginx streams the file." }
+        "403": { description: "FORBIDDEN_SCOPE — missing, tampered, or expired signature." }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---- Public pages (docs/LIVE_SHARE.md) — minimal stubs for the §3.7 route
+  # parity guard (test/openapi-routes.test.ts requires every mounted Express
+  # route to appear here); the real documentation for both lives in the doc,
+  # mirroring how /join/{token} above does the same thing.
+  /live/poster-default.svg:
+    get:
+      tags: [live]
+      summary: >-
+        PUBLIC, unauthenticated static asset — the branded fallback poster
+        the /w/{token} share page uses for `og:image` / `<video poster=...>`
+        when a recording has no ffmpeg-generated poster_url yet
+        (docs/LIVE_SHARE.md "Poster thumbnail" follow-up).
+      security: []
+      responses:
+        "200": { description: "image/svg+xml", content: { image/svg+xml: { schema: { type: string } } } }
+  /w/{token}:
+    get:
+      tags: [live]
+      summary: >-
+        PUBLIC, unauthenticated broadcast share page (docs/LIVE_SHARE.md).
+        Not a JSON route — server-rendered HTML with Open Graph/Twitter Card
+        meta, an inline <video> for scope='church' recordings, and a "for
+        members of {cell}" notice with NO video/media URL for scope='cell'
+        (the privacy fix). Escaped against XSS. Unknown/revoked tokens, and
+        streams whose recording was deleted, render a friendly 404 HTML page,
+        never the JSON error envelope.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "OG-rich HTML share page (video for church, notice-only for cell)", content: { text/html: { schema: { type: string } } } }
+        "404": { description: "HTML 404 page — unknown, revoked, or deleted-recording token.", content: { text/html: { schema: { type: string } } } }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }

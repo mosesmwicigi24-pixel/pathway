@@ -53,7 +53,7 @@ import { registerRadio } from "../modules/radio/index.js";
 import { registerDiscipleship } from "../modules/discipleship/index.js";
 import { registerPastoral } from "../modules/pastoral/index.js";
 import { registerReadingSocial, registerReadingSocialJoin } from "../modules/reading-social/index.js";
-import { registerLive } from "../modules/live/index.js";
+import { registerLive, registerLiveShare } from "../modules/live/index.js";
 
 export function createApp(ctx: AppContext): Express {
   const app = express();
@@ -198,6 +198,11 @@ export function createApp(ctx: AppContext): Express {
   // root, NOT under /v1, so it can double as the Universal Link/App Link
   // target once that native infra lands (docs/READING_SOCIAL_PLAN.md §5).
   app.use(registerReadingSocialJoin(ctx));
+
+  // Public broadcast share page (docs/LIVE_SHARE.md) — same placement as the
+  // reading-social join page above and for the same reason: /w/{token} must
+  // answer at the bare domain root, not under /v1.
+  app.use(registerLiveShare(ctx));
 
   // Terminal error handler — always emits the §3.2 envelope.
   app.use(

@@ -3,7 +3,7 @@
 // to disk) is already live; this owns: minting stream keys (RBAC + §5.4
 // scoping), the MediaMTX authHTTP webhook, live_streams/live_viewers, viewer
 // presence, the recording registrar, and the auto-end-orphans sweep.
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes, createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Pool } from "pg";
@@ -14,7 +14,7 @@ import { effectivePermissions, assertCellInScope } from "../../http/auth.js";
 import type { Principal } from "../../http/http.js";
 import { IdentityService } from "../identity/service.js";
 import { NotificationService } from "../notifications/service.js";
-import { matchRecordingFile } from "./recordings.js";
+import { matchRecordingFile, generatePosterUrl } from "./recordings.js";
 
 export type LiveScope = "church" | "cell";
 export type LiveKind = "video" | "audio";
@@ -134,6 +134,35 @@ interface StreamRow {
   viewer_peak: number;
   recording_url: string | null;
   recording_deleted_at: string | null;
+  share_token: string | null;
+  share_revoked_at: string | null;
+  poster_url: string | null;
+}
+
+// ---- Share links (docs/LIVE_SHARE.md "Share a broadcast") -----------------
+
+export interface ShareInfo {
+  url: string;
+  title: string;
+  started_at: string;
+  /** Always null: the share LINK never expires on its own — only DELETE
+   *  (share_revoked_at) kills it. Present so the response shape matches the
+   *  spec even though there is nothing to compute today; a future TTL policy
+   *  (if ever added) has a field ready to fill in without a wire break. */
+  expires_at: string | null;
+}
+
+export interface PublicShareRow {
+  stream_id: string;
+  scope: LiveScope;
+  cell_id: string | null;
+  cell_name: string | null;
+  title: string;
+  kind: LiveKind;
+  started_at: string;
+  ended_at: string | null;
+  congregation_name: string;
+  poster_url: string | null;
 }
 
 function sha256Hex(s: string): string {
@@ -216,6 +245,14 @@ export class LiveService {
      *  LIVE_MEDIAMTX_API_BASE. MediaMTX's HTTP control API base as reachable
      *  from the backend's docker network. No trailing slash. */
     private readonly mediamtxApiBase = "http://nuru-mediamtx:9997",
+    /** docs/LIVE_SHARE.md — public base the /w/{token} share page and the
+     *  signed media URL are built from. No trailing slash. */
+    private readonly publicWebBase = "https://pathway.nuruplace.org",
+    /** docs/LIVE_SHARE.md — HMAC key signing the short-lived media URL
+     *  embedded in the share page. Callers pass
+     *  env.LIVE_SHARE_SECRET ?? env.JWT_SIGNING_KEY (see index.ts) so a
+     *  missed env var in prod can never leave sharing unusable. */
+    private readonly shareSecret = "insecure-dev-only-live-share-secret",
   ) {
     this.notifications = notifications ?? new NotificationService(pool);
   }
@@ -266,6 +303,12 @@ export class LiveService {
   static readonly RecordingsQuery = z.object({
     scope: z.enum(["church", "cell"]).optional(),
     cell_id: z.string().uuid().optional(),
+  });
+
+  /** Query params for GET /live/replays/:id/media (docs/LIVE_SHARE.md). */
+  static readonly ShareMediaSig = z.object({
+    t: z.string().min(1).max(200),
+    e: z.coerce.number().int().positive(),
   });
 
   // ---- L5 interactions (docs/LIVE_INTERACTIVE.md) ----------------------
@@ -365,7 +408,8 @@ export class LiveService {
     return maybeOne<StreamRow>(
       c,
       `SELECT stream_id, scope, cell_id, started_by, title, kind, status, stream_key_hash,
-              started_at, ended_at, viewer_peak, recording_url, recording_deleted_at
+              started_at, ended_at, viewer_peak, recording_url, recording_deleted_at,
+              share_token, share_revoked_at, poster_url
          FROM live_streams WHERE stream_id = $1`,
       [streamId],
     );
@@ -436,7 +480,23 @@ export class LiveService {
         `UPDATE live_streams SET recording_url = $2 WHERE stream_id = $1 AND recording_url IS NULL`,
         [row.stream_id, recordingUrl],
       );
-      return (res.rowCount ?? 0) > 0;
+      const registered = (res.rowCount ?? 0) > 0;
+      if (registered) {
+        // Poster thumbnail (docs/LIVE_SHARE.md) — best-effort, isolated from
+        // the registration result above: generatePosterUrl always returns
+        // null today (no ffmpeg in the image, see recordings.ts), but a
+        // caught failure here must NEVER undo/fail the recording
+        // registration that already committed.
+        try {
+          const poster = await generatePosterUrl(recordingUrl);
+          if (poster) {
+            await this.pool.query(`UPDATE live_streams SET poster_url = $2 WHERE stream_id = $1`, [row.stream_id, poster]);
+          }
+        } catch {
+          /* best-effort — the share page falls back to the static poster */
+        }
+      }
+      return registered;
     } catch {
       return false;
     }
@@ -928,6 +988,148 @@ export class LiveService {
         await audit(c, principal.userId, "live.recording_deleted", "live_streams", streamId, {});
       }
     });
+  }
+
+  // ---- Share links (docs/LIVE_SHARE.md "Share a broadcast") -------------
+
+  /** HMAC-SHA256 over "streamId.expiry" — the whole authorization for the
+   *  unauthenticated media hand-off route; see mediaAccelPath below. */
+  private hmacSig(streamId: string, expiresAtEpochSeconds: number): string {
+    return createHmac("sha256", this.shareSecret).update(`${streamId}.${expiresAtEpochSeconds}`).digest("base64url");
+  }
+
+  /**
+   * Signs a short-lived (default 6h) media URL for a church-scope recording.
+   * Re-minted on EVERY /w/{token} page load — the share LINK itself never
+   * expires (only DELETE .../share / share_revoked_at kills it); this
+   * signature only bounds how long any ONE embedded <video> src stays
+   * fetchable, so a page cached by a browser/crawler for days can't keep
+   * serving bytes forever on its own, independent of revocation.
+   */
+  private mediaUrl(streamId: string, ttlSeconds = 6 * 60 * 60): string {
+    const e = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const t = this.hmacSig(streamId, e);
+    return `${this.publicWebBase}/v1/live/replays/${streamId}/media?t=${encodeURIComponent(t)}&e=${e}`;
+  }
+
+  /** Constant-time signature check + expiry. Never throws on malformed input
+   *  (length mismatches would otherwise make Node's timingSafeEqual throw). */
+  private verifyMediaSig(streamId: string, t: string, e: number): boolean {
+    if (!Number.isFinite(e) || Math.floor(Date.now() / 1000) > e) return false;
+    const expected = Buffer.from(this.hmacSig(streamId, e));
+    const given = Buffer.from(t);
+    if (expected.length !== given.length) return false;
+    return timingSafeEqual(expected, given);
+  }
+
+  /**
+   * Mint (or return the still-active) share token for a broadcast's
+   * recording. Same "entitled to see it" rule as every other L5 read
+   * (assertVisible: church always allowed, cell requires membership /
+   * Admin/SuperAdmin / a live:manage holder). Requires a non-deleted
+   * recording to already exist — nothing to share otherwise. Idempotent
+   * while the current token is still active (repeat calls return the exact
+   * same URL); a previously REVOKED token is replaced with a fresh one
+   * rather than resurrected — the old link stays dead forever, matching the
+   * revoke contract below.
+   */
+  async mintShare(principal: Principal, streamId: string): Promise<ShareInfo> {
+    const stream = await this.streamOrThrow(streamId);
+    await this.assertVisible(principal, stream);
+    if (!stream.recording_url || stream.recording_deleted_at) {
+      throw new ApiError("NOT_FOUND", "This broadcast has no recording to share yet");
+    }
+
+    let token = stream.share_token;
+    if (!token || stream.share_revoked_at) {
+      token = randomBytes(16).toString("base64url"); // 128 bits — >=22 url-safe chars, never sequential
+      await tx(this.pool, async (c) => {
+        await c.query(
+          `UPDATE live_streams SET share_token = $2, share_revoked_at = NULL WHERE stream_id = $1`,
+          [streamId, token],
+        );
+        await audit(c, principal.userId, "live.recording_shared", "live_streams", streamId, {});
+      });
+    }
+
+    return {
+      url: `${this.publicWebBase}/w/${token}`,
+      title: stream.title,
+      started_at: stream.started_at,
+      expires_at: null,
+    };
+  }
+
+  /**
+   * Revoke a broadcast's share link — same entitlement rule as mintShare
+   * (whoever could share it may un-share it). Idempotent: revoking a
+   * broadcast that was never shared, or an already-revoked one, is a silent
+   * no-op, matching deleteRecording's idiom elsewhere in this file.
+   */
+  async revokeShare(principal: Principal, streamId: string): Promise<void> {
+    const stream = await this.streamOrThrow(streamId);
+    await this.assertVisible(principal, stream);
+    const res = await this.pool.query(
+      `UPDATE live_streams SET share_revoked_at = now() WHERE stream_id = $1 AND share_token IS NOT NULL AND share_revoked_at IS NULL`,
+      [streamId],
+    );
+    if ((res.rowCount ?? 0) > 0) {
+      await audit(this.pool, principal.userId, "live.recording_share_revoked", "live_streams", streamId, {});
+    }
+  }
+
+  /**
+   * Public GET /w/{token} lookup — UNAUTHENTICATED (see index.ts
+   * registerLiveShare / sharePage.ts). Null for an unknown token, a revoked
+   * one, or one whose recording no longer exists (deleted after being
+   * shared) — every one of those renders the same branded 404, never a
+   * stack trace or a JSON error envelope. scope='cell' rows ARE still
+   * returned here (the page renders the "for members" notice instead of a
+   * 404); the caller (index.ts) decides whether to include a media URL, and
+   * only ever does for scope='church'.
+   */
+  async getPublicShare(token: string): Promise<PublicShareRow | null> {
+    return maybeOne<PublicShareRow>(
+      this.pool,
+      `SELECT s.stream_id, s.scope, s.cell_id, cg.name AS cell_name, s.title, s.kind,
+              s.started_at, s.ended_at, s.poster_url, c.name AS congregation_name
+         FROM live_streams s
+         JOIN users u ON u.user_id = s.started_by
+         JOIN congregations c ON c.congregation_id = u.congregation_id
+         LEFT JOIN cell_groups cg ON cg.cell_group_id = s.cell_id
+        WHERE s.share_token = $1 AND s.share_revoked_at IS NULL
+          AND s.recording_url IS NOT NULL AND s.recording_deleted_at IS NULL`,
+      [token],
+    );
+  }
+
+  /** Fresh signed media URL for a church-scope share page — called on every
+   *  page load (see mediaUrl's doc: the LINK never expires, only this one
+   *  embedded URL is short-lived). Public (not private) — index.ts calls it
+   *  directly from the /w/{token} route. */
+  publicMediaUrl(streamId: string): string {
+    return this.mediaUrl(streamId);
+  }
+
+  /**
+   * X-Accel-Redirect target for GET /v1/live/replays/{id}/media
+   * (docs/LIVE_SHARE.md has the matching nginx block). Validates the HMAC
+   * signature + expiry, then re-checks the recording still exists (a signed
+   * URL minted minutes ago must not outlive a delete/revoke that happened
+   * meanwhile) and is scope='church' — defense in depth: nothing in this
+   * codebase ever mints a signed media URL for a cell-scope stream (see
+   * mintShare/getPublicShare), but this endpoint refuses to serve one even
+   * if it somehow received a validly-signed request for one.
+   */
+  async mediaAccelPath(streamId: string, sig: { t: string; e: number }): Promise<string> {
+    if (!this.verifyMediaSig(streamId, sig.t, sig.e)) {
+      throw new ApiError("FORBIDDEN_SCOPE", "Invalid or expired media link");
+    }
+    const stream = await this.streamById(this.pool, streamId);
+    if (!stream || !stream.recording_url || stream.recording_deleted_at || stream.scope !== "church") {
+      throw new ApiError("NOT_FOUND", "Recording not available");
+    }
+    return stream.recording_url.replace(/^\/live-recordings\//, "/internal-live-recordings/");
   }
 
   // ---- L5 interactions (docs/LIVE_INTERACTIVE.md) -----------------------

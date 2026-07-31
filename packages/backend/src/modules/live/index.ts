@@ -34,12 +34,22 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { LiveService } from "./service.js";
+import {
+  DEFAULT_POSTER_SVG,
+  renderChurchSharePage,
+  renderCellRestrictedPage,
+  renderShareNotFoundPage,
+} from "./sharePage.js";
 
 const IdParam = z.object({ id: z.string().uuid() });
 const GuestParam = z.object({ id: z.string().uuid(), userId: z.string().uuid() });
 
-export function registerLive(ctx: AppContext): Router {
-  const svc = new LiveService(
+/** Every registerX in this module builds its own LiveService from ctx — see
+ *  registerLive's own comment on why (fresh Router/svc per createApp() call,
+ *  test isolation). registerLiveShare (below) needs the exact same
+ *  construction, so it's factored out here rather than duplicated. */
+function buildService(ctx: AppContext): LiveService {
+  return new LiveService(
     ctx.db.primary,
     ctx.env.LIVE_RECORDINGS_DIR ?? "/opt/pathway/mediamtx/recordings",
     ctx.env.LIVE_RTMP_BASE_URL ?? "rtmp://pathway.nuruplace.org:1935",
@@ -48,7 +58,16 @@ export function registerLive(ctx: AppContext): Router {
     ctx.env.LIVE_WEBRTC_BASE_URL ?? "https://pathway.nuruplace.org/webrtc",
     ctx.env.LIVE_CDN_PER_STREAM,
     ctx.env.LIVE_MEDIAMTX_API_BASE ?? "http://nuru-mediamtx:9997",
+    ctx.env.APP_PUBLIC_URL,
+    // docs/LIVE_SHARE.md: falls back to the JWT signing key so a missed
+    // LIVE_SHARE_SECRET on deploy can never leave sharing broken/insecure —
+    // it just shares a signing key with token auth instead of having its own.
+    ctx.env.LIVE_SHARE_SECRET ?? ctx.env.JWT_SIGNING_KEY,
   );
+}
+
+export function registerLive(ctx: AppContext): Router {
+  const svc = buildService(ctx);
   const auth = authenticate(ctx.env);
   const perm = requirePermission(ctx.db.replica);
   // A fresh Router per call — registerLive runs once per createApp() in prod,
@@ -224,6 +243,107 @@ export function registerLive(ctx: AppContext): Router {
     await svc.removeGuest(requirePrincipal(req), id, userId);
     res.sendStatus(204);
   }));
+
+  // ---- Share links (docs/LIVE_SHARE.md "Share a broadcast") -------------
+
+  r.post("/live/replays/:id/share", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await svc.mintShare(requirePrincipal(req), id));
+  }));
+
+  r.delete("/live/replays/:id/share", auth, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    await svc.revokeShare(requirePrincipal(req), id);
+    res.sendStatus(204);
+  }));
+
+  // Signed, UNAUTHENTICATED media hand-off — same trust-boundary idiom as
+  // POST /live/auth and GET /live/church/current above: no bearer JWT, the
+  // HMAC signature (+ expiry) IS the authorization, because the public share
+  // page's <video> tag has no session to present. Delegates the actual bytes
+  // to nginx via X-Accel-Redirect (docs/LIVE_SHARE.md has the nginx block)
+  // so Node never proxies a 30MB+ file and Range/seeking keep working.
+  r.get("/live/replays/:id/media", handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    const sig = parseBody(LiveService.ShareMediaSig, req.query);
+    const accelPath = await svc.mediaAccelPath(id, sig);
+    res.setHeader("X-Accel-Redirect", accelPath);
+    res.setHeader("Content-Type", "video/mp4");
+    res.status(200).end();
+  }));
+
+  return r;
+}
+
+export const liveShareRouter: Router = Router();
+
+/**
+ * Public, unauthenticated /w/{token} broadcast share page + its tiny default
+ * poster asset. Mounted directly on the root app (NOT under /v1) — same
+ * placement as reading-social's registerReadingSocialJoin, and for the same
+ * reason: it must answer at the bare domain so it can double as a Universal
+ * Link/App Link target once that native infra lands. Never returns the JSON
+ * error envelope — every failure mode (unknown token, revoked, DB hiccup)
+ * renders a friendly branded HTML page instead.
+ */
+export function registerLiveShare(ctx: AppContext): Router {
+  const svc = buildService(ctx);
+  const r = liveShareRouter;
+  const appScheme = ctx.env.READING_INVITE_APP_SCHEME;
+  const androidStoreUrl = ctx.env.READING_INVITE_ANDROID_STORE_URL ?? "";
+  const iosStoreUrl = ctx.env.READING_INVITE_IOS_STORE_URL ?? "";
+  const defaultPosterUrl = `${ctx.env.APP_PUBLIC_URL}/live/poster-default.svg`;
+
+  r.get("/live/poster-default.svg", (_req, res) => {
+    res.type("image/svg+xml").send(DEFAULT_POSTER_SVG);
+  });
+
+  r.get("/w/:token", async (req, res) => {
+    const token = req.params.token ?? "";
+    try {
+      const share = await svc.getPublicShare(token);
+      if (!share) {
+        res.status(404).type("html").send(renderShareNotFoundPage());
+        return;
+      }
+      const joinUrl = `${ctx.env.APP_PUBLIC_URL}/w/${token}`;
+      const posterUrl = share.poster_url ?? defaultPosterUrl;
+
+      if (share.scope === "cell") {
+        res.status(200).type("html").send(
+          renderCellRestrictedPage({
+            joinUrl,
+            title: share.title,
+            cellName: share.cell_name ?? "this cell",
+            posterUrl,
+            streamId: share.stream_id,
+            appScheme,
+            androidStoreUrl,
+            iosStoreUrl,
+          }),
+        );
+        return;
+      }
+
+      res.status(200).type("html").send(
+        renderChurchSharePage({
+          token,
+          joinUrl,
+          title: share.title,
+          congregationName: share.congregation_name,
+          startedAt: share.started_at,
+          mediaUrl: svc.publicMediaUrl(share.stream_id),
+          posterUrl,
+          streamId: share.stream_id,
+          appScheme,
+          androidStoreUrl,
+          iosStoreUrl,
+        }),
+      );
+    } catch {
+      res.status(404).type("html").send(renderShareNotFoundPage());
+    }
+  });
 
   return r;
 }

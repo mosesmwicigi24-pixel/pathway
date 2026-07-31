@@ -219,6 +219,16 @@ const EnvSchema = z.object({
   // ~2min worker sweep and createStream's owner self-recovery. No trailing
   // slash. ---
   LIVE_MEDIAMTX_API_BASE: z.string().default("http://nuru-mediamtx:9997"),
+
+  // --- Nuru Live — public share links (docs/LIVE_SHARE.md). The public
+  // /w/{token} page embeds a short-lived, HMAC-signed media URL (validated by
+  // GET /v1/live/replays/{id}/media, then handed to nginx via
+  // X-Accel-Redirect) rather than exposing the raw /live-recordings/ file
+  // path. Optional and falls back to JWT_SIGNING_KEY (an existing,
+  // always-present secret) — deliberately NOT a required var, so a missed
+  // env entry on deploy can never leave this endpoint unable to boot; it
+  // just shares a signing key with token auth instead of having its own. ---
+  LIVE_SHARE_SECRET: z.string().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
