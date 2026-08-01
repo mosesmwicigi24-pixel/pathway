@@ -81,6 +81,25 @@ export interface MatchOptions {
  * filename; concatenating multiple segments into one VOD is out of scope
  * (see module doc).
  */
+/**
+ * Poster-frame generation for the public share page (docs/LIVE_SHARE.md).
+ * NOT IMPLEMENTED: the backend runtime image (packages/backend/Dockerfile,
+ * node:20-bookworm-slim) does not install ffmpeg, and this feature
+ * deliberately does NOT add it silently — bundling a native binary into the
+ * production image (size, CVE surface) is an infra decision for the operator
+ * to make on purpose, not something to sneak into a feature PR. Until ffmpeg
+ * (or an image-processing dependency) is added, this always returns null and
+ * every share page falls back to the static branded poster
+ * (sharePage.ts DEFAULT_POSTER_SVG) — see the doc's "Poster thumbnail"
+ * follow-up. The call site (service.ts tryRegisterRecording) already treats
+ * this as best-effort or catches synchronously-thrown errors: a failure here
+ * must never break recording registration, so swapping this one function for
+ * a real ffmpeg thumbnail extraction is the entire follow-up.
+ */
+export async function generatePosterUrl(_recordingUrl: string): Promise<string | null> {
+  return null;
+}
+
 export function matchRecordingFile(
   files: readonly (string | CandidateFile)[],
   startedAt: Date,
