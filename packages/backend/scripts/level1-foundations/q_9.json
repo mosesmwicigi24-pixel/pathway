@@ -1,0 +1,122 @@
+[
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "Module 9 opens by explaining how belonging to God's family works. According to the introduction, how does a person come to belong?",
+    "answer_options": [
+      "We earn belonging by being good enough for the group",
+      "We grow spiritually first, and belonging follows our maturity",
+      "God adopts us into His family first, and then we grow",
+      "We belong once church leaders formally approve our membership"
+    ],
+    "correct_answer": "God adopts us into His family first, and then we grow",
+    "difficulty_rating": 1
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "The module uses the illustration of a child adopted into a loving home who is given the family name, handed a chair, and told 'you are ours now.' What is this illustration teaching?",
+    "answer_options": [
+      "You do not belong because you performed; you belong because God chose you",
+      "Adopted children must work hard to keep their place at the table",
+      "God's family accepts only those who first prove themselves faithful",
+      "Belonging comes gradually as you learn the family's rules"
+    ],
+    "correct_answer": "You do not belong because you performed; you belong because God chose you",
+    "difficulty_rating": 1
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "The module names one relationship as the most important of all. Which relationship is it, and why?",
+    "answer_options": [
+      "Relationship with others, because love is the greatest commandment",
+      "Relationship with self, because you cannot love others until you love yourself",
+      "Relationship with church leaders, because they watch over your soul",
+      "Relationship with God, because every other relationship grows healthier when it is right"
+    ],
+    "correct_answer": "Relationship with God, because every other relationship grows healthier when it is right",
+    "difficulty_rating": 2
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "Under 'How to Grow Closer to God', the module lists five practices. Which option matches the list given in the lesson?",
+    "answer_options": [
+      "Fast weekly, attend every service, memorise creeds, keep vigils, and tithe",
+      "Talk to Him in prayer, listen by reading His Word, walk with the Holy Spirit daily, worship wholeheartedly, and trust and obey what He says",
+      "Study theology, join a ministry, take mission trips, mentor others, and journal",
+      "Confess daily, avoid unbelievers, wear modest clothing, sing hymns, and rest on the Sabbath"
+    ],
+    "correct_answer": "Talk to Him in prayer, listen by reading His Word, walk with the Holy Spirit daily, worship wholeheartedly, and trust and obey what He says",
+    "difficulty_rating": 2
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "On the relationship with self, the module says how you see yourself, treat yourself, and think of yourself should be influenced by one thing only. What is it?",
+    "answer_options": [
+      "Your past record, which keeps you humble about who you really are",
+      "The honest opinions of the people who know you best",
+      "Your achievements and growth since becoming a believer",
+      "God's standpoint pertaining to you — your new creation identity in Christ"
+    ],
+    "correct_answer": "God's standpoint pertaining to you — your new creation identity in Christ",
+    "difficulty_rating": 3
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "The module says that regardless of your past, you should be able to forgive yourself. What reason does it give, and what does it call the refusal to do so?",
+    "answer_options": [
+      "Because God has forgiven you — and not being able to forgive yourself is a sense of pride",
+      "Because time heals all wounds — and refusing to move on is a sign of weakness",
+      "Because everyone makes mistakes — and dwelling on them is simply unproductive",
+      "Because your good works now outweigh the past — and doubting that is unbelief"
+    ],
+    "correct_answer": "Because God has forgiven you — and not being able to forgive yourself is a sense of pride",
+    "difficulty_rating": 3
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "Quoting Romans 8:38-39 under 'You Are Deeply Loved', what conclusion does the module draw for how you relate to yourself?",
+    "answer_options": [
+      "God's love must be maintained by daily devotion, so guard it carefully",
+      "God loves you when you love others, so serve people to stay loved",
+      "Nothing in all creation can separate you from God's love, so you can love yourself, seeing yourself as He sees you",
+      "God's love covers the past only, so present failures must still be paid for"
+    ],
+    "correct_answer": "Nothing in all creation can separate you from God's love, so you can love yourself, seeing yourself as He sees you",
+    "difficulty_rating": 4
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "From John 13:34-35, the module states how the world will know that we are disciples of Jesus. What is the mark it names?",
+    "answer_options": [
+      "Our bold public preaching of the gospel",
+      "Our love for one another, not how much we know",
+      "Our separation from worldly patterns and habits",
+      "Our faithful attendance at church gatherings"
+    ],
+    "correct_answer": "Our love for one another, not how much we know",
+    "difficulty_rating": 4
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "The module twice uses the picture of a burning coal — pulled from the fire it grows cold; kept with the others it stays burning. What truth is this illustrating?",
+    "answer_options": [
+      "Believers were never meant to stay warm alone; planted together in community, we keep each other burning",
+      "Zeal naturally fades with age, so young believers must be especially fervent",
+      "Trials are the fire God uses to refine each believer individually",
+      "A believer who falls away can never be restored to their first fire"
+    ],
+    "correct_answer": "Believers were never meant to stay warm alone; planted together in community, we keep each other burning",
+    "difficulty_rating": 5
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "'The Family Table' answers the question 'why the local church?' with five reasons the church matters. Which option lists all five as taught?",
+    "answer_options": [
+      "Worship, prayer, evangelism, giving, and service",
+      "Preaching, healing, deliverance, communion, and missions",
+      "Fellowship, leadership, tradition, sacraments, and discipline",
+      "Community, doctrine, covering, the ordinances, and growth"
+    ],
+    "correct_answer": "Community, doctrine, covering, the ordinances, and growth",
+    "difficulty_rating": 5
+  }
+]

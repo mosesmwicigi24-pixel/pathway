@@ -1620,532 +1620,274 @@ SELECT module_id, 'multiple_choice', $NQ$The 'Catch this' line for the abuse sec
   FROM modules WHERE level_number=1 AND module_sequence_number=6;
 
 -- ===== Level 1 · Module 7: The Holy Spirit & Empowerment (Part 1) =====
-INSERT INTO modules (level_number, module_sequence_number, title, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
-VALUES (1, 7, $NT$The Holy Spirit & Empowerment (Part 1)$NT$, $NB$As Christians, we are called into a constant fellowship with Him, because He is a person. (2 Corinthians 13:14)
+-- Re-authored teaching content + quiz applied directly to production; exported back
+-- from prod 2026-08-02 (drift repair — supersedes the original PDF-derived set).
+INSERT INTO modules (level_number, module_sequence_number, title, summary, key_verses, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
+VALUES (1, 7, $NT$The Holy Spirit & Empowerment (Part 1)$NT$,
+  $NS$Meet the Person who now lives in us. This module unpacks who the Holy Spirit is (fully God, a Person — not a force), what He does in every believer, how to receive Him by faith, and the gifts and fruit of a Spirit-filled life. We now live in the age of the Spirit — the Christian life is lived in daily partnership with Him.$NS$,
+  $NK$["Acts 1:8", "John 14:16-17", "Romans 8:15-16", "Galatians 5:22-23", "1 Corinthians 12:8-10"]$NK$::jsonb,
+  $NB$# Module 7: The Holy Spirit & Empowerment (Part 1)
 
-Before Jesus was revealed, man related with (heard from) God the Father predominantly through prophets and angelic appearances. After the revealing of
+> "But ye shall receive power, after that the Holy Ghost is come upon you." — *Acts 1:8 (KJV)*
 
-Jesus the Christ, man got the opportunity to receive from God through the Word made flesh - Jesus Christ.
+Up to this point we have learned what God has done for us in Christ. In this module we meet the Person who now lives in us, to make that life real day by day.
 
-After the resurrection and ascension of Christ, man relates with God predominantly through the Holy Spirit who leads us into all truth and understanding of spiritual matters.
+## Topic Outline
+- The New Roommate: Meeting the Holy Spirit
+- Who Is the Holy Spirit? He Is Fully God
+- What the Holy Spirit Does in the Believer
+- How to Receive the Holy Spirit
+- The Power of a Spirit-Filled Life
+- The Gifts of the Holy Spirit
+- The Fruit of the Holy Spirit
+- Clearing Up Misconceptions
 
-The New Roommate (Part 1): Meeting the Holy Spirit
+## The New Roommate: Meeting the Holy Spirit
 
-Why call Him "The New Roommate"?
+### How God Has Related with Man
+As Christians, we are called into constant fellowship with God, because He is a Person, not merely a power (2 Corinthians 13:14). Throughout Scripture, the way God relates with man has unfolded in stages:
 
-A roommate shares your space. He is present in your everyday life. You wake up and go to sleep knowing someone else lives there.
+- **Before Christ was revealed,** man heard from God the Father chiefly through the prophets and through angelic appearances.
+- **When the Son was revealed,** man received directly from God through the Word made flesh — Jesus Christ.
+- **After the resurrection and ascension of Christ,** man relates with God chiefly through the Holy Spirit, who leads us into all truth and into the understanding of spiritual things.
 
-When a person believes in Christ, the Holy Spirit comes to dwell within them permanently. He does not visit occasionally or appear only during church services.
+**We now live in the age of the Spirit.** To know God today is to know and walk with the Holy Spirit.
 
-He makes His home in the believer.
+### Why "The New Roommate"?
+A roommate shares your space. He is present in your everyday life; you wake and you sleep knowing someone else lives there. This is a picture of the Holy Spirit. When a person believes in Christ, the Holy Spirit comes to dwell within them permanently. He does not visit occasionally or appear only during church services — He makes His home in the believer. **You are never alone again.**
 
-You are never alone again.
+The Christian life, therefore, is not merely trying harder to obey God by human effort. It is learning to live in daily fellowship with the One who now lives within you. Three questions follow:
 
-The Christian life, therefore, is not merely trying harder to obey God through human effort.
-It is learning to live in daily fellowship with the One who now lives within you. The question becomes:
+- Will you acknowledge Him?
+- Will you listen to Him?
+- Will you walk with Him?
 
-      Will you acknowledge Him?
+### The Promised Gift of the Father
+The Holy Spirit is not an afterthought; He is the promise of the Father, foretold long before Pentecost.
 
-      Will you listen to Him?
+> "And it shall come to pass afterward, that I will pour out my spirit upon all flesh; and your sons and your daughters shall prophesy, your old men shall dream dreams, your young men shall see visions." — **Joel 2:28 (KJV)**
 
-      Will you walk with Him?
+> "If ye love me, keep my commandments. And I will pray the Father, and he shall give you another Comforter, that he may abide with you for ever." — **John 14:15–16 (KJV)**
 
-The Holy Spirit as a gift of Promise from the Father.
+Jesus called Him "another Comforter" — one of the same kind as Himself, sent to be with us forever.
 
-Joel 2:28 - “It shall come about after this, that I shall pour out My Spirit on all mankind; and your sons and your daughters will prophesy, your old men will dream dreams, your young men will see visions.
+## Who Is the Holy Spirit? He Is Fully God
+The Holy Spirit is fully God — the third Person of the Trinity, co-equal with the Father and the Son. He is not a force, a power, or a feeling. He is a Person, with mind, will, and emotion.
 
-                                                            16
-John 14:15 - “If you love me, keep my commands.                  And I will ask the Father, and he will give you another advocate to help you and be with you forever— 17 the Spirit of truth.
+### His Names and Titles
+- **The Comforter / Advocate** — Counsellor, Strengthener, Standby, and Intercessor.
+- **The Helper** — the One who comes alongside us to assist.
+- **The Spirit of Truth** — who guides us into all truth and abides with us forever (John 14:16–17).
 
-Who Is the Holy Spirit?
+### He Is a Person, Not a Force
+Because the Holy Spirit is a Person, He relates to us personally. He loves, and He can be grieved.
 
-The Holy Spirit is fully God, the third person of the Trinity. He is fully divine, co-equal with the Father and the Son. He is not a force, a power or a feeling, He is a person with a personality and feelings.
+> "And grieve not the holy Spirit of God, whereby ye are sealed unto the day of redemption." — **Ephesians 4:30 (KJV)**
 
-The Holy Spirit is:
-   1.​ An advocate - Counselor, Strengthener, Standby
+A force cannot be grieved; only a person can. The very command not to grieve Him proves that He has personality, affection, and feeling. We are therefore called not merely to use Him, but to walk with Him in a relationship of love and sensitivity.
 
-   2.​ Helper - Comforter, Advocate, Intercessor—, to be with you forever
+## What the Holy Spirit Does in the Believer
+When a person is born again, the Holy Spirit immediately goes to work. He does five things in every believer:
 
-   3.​ the Spirit of Truth,
+1. He indwells us.
+2. He seals and guarantees our salvation.
+3. He confirms our adoption as sons.
+4. He empowers us to witness and to live victoriously.
+5. He reveals and glorifies Christ.
 
-The Personal Traits of the Holy Spirit
+### 1. He Indwells Us — You Are His Temple
+At the moment of the new birth, the Holy Spirit takes up residence in you. Your body becomes a living temple for His dwelling. This indwelling is what distinguishes the believer from the world.
 
-   1.​ He Loves
+> "What? know ye not that your body is the temple of the Holy Ghost which is in you, which ye have of God, and ye are not your own?" — **1 Corinthians 6:19 (KJV)**
 
-   2.​ He gets angry
+### 2. He Seals and Guarantees Our Salvation
+The presence of the Holy Spirit is God's seal of ownership on our lives and His guarantee of all that is to come.
 
-   3.​ He gets heartbreaks and grief
+> "Who hath also sealed us, and given the earnest of the Spirit in our hearts." — **2 Corinthians 1:22 (KJV)**
 
-               Ephesians 4: 20 - And do not grieve the Holy Spirit of God, with whom you were sealed for the day of redemption”. According to this scripture, we see that it is possible to grieve the Holy Spirit, meaning He has a personality.
+> "…ye were sealed with that holy Spirit of promise, which is the earnest of our inheritance until the redemption of the purchased possession, unto the praise of his glory." — **Ephesians 1:13–14 (KJV)**
 
-Facts about the Holy Spirit:
+A seal marks ownership; an earnest is a deposit that guarantees the full payment. The Holy Spirit in us is both — proof that we belong to God, and the down-payment of our eternal inheritance.
 
-   1.​ Dwells in a believer
+### 3. He Confirms Our Adoption as Sons
+The Holy Spirit testifies that we belong to God as His adopted children. He does not lead us back into fear, but assures us of our place in the family of God.
 
-   2.​ He empowers us to witness and to live life to the fullest
+> "For ye have not received the spirit of bondage again to fear; but ye have received the Spirit of adoption, whereby we cry, Abba, Father. The Spirit itself beareth witness with our spirit, that we are the children of God." — **Romans 8:15–16 (KJV)**
 
-   3.​ He reveals Christ
+### 4. He Empowers Us to Witness and to Live Victoriously
+It is impossible to live a victorious Christian life without the enabling power of the Holy Spirit. This power is not only for preaching; it is for holiness, boldness, discernment, and fellowship with God.
 
-Understanding the Holy Spirit
+> "But ye shall receive power, after that the Holy Ghost is come upon you: and ye shall be witnesses unto me both in Jerusalem, and in all Judaea, and in Samaria, and unto the uttermost part of the earth." — **Acts 1:8 (KJV)**
 
-The Holy Spirit helps to produce the fruit - so every believer who have the Holy Spirit must
-show the fruit of the Spirit
-The Holy spirit gives gifts as he wills and to anyone He chooses . Gifts are not fruits, fruits
-abide even when gifts are not visibly at work.
+The disciples' assignment — to carry the gospel beyond Jerusalem — depended entirely on this empowerment. This is why Christ commanded them to tarry in Jerusalem until they were endued with power from on high.
 
-   A.​ Dwells in every Belieber. i.​    At the moment of the new birth, the Holy Spirit takes up residence in you. You become a temple for His residing, a living temple.
+> "And they were all filled with the Holy Ghost, and began to speak with other tongues, as the Spirit gave them utterance." — **Acts 2:4 (KJV)**
 
-                         1 Corinthians 6:19 - Do you not know that your bodies are temples of the Holy Spirit, who is in you, whom you have received from God? You are not your own; ii.​   The residency of the Holy Spirit in us is what distinguishes us from the World. According to 2 Corinthians 1:22, having the Holy Spirit in you is the guarantee for your salvation.
+### 5. He Reveals and Glorifies Christ
+The ministry of the Holy Spirit is not to draw attention to Himself, but to glorify Jesus.
 
-   B.​ Seal of ownership on us 2 Corinthians 1:22, set his seal of ownership on us, and put his Spirit in our hearts as a deposit, guaranteeing what is to come.
+> "But when the Comforter is come… he shall testify of me." — **John 15:26 (KJV)**
 
-       Ephesians 1:13-14 - And you also were included in Christ when you heard the message of truth, the gospel of your salvation. When you believed, you were marked in him with a seal, the promised Holy Spirit, 14 who is a deposit guaranteeing our inheritance until the redemption of those who are God’s possession—to the praise of his glory.
+> "He shall glorify me: for he shall receive of mine, and shall shew it unto you." — **John 16:14 (KJV)**
 
-   C.​ Guarantee of adoption to sonship:The Holy Spirit in us is the testimony that we belong to God as adopted sons.
+He makes the Word alive, guiding the believer into all truth and pointing always to Christ. This is why the preaching of the cross is foolishness to those who perish, but to us who are saved it is the power of God (1 Corinthians 1:18). The things of God cannot be understood unless they are revealed to us by the Holy Spirit.
 
-       Romans 8:15-16 says 15 The Spirit you received does not make you slaves, so that you live in fear again; rather, the Spirit you received brought about your adoption to sonship. And by him we cry, “Abba, Father.” 16 The Spirit himself testifies with our spirit that we are God’s children.
-D.​ He empowers us to witness and to live life to the fullest
+> **Pause & reflect:** Read Romans 8:15–16 again, slowly. Where in your life have you been striving in your own strength, rather than leaning on the Helper who lives in you?
 
-   It is impossible to live a victorious life as a Chirtian without the enabling power of the Holy Spirit. Acts 1:8 says “You shall receive power when the Holy Spirit comes upon you.” This isn’t just for preaching; it’s for living the Christian life victoriously, for holiness, for boldness, for discernment and for fellowship with
+## How to Receive the Holy Spirit
+The Holy Spirit is not earned by striving; He is received by faith, as God's gift to His children. Scripture shows a clear pathway:
 
-   God.
+- **Be born again.** The Holy Spirit is given to those who belong to Christ through faith. *"And because ye are sons, God hath sent forth the Spirit of his Son into your hearts, crying, Abba, Father."* — Galatians 4:6 (KJV)
+- **Believe God's promise.** *"…how much more shall your heavenly Father give the Holy Spirit to them that ask him?"* — Luke 11:13 (KJV)
+- **Ask the Father.** Jesus taught believers to ask for the Holy Spirit (Luke 11:13).
+- **Receive by faith.** *"Received ye the Spirit by the works of the law, or by the hearing of faith?"* — Galatians 3:2 (KJV)
+- **Yield to His leadership.** *"For as many as are led by the Spirit of God, they are the sons of God."* — Romans 8:14 (KJV)
+- **Expect His power.** He empowers believers for witness and ministry (Acts 1:8).
+- **Allow Him to give utterance.** He may manifest Himself as He wills (Acts 2:4).
 
-   Acts 2:4 4 And they were all filled with the Holy Ghost, and began to speak with other tongues, as the Spirit gave them utterance.
+> **Catch this:** The Holy Spirit is not earned by striving; He is received by faith as God's gift to His children.
 
-   The assignment of the disciples, which was to further preach the gospel of
+## The Power of a Spirit-Filled Life
+A life filled with the Holy Spirit is a life transformed. When the Spirit fills and leads you:
 
-   Christ out and beyond, was dependent on the enablement of the Holy Spirit.
+- You receive power for witness and service.
+- You understand the heart of God.
+- You operate in the gifts of the Holy Spirit.
+- You are not easily deceived by erroneous doctrines.
 
-   It is for this reason that Christ instructed them to tarry in Jerusalem until the are endued with the Holy Spirit.
+A Spirit-led life is:
 
-   Acts 1:8 But you will receive power when the Holy Spirit comes on you; and you will be my witnesses in Jerusalem, and in all Judea and Samaria, and to the ends of the earth.”
+- directed by God's wisdom and guidance;
+- empowered to overcome sin and temptation;
+- a reflection of the character and fruit of Christ;
+- equipped to witness and serve effectively;
+- strengthened with peace, comfort, and endurance in every season.
 
-E.​ He reveals Christ
+## The Gifts of the Holy Spirit
 
-   The ministry of the Holy Spirit is not to draw attention to Himself, but to glorify
+### What Spiritual Gifts Are
+Spiritual gifts are grace-gifts. They are not natural talents — though God may use your natural abilities — but supernatural endowments given by the Holy Spirit as He wills (1 Corinthians 12:4–11; Romans 12:6–8; Ephesians 4:7–12; 1 Peter 4:10).
 
-   Jesus.
+### The Purpose of Spiritual Gifts
+The gifts are never for personal glory or showmanship. They are given:
 
-   John 15:26 - When the Advocate comes, whom I will send to you from the
+- to edify the Church (Ephesians 4:12);
+- to manifest God's presence for the profit of all (1 Corinthians 12:7);
+- to demonstrate God's power (1 Corinthians 2:4);
+- to advance the gospel (Mark 16:20).
 
-   Father—the Spirit of truth who goes out from the Father—he will testify about me.
+### The Nine Gifts (1 Corinthians 12:8–10)
+Paul lists nine manifestations of the Spirit, traditionally grouped in three categories.
 
-   John 16:14 - He will glorify me because it is from me that he will receive what he will make known to you.
+**Gifts of Revelation — they reveal what is hidden**
 
-   He makes the Word alive by guiding the Christian into all truth. In other words, the Holy Spirit points us to Jesus the Christ. This is why the bible says that the
-     preaching of the cross is foolishness to those who perish; but unto us who are saved, it is the power of God. (1 Corinthians 1:18) It is impossible to understand the things of God, useless they are revealed to us by the Holy Spirit.
+- **Word of Wisdom** — a supernatural utterance of God's wisdom for a specific situation; insight into His will or strategy that could not be known naturally.
+- **Word of Knowledge** — a supernatural revelation of facts (past, present, or future) that could not be known by natural means.
+- **Discerning of Spirits** — the supernatural ability to perceive the source behind a spiritual manifestation: the Holy Spirit, a human spirit, or a demonic spirit. This is spiritual perception, not natural suspicion.
 
-How to Receive the Holy Spirit
+**Gifts of Power — they do what is humanly impossible**
 
-  1.​ Be Born Again - The Holy Spirit is given to those who belong to Christ
-     through faith. Galatians 4:6 (KJV) “And because ye are sons, God hath sent forth the Spirit of his Son into your hearts, crying, Abba, Father.”
+- **Faith** — not saving faith, but a special surge of supernatural faith to believe God for the impossible in a given moment.
+- **Gifts of Healings** — supernatural power to heal diseases and infirmities without natural means (note the plural — different manifestations for different conditions).
+- **Working of Miracles** — supernatural intervention that overrides natural law; God doing the impossible.
 
-  2.​ Believe That the Holy Spirit Is God’s Promise God desires to give the
-     Holy Spirit to His children. Luke 11:13 (KJV)​
+**Gifts of Inspiration — they speak forth God's heart**
 
-     “If ye then, being evil, know how to give good gifts unto your children: how much more shall your heavenly Father give the Holy Spirit to them that ask him?”
+- **Prophecy** — speaking forth the mind of God for edification, exhortation, and comfort (1 Corinthians 14:3). It must be judged and must align with Scripture (1 Corinthians 14:29).
+- **Different Kinds of Tongues** — speaking in a language unknown to the speaker, whether human or heavenly. Distinguish the private prayer language for self-edification (1 Corinthians 14:4) from public tongues with interpretation for the Church (1 Corinthians 14:27–28).
+- **Interpretation of Tongues** — the supernatural ability to make a message in tongues understandable. It is interpretation (meaning-for-meaning), not word-for-word translation.
 
-  3.​ Ask the Father - Jesus taught believers to ask for the Holy Spirit. Luke 11:13
-     (KJV) - “…how much more shall your heavenly Father give the Holy Spirit to them that ask him?”
+### Gifts vs. Offices
+It is important to distinguish the manifest gifts of the Spirit (1 Corinthians 12:8–10) from the ministry offices (Ephesians 4:11).
 
-  4.​ Receive by Faith The Holy Spirit is received through faith, not by works
-     Galatians 3:2 (KJV) “Received ye the Spirit by the works of the law, or by the hearing of faith?”
+- **The Nine Gifts:** given to ALL believers · for momentary manifestation · operate as the Spirit wills.
+- **The Five-Fold Ministry:** given to SOME believers · for ongoing ministry function · operate as a calling / office.
 
-  5.​ Yield Yourself to the Holy SpiritAllow Him to lead and direct your life.
+**The Five-Fold Ministry (Ephesians 4:11):**
 
-     Romans 8:14 (KJV) - For as many as are led by the Spirit of God, they are the sons of God.
+- **Apostle** — pioneer, church planter, spiritual father.
+- **Prophet** — one who prophesies regularly and carries a prophetic office.
+- **Evangelist** — soul-winner who brings people to Christ.
+- **Pastor** — shepherd who cares for the flock.
+- **Teacher** — one who explains and grounds believers in the Word.
 
-  6.​ Expect His Power and Manifestation The Holy Spirit empowers believers
-     for witness and ministry. Acts 1:8 (KJV) “But ye shall receive power, after that the Holy Ghost will come upon you: and ye shall be witnesses unto me…”
-   7.​ Allow the Holy Spirit to Give Utterance The Holy Spirit may manifest
-       Himself as He wills. Acts 2:4 (KJV) “And they were all filled with the Holy Ghost, and began to speak with other tongues, as the Spirit gave them utterance.”
+You may operate in spiritual gifts without holding a five-fold office. Every believer should desire and exercise the gifts; not every believer is called to an office.
 
-   Simple Class Takeaway
+## The Fruit of the Holy Spirit
+The fruit of the Spirit is the visible expression of the Holy Spirit's nature formed in the life of a born-again believer. It is not behaviour modification; it is nature transformation.
 
-   ●​ Be born again.
+**Common misconceptions vs. the truth:**
 
-   ●​ Believe God’s promise.
+- "I must work hard to produce this fruit" → The Spirit produces fruit as I abide.
+- "I can pick which fruit to develop" → It is ONE fruit with nine expressions.
+- "This is about external behaviour" → This is about internal nature.
+- "I earn God's favour by bearing fruit" → Fruit is evidence I already have His favour.
 
-   ●​ Ask the Father.
+### One Fruit, Nine Expressions
+> "But the fruit of the Spirit is love, joy, peace, longsuffering, gentleness, goodness, faith, meekness, temperance: against such there is no law." — **Galatians 5:22–23 (KJV)**
 
-   ●​ Receive by faith.
+Paul writes "fruit," not "fruits." The Spirit's work in us is unified, not fragmented. All nine expressions grow together — you cannot have love without joy, or peace without patience. Maturity means balanced growth across all nine.
 
-   ●​ Yield to His leadership.
+**The Nine Expressions:**
 
-   ●​ Expect His power.
+- **Love (agape)** — divine, unconditional love that seeks the highest good of others, regardless of their response. (Romans 5:8)
+- **Joy** — deep gladness rooted in God, not in circumstances; our strength in the storm. (John 15:11; Nehemiah 8:10)
+- **Peace** — wholeness and calm in the chaos; the peace that passes understanding. (John 14:27; Philippians 4:7)
+- **Longsuffering (patience)** — being slow to anger; enduring provocation without retaliation. (2 Peter 3:9)
+- **Gentleness** — strength under control; kindness in action that heals rather than harms. (Philippians 4:5)
+- **Goodness** — moral excellence in action; doing what is right even when unseen. (Galatians 6:9)
+- **Faithfulness** — reliability and steadfast loyalty to God and others; being a person of your word. (Luke 16:10)
+- **Meekness** — humility that does not insist on its own rights; teachable, valuing others above self. (Matthew 5:5; Philippians 2:3)
+- **Temperance (self-control)** — mastery over desires and impulses; saying "no" to the flesh and "yes" to the Spirit. (1 Corinthians 9:25)
 
-   ●​ Allow Him to work through you.
+> **Take-home assignment:** This week, choose ONE expression of the fruit to focus on. Each day: (1) identify one situation that tests it — a person hard to love, a circumstance that steals your peace, an area lacking self-control; (2) pause and pray: "Holy Spirit, express Your love / peace / patience through me"; (3) take one concrete action and record what happens. Remember: you are not manufacturing fruit by effort — you are abiding, so the Spirit can produce it through you.
 
-Catch this: The Holy Spirit is not earned by striving; He is received by faith as God’s gift to His children. 1: DISCIPLESHIP CLASSES - FULL COURSE.md
+## Clearing Up Misconceptions
+As we close, let us correct some common errors about the Holy Spirit.
 
-   ●​ t
+- "He is merely a force or a power." → He is a divine Person — the third Person of the Trinity.
+- "He is disorderly and chaotic." → "God is not the author of confusion, but of peace" (1 Corinthians 14:33). The Spirit works in order.
+- "Spirit-filled people must be loud, and we must pray loudly to reach Him." → He is gentle and ever-present; volume does not summon Him. He responds to faith, not noise.
+- "He is limited to speaking in tongues only." → Tongues is one manifestation among many; His work includes wisdom, revelation, power, fruit, and comfort.
 
-   ●​ The Power of a Spirit-Filled Life
+We have met the Person who now lives in us. The Christian life was never meant to be lived by human effort alone; it is lived in daily partnership with the Holy Spirit — acknowledging Him, listening to Him, and walking with Him. Go this week not striving, but yielding.
 
-          1.​ You receive power when the Holy Spirit comes upon you
-
-          2.​ You understand the heart of God
-
-          3.​ You operate in the gifts of the Holy Spirit
-
-          4.​ You are not easily manipulated by erroneous doctrines
-
-          5.​ A Spirit-led life is a life directed by God’s wisdom and guidance.
-
-          6.​ A Spirit-led life is a life empowered to overcome sin and temptation.
-
-          7.​ A Spirit-led life is a life that reflects the character and fruit of Christ.
-
-          8.​ A Spirit-led life is a life empowered to witness and serve effectively.
-
-          9.​ A Spirit-led life is a life strengthened with peace, comfort, and endurance in every season.
-The Gifts of the Holy Spirit
-
-Spiritual gifts are grace-gifts. They are not natural talents, though God may use your natural abilities. They are supernatural endowments given by the Holy Spirit to every believer at the moment of salvation.
-
-1 Corinthians 12:4-11 — "There are diversities of gifts, but the same Spirit... But one and the same Spirit works all these things, distributing to each one individually as He wills."
-
-Romans 12:6-8 — "Having then gifts differing according to the grace that is given to us..."
-
-Ephesians 4:7-12 — "But to each one of us grace was given according to the measure of Christ's gift."
-
-1 Peter 4:10 — "As each one has received a gift, minister it to one another, as good stewards of the manifold grace of God."
-
-The Purpose of Spiritual Gifts
-
-The gifts are not for personal glory, spiritual showmanship, or self-edification alone.
-
-Their purposes are:
-
-          A. To edify the Church — "for the equipping of the saints for the work of ministry, for the edifying of the body of Christ" (Ephesians 4:12)
-
-          B. To manifest God's presence — "But the manifestation of the Spirit is given to each one for the profit of all" (1 Corinthians 12:7)
-       C. To demonstrate God's power — "And my speech and my preaching were not with persuasive words of human wisdom, but in demonstration of the Spirit and of power" (1 Corinthians 2:4)
-
-       D. To advance the Gospel — "And they went out and preached everywhere, the Lord working with them and confirming the word through the accompanying signs" (Mark 16:20)
-
-The 9 Gifts Of The Spirit
-
-The apostle Paul outlines nine manifest gifts of the Holy Spirit in 1 Corinthians 12:8-10.
-
-These are traditionally grouped into three categories:
-
-       1. Gifts of Revelation
-
-These gifts reveal what is hidden — God's mind, plans, or supernatural knowledge.
-
-1.1 The Word of Wisdom
-
-It is a supernatural utterance of divine wisdom for a specific situation. It is not human wisdom or counsel, but God's wisdom spoken into a moment. The Spirit gives you insight into God's will or strategy that could not be known naturally.
-
-1.2 The Word of Knowledge
-
-It is a supernatural revelation of facts — past, present, or future — that could not be known by natural means. The Spirit reveals specific information: a person's condition, a future event, or even a need.
-
-1.3 Discerning of Spirits
-
-Discerning of Spirits is the supernatural ability to perceive the source of a spiritual manifestation — whether it is from the Holy Spirit, a human spirit, or a demonic spirit.
-With this gift, you perceive the spirit behind words, actions, or manifestations. This is not natural suspicion or criticism — it is spiritual perception.
-
-       2.   Gifts of Power
-
-These gifts do what is humanly impossible — they demonstrate God's mighty power.
-
-2.1 Faith
-
-This gift is not the saving faith (which all believers have), but a special measure of supernatural faith given for a specific moment to believe God for the impossible. It is characterized by a surge of confidence in God's power rising in your spirit — you know God will act in a particular thing, and you speak or act accordingly.
-
-2.2 Gifts of Healings
-
-It is the supernatural power to heal diseases and infirmities without natural means.
-
-Note the plural "gifts" — different manifestations for different conditions. The gifts operate through prayer, laying on of hands, anointing with oil, or even a word spoken in faith, and by these God's healing power flows.
-
-2.3 The Working of Miracles
-
-This gift entails supernatural interventions that suspend or override natural law — God doing the impossible. Through faith and the Word, circumstances are changed, nature is commanded, and the impossible becomes possible.
-
-       3. Gifts of Inspiration
-
-These gifts communicate God's heart — they speak forth His mind supernaturally.
-
-3.1 Prophecy
-
-The gift entails speaking forth the mind of God under the inspiration of the Holy Spirit.
-
-It is not primarily foretelling the future, but forth-telling God's heart — for edification,
-exhortation, and comfort (1 Corinthians 14:3). The Spirit gives you a message to speak. It must be judged (1 Corinthians 14:29) and aligns with Scripture.
-
-3.2 Different Kinds of Tongues
-
-This gift is expressed by speaking in a language unknown to the speaker — either a human language (as in Acts 2) or a heavenly language (1 Corinthians 13:1). The Holy
-
-Spirit gives utterance to the individual. There is a distinction between:
-
-Private prayer language — for self-edification (1 Corinthians 14:4; Jude 1:20)
-
-Public tongues with interpretation — for the edification of the Church (1 Corinthians
-
-14:5, 27-28)
-
-3.3 Interpretation of Tongues
-
-Interpretation of Tongues is the supernatural ability to interpret (make understandable) a message given in tongues. It is not translation (word-for-word) but interpretation (meaning-for-meaning). After a public message in tongues, the Spirit gives another believer the interpretation so the Church may be edified.
-
-Gifts Vs. Offices
-
-It is important to distinguish between the manifest gifts of the Spirit (1 Corinthians
-
-12:8-10) and the ministry offices (Ephesians 4:11).
-
- The Nine Gifts                                The Five-Fold Ministries
- Given to ALL believers                        Given to SOME believers
- For momentary manifestation                   For ongoing ministry function
- Operate as the Spirit wills                   Operate as a calling/office
-
-The Five-Fold Ministries:
-Apostle — Pioneer, church planter, father
-
-Prophet — One who prophesies regularly and carries a prophetic office
-
-Evangelist — Soul-winner, brings people to Christ
-
-Pastor — Shepherd, cares for the flock
-
-Teacher — Explains and grounds believers in the Word
-
-You may operate in spiritual gifts without holding a five-fold office. Every believer should desire and operate in the gifts; not every believer is called to a five-fold office.
-
-The Fruit of the Holy Spirit
-
-The Fruit of the Holy Spirit is the visible expression of the Holy Spirit's nature developed in the life of a born-again believer. It is not behavior modification; it is nature transformation.
-
-                                               Truth
- Misconception
-
- I must work hard to produce this fruit        The Spirit produces fruit as I abide
-
- I can pick which fruits to develop            It is ONE fruit with nine manifestations
-
- This is about external behavior               This is about internal nature
- I earn God's favor by bearing fruit              Fruit is evidence I already have His favor
-
-Galatians 5:22-23 - But the fruit of the Spirit is love, joy, peace, forbearance, kindness, goodness, faithfulness, 23 gentleness and self-control. Against such things there is no law.
-
-Why "Fruit" and Not "Fruits"?
-
-Paul uses the singular "fruit", not "fruits." This teaches us: The Holy Spirit's work in us is unified, not fragmented, all nine manifestations grow together, not in isolation, meaning you cannot have love without joy, or peace without patience. With this in mind, maturity means balanced development across all nine areas
-
-The Nine Manifestations
-
-   A.​ Love (Agape)
-
-       Definition: Divine, unconditional love — the very nature of God (1 John 4:8).
-
-       This is the Love that loves the unlovable, that gives without expecting return, and that seeks the highest good of others regardless of their response.
-
-       It is not characterized by emotional affection, romantic feeling and is not based on the worthiness of the recipient
-
-Key Scripture: "God commendeth his love toward us, in that, while we were yet sinners, Christ died for us." — Romans 5:8
-Reflection Questions:
-
-   ●​ Who in your life is difficult to love? How can God's love flow through you toward them this week?
-
-   ●​ In what areas have you been loving conditionally?
-
-Practical Assignment: Identify one person you've struggled to love. Pray for them daily this week. Speak blessing over them. Take one concrete action to show kindness.
-
-   B.​ Joy
-
-      Definition: Deep, abiding gladness rooted in your relationship with God — not dependent on circumstances.
-
-      It is characterized by the joy of salvation, the joy of knowing you're righteous and an expression of strength in the storm (Nehemiah 8:10)
-
-      Joy is not happiness (which depends on happenings), neither is it denial of pain or struggle.
-
-Key Scripture: "These things have I spoken unto you, that my joy might remain in you, and that your joy might be full." — John 15:11
-
-Reflection Questions:
-
-   ●​ What circumstances typically rob you of joy?
-
-   ●​ How can you anchor your joy in Christ rather than conditions?
-
-Practical Assignment: For seven days, begin each morning by declaring three things you're thankful for. End each day by recording one evidence of God's faithfulness.
-   C.​ Peace
-
-       Definition: Wholeness, completeness, nothing broken, nothing missing — the calm in the chaos.
-
-       This is the Shalom present in God that entails total well-being, having Peace that passes understanding (Philippians 4:7) and a Confidence that God holds your life.
-
-       Peace is not a mere absence of conflict, avoidance of difficult situations or emotional numbness, it is the assurance that regardless of what happens,
-
-       God has the best of interest at heart towards you.
-
-Key Scripture: "Peace I leave with you, my peace I give unto you: not as the world giveth, give I unto you." — John 14:27
-
-Reflection Questions:
-
-   ●​ Where in your life do you feel unrest or anxiety?
-
-   ●​ What would it look like to surrender that area to God's peace?
-
-Practical Assignment: Identify your primary source of anxiety. Write it down. Over it, write: "The peace of God guards my heart and mind in Christ Jesus." Read Philippians
-
-4:6-7 aloud daily.
-
-   D.​ Longsuffering (Patience)
-
-       Definition: Patience with people — slow to anger, forbearing, willing to endure provocation.
-       A Christian yielded to the Holy Spirit is long-tempered (not short-tempered), where God's patience reproduced in them, having endurance under provocation without retaliation.
-
-       Noteworthy, longsuffering is not passive acceptance of abuse, suppression of righteous anger, weakness or inability to set boundaries.
-
-Key Scripture: "The Lord is not slack concerning his promise... but is longsuffering to us-ward." — 2 Peter 3:9
-
-Reflection Questions:
-
-   ●​ Who or what tests your patience most often?
-
-   ●​ How does God's patience toward you inspire your patience toward others?
-
-Practical Assignment: The next time you feel irritation rising, pause. Breathe. Pray silently: "Holy Spirit, express Your patience through me." Respond only after you've invited His presence.
-
-   E.​ Gentleness
-
-       Definition: Kindness in action — it is a tender disposition that treats others with care.
-
-       Gentleness is essentially strength under control, where power is used to heal, not harm, putting into consideration the weak and vulnerable.
-
-       Gentleness is not weakness or timidity, it is not being passive or avoiding hard conversations, but a sense of having your strength under control.
-
-Key Scripture: "Let your moderation be known unto all men. The Lord is at hand." —
-
-Philippians 4:5
-Reflection Questions:
-
-   ●​ In what situations do you tend to be harsh rather than gentle?
-
-   ●​ How can you speak truth with gentleness?
-
-Practical Assignment: Practice the "gentle response." When provoked, consciously lower your voice. Choose words that heal. Notice the impact.
-
-   F.​ Goodness
-
-       Definition: Goodness is moral excellence in action — actively doing what is right, just, and beneficial.
-
-       It is expressed through integrity both in private and public, where one is inclined to do good even when unseen. Goodness is not mere niceness, people-pleasing or expressing righteousness for show.
-
-Key Scripture: "Let us not be weary in well doing: for in due season we shall reap, if we faint not." — Galatians 6:9
-
-Reflection Questions:
-
-   ●​ Where are you tempted to compromise your integrity?
-
-   ●​ What "good work" is God calling you to step into?
-
-Practical Assignment: Perform one act of goodness this week that no one will know about but God. Let it be your secret worship.
-   G.​ Faithfulness
-
-        Definition: Faithfulness is the expression of reliability, trustworthiness, and steadfastness. It is being a person of your word, expressing consistent character regardless of circumstances and upholding steadfast loyalty to
-
-        God and others.
-
-Key Scripture: "He that is faithful in that which is least is faithful also in much." — Luke
-
-16:10
-
-Reflection Questions:
-
-   ●​ Where have you been unreliable — in small things or large?
-
-   ●​ What commitment do you need to honor that you've neglected?
-
-Practical Assignment: Identify one promise you've made (to God or someone else) that you haven't fulfilled. Take concrete steps to honor it this week.
-
-   H.​ Meekness
-
-        Definition: Meekness can be considered as having your power under control
-
-        — humility that doesn't insist on its own rights.
-
-        It is having strength that serves rather than wanting to be served or dominate.
-
-        It is expressed by being teachable and valuing other people more than yourself (Philippians 2:3) “Do nothing out of selfish ambition or vain conceit.
-
-        Rather, in humility value others above yourselves,”
-
-        Meekness is not weakness or cowardice, or a lack of conviction.
-
-Key Scripture: "Blessed are the meek: for they shall inherit the earth." — Matthew 5:5
-Reflection Questions:
-
-   ●​ Where do you insist on your own way?
-
-   ●​ What would surrender look like in that area?
-
-Practical Assignment: This week, yield your "right to be right" in one situation. Listen more than you speak. Observe what happens.
-
-   I.​ Temperance
-
-         Definition: It is the expression of Self-control — mastery over desires and impulses.
-
-         A christian that has solid tem[prance has mastered regulation, the ability to say "no" to the flesh and to say "yes" to the Spirit, practicing discipline that is based on love and not fear.
-
-Key Scripture: "Every man that striveth for the mastery is temperate in all things." — 1
-
-Corinthians 9:25
-
-Reflection Questions:
-
-   ●​ What area of your life lacks self-control?
-
-   ●​ What practical boundaries would help you walk in temperance?
-
-Practical Assignment: Choose one area where you need self-control (food, screen time, spending, speech). Set one clear, measurable boundary. Track your progress daily.
-Misconceptions about the Holy Spirit
-
-  1.​ He is a force or a Power
-
-  2.​ He is Disordary and chaotic
-
-  3.​ People who have the Holy Spirit are not calm, He needs people to pray loudly
-
-  4.​ He is limited to speaking in tongues only.$NB$, 'quiz', 26, 70, 'published')
+> "The grace of the Lord Jesus Christ, and the love of God, and the communion of the Holy Ghost, be with you all. Amen." — **2 Corinthians 13:14 (KJV)**
+$NB$, 'quiz', 45, 70, 'published')
 ON CONFLICT (level_number, module_sequence_number) DO UPDATE SET
-  title = EXCLUDED.title, lesson_content = EXCLUDED.lesson_content, evaluation_kind = EXCLUDED.evaluation_kind,
-  estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
+  title = EXCLUDED.title, summary = EXCLUDED.summary, key_verses = EXCLUDED.key_verses, lesson_content = EXCLUDED.lesson_content,
+  evaluation_kind = EXCLUDED.evaluation_kind, estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
   status = 'published', updated_at = now();
 DELETE FROM question_bank WHERE module_id = (SELECT module_id FROM modules WHERE level_number=1 AND module_sequence_number=7);
 INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
-SELECT module_id, 'multiple_choice', $NQ$The module calls the Holy Spirit "The New Roommate." According to the text, why is this name used?$NQ$, $NA${"choices":[{"id":"opt-l1m7q1o1","text":"Because a roommate shares your space and is present in your everyday life","is_correct":true},{"id":"opt-l1m7q1o2","text":"Because a roommate only visits occasionally when invited","is_correct":false},{"id":"opt-l1m7q1o3","text":"Because a roommate is a force that comes and goes","is_correct":false},{"id":"opt-l1m7q1o4","text":"Because a roommate appears only during church services","is_correct":false}]}$NA$::jsonb, $NC$Because a roommate shares your space and is present in your everyday life$NC$, 1, TRUE
+SELECT module_id, 'multiple_choice', $NQ$Module 7 traces how God has related with humanity in stages — first through the prophets, then through the Son made flesh, and now in a new way. In this present "age of the Spirit," how does God chiefly relate with and lead the believer day by day?$NQ$, $NA${"choices":[{"id":"opt-l1m7q1o1","text":"Through the indwelling Holy Spirit, who lives in us and leads us into all truth.","is_correct":true},{"id":"opt-l1m7q1o2","text":"Through angels and prophets only, exactly as before Christ came.","is_correct":false},{"id":"opt-l1m7q1o3","text":"Through the written law alone, apart from any personal relationship.","is_correct":false},{"id":"opt-l1m7q1o4","text":"Through occasional visits of the Spirit that happen only during church services.","is_correct":false}]}$NA$::jsonb, $NC$Through the indwelling Holy Spirit, who lives in us and leads us into all truth.$NC$, 1, TRUE
   FROM modules WHERE level_number=1 AND module_sequence_number=7;
 INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
-SELECT module_id, 'multiple_choice', $NQ$The text describes who the Holy Spirit is in relation to the Trinity. How does it identify Him?$NQ$, $NA${"choices":[{"id":"opt-l1m7q2o1","text":"Fully God, the third person of the Trinity, co-equal with the Father and the Son","is_correct":true},{"id":"opt-l1m7q2o2","text":"A power and a feeling given by the Father","is_correct":false},{"id":"opt-l1m7q2o3","text":"An angel sent to appear to mankind","is_correct":false},{"id":"opt-l1m7q2o4","text":"A lesser spirit subordinate to the Father and the Son","is_correct":false}]}$NA$::jsonb, $NC$Fully God, the third person of the Trinity, co-equal with the Father and the Son$NC$, 1, TRUE
+SELECT module_id, 'multiple_choice', $NQ$Scripture commands, "grieve not the holy Spirit of God" (Ephesians 4:30). The module builds an important argument on this command. What does the fact that the Holy Spirit can be grieved prove about Him?$NQ$, $NA${"choices":[{"id":"opt-l1m7q2o1","text":"That He is an impersonal force or energy we can switch on and off.","is_correct":false},{"id":"opt-l1m7q2o2","text":"That He is a Person — only a person can be grieved, so He has mind, will, and emotion.","is_correct":true},{"id":"opt-l1m7q2o3","text":"That He is somehow less than fully God.","is_correct":false},{"id":"opt-l1m7q2o4","text":"That He relates only to mature, long-time believers.","is_correct":false}]}$NA$::jsonb, $NC$That He is a Person — only a person can be grieved, so He has mind, will, and emotion.$NC$, 1, TRUE
   FROM modules WHERE level_number=1 AND module_sequence_number=7;
 INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
-SELECT module_id, 'multiple_choice', $NQ$The module lists personal traits of the Holy Spirit to show He has a personality. Which set of traits does it give?$NQ$, $NA${"choices":[{"id":"opt-l1m7q3o1","text":"He loves, He gets angry, and He gets heartbreaks and grief","is_correct":true},{"id":"opt-l1m7q3o2","text":"He is happy, calm, and never disturbed","is_correct":false},{"id":"opt-l1m7q3o3","text":"He is wise, powerful, and unfeeling","is_correct":false},{"id":"opt-l1m7q3o4","text":"He loves, He forgives, and He rejoices only","is_correct":false}]}$NA$::jsonb, $NC$He loves, He gets angry, and He gets heartbreaks and grief$NC$, 2, TRUE
+SELECT module_id, 'multiple_choice', $NQ$The module pictures the Holy Spirit as a "new roommate" who makes His home in the believer. According to 1 Corinthians 6:19, when does He take up permanent residence, and what does the believer become?$NQ$, $NA${"choices":[{"id":"opt-l1m7q3o1","text":"Only after years of obedience; the believer becomes a prophet.","is_correct":false},{"id":"opt-l1m7q3o2","text":"Only when a believer speaks in tongues; the believer becomes an apostle.","is_correct":false},{"id":"opt-l1m7q3o3","text":"At the new birth; the believer's body becomes a living temple of the Holy Spirit.","is_correct":true},{"id":"opt-l1m7q3o4","text":"At water baptism only; the believer simply becomes a church member.","is_correct":false}]}$NA$::jsonb, $NC$At the new birth; the believer's body becomes a living temple of the Holy Spirit.$NC$, 1, TRUE
   FROM modules WHERE level_number=1 AND module_sequence_number=7;
 INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
-SELECT module_id, 'multiple_choice', $NQ$The text explains when the Holy Spirit takes up residence in a person, making them a living temple. When does this happen?$NQ$, $NA${"choices":[{"id":"opt-l1m7q4o1","text":"At the moment of the new birth","is_correct":true},{"id":"opt-l1m7q4o2","text":"After years of faithful church attendance","is_correct":false},{"id":"opt-l1m7q4o3","text":"Only when a believer first speaks in tongues","is_correct":false},{"id":"opt-l1m7q4o4","text":"When a believer earns it through human effort","is_correct":false}]}$NA$::jsonb, $NC$At the moment of the new birth$NC$, 2, TRUE
+SELECT module_id, 'multiple_choice', $NQ$Paul says believers are "sealed" and given "the earnest of the Spirit" (2 Corinthians 1:22; Ephesians 1:13-14). The module explains these two word-pictures. What do the seal and the earnest signify together?$NQ$, $NA${"choices":[{"id":"opt-l1m7q4o1","text":"A seal marks God's ownership of us; an earnest is a deposit guaranteeing our full eternal inheritance.","is_correct":true},{"id":"opt-l1m7q4o2","text":"A seal hides our sin from God; an earnest is a reward we earn by good works.","is_correct":false},{"id":"opt-l1m7q4o3","text":"Both simply mean we must keep working hard to hold on to our salvation.","is_correct":false},{"id":"opt-l1m7q4o4","text":"A seal is water baptism; an earnest is faithful church membership.","is_correct":false}]}$NA$::jsonb, $NC$A seal marks God's ownership of us; an earnest is a deposit guaranteeing our full eternal inheritance.$NC$, 2, TRUE
   FROM modules WHERE level_number=1 AND module_sequence_number=7;
 INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
-SELECT module_id, 'multiple_choice', $NQ$The module distinguishes between the gifts and the fruit of the Holy Spirit. According to the text, what is true of the gifts versus the fruit?$NQ$, $NA${"choices":[{"id":"opt-l1m7q5o1","text":"Gifts are given as He wills to anyone He chooses, while fruits abide even when gifts are not visibly at work","is_correct":true},{"id":"opt-l1m7q5o2","text":"Fruits are given as He wills, while gifts abide permanently in every believer","is_correct":false},{"id":"opt-l1m7q5o3","text":"Both gifts and fruits are natural talents God may use","is_correct":false},{"id":"opt-l1m7q5o4","text":"Gifts are produced by hard work, while fruits are received by faith","is_correct":false}]}$NA$::jsonb, $NC$Gifts are given as He wills to anyone He chooses, while fruits abide even when gifts are not visibly at work$NC$, 3, TRUE
+SELECT module_id, 'multiple_choice', $NQ$The module gives a clear pathway for receiving the Holy Spirit (Luke 11:13; Galatians 3:2; 4:6). Which statement best captures its central principle?$NQ$, $NA${"choices":[{"id":"opt-l1m7q5o1","text":"He is earned by long fasting and striving until we finally feel worthy of Him.","is_correct":false},{"id":"opt-l1m7q5o2","text":"He is received by faith as the Father's gift to His children — not earned by striving or works.","is_correct":true},{"id":"opt-l1m7q5o3","text":"He is given only to church leaders who hold a ministry office.","is_correct":false},{"id":"opt-l1m7q5o4","text":"He is obtained by carefully keeping the works of the law.","is_correct":false}]}$NA$::jsonb, $NC$He is received by faith as the Father's gift to His children — not earned by striving or works.$NC$, 1, TRUE
   FROM modules WHERE level_number=1 AND module_sequence_number=7;
 INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
-SELECT module_id, 'multiple_choice', $NQ$The text says the ministry of the Holy Spirit is not to draw attention to Himself. What does it say He does instead?$NQ$, $NA${"choices":[{"id":"opt-l1m7q6o1","text":"He glorifies Jesus and points believers to Christ","is_correct":true},{"id":"opt-l1m7q6o2","text":"He glorifies Himself so believers will worship the Spirit","is_correct":false},{"id":"opt-l1m7q6o3","text":"He draws attention to the gifts He distributes","is_correct":false},{"id":"opt-l1m7q6o4","text":"He elevates the five-fold ministry offices","is_correct":false}]}$NA$::jsonb, $NC$He glorifies Jesus and points believers to Christ$NC$, 3, TRUE
+SELECT module_id, 'multiple_choice', $NQ$The module groups the nine manifestation gifts of 1 Corinthians 12:8-10 into three families, according to what each family does. What are the three categories?$NQ$, $NA${"choices":[{"id":"opt-l1m7q6o1","text":"Gifts of Service, Gifts of Giving, and Gifts of Mercy.","is_correct":false},{"id":"opt-l1m7q6o2","text":"Gifts of Teaching, Gifts of Leading, and Gifts of Helps.","is_correct":false},{"id":"opt-l1m7q6o3","text":"Gifts of Revelation (they reveal), Gifts of Power (they do), and Gifts of Inspiration (they speak).","is_correct":true},{"id":"opt-l1m7q6o4","text":"Gifts of Tongues, Gifts of Healing, and Gifts of Faith.","is_correct":false}]}$NA$::jsonb, $NC$Gifts of Revelation (they reveal), Gifts of Power (they do), and Gifts of Inspiration (they speak).$NC$, 2, TRUE
   FROM modules WHERE level_number=1 AND module_sequence_number=7;
 INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
-SELECT module_id, 'multiple_choice', $NQ$The module lists steps for how to receive the Holy Spirit. According to the text, what is the very first step?$NQ$, $NA${"choices":[{"id":"opt-l1m7q7o1","text":"Be born again, since the Holy Spirit is given to those who belong to Christ through faith","is_correct":true},{"id":"opt-l1m7q7o2","text":"Speak in other tongues as the Spirit gives utterance","is_correct":false},{"id":"opt-l1m7q7o3","text":"Work hard to earn the Spirit through obedience","is_correct":false},{"id":"opt-l1m7q7o4","text":"Yield yourself and allow Him to lead your life","is_correct":false}]}$NA$::jsonb, $NC$Be born again, since the Holy Spirit is given to those who belong to Christ through faith$NC$, 4, TRUE
+SELECT module_id, 'multiple_choice', $NQ$The module distinguishes the nine manifestation gifts from the five-fold ministry offices (Ephesians 4:11). Which contrast does it actually teach?$NQ$, $NA${"choices":[{"id":"opt-l1m7q7o1","text":"Both the gifts and the offices are given only to a select few leaders.","is_correct":false},{"id":"opt-l1m7q7o2","text":"The offices are momentary manifestations; the gifts are permanent lifelong callings.","is_correct":false},{"id":"opt-l1m7q7o3","text":"The nine gifts can operate through ALL believers as the Spirit wills, while the five-fold offices are callings given to SOME.","is_correct":true},{"id":"opt-l1m7q7o4","text":"The gifts replaced the offices entirely in the New Testament church.","is_correct":false}]}$NA$::jsonb, $NC$The nine gifts can operate through ALL believers as the Spirit wills, while the five-fold offices are callings given to SOME.$NC$, 2, TRUE
   FROM modules WHERE level_number=1 AND module_sequence_number=7;
 INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
-SELECT module_id, 'multiple_choice', $NQ$The text groups the nine gifts of the Spirit into three categories: Revelation, Power, and Inspiration. Which gift belongs to the Gifts of Power?$NQ$, $NA${"choices":[{"id":"opt-l1m7q8o1","text":"The Working of Miracles","is_correct":true},{"id":"opt-l1m7q8o2","text":"The Word of Knowledge","is_correct":false},{"id":"opt-l1m7q8o3","text":"Prophecy","is_correct":false},{"id":"opt-l1m7q8o4","text":"Interpretation of Tongues","is_correct":false}]}$NA$::jsonb, $NC$The Working of Miracles$NC$, 4, TRUE
+SELECT module_id, 'multiple_choice', $NQ$Galatians 5:22-23 says "the fruit of the Spirit is love, joy, peace...". The module stresses that Paul writes "fruit," not "fruits." Why does this single word matter?$NQ$, $NA${"choices":[{"id":"opt-l1m7q8o1","text":"The Spirit's work is unified — it is ONE fruit with nine expressions that grow together, so maturity means balanced growth in all of them.","is_correct":true},{"id":"opt-l1m7q8o2","text":"We may pick the one or two expressions we like and simply ignore the rest.","is_correct":false},{"id":"opt-l1m7q8o3","text":"Each expression is a separate fruit earned by a separate act of willpower.","is_correct":false},{"id":"opt-l1m7q8o4","text":"Only love truly matters; the other eight are optional extras.","is_correct":false}]}$NA$::jsonb, $NC$The Spirit's work is unified — it is ONE fruit with nine expressions that grow together, so maturity means balanced growth in all of them.$NC$, 1, TRUE
   FROM modules WHERE level_number=1 AND module_sequence_number=7;
 INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
-SELECT module_id, 'multiple_choice', $NQ$The module contrasts the nine gifts of the Spirit with the five-fold ministry offices. Which description matches the nine gifts rather than the offices?$NQ$, $NA${"choices":[{"id":"opt-l1m7q9o1","text":"Given to all believers, for momentary manifestation, operating as the Spirit wills","is_correct":true},{"id":"opt-l1m7q9o2","text":"Given to some believers, for ongoing ministry function, operating as a calling","is_correct":false},{"id":"opt-l1m7q9o3","text":"Given to some believers and earned through striving over time","is_correct":false},{"id":"opt-l1m7q9o4","text":"Given to all believers as a permanent office held for life","is_correct":false}]}$NA$::jsonb, $NC$Given to all believers, for momentary manifestation, operating as the Spirit wills$NC$, 5, TRUE
+SELECT module_id, 'multiple_choice', $NQ$The module corrects a common misconception about how the fruit of the Spirit is produced. Which statement reflects the truth it teaches?$NQ$, $NA${"choices":[{"id":"opt-l1m7q9o1","text":"I must work hard to manufacture the fruit by my own willpower.","is_correct":false},{"id":"opt-l1m7q9o2","text":"Bearing fruit is mainly about polishing my external behaviour.","is_correct":false},{"id":"opt-l1m7q9o3","text":"The Spirit produces the fruit as I abide in Him; it is nature transformation and evidence I already have God's favour.","is_correct":true},{"id":"opt-l1m7q9o4","text":"Bearing fruit is the way I earn God's favour in the first place.","is_correct":false}]}$NA$::jsonb, $NC$The Spirit produces the fruit as I abide in Him; it is nature transformation and evidence I already have God's favour.$NC$, 2, TRUE
   FROM modules WHERE level_number=1 AND module_sequence_number=7;
 INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
-SELECT module_id, 'multiple_choice', $NQ$The text explains why Paul uses the singular "fruit" and not "fruits." What does it say this teaches about the Spirit's work?$NQ$, $NA${"choices":[{"id":"opt-l1m7q10o1","text":"It is one unified work with nine manifestations that grow together, so maturity means balanced development across all nine","is_correct":true},{"id":"opt-l1m7q10o2","text":"It means a believer may pick which fruits to develop one at a time","is_correct":false},{"id":"opt-l1m7q10o3","text":"It means the fruit is about external behavior modification rather than nature","is_correct":false},{"id":"opt-l1m7q10o4","text":"It means each fruit is a separate gift distributed as the Spirit wills","is_correct":false}]}$NA$::jsonb, $NC$It is one unified work with nine manifestations that grow together, so maturity means balanced development across all nine$NC$, 5, TRUE
+SELECT module_id, 'multiple_choice', $NQ$The keystone verse of the module is Acts 1:8: "But ye shall receive power, after that the Holy Ghost is come upon you...". According to the module, what is this power primarily given for?$NQ$, $NA${"choices":[{"id":"opt-l1m7q10o1","text":"For personal comfort and private blessing only.","is_correct":false},{"id":"opt-l1m7q10o2","text":"For empowered witness and a victorious life — boldness, holiness, discernment, and carrying the gospel to the ends of the earth.","is_correct":true},{"id":"opt-l1m7q10o3","text":"For gaining status and an impressive ministry title.","is_correct":false},{"id":"opt-l1m7q10o4","text":"For speaking in tongues and nothing else.","is_correct":false}]}$NA$::jsonb, $NC$For empowered witness and a victorious life — boldness, holiness, discernment, and carrying the gospel to the ends of the earth.$NC$, 1, TRUE
   FROM modules WHERE level_number=1 AND module_sequence_number=7;
 
 -- ===== Level 1 · Module 8: Christian Living & Character (First Steps of Obedience) =====
@@ -2389,42 +2131,392 @@ ON CONFLICT (level_number, module_sequence_number) DO UPDATE SET
 DELETE FROM question_bank WHERE module_id = (SELECT module_id FROM modules WHERE level_number=1 AND module_sequence_number=8);
 
 -- ===== Level 1 · Module 9: Relationships & Community (Belonging) =====
-INSERT INTO modules (level_number, module_sequence_number, title, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
-VALUES (1, 9, $NT$Relationships & Community (Belonging)$NT$, $NB$●​ Relationship with God
+-- Full teaching content + quiz applied directly to production (was outline-only,
+-- no quiz); exported back from prod 2026-08-02 (drift repair).
+INSERT INTO modules (level_number, module_sequence_number, title, summary, key_verses, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
+VALUES (1, 9, $NT$Relationships & Community (Belonging)$NT$,
+  $NS$God made you for relationship — with Him first, then with yourself, with others, and with His family, the church. You belong by adoption, not performance, and the local church is the family table where you are fed, known, protected, and grown.$NS$,
+  $NK$["Ephesians 1:5", "John 1:12", "Romans 8:15", "Romans 8:38-39", "Romans 5:17", "Psalm 139:14", "John 13:34-35", "Ephesians 2:19", "Hebrews 10:24-25", "Ephesians 4:15-16"]$NK$::jsonb,
+  $NB$*Belonging*
 
-  ●​ Relationship with Self
+God did not save you to walk alone. He made you for relationship: with Him first, then with yourself, with others, and with His family, the church. The moment you came to Christ, you stopped being an outsider. You were welcomed home.
 
-  ●​ Relationship with Others
+Belonging is not something we earn by being good enough for the group. In Christ, God adopts us into His family first, and then we grow. You already belong. The whole module flows from that gift.
 
-  ●​ The Family Table (Part 1): Why Church Matters (community, doctrine, covering, sacraments, growth)$NB$, 'none', 8, 70, 'published')
+> "Having predestinated us unto the adoption of children by Jesus Christ to himself, according to the good pleasure of his will." — Ephesians 1:5 (KJV)
+
+> "But as many as received him, to them gave he power to become the sons of God, even to them that believe on his name." — John 1:12 (KJV)
+
+God is relational in His very being. He made us in His image, which means we are wired for connection: with Him first, and then with one another. Sin fractured all of that. Through Jesus, every broken relationship can be restored, starting with the one that matters most.
+
+**Illustration.** A child adopted into a loving home does not work to earn a place at the dinner table. They are given the family name, handed a chair, and told, you are ours now. That is what God does for you in Christ. You do not belong because you performed. You belong because He chose you.
+
+**Key Truth:** I do not behave to belong. I belong because God adopted me, and now I grow.
+
+> "The Spirit you received does not make you slaves, so that you live in fear again; rather, the Spirit you received brought about your adoption to sonship. And by him we cry, 'Abba, Father.'" — Romans 8:15 (NIV)
+
+**Group Question:** Have you ever felt like an outsider? How does it land to hear that God has already made you family? Which of your relationships feels most in need of healing right now?
+
+## 1. Relationship with God
+
+This is your most important relationship. Every other relationship grows healthier when this one is right. Because of Jesus, you are no longer separated from God. You are brought near, and you can call Him Father.
+
+A relationship with God grows the same way any close relationship grows: by spending time together. Talk to Him in prayer, listen to Him in His Word, and follow what He says.
+
+> "Therefore being justified by faith, we have peace with God through our Lord Jesus Christ." — Romans 5:1 (KJV)
+
+> "For ye have not received the spirit of bondage again to fear; but ye have received the Spirit of adoption, whereby we cry, Abba, Father." — Romans 8:15 (KJV)
+
+**How to Grow Closer to God**
+
+1. Talk to Him in prayer.
+2. Listen to Him by reading His Word.
+3. Walk with the Holy Spirit each day.
+4. Worship Him with your whole heart.
+5. Trust and obey what He says.
+
+> "That which we have seen and heard declare we unto you, that ye also may have fellowship with us: and truly our fellowship is with the Father, and with his Son Jesus Christ." — 1 John 1:3 (KJV)
+
+**Illustration.** No friendship grows without time together. You cannot become close to someone you never speak to or listen to. The same is true with God. A few honest minutes a day, talking and listening, will grow into the deepest relationship of your life.
+
+**Remember This:** God is not a distant boss. He is my Father, He is your Father, and He wants our company.
+
+## 2. Relationship with Self
+
+Many believers struggle because they relate to themselves based on their past rather than their new creation identity in Christ. Your relationship with self should be based on your understanding of God and who He has made you to be as a new creation in Christ. In other words, how you see yourself, treat yourself, and think of yourself should be solely influenced by God's standpoint pertaining to you.
+
+For example, there are many Christians who struggle to love themselves, forgive themselves, or even see themselves as of value. This could be influenced by many factors such as upbringing, abuse, failures, words spoken by others, and negative beliefs reinforced by the enemy.
+
+Without a healthy relationship with self as determined by God, it is impossible for a Christian to fully live the realities available for them in Christ. To achieve a healthy relationship with self as a Christian, there are truths one has to embrace without any conflicting persuasion.
+
+**a) You Are Deeply Loved**
+
+It is paramount to understand and believe that God deeply loves you, and nothing can change that.
+
+> "For I am convinced that neither death nor life, neither angels nor demons, neither the present nor the future, nor any powers, neither height nor depth, nor anything else in all creation, will be able to separate us from the love of God that is in Christ Jesus our Lord." — Romans 8:38-39 (NIV)
+
+- If God loves you no matter what, then you can love yourself, seeing yourself as He sees you.
+- Simply because there are people in your life who failed to show you love does not mean you are unlovable — that was their problem. God, who is the most important person in your life, loves you.
+
+**b) You Are a New Creation**
+
+The knowledge of newness in Christ breaks the power of darkness that keeps Christians tied to their past.
+
+> "Therefore we were buried with Him through baptism into death, that just as Christ was raised from the dead by the glory of the Father, even so we also should walk in newness of life." — Romans 6:4
+
+- You are not a reformed sinner; you are a new creation with a righteous nature.
+- Sin is foreign to your regenerated spirit.
+- With this understanding, you can be confident that there is no active association between you and the mistakes you made before salvation.
+
+**c) You Are Righteous by Gift, Not Performance**
+
+Regardless of how your past life has been, you should be able to forgive yourself. Why? Because God has forgiven you. Not being able to forgive yourself is a sense of pride.
+
+> "For if by the one man's offense death reigned through the one, much more those who receive abundance of grace and of the gift of righteousness will reign in life through the One, Jesus Christ." — Romans 5:17
+
+- Righteousness is your nature, not your reward.
+- Guilt and condemnation have no place in your self-concept (Romans 8:1).
+
+**d) You Are Fearfully and Wonderfully Made**
+
+Having a negative image of self is not only ungodly, but also limits how much God can work in you. A Christian should be able to see themself and appreciate how God made them, with all the peculiarities.
+
+> "I will praise You, for I am fearfully and wonderfully made." — Psalm 139:14
+
+- Reject negative self-talk; it contradicts God's design.
+- Your body is the temple of the Holy Spirit (1 Corinthians 6:19), and if God is pleased to live in it, then you should be happy about it.
+
+**Practical Application Towards a Healthy Relationship with Self**
+
+- Confess righteousness daily: "I am the righteousness of God in Christ" (2 Corinthians 5:21).
+- Reject condemnation immediately when it arises.
+- Speak life to yourself in alignment with Scripture.
+- Be conscious of God's workmanship in your body, soul, and spirit.
+
+## 3. Relationship with Others
+
+Once we are right with God and at peace with ourselves, God sends us outward to love people. Jesus said the world would know we belong to Him not by our knowledge, but by our love. Loving others is proof that the new life is real.
+
+> "A new commandment I give unto you, That ye love one another; as I have loved you, that ye also love one another. By this shall all men know that ye are my disciples, if ye have love one to another." — John 13:34-35 (KJV)
+
+The New Testament is full of "one another" commands: love one another, forgive one another, bear one another's burdens, be kind one to another. Christianity is not a solo journey. It is lived out in how we treat real people, especially the difficult ones.
+
+**What Love for Others Looks Like**
+
+1. Forgive: release others as God released you (Ephesians 4:32).
+2. Pursue peace: do your part to live at peace (Romans 12:18).
+3. Carry burdens: show up for people when life is heavy (Galatians 6:2).
+4. Speak life: let your words build up, not tear down (Ephesians 4:29).
+5. Reconcile quickly: make things right, do not let it fester (Matthew 5:23-24).
+
+> "And be ye kind one to another, tenderhearted, forgiving one another, even as God for Christ's sake hath forgiven you." — Ephesians 4:32 (KJV)
+
+**Illustration.** A single coal pulled out of the fire and set on its own will soon grow cold and die. Put it back among the others and it stays burning. People are like that. We were never meant to stay warm alone. We keep each other burning.
+
+**Key Truth:** The world will know I belong to Jesus by how I love people, not by how much I know.
+
+**Group Question:** Is there someone you need to forgive, or someone you need to make peace with this week? Which "one another" (forgive, encourage, carry, speak life) is God asking you to practice first?
+
+## 4. The Family Table: The Church (Part 1)
+
+**Why does the church matter?** Some new believers think they can follow Jesus alone — just me and God. But God never designed it that way. When you came to Christ, you were not only saved. You were placed into a family.
+
+The local church is that family table, the place where you are fed, known, protected, and grown. We will look at five reasons church matters.
+
+> "Now therefore ye are no more strangers and foreigners, but fellowcitizens with the saints, and of the household of God." — Ephesians 2:19 (KJV)
+
+In Module 6 we studied fellowship in depth: koinonia, the shared life that is both vertical, with God, and horizontal, with one another. The Family Table builds directly on that teaching. Fellowship is the shared life; the local church is the home where that life is fed, protected, and grown. We are not repeating the fellowship lesson here. We are answering a new question: why the local church?
+
+### 4.1 Community: You Belong to a Family
+
+> "And they continued stedfastly in the apostles' doctrine and fellowship, and in breaking of bread, and in prayers." — Acts 2:42 (KJV)
+
+> "And let us consider one another to provoke unto love and to good works: Not forsaking the assembling of ourselves together, as the manner of some is; but exhorting one another: and so much the more, as ye see the day approaching." — Hebrews 10:24-25 (KJV)
+
+This is the horizontal fellowship, the koinonia, from Module 6, now given a home. The early believers were together constantly. The Christian life is meant to be shared. We are told plainly not to forsake gathering together. We need each other to stay encouraged and to keep going.
+
+### 4.2 Doctrine: You Are Taught the Truth
+
+> "All scripture is given by inspiration of God, and is profitable for doctrine, for reproof, for correction, for instruction in righteousness." — 2 Timothy 3:16 (KJV)
+
+What you believe shapes how you live. In a healthy church you are grounded in sound, biblical teaching so you are not tossed around by every wind of false ideas, "tossed to and fro, and carried about with every wind of doctrine" (Ephesians 4:14-15). The family table is where you are fed the solid food of God's Word.
+
+### 4.3 Covering: You Are Protected and Led
+
+> "Obey them that have the rule over you, and submit yourselves: for they watch for your souls, as they that must give account, that they may do it with joy, and not with grief: for that is unprofitable for you." — Hebrews 13:17 (KJV)
+
+God places loving spiritual leaders over us — apostles, prophets, evangelists, pastors and teachers, for the perfecting of the saints (Ephesians 4:11-12) — not to control us, but to watch over our souls and help us grow. Being under godly covering and accountability is a protection, like a sheep staying near the shepherd. A believer who answers to no one is an easy target.
+
+**The church is a support system.** The early church shared generously, covering each other's needs: the multitude of those who believed were of one heart and one soul, and they distributed to each as anyone had need (Acts 4:32-35). The community factor creates a sharing concern — one is empowered in different measures to carry the burden of the other. "Bear ye one another's burdens, and so fulfil the law of Christ" (Galatians 6:2).
+
+### 4.4 The Ordinances: You Share the Family Meal and Mark
+
+> "Go ye therefore, and teach all nations, baptizing them in the name of the Father, and of the Son, and of the Holy Ghost." — Matthew 28:19 (KJV)
+
+> "For as often as ye eat this bread, and drink this cup, ye do shew the Lord's death till he come." — 1 Corinthians 11:26 (KJV)
+
+Jesus gave the church two ordinances to practice together. Water baptism is the outward declaration that you have died to the old life and risen new in Christ: "no one can enter the kingdom of God unless they are born of water and the Spirit" (John 3:5-6). The Lord's Supper, or communion, is the family meal where we remember His body broken and His blood shed for us, until He comes again (Luke 22:19-20; John 6:53). Encourage new believers who have not yet been baptized to take that step.
+
+### 4.5 Growth: You Grow Up Together
+
+> "But speaking the truth in love, may grow up into him in all things, which is the head, even Christ: From whom the whole body fitly joined together and compacted by that which every joint supplieth, according to the effectual working in the measure of every part, maketh increase of the body unto the edifying of itself in love." — Ephesians 4:15-16 (KJV)
+
+> "Those that be planted in the house of the LORD shall flourish in the courts of our God." — Psalm 92:13 (KJV)
+
+Notice this picture: a body grows when every part is joined and working. You grow as you are planted and connected — not as a visitor, but as a member who serves and is served. Plants that are potted and planted flourish. The same is true of believers planted in a church home.
+
+**Illustration.** A burning coal glows as long as it stays in the fire with the others. A finger cut off from the hand cannot grow or even survive. You were saved into a body. Find your place in it, and you will flourish. Stay apart from it, and you will slowly grow cold.
+
+**Key Truth:** I was not just saved from sin. I was saved into a family. The church is my home, and I need to be planted in it.
+
+**Group Question:** Which of the five (community, doctrine, covering, ordinances, growth) do you most need right now? Have you been baptized since believing? What would it take for you to get planted in this church family?$NB$, 'quiz', 22, 70, 'published')
 ON CONFLICT (level_number, module_sequence_number) DO UPDATE SET
-  title = EXCLUDED.title, lesson_content = EXCLUDED.lesson_content, evaluation_kind = EXCLUDED.evaluation_kind,
-  estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
+  title = EXCLUDED.title, summary = EXCLUDED.summary, key_verses = EXCLUDED.key_verses, lesson_content = EXCLUDED.lesson_content,
+  evaluation_kind = EXCLUDED.evaluation_kind, estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
   status = 'published', updated_at = now();
 DELETE FROM question_bank WHERE module_id = (SELECT module_id FROM modules WHERE level_number=1 AND module_sequence_number=9);
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$Module 9 opens by explaining how belonging to God's family works. According to the introduction, how does a person come to belong?$NQ$, $NA${"choices":[{"id":"opt-l1m9q1o1","text":"We earn belonging by being good enough for the group","is_correct":false},{"id":"opt-l1m9q1o2","text":"We grow spiritually first, and belonging follows our maturity","is_correct":false},{"id":"opt-l1m9q1o3","text":"God adopts us into His family first, and then we grow","is_correct":true},{"id":"opt-l1m9q1o4","text":"We belong once church leaders formally approve our membership","is_correct":false}]}$NA$::jsonb, $NC$God adopts us into His family first, and then we grow$NC$, 1, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=9;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$The module uses the illustration of a child adopted into a loving home who is given the family name, handed a chair, and told 'you are ours now.' What is this illustration teaching?$NQ$, $NA${"choices":[{"id":"opt-l1m9q2o1","text":"You do not belong because you performed; you belong because God chose you","is_correct":true},{"id":"opt-l1m9q2o2","text":"Adopted children must work hard to keep their place at the table","is_correct":false},{"id":"opt-l1m9q2o3","text":"God's family accepts only those who first prove themselves faithful","is_correct":false},{"id":"opt-l1m9q2o4","text":"Belonging comes gradually as you learn the family's rules","is_correct":false}]}$NA$::jsonb, $NC$You do not belong because you performed; you belong because God chose you$NC$, 1, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=9;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$The module names one relationship as the most important of all. Which relationship is it, and why?$NQ$, $NA${"choices":[{"id":"opt-l1m9q3o1","text":"Relationship with others, because love is the greatest commandment","is_correct":false},{"id":"opt-l1m9q3o2","text":"Relationship with self, because you cannot love others until you love yourself","is_correct":false},{"id":"opt-l1m9q3o3","text":"Relationship with church leaders, because they watch over your soul","is_correct":false},{"id":"opt-l1m9q3o4","text":"Relationship with God, because every other relationship grows healthier when it is right","is_correct":true}]}$NA$::jsonb, $NC$Relationship with God, because every other relationship grows healthier when it is right$NC$, 2, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=9;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$Under 'How to Grow Closer to God', the module lists five practices. Which option matches the list given in the lesson?$NQ$, $NA${"choices":[{"id":"opt-l1m9q4o1","text":"Fast weekly, attend every service, memorise creeds, keep vigils, and tithe","is_correct":false},{"id":"opt-l1m9q4o2","text":"Talk to Him in prayer, listen by reading His Word, walk with the Holy Spirit daily, worship wholeheartedly, and trust and obey what He says","is_correct":true},{"id":"opt-l1m9q4o3","text":"Study theology, join a ministry, take mission trips, mentor others, and journal","is_correct":false},{"id":"opt-l1m9q4o4","text":"Confess daily, avoid unbelievers, wear modest clothing, sing hymns, and rest on the Sabbath","is_correct":false}]}$NA$::jsonb, $NC$Talk to Him in prayer, listen by reading His Word, walk with the Holy Spirit daily, worship wholeheartedly, and trust and obey what He says$NC$, 2, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=9;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$On the relationship with self, the module says how you see yourself, treat yourself, and think of yourself should be influenced by one thing only. What is it?$NQ$, $NA${"choices":[{"id":"opt-l1m9q5o1","text":"Your past record, which keeps you humble about who you really are","is_correct":false},{"id":"opt-l1m9q5o2","text":"The honest opinions of the people who know you best","is_correct":false},{"id":"opt-l1m9q5o3","text":"Your achievements and growth since becoming a believer","is_correct":false},{"id":"opt-l1m9q5o4","text":"God's standpoint pertaining to you — your new creation identity in Christ","is_correct":true}]}$NA$::jsonb, $NC$God's standpoint pertaining to you — your new creation identity in Christ$NC$, 3, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=9;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$The module says that regardless of your past, you should be able to forgive yourself. What reason does it give, and what does it call the refusal to do so?$NQ$, $NA${"choices":[{"id":"opt-l1m9q6o1","text":"Because God has forgiven you — and not being able to forgive yourself is a sense of pride","is_correct":true},{"id":"opt-l1m9q6o2","text":"Because time heals all wounds — and refusing to move on is a sign of weakness","is_correct":false},{"id":"opt-l1m9q6o3","text":"Because everyone makes mistakes — and dwelling on them is simply unproductive","is_correct":false},{"id":"opt-l1m9q6o4","text":"Because your good works now outweigh the past — and doubting that is unbelief","is_correct":false}]}$NA$::jsonb, $NC$Because God has forgiven you — and not being able to forgive yourself is a sense of pride$NC$, 3, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=9;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$Quoting Romans 8:38-39 under 'You Are Deeply Loved', what conclusion does the module draw for how you relate to yourself?$NQ$, $NA${"choices":[{"id":"opt-l1m9q7o1","text":"God's love must be maintained by daily devotion, so guard it carefully","is_correct":false},{"id":"opt-l1m9q7o2","text":"God loves you when you love others, so serve people to stay loved","is_correct":false},{"id":"opt-l1m9q7o3","text":"Nothing in all creation can separate you from God's love, so you can love yourself, seeing yourself as He sees you","is_correct":true},{"id":"opt-l1m9q7o4","text":"God's love covers the past only, so present failures must still be paid for","is_correct":false}]}$NA$::jsonb, $NC$Nothing in all creation can separate you from God's love, so you can love yourself, seeing yourself as He sees you$NC$, 4, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=9;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$From John 13:34-35, the module states how the world will know that we are disciples of Jesus. What is the mark it names?$NQ$, $NA${"choices":[{"id":"opt-l1m9q8o1","text":"Our bold public preaching of the gospel","is_correct":false},{"id":"opt-l1m9q8o2","text":"Our love for one another, not how much we know","is_correct":true},{"id":"opt-l1m9q8o3","text":"Our separation from worldly patterns and habits","is_correct":false},{"id":"opt-l1m9q8o4","text":"Our faithful attendance at church gatherings","is_correct":false}]}$NA$::jsonb, $NC$Our love for one another, not how much we know$NC$, 4, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=9;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$The module twice uses the picture of a burning coal — pulled from the fire it grows cold; kept with the others it stays burning. What truth is this illustrating?$NQ$, $NA${"choices":[{"id":"opt-l1m9q9o1","text":"Believers were never meant to stay warm alone; planted together in community, we keep each other burning","is_correct":true},{"id":"opt-l1m9q9o2","text":"Zeal naturally fades with age, so young believers must be especially fervent","is_correct":false},{"id":"opt-l1m9q9o3","text":"Trials are the fire God uses to refine each believer individually","is_correct":false},{"id":"opt-l1m9q9o4","text":"A believer who falls away can never be restored to their first fire","is_correct":false}]}$NA$::jsonb, $NC$Believers were never meant to stay warm alone; planted together in community, we keep each other burning$NC$, 5, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=9;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$'The Family Table' answers the question 'why the local church?' with five reasons the church matters. Which option lists all five as taught?$NQ$, $NA${"choices":[{"id":"opt-l1m9q10o1","text":"Worship, prayer, evangelism, giving, and service","is_correct":false},{"id":"opt-l1m9q10o2","text":"Preaching, healing, deliverance, communion, and missions","is_correct":false},{"id":"opt-l1m9q10o3","text":"Fellowship, leadership, tradition, sacraments, and discipline","is_correct":false},{"id":"opt-l1m9q10o4","text":"Community, doctrine, covering, the ordinances, and growth","is_correct":true}]}$NA$::jsonb, $NC$Community, doctrine, covering, the ordinances, and growth$NC$, 5, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=9;
 
 -- ===== Level 1 · Module 10: Practical Life Questions (Early Clarity + The Battle) =====
-INSERT INTO modules (level_number, module_sequence_number, title, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
-VALUES (1, 10, $NT$Practical Life Questions (Early Clarity + The Battle)$NT$, $NB$●​ Why Bad Things Happen to Good People
+-- Full teaching content + quiz applied directly to production (was outline-only,
+-- no quiz); exported back from prod 2026-08-02 (drift repair).
+INSERT INTO modules (level_number, module_sequence_number, title, summary, key_verses, lesson_content, evaluation_kind, estimated_minutes, quiz_pass_mark, status)
+VALUES (1, 10, $NT$Practical Life Questions (Early Clarity + The Battle)$NT$,
+  $NS$Early clarity for the real questions of the new life — why good people suffer, betting, baptism — plus basic training for the battle that follows salvation and a first look at your new mission.$NS$,
+  $NK$["James 1:5", "1 John 4:4", "Romans 3:23", "Romans 8:28", "Revelation 21:4", "Proverbs 13:11", "Hebrews 13:5", "Matthew 28:19", "John 16:33", "James 1:2-4"]$NK$::jsonb,
+  $NB$*Early Clarity + The Battle*
 
-  ●​ Betting and Christianity
+Now that you follow Jesus, real questions and real battles come. Why do good people suffer? Is betting wrong? What is baptism, and should you be baptized? Why did following Jesus suddenly get harder? And what is your part now?
 
-  ●​ Baptism (Water Baptism Included)
+God is not afraid of your questions, and He has not left you to fight alone. This study gives you early clarity on the questions and basic training for the battle, then points you to your new mission.
 
-  ●​ Why Is It Suddenly Hard? (Part 1): The Battle (resistance after salvation, temptation, endurance, basic warfare)
+Read the sections slowly, look up the verses in your own Bible, and take time with the reflection prompts. This is between you and God.
 
-  ●​ Your New Mission (Part 1): (becoming a channel for the same grace that rescued you — witness, service, first steps of discipleship)
+**Let's settle two things before we begin.** First, following Jesus does not mean you stop having questions. God gives wisdom to everyone who asks Him. Second, the new life comes with a real battle. If life has felt harder since you believed, that is not a sign you did something wrong. It is a sign you switched sides, and your God has already won.
 
-  LEVEL 2: INNER TRANSFORMATION &
+> "If any of you lack wisdom, let him ask of God, that giveth to all men liberally, and upbraideth not; and it shall be given him." — James 1:5 (KJV)
 
-     KINGDOM LIVING (Part 2 —
+> "Ye are of God, little children, and have overcome them: because greater is he that is in you, than he that is in the world." — 1 John 4:4 (KJV)
 
-     Formation)$NB$, 'none', 8, 70, 'published')
+**Key Truth:** God welcomes my questions, and He has already won my battle. Greater is He that is in me.
+
+**Group Question:** What is one honest question you have had since you started following Jesus? Have things felt harder since you believed? How does it help to know that is normal?
+
+## 1. Why Bad Things Happen to Good People
+
+This may be one of your first hard questions. The Bible does not give one neat answer, and it warns against the cruel idea that suffering always means a person sinned.
+
+What it gives you is truth to stand on and a God who is near in the pain. It also gently challenges the question itself. Jesus said there is none good but God, and Scripture says all have sinned. So the real wonder is not that hard things happen to good people, but that God is so good to people like us. That keeps you humble as you look at where suffering comes from.
+
+> "For all have sinned, and come short of the glory of God." — Romans 3:23 (KJV)
+
+**Where Does Suffering Come From?**
+
+- **A broken world:** since sin entered, creation itself groans, with sickness, disasters, and death (Romans 8:22).
+- **Other people's choices:** much pain is caused by human sin, not by God.
+- **Your own choices:** sometimes you reap what you sow.
+- **A real enemy:** the devil comes to steal, kill, and destroy (John 10:10).
+- **Not always punishment:** Jesus said one man's blindness was not from sin, but so God's works could be shown (John 9:3). "He maketh his sun to rise on the evil and on the good, and sendeth rain on the just and on the unjust" (Matthew 5:45).
+
+Here is your hope. God does not waste pain. He works good out of it, He draws near to the broken, and He promises a day with no more tears. Jesus Himself suffered, so you do not serve a God who stands far off from your hurt.
+
+> "And we know that all things work together for good to them that love God, to them who are the called according to his purpose." — Romans 8:28 (KJV)
+
+> "And God shall wipe away all tears from their eyes; and there shall be no more death, neither sorrow, nor crying, neither shall there be any more pain: for the former things are passed away." — Revelation 21:4 (KJV)
+
+**Illustration.** Think of a doctor setting a broken bone. The moment hurts, and from the inside it can feel cruel. But the doctor is not against you. He is working toward healing you cannot yet see. God is never the author of evil, but He is able to bring healing and purpose out of what the enemy meant for harm.
+
+**Key Truth:** I may not get every answer, but I can trust the God who is near in my pain and works good out of it.
+
+**Group Question:** Which is harder for you: trusting God when you cannot see why, or believing He is near in the pain? Where do you need to invite God into a hard place in your life right now?
+
+## 2. Betting and Christianity
+
+Gambling — including sports betting, lotteries, casinos, and online wagering — is not merely a financial decision. It is a spiritual one. The Bible never uses the word gambling, so there is no single verse to quote. Instead God gives you principles, and when you hold betting up to them, the wisdom becomes clear. The real issue is not the money. It is your heart: where is your trust, and where is your treasure?
+
+> "But you who abandon (turn away from) the Lord, Who forget and ignore My holy mountain (Zion), Who set a table for Gad [the Babylonian god of fortune], And who fill a jug of mixed wine for Meni [the god of fate], I will destine you for the sword, [says the Lord], And all of you will bow down to the slaughter." — Isaiah 65:11-12 (AMP)
+
+While the Bible does not outrightly castigate gambling, there are several biblical principles that help us draw a conclusion on the matter: that gambling is inconsistent with God's will. Let us look at the relevant principles closely.
+
+**a) Stewardship.** God entrusts resources to you as a steward, not an owner. Gambling treats money as a tool for chance rather than a resource for purpose. "He who is faithful in what is least is faithful also in much; and he who is unjust in what is least is unjust also in much" (Luke 16:10-12). In the Parable of the Talents (Matthew 25:14-30), God expects multiplication through work and wisdom, not luck. Biblical financial management entails budgeting, saving, giving, and investing wisely in a way that honours God.
+
+**b) Greed and the Love of Money.** Gambling is often driven by the desire for quick wealth — the exact opposite of biblical prosperity, which comes through diligence (Proverbs 13:11). The Bible underscores the weight of godly work as God's way of prospering and providing for His children, and it sternly castigates get-rich-quick schemes. "A faithful man will abound with blessings, but he who hastens to be rich will not go unpunished" (Proverbs 28:20).
+
+**c) Exposure to Addiction and Bondage.** Gambling is designed to be addictive. The house always wins in the end. What begins as entertainment often becomes bondage; the situation can easily spiral into a full-blown pursuit to recover that which has been lost, which eventually leads to more loss and great desperation. "For by whom a person is overcome, by him also he is brought into bondage" (2 Peter 2:19).
+
+**d) Faith vs. Fortune.** Another devastating effect of gambling is that it weakens a person's faith: they shift their focus from God as their source to luck. Your source is God, not luck. Faith is substance and evidence (Hebrews 11:1); gambling is hoping for chance. These are opposing mindsets. "And my God shall supply all your need according to His riches in glory by Christ Jesus" (Philippians 4:19).
+
+**Why People Gamble**
+
+1. The love of money: betting feeds the desire to get rich without work, which Scripture says pierces us with sorrows (1 Timothy 6:10).
+2. Get-rich-quick: God honours patient, honest labour, not chasing fast money (Proverbs 13:11).
+3. Stewardship: your money is entrusted by God to be used wisely, not risked on chance.
+4. Loving your neighbour: betting profits from other people's losses, which is the opposite of love.
+5. Bondage: gambling easily becomes an addiction that masters a person (1 Corinthians 6:12).
+
+> "Wealth gotten by vanity shall be diminished: but he that gathereth by labour shall increase." — Proverbs 13:11 (KJV)
+
+> "Let your conversation be without covetousness; and be content with such things as ye have: for he hath said, I will never leave thee, nor forsake thee." — Hebrews 13:5 (KJV)
+
+Keep it simple. Betting trains your heart to trust luck and to crave more. The gospel trains your heart to trust God and to be content. Conclusively, gambling is incompatible with Christian stewardship. It is rooted in chance, not faith; in greed, not generosity; in bondage, not freedom. Your finances are a spiritual assignment — treat them that way. Let these principles guide you, and let the Holy Spirit lead you.
+
+**Ask Yourself:**
+
+- Has betting produced peace or anxiety?
+- Has it strengthened or weakened your trust in God?
+- Has it built your life or created financial stress?
+- Does it align with being a channel of blessing to others?
+
+## 3. Baptism (Water Baptism Included)
+
+Jesus commanded baptism for every disciple: "Go ye therefore, and teach all nations, baptizing them in the name of the Father, and of the Son, and of the Holy Ghost" (Matthew 28:19). Water baptism is the outward declaration that you have died to the old life and risen new in Christ.
+
+> "Jesus answered, Very truly I tell you, no one can enter the kingdom of God unless they are born of water and the Spirit. Flesh gives birth to flesh, but the Spirit gives birth to spirit." — John 3:5-6
+
+If you have believed but have not yet been baptized, take that step. Baptism does not save you — Christ has already done that — but it publicly declares whose you are, and it is a step of obedience that Jesus Himself asked for.
+
+## 4. Why Is It Suddenly Hard? (Part 1): The Battle
+
+*Resistance after salvation, temptation, endurance, basic warfare.*
+
+Things tend to become suddenly hard because change is not comfortable. There is a lot of renewal of mindset, change of lifestyle and culture, and the fear of stepping into the unknown.
+
+**Hardships are a reality in salvation** — and they carry their own benefit of working out our salvation.
+
+> "These things I have spoken unto you, that in me ye might have peace. In the world ye shall have tribulation: but be of good cheer; I have overcome the world." — John 16:33 (KJV)
+
+> "Beloved, think it not strange concerning the fiery trial which is to try you, as though some strange thing happened unto you: but rejoice, inasmuch as ye are partakers of Christ's sufferings; that, when his glory shall be revealed, ye may be glad also with exceeding joy." — 1 Peter 4:12-13 (KJV)
+
+We get to learn to trust the Lord wholeheartedly (Proverbs 3:5-6), and we end up yielding into obedience of Him.
+
+**Hardships bring us into maturity.**
+
+> "Consider it pure joy, my brothers and sisters, whenever you face trials of many kinds, because you know that the testing of your faith produces perseverance. Let perseverance finish its work so that you may be mature and complete, not lacking anything." — James 1:2-4 (NIV)
+
+With this we get to know how to handle different circumstances of life.
+
+**When endured, there is hope for an eternal reward.**
+
+> "For our present troubles are small and won't last very long. Yet they produce for us a glory that vastly outweighs them and will last forever!" — 2 Corinthians 4:17 (NLT)
+
+> "Yet what we suffer now is nothing compared to the glory he will reveal to us later." — Romans 8:18 (NLT)
+
+**Note This:**
+
+1. Hardships are a reality in salvation.
+2. They test our faith.
+3. When endured, we become mature and complete.
+4. They produce everlasting glory.
+
+## 5. Your New Mission (Part 1)
+
+You were rescued so that grace could flow through you. Your new mission is becoming a channel for the same grace that rescued you — witness, service, and the first steps of discipleship. What God poured into you is meant to reach others: tell what He has done for you, serve His people, and take your first steps as a disciple who makes disciples. This mission deepens as you grow, and it continues in Part 2 further along the Pathway.
+
+**Key Truth:** God welcomes my questions, I am equipped for the battle, and I carry a mission — and He is with me in all three.$NB$, 'quiz', 20, 70, 'published')
 ON CONFLICT (level_number, module_sequence_number) DO UPDATE SET
-  title = EXCLUDED.title, lesson_content = EXCLUDED.lesson_content, evaluation_kind = EXCLUDED.evaluation_kind,
-  estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
+  title = EXCLUDED.title, summary = EXCLUDED.summary, key_verses = EXCLUDED.key_verses, lesson_content = EXCLUDED.lesson_content,
+  evaluation_kind = EXCLUDED.evaluation_kind, estimated_minutes = EXCLUDED.estimated_minutes, quiz_pass_mark = EXCLUDED.quiz_pass_mark,
   status = 'published', updated_at = now();
 DELETE FROM question_bank WHERE module_id = (SELECT module_id FROM modules WHERE level_number=1 AND module_sequence_number=10);
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$Module 10 asks us to settle two things before beginning. According to the introduction, what are they?$NQ$, $NA${"choices":[{"id":"opt-l1m10q1o1","text":"That every question has one neat answer, and that battles end at salvation","is_correct":false},{"id":"opt-l1m10q1o2","text":"That following Jesus does not mean you stop having questions, and that the new life comes with a real battle","is_correct":true},{"id":"opt-l1m10q1o3","text":"That questions show weak faith, and that hardship is God's punishment","is_correct":false},{"id":"opt-l1m10q1o4","text":"That wisdom comes only through leaders, and that the battle is fought for us","is_correct":false}]}$NA$::jsonb, $NC$That following Jesus does not mean you stop having questions, and that the new life comes with a real battle$NC$, 1, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=10;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$The module says that if life has felt harder since you believed, that is not a sign you did something wrong. What does it say this is a sign of?$NQ$, $NA${"choices":[{"id":"opt-l1m10q2o1","text":"That you have not yet prayed enough for protection","is_correct":false},{"id":"opt-l1m10q2o2","text":"That your faith is still too small to bring peace","is_correct":false},{"id":"opt-l1m10q2o3","text":"That God is testing whether you deserve His blessings","is_correct":false},{"id":"opt-l1m10q2o4","text":"That you switched sides, and your God has already won","is_correct":true}]}$NA$::jsonb, $NC$That you switched sides, and your God has already won$NC$, 1, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=10;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$On why bad things happen to good people, the module gently challenges the question itself using Romans 3:23. What does it say is the real wonder?$NQ$, $NA${"choices":[{"id":"opt-l1m10q3o1","text":"Not that hard things happen to good people, but that God is so good to people like us","is_correct":true},{"id":"opt-l1m10q3o2","text":"That good people suffer more than bad people in this life","is_correct":false},{"id":"opt-l1m10q3o3","text":"That God allows any suffering at all in the world He made","is_correct":false},{"id":"opt-l1m10q3o4","text":"That suffering always ends once a person turns to Christ","is_correct":false}]}$NA$::jsonb, $NC$Not that hard things happen to good people, but that God is so good to people like us$NC$, 2, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=10;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$The module lists the sources suffering can come from. Which option matches the list given under 'Where Does Suffering Come From?'$NQ$, $NA${"choices":[{"id":"opt-l1m10q4o1","text":"Weak faith, unconfessed sin, poor choices, and bad company","is_correct":false},{"id":"opt-l1m10q4o2","text":"Fate, chance, generational curses, and divine anger","is_correct":false},{"id":"opt-l1m10q4o3","text":"A broken world, other people's choices, your own choices, and a real enemy","is_correct":true},{"id":"opt-l1m10q4o4","text":"God's discipline, natural law, human error, and coincidence","is_correct":false}]}$NA$::jsonb, $NC$A broken world, other people's choices, your own choices, and a real enemy$NC$, 2, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=10;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$Referring to the man born blind in John 9:3, what point does the module make about suffering?$NQ$, $NA${"choices":[{"id":"opt-l1m10q5o1","text":"Suffering is not always punishment — the man's blindness was not from sin, but so God's works could be shown","is_correct":true},{"id":"opt-l1m10q5o2","text":"Suffering is always traceable to someone's hidden sin","is_correct":false},{"id":"opt-l1m10q5o3","text":"Physical healing depends on first confessing every sin","is_correct":false},{"id":"opt-l1m10q5o4","text":"God sends blindness so that people will learn humility","is_correct":false}]}$NA$::jsonb, $NC$Suffering is not always punishment — the man's blindness was not from sin, but so God's works could be shown$NC$, 3, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=10;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$The module illustrates God's role in pain with a doctor setting a broken bone. What is this illustration teaching?$NQ$, $NA${"choices":[{"id":"opt-l1m10q6o1","text":"Pain proves that God has stepped away until the healing is complete","is_correct":false},{"id":"opt-l1m10q6o2","text":"God causes evil so that He can later display His power in healing it","is_correct":false},{"id":"opt-l1m10q6o3","text":"Believers should avoid asking why and simply endure whatever comes","is_correct":false},{"id":"opt-l1m10q6o4","text":"God is never the author of evil, but He works toward healing and purpose you cannot yet see","is_correct":true}]}$NA$::jsonb, $NC$God is never the author of evil, but He works toward healing and purpose you cannot yet see$NC$, 3, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=10;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$On betting and Christianity, the module says the real issue is not the money. According to the teaching, what is the real issue?$NQ$, $NA${"choices":[{"id":"opt-l1m10q7o1","text":"The amount wagered — small stakes are harmless, large stakes are sinful","is_correct":false},{"id":"opt-l1m10q7o2","text":"Your heart — where your trust is and where your treasure is","is_correct":true},{"id":"opt-l1m10q7o3","text":"The legality of gambling in your country of residence","is_correct":false},{"id":"opt-l1m10q7o4","text":"Whether the winnings are given generously to the church","is_correct":false}]}$NA$::jsonb, $NC$Your heart — where your trust is and where your treasure is$NC$, 4, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=10;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$Under 'Faith vs. Fortune', the module names a devastating spiritual effect of gambling. What is it?$NQ$, $NA${"choices":[{"id":"opt-l1m10q8o1","text":"It wastes time that should be spent in church activities","is_correct":false},{"id":"opt-l1m10q8o2","text":"It makes a person too wealthy to depend on God's provision","is_correct":false},{"id":"opt-l1m10q8o3","text":"It weakens a person's faith by shifting their focus from God as their source to luck","is_correct":true},{"id":"opt-l1m10q8o4","text":"It causes conflict with fellow believers over borrowed money","is_correct":false}]}$NA$::jsonb, $NC$It weakens a person's faith by shifting their focus from God as their source to luck$NC$, 4, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=10;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$How does the module describe water baptism and its relationship to salvation?$NQ$, $NA${"choices":[{"id":"opt-l1m10q9o1","text":"It is the moment a believer is actually saved and born again","is_correct":false},{"id":"opt-l1m10q9o2","text":"It is optional and carries no particular significance for a believer","is_correct":false},{"id":"opt-l1m10q9o3","text":"It washes away only the sins committed before the baptism date","is_correct":false},{"id":"opt-l1m10q9o4","text":"It is the outward declaration that you have died to the old life and risen new in Christ — it does not save you, but it is a step of obedience Jesus asked for","is_correct":true}]}$NA$::jsonb, $NC$It is the outward declaration that you have died to the old life and risen new in Christ — it does not save you, but it is a step of obedience Jesus asked for$NC$, 5, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=10;
+INSERT INTO question_bank (module_id, q_type, question_text, answer_options, correct_answer, difficulty_rating, is_active)
+SELECT module_id, 'multiple_choice', $NQ$'Why Is It Suddenly Hard?' closes with four 'Note This' points about hardships. Which option states all four as taught?$NQ$, $NA${"choices":[{"id":"opt-l1m10q10o1","text":"Hardships are a reality in salvation; they test our faith; when endured we become mature and complete; and they produce everlasting glory","is_correct":true},{"id":"opt-l1m10q10o2","text":"Hardships come from the enemy alone; they must be rebuked; they end quickly for the faithful; and they leave no lasting benefit","is_correct":false},{"id":"opt-l1m10q10o3","text":"Hardships mean hidden sin; they call for fasting; they are removed by giving; and they return if faith weakens","is_correct":false},{"id":"opt-l1m10q10o4","text":"Hardships are rare after salvation; they signal wrong choices; they are avoided by wisdom; and they fade with maturity","is_correct":false}]}$NA$::jsonb, $NC$Hardships are a reality in salvation; they test our faith; when endured we become mature and complete; and they produce everlasting glory$NC$, 5, TRUE
+  FROM modules WHERE level_number=1 AND module_sequence_number=10;
 
 -- Place the Level 1 exit exam after the 10 modules.
 UPDATE modules SET module_sequence_number = 11 WHERE level_number = 1 AND evaluation_kind = 'exit_exam';
