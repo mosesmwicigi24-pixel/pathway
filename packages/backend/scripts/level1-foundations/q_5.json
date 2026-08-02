@@ -3,9 +3,9 @@
     "q_type": "MultipleChoice",
     "question_text": "Module 5 teaches that the believer grows in truth, stability, and confidence after salvation through one foundational source. According to the lesson, what is the answer to how a believer grows after salvation?",
     "answer_options": [
-      "The Word of God",
       "Strong emotions and zeal alone",
       "Natural gifts and talents",
+      "The Word of God",
       "Sincere guesswork about God"
     ],
     "correct_answer": "The Word of God",
@@ -15,10 +15,10 @@
     "q_type": "MultipleChoice",
     "question_text": "The lesson describes the overall makeup of the Bible. According to the text, how many books does the Bible contain in total?",
     "answer_options": [
-      "It contains 66 books",
       "It contains 39 books",
       "It contains 27 books",
-      "It contains 12 books"
+      "It contains 12 books",
+      "It contains 66 books"
     ],
     "correct_answer": "It contains 66 books",
     "difficulty_rating": 1
@@ -39,8 +39,8 @@
     "q_type": "MultipleChoice",
     "question_text": "The lesson divides the Bible into two testaments and gives the book count of each. According to the text, how are the books distributed between the testaments?",
     "answer_options": [
-      "The Old Testament has 39 books and the New Testament has 27 books",
       "The Old Testament has 27 books and the New Testament has 39 books",
+      "The Old Testament has 39 books and the New Testament has 27 books",
       "The Old Testament has 33 books and the New Testament has 33 books",
       "The Old Testament has 39 books and the New Testament has 39 books"
     ],
@@ -63,9 +63,9 @@
     "q_type": "MultipleChoice",
     "question_text": "The lesson notes that the Bible is not laid out in a simple time sequence. According to the text, how is the Bible primarily arranged?",
     "answer_options": [
-      "By type, genre, and function rather than strictly by chronology",
       "Strictly in the chronological order events occurred",
       "Alphabetically by the names of the books",
+      "By type, genre, and function rather than strictly by chronology",
       "By the length of each book from longest to shortest"
     ],
     "correct_answer": "By type, genre, and function rather than strictly by chronology",
@@ -75,10 +75,10 @@
     "q_type": "MultipleChoice",
     "question_text": "The section on the Major Prophets lists Isaiah, Jeremiah, Lamentations, Ezekiel, and Daniel. According to the lesson, why are these called 'major'?",
     "answer_options": [
-      "Because of their length and scope, not because they are more inspired than the others",
       "Because they are more inspired than the other prophetic books",
       "Because they were written before all the other prophets",
-      "Because they contain the most prophecies about the end times"
+      "Because they contain the most prophecies about the end times",
+      "Because of their length and scope, not because they are more inspired than the others"
     ],
     "correct_answer": "Because of their length and scope, not because they are more inspired than the others",
     "difficulty_rating": 4
@@ -87,8 +87,8 @@
     "q_type": "MultipleChoice",
     "question_text": "The lesson describes the integrity of God's Word using passages such as Psalm 119:89, Numbers 23:19, and Isaiah 40:8. Which statement best captures the lesson's conclusion about the trustworthiness of God's Word?",
     "answer_options": [
-      "It is unchanging and stands forever, so the believer approaches it with confidence, not suspicion",
       "It is reliable now but may weaken and expire over long periods of time",
+      "It is unchanging and stands forever, so the believer approaches it with confidence, not suspicion",
       "It should be approached with suspicion until each part is personally proven",
       "It is subject to the instability of man and changes with circumstances"
     ],
@@ -99,10 +99,10 @@
     "q_type": "MultipleChoice",
     "question_text": "Under 'Key Priorities in Gaining Knowledge,' the lesson stresses that knowledge must mature into action. According to the text, what is the danger of knowledge that does not affect the believer's life?",
     "answer_options": [
-      "It has not yet matured properly; the Word must move from hearing to believing to doing",
       "It is automatically complete once the believer understands it correctly",
       "It guarantees transformation in a single sitting regardless of conduct",
-      "It produces health and stability even without obedience"
+      "It produces health and stability even without obedience",
+      "It has not yet matured properly; the Word must move from hearing to believing to doing"
     ],
     "correct_answer": "It has not yet matured properly; the Word must move from hearing to believing to doing",
     "difficulty_rating": 5
