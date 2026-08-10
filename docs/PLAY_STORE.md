@@ -101,7 +101,9 @@ The app collects, over an **encrypted HTTPS** connection:
 Play requires a publicly hosted privacy policy URL before publishing. Host one
 (e.g. `https://pathway.nuruplace.org/privacy`) covering: what's collected (above),
 how it's used, retention, third parties (Cloudinary media, Stripe/M-Pesa payments,
-Groq/Gemini for the assistant), and how to request deletion. Enter the URL under
+Anthropic/Claude for the AI assistant and pastoral-writing features, with Groq/
+Gemini as automatic fallbacks if Claude is unavailable), and how to request
+deletion. Enter the URL under
 **Store listing → Privacy policy** and **App content**.
 
 ## 6. Content rating
