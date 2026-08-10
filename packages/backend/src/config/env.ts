@@ -104,7 +104,7 @@ const EnvSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL_FAST: z.string().default("claude-haiku-4-5-20251001"),
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-5"),
-  ANTHROPIC_MODEL_DEEP: z.string().default("claude-opus-4-8"),
+  ANTHROPIC_MODEL_DEEP: z.string().default("claude-opus-5"),
   // Google AI Studio / Gemini (free-tier fallback).
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
