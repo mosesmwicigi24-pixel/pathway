@@ -64,6 +64,18 @@ describe("award evaluation (server-derived, §G.2)", () => {
     expect(gev.rows[0].n).toBe(1); // single provenance row
   });
 
+  it("the badge_awarded outbox payload carries the badge's human name, not just its machine code (bug: pushes read the raw template name)", async () => {
+    const u = (await createUser({ congregationId: cong, cellGroupId: cell })).user_id;
+    await completedModule(u);
+    await svc().evaluateForUser(u);
+
+    const ob = await testPool().query<{ payload: { code: string; name: string } }>(
+      "SELECT payload FROM outbox WHERE topic = 'notification.badge_awarded'",
+    );
+    expect(ob.rows).toHaveLength(1);
+    expect(ob.rows[0]!.payload).toMatchObject({ code: "first_module", name: "First Steps" });
+  });
+
   it("admin revoke removes a held badge (audited)", async () => {
     const admin = (await createUser({ congregationId: cong, role: "Admin", email: "a@dev.local" })).user_id;
     const u = (await createUser({ congregationId: cong, cellGroupId: cell })).user_id;

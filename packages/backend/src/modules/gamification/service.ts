@@ -62,9 +62,9 @@ export class GamificationService {
   async evaluateForUser(userId: string): Promise<{ awarded: string[] }> {
     return tx(this.pool, async (c) => {
       const s = await this.stats(c, userId);
-      const badges = await many<{ badge_id: string; code: string; criteria: Criteria }>(
+      const badges = await many<{ badge_id: string; code: string; name: string; criteria: Criteria }>(
         c,
-        `SELECT badge_id, code, criteria FROM badges WHERE is_active
+        `SELECT badge_id, code, name, criteria FROM badges WHERE is_active
            AND badge_id NOT IN (SELECT badge_id FROM user_badges WHERE user_id = $1 AND revoked_at IS NULL)`,
         [userId],
       );
@@ -85,7 +85,10 @@ export class GamificationService {
           [userId, b.badge_id, JSON.stringify({ event: "evaluate", stats: s })],
         );
         await recordChange(c, "achievements", b.badge_id, userId, "upsert");
-        await enqueueOutbox(c, "notification.badge_awarded", { user_id: userId, code: b.code });
+        // `name` rides along so the push notification can say "Faithfulness
+        // badge earned" instead of just the machine code (dispatch.ts's
+        // badge_awarded copy reads payload.name).
+        await enqueueOutbox(c, "notification.badge_awarded", { user_id: userId, code: b.code, name: b.name });
         awarded.push(b.code);
       }
       return { awarded };

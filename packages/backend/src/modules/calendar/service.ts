@@ -643,7 +643,7 @@ export class CalendarService {
 
   async addException(principal: Principal, seriesId: string, input: z.infer<typeof CalendarService.Exception>): Promise<unknown> {
     return tx(this.pool, async (c) => {
-      const s = await maybeOne(c, `SELECT 1 FROM event_series WHERE series_id = $1 AND deleted_at IS NULL`, [seriesId]);
+      const s = await maybeOne<{ title: string }>(c, `SELECT title FROM event_series WHERE series_id = $1 AND deleted_at IS NULL`, [seriesId]);
       if (!s) throw new ApiError("NOT_FOUND", "Series not found");
       const row = await one(
         c,
@@ -684,6 +684,7 @@ export class CalendarService {
               template,
               payload: {
                 event_id: occurrence.event_id,
+                title: s.title,
                 original_start_at: input.original_start_at,
                 new_start_at: input.new_start_at ?? null,
                 note: input.note ?? null,
@@ -873,7 +874,7 @@ export class CalendarService {
               userId: g.user_id,
               channel: "push",
               template: "event_cancelled",
-              payload: { event_id: row.event_id, original_start_at: row.occurrence_start, note: null },
+              payload: { event_id: row.event_id, title: s.title, original_start_at: row.occurrence_start, note: null },
             });
           } catch {
             // best-effort
@@ -1047,9 +1048,9 @@ export class CalendarService {
     }
     await this.ensureOccurrence(c, eventId); // materialize a projected occurrence on first RSVP
     await this.assertEventVisible(c, userId, eventId); // §8: same scoping as visibleSeries
-    const ev = await maybeOne<{ event_id: string; occurs_at: string; rsvp_enabled: boolean; reminders: boolean; automation: Record<string, unknown> | null }>(
+    const ev = await maybeOne<{ event_id: string; title: string; occurs_at: string; rsvp_enabled: boolean; reminders: boolean; automation: Record<string, unknown> | null }>(
       c,
-      `SELECT e.event_id, e.occurs_at, e.rsvp_enabled,
+      `SELECT e.event_id, e.title, e.occurs_at, e.rsvp_enabled,
               COALESCE(es.reminders_enabled, TRUE) AS reminders, es.automation
          FROM events e LEFT JOIN event_series es ON es.series_id = e.series_id
         WHERE e.event_id = $1`,
@@ -1087,7 +1088,7 @@ export class CalendarService {
           userId,
           channel: "push",
           template: min >= 1440 ? "event_reminder_24h" : "event_reminder_1h",
-          payload: { event_id: eventId, occurs_at: ev.occurs_at },
+          payload: { event_id: eventId, title: ev.title, occurs_at: ev.occurs_at },
           at: startMs - min * 60_000,
         });
       }
