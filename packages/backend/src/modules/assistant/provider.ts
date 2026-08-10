@@ -341,7 +341,16 @@ export class FakeAiProvider implements AiProvider {
     // the letter parser + story pipeline are testable offline.
     if (/sunday letter/i.test(input.system)) {
       return Promise.resolve(
-        "Scripture: Philippians 1:6\n\nDear friend, I watched your week — the lessons you finished and the quiet days too. He who began a good work in you will carry it on to completion. Keep walking; your cell is walking with you.\n— Nuru Place",
+        JSON.stringify({
+          title: "The week you kept showing up",
+          salutation: "Dear Ada,",
+          theme: "dawn",
+          scripture_ref: "Philippians 1:6",
+          body:
+            "I watched your week — the lessons you finished and the quiet days too. He who began a good work in you will carry it on to completion. Keep walking; your cell is walking with you. There is nothing about this week he missed, and nothing about the next one he won't be present for either.",
+          highlights: ["You finished a lesson this week", "You showed up in prayer"],
+          share_line: "Grace showed up again this week — even in the ordinary days.",
+        }),
       );
     }
     if (/rendering an existing lesson/i.test(input.system)) {

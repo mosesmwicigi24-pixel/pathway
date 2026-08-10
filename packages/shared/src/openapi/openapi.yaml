@@ -530,16 +530,28 @@ paths:
   /me/letters:
     get:
       tags: [progress]
-      summary: My Sunday Letters (AI-composed weekly pastoral letters), newest first.
+      summary: >-
+        My Sunday Letters — the keepable archive of my own weekly
+        AI-composed pastoral letters, newest first.
       responses:
-        "200": { description: "{ data: [{ letter_id, week_of, body, scripture_ref, created_at, read_at }] }" }
+        "200":
+          description: >-
+            { data: [{ letter_id, week_of, title, salutation, theme,
+            image_key, body, scripture_ref, highlights: string[], next_step:
+            { label, route, params? } | null, share_line, created_at,
+            read_at }] }. `theme`/`image_key` are one of the fixed letter
+            theme vocabulary (dawn, water, path, harvest, shelter, light,
+            seed, garden, mountain, rest) — never a third-party URL. Letters
+            written before this contract existed still serve with null-safe
+            defaults (a generic title/salutation/theme, empty highlights, no
+            next_step/share_line).
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/letters/latest:
     get:
       tags: [progress]
-      summary: My most recent Sunday Letter (or letter:null before the first one).
+      summary: My most recent Sunday Letter (or letter:null before it's arrived).
       responses:
-        "200": { description: "{ letter: {...} | null }" }
+        "200": { description: "{ letter: {...} | null } — same shape as GET /me/letters." }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/letters/{id}/read:
     post:
