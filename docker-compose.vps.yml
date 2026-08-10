@@ -100,6 +100,19 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # The WORKER is the process that dispatches notifications, so it — not the
+      # api — is what actually needs SMTP. Without these, giving receipts scheduled
+      # on channel:"email" cannot be delivered. (Same class of gap as the AI keys
+      # above: this compose file gave `api` a full environment and the worker
+      # almost none, so every worker-side integration silently no-opped.)
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SECURE: ${SMTP_SECURE}
+      SMTP_TLS_SERVERNAME: ${SMTP_TLS_SERVERNAME}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      EMAIL_FROM: ${EMAIL_FROM}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL}
     volumes:
       - /opt/pathway/secrets/fcm-service-account.json:/run/secrets/fcm.json:ro
       # rw: the sweep registers recordings AND (follow-up) unlinks soft-deleted ones.
