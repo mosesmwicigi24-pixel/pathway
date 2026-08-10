@@ -135,6 +135,34 @@ describe("leader scoping + ack", () => {
   });
 });
 
+describe("draft outreach", () => {
+  it("drafts a suggestion for the person behind a signal in the leader's flock", async () => {
+    await daysOfActivity(memberId, [9, 11, 13, 15, 17, 19, 21, 24]);
+    await svc().scanDrift();
+    const mine = await svc().listFor(leaderP());
+    expect(mine.length).toBe(1);
+
+    const { suggestion } = await svc().draftOutreach(leaderP(), mine[0]!.signal_id);
+    expect(typeof suggestion).toBe("string");
+    expect(suggestion.length).toBeGreaterThan(0);
+  });
+
+  it("404s for a signal outside the leader's flock, and for a bogus id", async () => {
+    await daysOfActivity(memberId, [9, 11, 13, 15, 17, 19, 21, 24]);
+    await svc().scanDrift();
+    const mine = await svc().listFor(leaderP());
+
+    const stranger = (await createUser({ congregationId: cong, email: "s2@dev.local", fullName: "Stranger Two" })).user_id;
+    await expect(
+      svc().draftOutreach({ userId: stranger, role: "Instructor", congregationId: cong }, mine[0]!.signal_id),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    await expect(svc().draftOutreach(leaderP(), "00000000-0000-4000-8000-000000000099")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+});
+
 describe("flock brief", () => {
   it("composes one brief per leader per week, idempotently", async () => {
     await new StoryService(testPool(), provider).rebuildFor(memberId); // brief pulls from stories

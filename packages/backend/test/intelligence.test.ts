@@ -145,6 +145,42 @@ describe("sunday letters", () => {
   });
 });
 
+describe("AI usage observability", () => {
+  it("aggregates recorded events by feature/tier/provider/model (Admin+ only)", async () => {
+    await testPool().query(
+      `INSERT INTO ai_usage_events (feature, tier, provider, model, input_tokens, output_tokens, latency_ms, success)
+       VALUES ('assistant_chat', 'standard', 'anthropic', 'claude-sonnet-5', 100, 50, 800, TRUE),
+              ('assistant_chat', 'standard', 'anthropic', 'claude-sonnet-5', 120, 60, 900, TRUE),
+              ('sunday_letter', 'deep', 'anthropic', 'claude-opus-5', 500, 300, 4000, FALSE)`,
+    );
+    const res = await agent().get("/v1/admin/intelligence/ai-usage").set(auth(adminTok));
+    expect(res.status).toBe(200);
+    expect(res.body.total_calls).toBe(3);
+    const chatRow = res.body.rows.find((r: { feature: string }) => r.feature === "assistant_chat");
+    expect(chatRow.calls).toBe(2);
+    expect(chatRow.total_input_tokens).toBe(220);
+    expect(chatRow.total_output_tokens).toBe(110);
+    const letterRow = res.body.rows.find((r: { feature: string }) => r.feature === "sunday_letter");
+    expect(letterRow.failures).toBe(1);
+    expect(res.body.total_estimated_cost_usd).toBeGreaterThan(0);
+  });
+
+  it("is not reachable by a member", async () => {
+    const res = await agent().get("/v1/admin/intelligence/ai-usage").set(auth(meTok));
+    expect(res.status).toBe(403);
+  });
+
+  it("wiring a real HTTP chat call through registerAssistant's buildAiProvider(env, recorder) never throws — offline (FakeAiProvider) writes no events, by design", async () => {
+    const chat = await agent().post("/v1/assistant/chat").set(auth(meTok)).send({ messages: [{ role: "user", text: "Hello, how are you today?" }] });
+    expect(chat.status).toBe(200);
+    // No ANTHROPIC/GROQ/GEMINI key in the test env → FakeAiProvider, which
+    // never calls the recorder (there is nothing real to bill or time).
+    const res = await agent().get("/v1/admin/intelligence/ai-usage").set(auth(adminTok));
+    expect(res.status).toBe(200);
+    expect(res.body.rows.find((r: { feature: string }) => r.feature === "assistant_chat")).toBeUndefined();
+  });
+});
+
 describe("consent covenant", () => {
   it("flips ai_opt_out and deletes the story on opt-out", async () => {
     await createEnrollment(meId, 1);
@@ -188,8 +224,11 @@ describe("story-aware companion", () => {
       search: (q, k) => ct.search(q, k),
     });
     await svc.chat(meId, { messages: [{ role: "user", text: "How do I grow in prayer and covenant conversation?" }] });
-    expect(seen.length).toBe(1);
-    const sys = seen[0]!.system;
+    // The thin 1-chunk corpus (< k=3) also triggers one search_expansion call
+    // alongside the main reply — filter to the actual chat reply, not by index.
+    const mainCalls = () => seen.filter((c) => c.feature === "assistant_chat");
+    expect(mainCalls()).toHaveLength(1);
+    const sys = mainCalls()[0]!.system;
     expect(sys).toContain("About this member");
     expect(sys).toContain("Level 1 · Module 1"); // citation of our own teaching
     expect(sys).toContain("Befrienders Kenya"); // guardrails ride along
@@ -197,6 +236,7 @@ describe("story-aware companion", () => {
     // Opt-out → no personal grounding block.
     await testPool().query(`UPDATE users SET ai_opt_out = TRUE WHERE user_id = $1`, [meId]);
     await svc.chat(meId, { messages: [{ role: "user", text: "How do I grow in prayer?" }] });
-    expect(seen[1]!.system).not.toContain("About this member");
+    expect(mainCalls()).toHaveLength(2);
+    expect(mainCalls()[1]!.system).not.toContain("About this member");
   });
 });

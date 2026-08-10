@@ -9,7 +9,7 @@ import { z } from "zod";
 import { many } from "../../db/db.js";
 import { ChatService } from "../chat/service.js";
 import type { AiProvider } from "./provider.js";
-import { companionGrounding } from "../intelligence/prompts.js";
+import { companionGrounding, SEARCH_EXPANSION_SYSTEM } from "../intelligence/prompts.js";
 
 /** Member Story + own-teaching retrieval, injected by registerAssistant. All
  *  grounding is best-effort: a failure must never block the member's chat. */
@@ -67,13 +67,16 @@ export class AssistantService {
       try {
         const me = await this.grounding.forUser(userId);
         const lastUserText = [...input.messages].reverse().find((m) => m.role === "user")?.text ?? "";
-        const chunks = lastUserText.length >= 8 ? await this.grounding.search(lastUserText, 3) : [];
+        const chunks = lastUserText.length >= 8 ? await this.searchWithExpansion(lastUserText, 3) : [];
         system += companionGrounding(me?.narrative ?? "", me?.factsLine ?? "", chunks);
       } catch {
         /* grounding must never block the chat */
       }
     }
-    const reply = await this.provider.complete({ system, messages: input.messages });
+    // effort: "low" — this is a live chat the member is waiting on; adaptive
+    // thinking is on by default on the standard-tier model and low effort
+    // keeps the reply snappy without giving up Claude's quality over Fake/Groq.
+    const reply = await this.provider.complete({ system, messages: input.messages, feature: "assistant_chat", effort: "low" });
     // Persist this exchange so the Nuru thread is retrievable across sessions
     // (best-effort — a storage hiccup must never swallow the member's reply).
     const lastUser = [...input.messages].reverse().find((m) => m.role === "user");
@@ -84,6 +87,56 @@ export class AssistantService {
       /* non-fatal */
     }
     return { reply };
+  }
+
+  /** "Semantic-ish" search lift over our keyword (Postgres FTS) content index,
+   *  without a new embeddings provider/vector store. websearch_to_tsquery ANDs
+   *  bare words together, so naively appending AI-generated keywords to the
+   *  member's own text would make the query MORE restrictive and could return
+   *  FEWER results than the plain search — the opposite of the point. Instead:
+   *  run the member's own text first; only if that comes back thin (fewer
+   *  than `k` hits) ask a cheap fast-tier model for a handful of the topical/
+   *  theological keywords a keyword search alone would miss (e.g. "I'm scared
+   *  about my exam" → "fear anxiety courage trust exam"), run that as a
+   *  SEPARATE search, and merge+dedupe. This also means the extra AI
+   *  round-trip only happens when it can actually help — most questions that
+   *  already match plenty of content skip it entirely, which keeps the common
+   *  case fast. Best-effort throughout: any failure just returns what the
+   *  primary search already found — grounding must never block the chat. */
+  private async searchWithExpansion(
+    query: string,
+    k: number,
+  ): Promise<Array<{ title: string; ref: string | null; body: string }>> {
+    const primary = await this.grounding!.search(query, k);
+    if (primary.length >= k) return primary;
+    let expansion = "";
+    try {
+      expansion = (
+        await this.provider.complete({
+          system: SEARCH_EXPANSION_SYSTEM,
+          messages: [{ role: "user", text: query }],
+          tier: "fast",
+          maxTokens: 40,
+          feature: "search_expansion",
+        })
+      )
+        .trim()
+        .slice(0, 200);
+    } catch {
+      return primary;
+    }
+    if (!expansion) return primary;
+    const extra = await this.grounding!.search(expansion, k - primary.length).catch(() => []);
+    const seen = new Set(primary.map((c) => `${c.title}|${c.ref ?? ""}`));
+    const merged = [...primary];
+    for (const c of extra) {
+      const key = `${c.title}|${c.ref ?? ""}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(c);
+      }
+    }
+    return merged.slice(0, k);
   }
 
   private async persist(userId: string, role: "user" | "assistant", text: string): Promise<void> {

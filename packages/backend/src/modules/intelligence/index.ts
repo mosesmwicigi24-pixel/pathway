@@ -10,6 +10,7 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { buildAiProvider, type AiProvider } from "../assistant/provider.js";
+import { AiUsageService } from "../assistant/usage.js";
 import { NotificationService } from "../notifications/service.js";
 import { ContentIndexService } from "./content.js";
 import { StoryService } from "./story.js";
@@ -26,7 +27,8 @@ import { ApiError } from "../../http/errors.js";
 export const intelligenceRouter: Router = Router();
 
 export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvider): Router {
-  const provider = providerOverride ?? buildAiProvider(ctx.env);
+  const usage = new AiUsageService(ctx.db.primary);
+  const provider = providerOverride ?? buildAiProvider(ctx.env, usage.recorder());
   const content = new ContentIndexService(ctx.db.primary);
   const story = new StoryService(ctx.db.primary, provider);
   const notifications = new NotificationService(ctx.db.primary);
@@ -104,6 +106,13 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
     res.json(await letters.runWeekly(input.user_id ? { userIds: [input.user_id] } : {}));
   }));
 
+  // --- AI cost/usage observability (Admin+): what is the AI layer doing and
+  // spending, aggregated by feature/tier/model — see assistant/usage.ts. ---
+  r.get("/admin/intelligence/ai-usage", auth, requireRole("Admin"), handler(async (req, res) => {
+    const days = Math.min(Math.max(Number(req.query.since_days ?? 30) || 30, 1), 365);
+    res.json(await usage.summary(days));
+  }));
+
   // --- Shepherd's Pulse (Phase 2): leader-scoped signals + the Flock Brief ---
   r.get("/admin/intelligence/signals", auth, requireRole("Instructor"), handler(async (req, res) => {
     const since = Math.min(Math.max(Number(req.query.since_days ?? 14) || 14, 1), 60);
@@ -112,6 +121,13 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
 
   r.post("/admin/intelligence/signals/:id/ack", auth, requireRole("Instructor"), handler(async (req, res) => {
     res.json(await signals.acknowledge(requirePrincipal(req), String(req.params.id ?? "")));
+  }));
+
+  // AI capability: draft a check-in for the person behind one signal — a
+  // suggestion only, the leader edits and sends it themselves (§1.1: AI
+  // never originates outreach, it only ever writes words for a human to use).
+  r.post("/admin/intelligence/signals/:id/draft-outreach", auth, requireRole("Instructor"), handler(async (req, res) => {
+    res.json(await signals.draftOutreach(requirePrincipal(req), String(req.params.id ?? "")));
   }));
 
   r.get("/admin/intelligence/flock-brief", auth, requireRole("Instructor"), handler(async (req, res) => {

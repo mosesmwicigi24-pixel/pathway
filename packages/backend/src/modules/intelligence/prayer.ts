@@ -51,6 +51,10 @@ export class PrayerAiService {
             : "I have no seed points — give me a gentle starter prayer I can make my own.",
         },
       ],
+      tier: "standard",
+      effort: "low", // interactive, member is waiting for the draft
+      maxTokens: 800,
+      feature: "prayer_assist",
     });
     return { suggestion: suggestion.trim().slice(0, 2000) };
   }
@@ -95,7 +99,11 @@ export class PrayerAiService {
     const raw = await this.provider.complete({
       system: PRAYER_POINTS_SYSTEM,
       messages: [{ role: "user", text: corpus }],
-      maxTokens: 400,
+      tier: "standard",
+      // 1200, not 400: standard-tier thinking is on by default and shares the
+      // max_tokens budget with the visible points list — leave headroom.
+      maxTokens: 1200,
+      feature: "prayer_points",
     });
     const points = raw
       .split("\n")
