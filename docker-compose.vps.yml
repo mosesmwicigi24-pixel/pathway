@@ -58,6 +58,14 @@ services:
       SMTP_TLS_SERVERNAME: ${SMTP_TLS_SERVERNAME}
       SMTP_USER: ${SMTP_USER}
       SMTP_PASS: ${SMTP_PASS}
+      # Claude is the primary provider (buildAiProvider prefers ANTHROPIC_API_KEY
+      # when present). Groq/Gemini stay wired as fallbacks so a missing or
+      # rate-limited Claude key degrades to a real model rather than to the
+      # offline canned responder.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      ANTHROPIC_MODEL_FAST: ${ANTHROPIC_MODEL_FAST:-claude-haiku-4-5-20251001}
+      ANTHROPIC_MODEL_DEEP: ${ANTHROPIC_MODEL_DEEP:-claude-opus-5}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -79,6 +87,19 @@ services:
   # read-only service-account file here; FCM_SERVICE_ACCOUNT (shared anchor) points
   # at it. All other env comes from the base *backend-env anchor in prod.yml.
   worker:
+    # PRODUCTION BUG FOUND 2026-08-01: the worker had NO AI provider env at all,
+    # so buildAiProvider() fell through to FakeAiProvider — the Sunday Letter and
+    # the nightly story narrative were canned offline text, not model output, and
+    # nothing surfaced that because the fallback is deliberately silent. The
+    # worker is the process that RUNS those jobs, so it needs the keys too.
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      ANTHROPIC_MODEL_FAST: ${ANTHROPIC_MODEL_FAST:-claude-haiku-4-5-20251001}
+      ANTHROPIC_MODEL_DEEP: ${ANTHROPIC_MODEL_DEEP:-claude-opus-5}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
       - /opt/pathway/secrets/fcm-service-account.json:/run/secrets/fcm.json:ro
       # rw: the sweep registers recordings AND (follow-up) unlinks soft-deleted ones.
