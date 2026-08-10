@@ -427,9 +427,16 @@ export class LiturgyService {
       const raw = await this.provider.complete({
         system: LITURGY_SYSTEM,
         messages: [{ role: "user", text: `Season: ${season}. Date: ${dayDate}. Compose today's liturgy.` }],
-        tier: "standard",
-        temperature: 0.4,
-        maxTokens: 600,
+        // Tier: deep. Volume here is the lowest in the whole intelligence layer
+        // (once per CONGREGATION per day, not per member) while readership is
+        // the highest (every member sees these 4 lines on Home every day) —
+        // the clearest case in the app for "pastoral writing a member actually
+        // reads deserves the strongest writer" at a cost that's a rounding error.
+        tier: "deep",
+        // 1400, not 600: deep-tier thinking is on by default and shares the
+        // max_tokens budget with the visible JSON — leave it headroom.
+        maxTokens: 1400,
+        feature: "daily_liturgy",
       });
       day = this.parse(raw);
     } catch {

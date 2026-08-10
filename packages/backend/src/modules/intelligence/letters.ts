@@ -88,8 +88,11 @@ export class LettersService {
         },
       ],
       tier: "deep",
-      maxTokens: 600,
-      temperature: 0.7,
+      // 2000, not 600: the deep-tier model thinks by default and max_tokens
+      // caps thinking + the visible letter together — a tight budget here
+      // risks truncating the actual 110-160 word letter to nothing.
+      maxTokens: 2000,
+      feature: "sunday_letter",
     });
     const { body, scriptureRef } = LettersService.parse(raw);
 

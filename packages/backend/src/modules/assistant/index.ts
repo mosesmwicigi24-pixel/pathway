@@ -7,6 +7,7 @@ import { authenticate } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { AssistantService } from "./service.js";
 import { buildAiProvider, type AiProvider } from "./provider.js";
+import { AiUsageService } from "./usage.js";
 import { ChatService } from "../chat/service.js";
 import { StoryService } from "../intelligence/story.js";
 import { ContentIndexService } from "../intelligence/content.js";
@@ -14,7 +15,8 @@ import { ContentIndexService } from "../intelligence/content.js";
 export const assistantRouter: Router = Router();
 
 export function registerAssistant(ctx: AppContext, providerOverride?: AiProvider): Router {
-  const provider = providerOverride ?? buildAiProvider(ctx.env);
+  const usage = new AiUsageService(ctx.db.primary);
+  const provider = providerOverride ?? buildAiProvider(ctx.env, usage.recorder());
   // Story-aware grounding (intelligence layer): the member's own story + the
   // church's own teaching, injected so Nuru remembers who it is walking with.
   const story = new StoryService(ctx.db.primary, provider);

@@ -646,6 +646,25 @@ paths:
         "200": { description: "{ signal_id, acknowledged_at }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: Not in my flock }
+  /admin/intelligence/signals/{id}/draft-outreach:
+    post:
+      tags: [admin]
+      summary: Instructor+. AI-draft a short check-in message for the person behind ONE signal in my flock — a SUGGESTION only, grounded in facts I already see (name, level, trend, activity, the signal's own summary — never raw reflection/journal text). Nothing is sent or persisted; I edit and send it myself. 404 outside my scope.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ suggestion }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Not in my flock }
+  /admin/intelligence/ai-usage:
+    get:
+      tags: [admin]
+      summary: Admin. Cost/usage observability for the AI layer — aggregated by feature/tier/provider/model over a rolling window (default 30 days) rather than raw event rows. Estimated cost is a rough list-price ballpark, not a billing reconciliation.
+      parameters:
+        - { name: since_days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 365, default: 30 } }
+      responses:
+        "200": { description: "{ since_days, total_calls, total_estimated_cost_usd, rows: [{ feature, tier, provider, model, calls, failures, avg_latency_ms, total_input_tokens, total_output_tokens, estimated_cost_usd }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /admin/intelligence/flock-brief:
     get:
       tags: [admin]

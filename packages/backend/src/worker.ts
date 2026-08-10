@@ -28,6 +28,7 @@ import { buildMobileMoneyProviders } from "./modules/financial/providers.js";
 import { RadioService } from "./modules/radio/service.js";
 import { buildStreamProvider } from "./modules/radio/provider.js";
 import { buildAiProvider } from "./modules/assistant/provider.js";
+import { AiUsageService } from "./modules/assistant/usage.js";
 import { ContentIndexService } from "./modules/intelligence/content.js";
 import { StoryService } from "./modules/intelligence/story.js";
 import { LettersService } from "./modules/intelligence/letters.js";
@@ -116,7 +117,8 @@ function main(): void {
   // rebuild (03:00 EAT), and the Sunday Letter run (Sunday 16:00 EAT). Every
   // job is idempotent (wipe+refill index; story upsert; letters UNIQUE per
   // user+week), and a missing AI key degrades to the offline fake provider.
-  const aiProvider = buildAiProvider(env);
+  const aiUsage = new AiUsageService(db.primary);
+  const aiProvider = buildAiProvider(env, aiUsage.recorder());
   const contentIndex = new ContentIndexService(db.primary);
   const memberStory = new StoryService(db.primary, aiProvider);
   const intelNotifications = new NotificationService(db.primary);

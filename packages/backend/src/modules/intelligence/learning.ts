@@ -60,8 +60,10 @@ export class LearningService {
         system: EXPLAIN_SYSTEM(style),
         messages: [{ role: "user", text: `Lesson title: ${title}\n\nLesson:\n${lesson.slice(0, LESSON_EXCERPT)}` }],
         tier: "standard",
-        maxTokens: 1000,
-        temperature: 0.5,
+        // 2200, not 1000: standard-tier thinking is on by default and shares
+        // the max_tokens budget with the visible rendering — leave headroom.
+        maxTokens: 2200,
+        feature: "learning_explain",
       })
     ).trim();
     await this.pool.query(
@@ -117,8 +119,10 @@ export class LearningService {
           },
         ],
         tier: "standard",
-        maxTokens: 700,
-        temperature: 0.4,
+        // 1800, not 700: same thinking-shares-max_tokens headroom reasoning
+        // as explain() above.
+        maxTokens: 1800,
+        feature: "quiz_remediation",
       })
     ).trim();
     await this.pool.query(

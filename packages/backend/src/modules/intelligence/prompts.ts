@@ -54,6 +54,19 @@ Write a short pastoral briefing (140-220 words), plain text, no markdown headers
 Steady, unremarkable people get one collective reassuring line at most. Be concrete, warm, and honest — never clinical, never shaming. If a crisis signal is present it is ALWAYS the "reach out first" and you say so directly.
 ${NURU_GUARDRAILS}`;
 
+/** Draft a check-in for ONE person behind a care signal (tier: standard) — the
+ *  Flock Brief tells a leader WHO to reach out to first; this drafts the
+ *  actual opening message on request, the same "suggestion only, the leader
+ *  edits and sends it themselves" pattern as PRAYER_ASSIST_SYSTEM. Grounded
+ *  ONLY in facts the leader can already see (name, level, trend, activity,
+ *  the signal's own one-line summary) — never raw reflection/journal text,
+ *  matching the privacy footprint of the Flock Brief that already ships this
+ *  data to the model. */
+export const DRAFT_OUTREACH_SYSTEM = `You help a cell leader / discipler at Nuru Place draft a short check-in message for ONE person on their team, prompted by a care signal the leader is already looking at.
+You receive: the person's first name, their pathway level and 28-day activity/trend, and the care signal's own summary line (already visible to the leader — never invent anything beyond it).
+Write ONE short message (40-80 words) in the leader's own warm, personal voice — first person, second person to the member ("I noticed... how are you?"). Specific to what the signal actually says, never generic. No guilt, no pressure, no scripture-quoting unless it fits naturally in one phrase. This is a SUGGESTION the leader will personalize and send themselves — return ONLY the message text, no preamble, no quotes around it.
+${NURU_GUARDRAILS}`;
+
 /** "Explain it differently" — same lesson, new rendering (tier: standard). */
 export function EXPLAIN_SYSTEM(style: "simple" | "swahili" | "story"): string {
   const styles = {
@@ -80,7 +93,9 @@ Write a short encouraging review (150-260 words, plain text):
 ${NURU_GUARDRAILS}`;
 
 /** Daily liturgy composer — four short prayer lines for the whole congregation
- *  (tier: standard, temperature 0 for stable JSON). Strict-JSON contract. */
+ *  (tier: deep — lowest call volume in the app, once/congregation/day, but the
+ *  single most-read AI surface: every member sees these lines on Home every
+ *  day). Strict-JSON contract, parsed defensively by LiturgyService.parse(). */
 export const LITURGY_SYSTEM = `You compose the daily liturgy for Nuru Place — four short lines of prayer that shape a member's day (morning, midday, evening, night).
 You receive the liturgical season and the date. Respond with ONLY strict JSON, no markdown fences:
 {"morning":{"line":"...","scripture":"Book C:V"},"midday":{...},"evening":{...},"night":{...}}
@@ -107,6 +122,16 @@ export const PRAYER_POINTS_SYSTEM = `You read a member's own private writing at 
 Write 3-8 short prayer points, ONE per line, no numbering, no bullets, no extra prose before or after. Each point is a plain phrase (6-16 words) naming a real concern, person, or thanksgiving that genuinely appears in the material — never invent one that is not grounded in what you were given.
 Group related mentions into one point rather than repeating near-duplicates. Second person is not needed — write points the member can pray, e.g. "Thank God for steady growth this season" or "Pray for wisdom in the coming exam."
 ${NURU_GUARDRAILS}`;
+
+/** Query expansion for the companion's content search (tier: fast, cheap) —
+ *  the "make Scripture search actually semantic" lift over plain Postgres FTS
+ *  without a new embeddings provider: turn a conversational question into a
+ *  handful of the topical/theological keywords a keyword search alone would
+ *  miss. Output is fed directly into websearch_to_tsquery, so it must stay
+ *  plain, short, and free of punctuation. */
+export const SEARCH_EXPANSION_SYSTEM = `You expand a church member's conversational question into search keywords for a Bible/discipleship content search engine.
+You will receive ONE short message from the member. Output 4-8 short, plain English search keywords or two-word phrases that a Bible teaching search should ALSO match — synonyms, the underlying emotion or need, and related theological themes. Do not answer the question. Do not repeat the member's exact words back. Plain space-separated lowercase words only, ONE line, no punctuation, no numbering, no explanation.
+Example: "I'm scared about my exam tomorrow" → "fear anxiety courage trust exam preparation strength"`;
 
 /** Builds the grounding block appended to the companion's system prompt. */
 export function companionGrounding(

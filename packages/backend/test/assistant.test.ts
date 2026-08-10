@@ -4,11 +4,14 @@
 // can actually access (§5.4) — otherwise 404.
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
-import { resetDb, closeTestPool } from "./helpers/db.js";
+import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createCellGroup, createUser } from "./helpers/factories.js";
+import { AssistantService } from "../src/modules/assistant/service.js";
+import type { AiCompletion, AiProvider } from "../src/modules/assistant/provider.js";
 
 let cong: string, cellA: string, cellB: string;
 let aTok: string, bTok: string;
+let aUserId: string;
 const auth = (t: string) => ({ Authorization: t });
 const uuid = (n: number) => `00000000-0000-4000-8000-0000000000${String(n).padStart(2, "0")}`;
 
@@ -19,6 +22,7 @@ beforeEach(async () => {
   cellB = await createCellGroup(cong, "Cell B");
   const a = await createUser({ congregationId: cong, cellGroupId: cellA, email: "a@dev.local", fullName: "Ada" });
   const b = await createUser({ congregationId: cong, cellGroupId: cellB, email: "b@dev.local", fullName: "Cara" });
+  aUserId = a.user_id;
   aTok = bearer({ sub: a.user_id, role: "Student", cong });
   bTok = bearer({ sub: b.user_id, role: "Student", cong });
 });
@@ -79,5 +83,80 @@ describe("Nuru assistant", () => {
 
     const other = await agent().get("/v1/assistant/history").set(auth(bTok));
     expect((other.body.messages as unknown[]).length).toBe(0); // another member can't see it
+  });
+});
+
+describe("companion search-expansion grounding (semantic-ish lift over FTS)", () => {
+  it("only expands when the primary search comes back thin, and merges the two result sets", async () => {
+    const calls: AiCompletion[] = [];
+    const searchQueries: string[] = [];
+    const provider: AiProvider = {
+      name: "stub",
+      complete: (input) => {
+        calls.push(input);
+        if (input.feature === "search_expansion") return Promise.resolve("fear anxiety courage");
+        return Promise.resolve("Here is my reply.");
+      },
+    };
+    const svc = new AssistantService(testPool(), provider, undefined, {
+      forUser: () => Promise.resolve(null),
+      search: (q, _k) => {
+        searchQueries.push(q);
+        // Primary search (the member's own text) comes back thin (1 < k=3) —
+        // this should trigger exactly one expansion call + a second search.
+        if (q === "I'm scared about my exam tomorrow") return Promise.resolve([{ title: "Trust", ref: "Ps 56:3", body: "..." }]);
+        return Promise.resolve([{ title: "Courage", ref: "Josh 1:9", body: "..." }]);
+      },
+    });
+
+    const res = await svc.chat(aUserId, { messages: [{ role: "user", text: "I'm scared about my exam tomorrow" }] });
+    expect(res.reply).toBe("Here is my reply.");
+    expect(calls.filter((c) => c.feature === "search_expansion")).toHaveLength(1);
+    expect(searchQueries).toEqual(["I'm scared about my exam tomorrow", "fear anxiety courage"]);
+  });
+
+  it("skips the expansion call entirely when the primary search already returns k results", async () => {
+    const calls: AiCompletion[] = [];
+    const searchQueries: string[] = [];
+    const provider: AiProvider = {
+      name: "stub",
+      complete: (input) => {
+        calls.push(input);
+        return Promise.resolve("Here is my reply.");
+      },
+    };
+    const svc = new AssistantService(testPool(), provider, undefined, {
+      forUser: () => Promise.resolve(null),
+      search: (q, k) => {
+        searchQueries.push(q);
+        return Promise.resolve(Array.from({ length: k }, (_, i) => ({ title: `Hit ${i}`, ref: null, body: "..." })));
+      },
+    });
+
+    await svc.chat(aUserId, { messages: [{ role: "user", text: "Tell me about prayer and fasting" }] });
+    expect(calls.some((c) => c.feature === "search_expansion")).toBe(false);
+    expect(searchQueries).toEqual(["Tell me about prayer and fasting"]); // only the primary search ran
+  });
+
+  it("falls back to the primary (possibly empty) results when expansion fails — grounding never blocks the chat", async () => {
+    const searchQueries: string[] = [];
+    const provider: AiProvider = {
+      name: "stub",
+      complete: (input) => {
+        if (input.feature === "search_expansion") return Promise.reject(new Error("model down"));
+        return Promise.resolve("Reply anyway.");
+      },
+    };
+    const svc = new AssistantService(testPool(), provider, undefined, {
+      forUser: () => Promise.resolve(null),
+      search: (q) => {
+        searchQueries.push(q);
+        return Promise.resolve([]);
+      },
+    });
+
+    const res = await svc.chat(aUserId, { messages: [{ role: "user", text: "Please pray for my family" }] });
+    expect(res.reply).toBe("Reply anyway.");
+    expect(searchQueries).toEqual(["Please pray for my family"]); // no second search after the failed expansion
   });
 });
