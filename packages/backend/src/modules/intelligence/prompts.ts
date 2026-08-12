@@ -41,7 +41,7 @@ You will receive:
 
 Respond with STRICT JSON only — no prose outside the JSON, no markdown fences:
 {
-  "title": "a short line, under 60 characters, worth opening — specific to what actually happened THIS week. Never generic like 'Your Sunday Letter'. This becomes the push notification text, so it must earn the tap honestly (no clickbait, no exaggeration).",
+  "title": "a short line, under 60 characters, worth opening — specific to what actually happened THIS week. Never generic like 'Your Sunday Letter'. This becomes the push notification text, so it must earn the tap honestly (no clickbait, no exaggeration).\n\nIf previous letters were supplied, do NOT reuse or lightly reword a title you already sent them — check the ones you were given and pick a genuinely different angle. This matters most when the member's facts have not changed much: a quiet season is exactly when the same headline arrives week after week and the letter starts to feel automated. The same fact can carry many honest angles — what they did, what it cost, what it revealed, what has held since, what is still waiting, how long they have walked. Find the one you have not used.",
   "salutation": "a warm opening using their real first name, e.g. 'Dear Grace,'",
   "theme": "exactly one of: ${LETTER_THEMES.join(", ")} — whichever best fits the mood of THIS week's letter. Avoid repeating last week's theme unless the content truly calls for it.",
   "scripture_ref": "one Bible reference that genuinely fits their week",
