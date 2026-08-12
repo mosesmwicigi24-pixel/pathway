@@ -121,7 +121,7 @@ function firstSentence(text: string): string | null {
  * the member's real first name, we override it deterministically rather than
  * risk a misspelled or wrong name in the most personal line of the letter.
  */
-export function parseLetter(raw: string, expectedFirstName: string | null, lastTheme: string | null): ParsedLetter {
+export function parseLetter(raw: string, expectedFirstName: string | null, lastTheme: string | null): ParsedLetter | null {
   const fallbackSalutation = expectedFirstName ? `Dear ${expectedFirstName},` : DEFAULT_LETTER_SALUTATION;
   const fallbackTheme = nextThemeAfter(lastTheme);
 
@@ -159,6 +159,17 @@ export function parseLetter(raw: string, expectedFirstName: string | null, lastT
         return { title, salutation, theme, scriptureRef, body, highlights, shareLine };
       }
     } catch {
+      // The model returned JSON we could not parse — almost always a TRUNCATED
+      // response (max_tokens covers thinking + output on these models, so a
+      // long letter can be cut mid-write). The old behaviour fell through and
+      // used the RAW STRING as the body, which put a `{"title":"...` blob in
+      // front of a member as though it were their pastoral letter. Never
+      // present broken output as if a person wrote it: if it smells like JSON,
+      // refuse it and let the caller skip this letter rather than ship that.
+      if (raw.trimStart().startsWith("{")) {
+        return null;
+      }
+
       /* fall through to legacy/total-failure parsing below */
     }
   }
@@ -202,6 +213,11 @@ export class LettersService {
     private readonly story: StoryService,
     private readonly content: ContentIndexService,
     private readonly notifications?: NotificationService,
+    // index.ts has been PASSING ctx.log here all along while the constructor
+    // silently dropped it — so every diagnostic this service tried to emit went
+    // nowhere. Accepting it is the difference between a skipped letter being
+    // visible and it being invisible.
+    private readonly log?: { warn: (o: unknown, m: string) => void },
   ) {}
 
   /** The Sunday (EAT) of the week containing `now`, as YYYY-MM-DD. */
@@ -341,10 +357,20 @@ export class LettersService {
       // 2000, not 600: the deep-tier model thinks by default and max_tokens
       // caps thinking + the visible letter together — a tight budget here
       // risks truncating the actual JSON letter to nothing.
-      maxTokens: 2000,
+      maxTokens: 8000,
       feature: "sunday_letter",
     });
     const parsed = parseLetter(raw, firstName, lastTheme);
+    // parseLetter returns null when the response was unusable — in practice a
+    // TRUNCATED JSON reply. Skipping the week is the honest outcome: a member
+    // seeing no letter is recoverable, a member reading a `{"title":"...` blob
+    // presented as their pastoral letter is not. The weekly job counts skips,
+    // and the ops health summary surfaces them, so this cannot fail silently
+    // the way the old fallback did.
+    if (!parsed) {
+      this.log?.warn({ userId, weekOf }, "sunday letter: unusable model response, skipping this week");
+      return null;
+    }
     const nextStep = await this.computeNextStep(userId, built.facts.level);
     const highlightsJson = JSON.stringify({
       moments: parsed.highlights,
