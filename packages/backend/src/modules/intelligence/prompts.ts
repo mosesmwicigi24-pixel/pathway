@@ -125,9 +125,12 @@ You will receive JSON with:
 - date: today's date
 - spine: a SCRIPTURE SPINE for today — a real psalm, gospel passage, and epistle passage (reference AND text). Pray FROM this text — quote it, echo its imagery, or draw a line straight out of it. Do not fall back on a verse you recall unaided when real text has been given to you.
 - prior_lines: this congregation's own liturgy lines from the last 14 days.
+- quotes: a short list of the church's own teaching lines — short sentences Pastor Moses himself has actually preached, each with an id, its text, and the sermon it's from. These are RAW MATERIAL, not obligations.
+
+QUOTES RULE: when one of the quotes genuinely fits today's Scripture and the hour — a real echo, not a stretch — weave it into ONE band, verbatim, and attribute it plainly (e.g. "as Pastor Moses has taught us, '...'" or "Pastor Moses put it this way: '...'"). If none of them genuinely fit, ignore the list entirely — a forced quote is worse than no quote. Use at most one quote across the whole day. Never reword a quote and still attribute it: a quote is either used exactly as given, with attribution, or not used at all. If you use one, name which quote by putting its id in that band's "quote_id" field (see the output shape below); every other band omits "quote_id" or sets it to null.
 
 Respond with ONLY strict JSON, no markdown fences:
-{"sunrise":{"line":"...","scripture":"Book C:V"},"morning":{...},"midday":{...},"afternoon":{...},"evening":{...},"night":{...},"midnight":{...}}
+{"sunrise":{"line":"...","scripture":"Book C:V","quote_id":null},"morning":{...},"midday":{...},"afternoon":{...},"evening":{...},"night":{...},"midnight":{...}}
 
 Each band has its own pastoral character AND its own length — honor both:
 - sunrise (45-80 words, a full paragraph): consecrates — the first word of the day belongs to God; invite the reader to meet him before the world does.

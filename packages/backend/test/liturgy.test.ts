@@ -251,6 +251,132 @@ describe("memory — prior lines actually reach the prompt", () => {
   });
 });
 
+describe("sermon quotes — a third input, woven in only when offered and used", () => {
+  let cong: string;
+  beforeEach(async () => {
+    await resetDb();
+    cong = await createCongregation();
+  });
+
+  async function insertActiveQuote(text: string): Promise<string> {
+    const { rows } = await testPool().query<{ quote_id: string }>(
+      `INSERT INTO teaching_quotes (quote_text, attribution, source_title, source_ref)
+       VALUES ($1, 'Pastor Moses', 'Test Sermon', 'test-ref') RETURNING quote_id`,
+      [text],
+    );
+    return rows[0]!.quote_id;
+  }
+
+  it("a liturgy composed against an empty teaching_quotes table still succeeds — the library is an enhancement, never a dependency", async () => {
+    const svc = new LiturgyService(testPool(), new FakeAiProvider());
+    const result = await svc.composeFor(cong);
+    expect(result.cached).toBe(false);
+    for (const band of BANDS) {
+      expect(result.day[band].line.length).toBeGreaterThan(8);
+    }
+  });
+
+  it("offers active quote candidates to the model in the prompt payload", async () => {
+    await insertActiveQuote("The role of the spirit is to deliver the mind of God this very day.");
+
+    let captured: AiCompletion | undefined;
+    const capturing: AiProvider = {
+      name: "capturing",
+      complete: (input) => {
+        captured = input;
+        return new FakeAiProvider().complete(input);
+      },
+    };
+    await new LiturgyService(testPool(), capturing).composeFor(cong);
+
+    expect(captured).toBeDefined();
+    const payload = captured!.messages.map((m) => m.text).join("\n");
+    expect(payload).toContain("quotes");
+    expect(payload).toContain("The role of the spirit is to deliver the mind of God this very day.");
+    expect(captured!.system).toContain("Pastor Moses"); // LITURGY_SYSTEM's attribution instruction names him
+  });
+
+  it("does not offer an inactive quote to the model", async () => {
+    await testPool().query(
+      `INSERT INTO teaching_quotes (quote_text, attribution, source_title, source_ref, is_active)
+       VALUES ('An inactive quote that must never reach the composer prompt.', 'Pastor Moses', 'Test Sermon', 'test-ref', FALSE)`,
+    );
+    let captured: AiCompletion | undefined;
+    const capturing: AiProvider = {
+      name: "capturing",
+      complete: (input) => {
+        captured = input;
+        return new FakeAiProvider().complete(input);
+      },
+    };
+    await new LiturgyService(testPool(), capturing).composeFor(cong);
+    const payload = captured!.messages.map((m) => m.text).join("\n");
+    expect(payload).not.toContain("An inactive quote that must never reach the composer prompt.");
+  });
+
+  it("marks a quote the model actually used, and rotates it out of tomorrow's candidates", async () => {
+    const quoteId = await insertActiveQuote("A teaching line the model will choose to weave in today.");
+
+    const weaving: AiProvider = {
+      name: "weaving",
+      complete: async (input) => {
+        const raw = await new FakeAiProvider().complete(input);
+        const obj = JSON.parse(raw) as Record<string, { line: string; scripture: string | null }>;
+        // Simulate the model reporting it used this quote in the sunrise band.
+        return JSON.stringify({ ...obj, sunrise: { ...obj.sunrise, quote_id: quoteId } });
+      },
+    };
+
+    await new LiturgyService(testPool(), weaving).composeFor(cong, new Date("2026-07-20T09:00:00Z"));
+
+    const { rows } = await testPool().query<{ use_count: number; last_used_at: Date | null }>(
+      `SELECT use_count, last_used_at FROM teaching_quotes WHERE quote_id = $1`,
+      [quoteId],
+    );
+    expect(rows[0]!.use_count).toBe(1);
+    expect(rows[0]!.last_used_at).not.toBeNull();
+
+    // A fresh selection right after must exclude it (14-day rotation window).
+    const { selectQuoteCandidates } = await import("../src/modules/intelligence/teachingQuotes.js");
+    const next = await selectQuoteCandidates(testPool());
+    expect(next.map((q) => q.quoteId)).not.toContain(quoteId);
+  });
+
+  it("ignores a quote_id the model reports that was never actually offered (defense in depth)", async () => {
+    const hallucinating: AiProvider = {
+      name: "hallucinating",
+      complete: async (input) => {
+        const raw = await new FakeAiProvider().complete(input);
+        const obj = JSON.parse(raw) as Record<string, { line: string; scripture: string | null }>;
+        return JSON.stringify({ ...obj, sunrise: { ...obj.sunrise, quote_id: "00000000-0000-0000-0000-000000000000" } });
+      },
+    };
+    // Should not throw, and should not touch any row (there is none to touch).
+    const result = await new LiturgyService(testPool(), hallucinating).composeFor(cong);
+    expect(result.cached).toBe(false);
+    expect(result.day.sunrise.line.length).toBeGreaterThan(8);
+  });
+
+  it("every quote reaching the prompt carries attribution — a surfaced quote is never anonymous", async () => {
+    await insertActiveQuote("Every candidate line the composer sees must already carry its own attribution.");
+    let captured: AiCompletion | undefined;
+    const capturing: AiProvider = {
+      name: "capturing",
+      complete: (input) => {
+        captured = input;
+        return new FakeAiProvider().complete(input);
+      },
+    };
+    await new LiturgyService(testPool(), capturing).composeFor(cong);
+    const payload = JSON.parse(captured!.messages[0]!.text) as { quotes: Array<{ id: string; text: string; source: string }> };
+    expect(payload.quotes.length).toBeGreaterThan(0);
+    for (const q of payload.quotes) {
+      expect(q.id.length).toBeGreaterThan(0);
+      expect(q.source.length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe("seven-band persistence + backward compatibility", () => {
   let cong: string;
   beforeEach(async () => {
