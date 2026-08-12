@@ -88,11 +88,18 @@ const KNOWN_NON_ORIGINAL_LINES: readonly string[] = [
 // commentary quoting it directly (this pastor's own style always keeps
 // the reference right next to the quoted text). Name-agnostic on purpose:
 // the corpus has misspelled book names ("Mathew", "Hebrew") that a fixed
-// book list would miss.
-// Two citation styles appear in this corpus: "Book C:V" (most of it) and,
-// occasionally, "Book C vs V" / "Book C v V" ("Mathew 24 vs 37").
+// book list would miss. Two citation styles appear: "Book C:V" (most of
+// it) and, occasionally, "Book C vs V" / "Book C v V" ("Mathew 24 vs 37").
 const SCRIPTURE_REF_RE =
   /\b[1-3]?\s?[A-Z][A-Za-z]+\.?\s+\d{1,3}(?::\s?\d{1,3}(?:\s?[-–]\s?\d{1,3})?|\s+vs?\.?\s?\d{1,3})\b/;
+/** God speaking in the first person, or a prophetic formula, with NO
+ *  reference anywhere nearby to catch via SCRIPTURE_REF_RE — most often
+ *  the sermon's own title, which is frequently a verse itself ("I am
+ *  making all things new" = Revelation 21:5). Deliberately narrow: it must
+ *  not swallow the pastor's own first person ("I have seen people
+ *  who..."), only the declarative divine voice of quoted Scripture. */
+const DIVINE_SPEECH_RE =
+  /(^|[\s"“])(behold|verily)\b|\b(thus says?|declares?|says) the (lord|father)\b|\bI am (making|doing|the (lord|way|truth|life|vine|good shepherd|bread|light))\b|\bI will (make a way|pour out|restore|build my church|never leave)\b/i;
 // Any hyperlink (markdown or bare) is a strong signal of copied/cited
 // material — this also happens to catch most of the theological-commentary
 // blocks identified during review (biblegateway.com, biblestudytools.com,
@@ -179,18 +186,20 @@ export function extractQuotableLines(text: string, source: QuoteSource): QuoteCa
       continue; // too short to be a candidate anyway, but be explicit
     }
 
-    // A raw line carrying a Scripture reference ANYWHERE in it is treated
-    // as Scripture-tainted in its entirety, not just the sentence fragment
-    // that happens to contain the reference token — this pastor routinely
-    // writes "Book C:V - <quoted verse text>. <more quoted verse text>."
-    // as one continuous line, and sentence-splitting it would otherwise
-    // separate the reference from the very quote it's citing, leaking the
-    // rest of the verse as if it were an uncited original line.
-    const fragments = block
-      .split("\n")
-      .map(stripMarkup)
-      .filter((l) => l.length > 0 && !SCRIPTURE_REF_RE.test(l))
-      .flatMap((l) => l.split(SENTENCE_SPLIT_RE));
+    // A block containing a Scripture reference ANYWHERE is discarded WHOLE,
+    // not just the reference-bearing line. Filtering out only that one line
+    // still leaked verse text: this pastor writes a citation on one line
+    // and lets the verse run across the next several, so the continuation
+    // lines carry no reference of their own and sailed straight through —
+    // that is how "I will make a way in the wilderness" (Isaiah 43:19)
+    // once came out attributed to him. His own teaching lines live in their
+    // own bullets/paragraphs, separate from the verse blocks, so dropping
+    // the whole block costs little and prevents the one error this feature
+    // must never make: putting God's words in his mouth.
+    const rawLines = block.split("\n").map(stripMarkup).filter((l) => l.length > 0);
+    if (rawLines.some((l) => SCRIPTURE_REF_RE.test(l))) continue;
+
+    const fragments = rawLines.flatMap((l) => l.split(SENTENCE_SPLIT_RE));
 
     let buffer = "";
     const flush = () => {
@@ -241,6 +250,12 @@ function finalizeCandidate(raw: string, source: QuoteSource): QuoteCandidate | n
   // numbered-list stripper to catch).
   if (/^\d/.test(candidate)) return null;
   if (SCRIPTURE_REF_RE.test(candidate)) return null;
+  // Scripture quoted with NO reference anywhere near it — most often the
+  // sermon's own title, which is frequently a verse ("I am making all things
+  // new" = Revelation 21:5). These are God speaking in the first person or a
+  // prophetic formula; attributing them to the pastor is worse than dropping
+  // a few real lines.
+  if (DIVINE_SPEECH_RE.test(candidate)) return null;
   if (URL_RE.test(candidate)) return null;
   if (NAMED_SOURCE_RE.test(candidate)) return null;
   if (SENSITIVE_RE.test(candidate)) return null;
