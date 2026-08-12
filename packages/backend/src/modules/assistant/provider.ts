@@ -360,10 +360,13 @@ export class FakeAiProvider implements AiProvider {
     }
     if (/daily liturgy/i.test(input.system)) {
       return Promise.resolve(JSON.stringify({
-        morning: { line: "Rise — his mercies are new for you this morning; meet him before the day meets you.", scripture: "Lamentations 3:22-23" },
+        sunrise: { line: "Before the world has your attention, give the first word of this day to the God who is already awake with you. His mercies are new this morning — meet him here, before the noise, before anyone else asks anything of you.", scripture: "Lamentations 3:22-23" },
+        morning: { line: "Whatever your hands find to do this morning, do it as worship, not as burden — he sees the ordinary work and calls it holy.", scripture: "Colossians 3:23" },
         midday: { line: "Pause one breath — the Lord is near, even in the middle of the noise.", scripture: "Philippians 4:5" },
-        evening: { line: "Look back over today with honesty and grace; he was in every hour of it.", scripture: "Psalm 139:23-24" },
-        night: { line: "Lie down in peace tonight — he who keeps you neither slumbers nor sleeps.", scripture: "Psalm 4:8" },
+        afternoon: { line: "Tired is not the same as finished. Keep going — he sees the faithfulness nobody else is watching.", scripture: "Galatians 6:9" },
+        evening: { line: "Look back over today with honesty, not judgment. Where did you see him? Name it and thank him — where you failed, he already forgave; let the day close in peace, not shame.", scripture: "Psalm 139:23-24" },
+        night: { line: "Lie down in peace tonight — the One who keeps you does not slumber, does not grow tired of loving what he made.", scripture: "Psalm 121:3-4" },
+        midnight: { line: "If you're awake at this hour, you are not alone in it — the quietest hour is not too quiet for God to hear.", scripture: "Psalm 63:6" },
       }));
     }
     if (/quiz coach/i.test(input.system)) {
