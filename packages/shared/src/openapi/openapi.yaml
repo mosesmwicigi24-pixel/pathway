@@ -789,8 +789,47 @@ paths:
       tags: [growth]
       summary: The liturgy line for RIGHT NOW (EAT clock) — church season, Sunday flag, grounded in a daily scripture spine (a psalm + gospel + epistle passage) and composed with 14 days of memory so it doesn't repeat. AI-composed once per congregation per day, seven bands at once; deterministic fallback (all seven bands) when the model is down.
       responses:
-        "200": { description: "{ part, band, season, is_sunday, line, scripture_ref, art: { url, alt }, charge, verse_line: { reference, text } } — band is the 7-band clock (sunrise|morning|midday|afternoon|evening|night|midnight); `line`/`scripture_ref` are now that BAND's own composed content (sunrise/evening are a fuller 45-80 word paragraph, midday/afternoon one breath at 12-25 words). `part` is a legacy 4-value field (morning|midday|evening|night, computed from a coarser clock) kept ONLY for clients built before the seven-band composer — four of the seven band names are literally the four legacy part values, so those clients keep reading a value they understand. This endpoint still only returns ONE band's line ('right now') — a client wanting to show all seven bands for the day would need a new endpoint (not yet built) rather than this one. art is the hour's tableau photograph, disjoint from the verse card's; charge is a second authored exhortation line for the band; verse_line is curated scripture for the band, distinct from `line`/`scripture_ref`" }
+        "200": { description: "{ part, band, season, is_sunday, line, scripture_ref, art: { url, alt }, charge, verse_line: { reference, text }, recorded_audio_url, recorded_audio_duration_sec } — band is the 7-band clock (sunrise|morning|midday|afternoon|evening|night|midnight); `line`/`scripture_ref` are now that BAND's own composed content (sunrise/evening are a fuller 45-80 word paragraph, midday/afternoon one breath at 12-25 words). `part` is a legacy 4-value field (morning|midday|evening|night, computed from a coarser clock) kept ONLY for clients built before the seven-band composer — four of the seven band names are literally the four legacy part values, so those clients keep reading a value they understand. This endpoint still only returns ONE band's line ('right now') — a client wanting to show all seven bands for the day would need a new endpoint (not yet built) rather than this one. art is the hour's tableau photograph, disjoint from the verse card's; charge is a second authored exhortation line for the band; verse_line is curated scripture for the band, distinct from `line`/`scripture_ref`. recorded_audio_url/recorded_audio_duration_sec (migration 189) are non-null only when the pastor has recorded THIS band himself — the client should prefer playing that over synthesizing `line`; both null is the normal case for most bands and is never presented as missing. No admin identity or other personal data rides on these two fields — corporate content only." }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/liturgy/recordings:
+    get:
+      tags: [admin]
+      summary: Admin. The pastor's own recordings for all seven bands, in clock order — drives the admin recorder UI's "which bands already have his voice" view. Never exposed to members.
+      responses:
+        "200": { description: "{ data: [{ band, audio_url, duration_sec, recorded_at }] } — always all 7 bands; audio_url/duration_sec/recorded_at are null for a band that's still synthesised (the normal, not degraded, state)" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/liturgy/recordings/{band}:
+    post:
+      tags: [admin]
+      summary: Admin. Record (or re-record — upserts) the pastor's own voice for ONE band. Replaces whatever was there for that band; the other six bands are never touched ("per band, never all-or-nothing"). Audio lands on our own /media disk (same storage as every other upload in this app).
+      parameters:
+        - { name: band, in: path, required: true, schema: { type: string, enum: [sunrise, morning, midday, afternoon, evening, night, midnight] } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, duration_sec]
+              properties:
+                file: { type: string, format: binary }
+                duration_sec: { type: integer, minimum: 1, maximum: 900 }
+      responses:
+        "201": { description: "{ band, audio_url, duration_sec }" }
+        "400": { description: Validation failed (not audio / too large / no file / bad duration) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    delete:
+      tags: [admin]
+      summary: Admin. Remove the pastor's recording for one band — that band falls back to synthesis immediately; no other band is affected.
+      parameters:
+        - { name: band, in: path, required: true, schema: { type: string, enum: [sunrise, morning, midday, afternoon, evening, night, midnight] } }
+      responses:
+        "200": { description: "{ deleted: true }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: No recording for that band }
   /community/moments:
     get:
       tags: [community]

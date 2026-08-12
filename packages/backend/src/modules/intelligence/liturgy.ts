@@ -652,7 +652,14 @@ export class LiturgyService {
    *  a value it understands — but `line`/`scripture_ref` are now the current
    *  band's own content, the same finer clock that already drives
    *  art/charge/verse_line, so "capturing every hour of the day as it is"
-   *  is true of the headline line too, not just its trimmings. */
+   *  is true of the headline line too, not just its trimmings.
+   *
+   *  recorded_audio_url/recorded_audio_duration_sec (migration 189): when the
+   *  pastor has recorded THIS band, the client plays him instead of
+   *  synthesizing the line — both fields are simply null when he hasn't,
+   *  which is the normal, permanent, non-degraded case for most bands (see
+   *  liturgy_recordings' header comment). No recorded_by / admin identity
+   *  ever rides on this member-facing payload — corporate content only. */
   async current(congregationId: string | null, now: Date = new Date()): Promise<{
     part: LiturgyPart;
     band: DayBand;
@@ -663,15 +670,27 @@ export class LiturgyService {
     art: LiturgyArt;
     charge: string;
     verse_line: BandVerseLine;
+    recorded_audio_url: string | null;
+    recorded_audio_duration_sec: number | null;
   }> {
     const part = partOf(now);
     const band = bandOf(now);
     const season = seasonOf(now);
     const isSunday = eatDate(now).getUTCDay() === 0;
     let line = FALLBACK_LITURGY[band];
+    let recordedUrl: string | null = null;
+    let recordedDurationSec: number | null = null;
     if (congregationId) {
       const { day } = await this.composeFor(congregationId, now);
       line = day[band];
+      const rec = await this.pool.query<{ audio_url: string; duration_sec: number }>(
+        `SELECT audio_url, duration_sec FROM liturgy_recordings WHERE congregation_id = $1 AND band = $2`,
+        [congregationId, band],
+      );
+      if (rec.rows.length > 0) {
+        recordedUrl = rec.rows[0]!.audio_url;
+        recordedDurationSec = rec.rows[0]!.duration_sec;
+      }
     }
     const dayKey = ymd(eatDate(now));
     const parity = epochDay(dayKey) % 2;
@@ -685,6 +704,8 @@ export class LiturgyService {
       art: pickBandArt("liturgy", band, dayKey),
       charge: CHARGES[band][parity]!,
       verse_line: VERSE_LINES[band][parity]!,
+      recorded_audio_url: recordedUrl,
+      recorded_audio_duration_sec: recordedDurationSec,
     };
   }
 
