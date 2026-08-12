@@ -787,9 +787,9 @@ paths:
   /home/liturgy:
     get:
       tags: [growth]
-      summary: The liturgy line for RIGHT NOW (EAT clock) — part (morning|midday|evening|night), church season, Sunday flag. AI-composed once per congregation per day; deterministic fallback when the model is down.
+      summary: The liturgy line for RIGHT NOW (EAT clock) — church season, Sunday flag, grounded in a daily scripture spine (a psalm + gospel + epistle passage) and composed with 14 days of memory so it doesn't repeat. AI-composed once per congregation per day, seven bands at once; deterministic fallback (all seven bands) when the model is down.
       responses:
-        "200": { description: "{ part, band, season, is_sunday, line, scripture_ref, art: { url, alt }, charge, verse_line: { reference, text } } — band is the finer 7-part clock (sunrise|morning|midday|afternoon|evening|night|midnight) driving art/charge/verse_line; art is the hour's tableau photograph, disjoint from the verse card's; charge is a second authored exhortation line for the band; verse_line is curated scripture for the band, distinct from `line`/`scripture_ref`" }
+        "200": { description: "{ part, band, season, is_sunday, line, scripture_ref, art: { url, alt }, charge, verse_line: { reference, text } } — band is the 7-band clock (sunrise|morning|midday|afternoon|evening|night|midnight); `line`/`scripture_ref` are now that BAND's own composed content (sunrise/evening are a fuller 45-80 word paragraph, midday/afternoon one breath at 12-25 words). `part` is a legacy 4-value field (morning|midday|evening|night, computed from a coarser clock) kept ONLY for clients built before the seven-band composer — four of the seven band names are literally the four legacy part values, so those clients keep reading a value they understand. This endpoint still only returns ONE band's line ('right now') — a client wanting to show all seven bands for the day would need a new endpoint (not yet built) rather than this one. art is the hour's tableau photograph, disjoint from the verse card's; charge is a second authored exhortation line for the band; verse_line is curated scripture for the band, distinct from `line`/`scripture_ref`" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /community/moments:
     get:
@@ -820,7 +820,7 @@ paths:
   /admin/intelligence/liturgy/run:
     post:
       tags: [admin]
-      summary: Admin. Compose today's liturgy for every congregation now. Cached per congregation+day.
+      summary: Admin. Compose today's liturgy (all seven bands) for every congregation now. Cached per congregation+day — a congregation with any existing rows for the day is left as-is.
       responses:
         "200": { description: "{ composed }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
