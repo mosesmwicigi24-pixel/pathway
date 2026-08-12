@@ -10,13 +10,16 @@ import {
   seasonOf,
   partOf,
   bandOf,
+  spineFor,
+  BANDS,
   FALLBACK_LITURGY,
   LITURGY_ART,
   pickLiturgyArt,
   pickBandArt,
   type DayBand,
 } from "../src/modules/intelligence/liturgy.js";
-import { FakeAiProvider, type AiProvider } from "../src/modules/assistant/provider.js";
+import { LITURGY_SYSTEM } from "../src/modules/intelligence/prompts.js";
+import { FakeAiProvider, type AiProvider, type AiCompletion } from "../src/modules/assistant/provider.js";
 
 afterAll(async () => {
   await closeTestPool();
@@ -80,27 +83,31 @@ describe("band art — disjoint tableau photographs per card", () => {
   });
 });
 
-describe("composition + cache", () => {
+describe("composition + cache (seven bands)", () => {
   let cong: string;
   beforeEach(async () => {
     await resetDb();
     cong = await createCongregation();
   });
 
-  it("composes once, caches per congregation+day, and current() serves the clock's part", async () => {
+  it("composes seven bands once, caches per congregation+day, and current() serves the clock's band", async () => {
     const svc = new LiturgyService(testPool(), new FakeAiProvider());
     const first = await svc.composeFor(cong);
     expect(first.cached).toBe(false);
-    expect(first.day.morning.line).toContain("mercies");
+    expect(first.day.sunrise.line).toContain("mercies");
+    for (const band of BANDS) {
+      expect(typeof first.day[band].line).toBe("string");
+      expect(first.day[band].line.length).toBeGreaterThan(8);
+    }
 
     const again = await svc.composeFor(cong);
     expect(again.cached).toBe(true);
 
     const rows = await testPool().query(`SELECT count(*)::int AS n FROM liturgies`);
-    expect(rows.rows[0].n).toBe(4);
+    expect(rows.rows[0].n).toBe(7);
 
     const now = await svc.current(cong);
-    expect(["morning", "midday", "evening", "night"]).toContain(now.part);
+    expect(["morning", "midday", "evening", "night"]).toContain(now.part); // legacy field, still one of 4
     expect(now.line.length).toBeGreaterThan(10);
     expect(now.season).toBeTruthy();
     // The hour's tableau rides along, drawn from that band's curated (liturgy-card) pool.
@@ -108,7 +115,7 @@ describe("composition + cache", () => {
     expect(now.art.alt.length).toBeGreaterThan(5);
     // The finer 7-band clock rides along too: a band, a second authored charge
     // line, and a curated verse-line for that band.
-    expect(["sunrise", "morning", "midday", "afternoon", "evening", "night", "midnight"]).toContain(now.band);
+    expect(BANDS).toContain(now.band);
     expect(typeof now.charge).toBe("string");
     expect(now.charge.length).toBeGreaterThan(10);
     expect(typeof now.verse_line.reference).toBe("string");
@@ -133,18 +140,197 @@ describe("composition + cache", () => {
     }
   });
 
-  it("serves the fallback (uncached) when the model fails, then heals", async () => {
+  it("serves the fallback (uncached), covering all seven bands, when the model fails, then heals", async () => {
     const broken: AiProvider = {
       name: "broken",
       complete: () => Promise.reject(new Error("model down")),
     };
     const svc = new LiturgyService(testPool(), broken);
     const r = await svc.composeFor(cong);
-    expect(r.day.morning.line).toBe(FALLBACK_LITURGY.morning.line);
+    expect(r.day.sunrise.line).toBe(FALLBACK_LITURGY.sunrise.line);
+    for (const band of BANDS) {
+      expect(r.day[band].line.length).toBeGreaterThan(8);
+      expect(r.day[band].scripture).toBeTruthy();
+    }
     const rows = await testPool().query(`SELECT count(*)::int AS n FROM liturgies`);
     expect(rows.rows[0].n).toBe(0); // fallback is never cached
 
     const healed = await new LiturgyService(testPool(), new FakeAiProvider()).composeFor(cong);
     expect(healed.cached).toBe(false); // composed fresh now that the model is back
+  });
+});
+
+describe("scripture spine", () => {
+  const REF_RE = /^([1-3] )?[A-Za-z]+ \d+:\d+(-\d+)?$/;
+
+  it("is deterministic for a given day", () => {
+    const a = spineFor("2026-07-13");
+    const b = spineFor("2026-07-13");
+    expect(a).toEqual(b);
+  });
+
+  it("every reference is well-formed and every passage carries real text", () => {
+    const days = Array.from({ length: 60 }, (_, i) => {
+      const d = new Date(Date.UTC(2026, 0, 1 + i * 6)).toISOString().slice(0, 10);
+      return spineFor(d);
+    });
+    for (const spine of days) {
+      for (const passage of [spine.psalm, spine.gospel, spine.epistle]) {
+        expect(passage.reference).toMatch(REF_RE);
+        expect(passage.text.length).toBeGreaterThan(15);
+        expect(passage.text.trim()).toBe(passage.text); // no stray whitespace
+      }
+    }
+  });
+
+  it("does not repeat within a long (year-scale) window — not a 7-day loop", () => {
+    const WINDOW_DAYS = 400; // > 1 year of days; comfortably beyond a week
+    const seen = new Set<string>();
+    for (let i = 0; i < WINDOW_DAYS; i++) {
+      const d = new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10);
+      const s = spineFor(d);
+      const key = `${s.psalm.reference}|${s.gospel.reference}|${s.epistle.reference}`;
+      expect(seen.has(key)).toBe(false); // the full triple must be new
+      seen.add(key);
+    }
+    expect(seen.size).toBe(WINDOW_DAYS);
+
+    // A literal 7-day loop would repeat the whole triple every week — assert
+    // the spine one week later is NOT the same as today's.
+    const day0 = spineFor("2026-03-01");
+    const day7 = spineFor("2026-03-08");
+    expect(day0).not.toEqual(day7);
+  });
+});
+
+describe("memory — prior lines actually reach the prompt", () => {
+  let cong: string;
+  beforeEach(async () => {
+    await resetDb();
+    cong = await createCongregation();
+  });
+
+  it("feeds the last 14 days' composed lines to the model, not just a rule about them", async () => {
+    const dayDate = "2026-07-20"; // composeFor's target EAT day
+    const markerA = "MARKER_LINE_ALPHA_this exact sentence must appear in the prompt payload";
+    const markerB = "MARKER_LINE_BETA_this exact sentence must appear in the prompt payload";
+    const tooOld = "MARKER_LINE_TOO_OLD_outside the 14-day window, must NOT appear";
+
+    // Seed prior days directly (as if composed earlier), including one day
+    // that's outside the 14-day lookback window.
+    await testPool().query(
+      `INSERT INTO liturgies (congregation_id, day_date, part, body, scripture_ref, season)
+       VALUES ($1, '2026-07-18', 'morning', $2, 'Psalm 1:1', 'ordinary'),
+              ($1, '2026-07-19', 'evening', $3, 'Psalm 2:1', 'ordinary'),
+              ($1, '2026-06-01', 'morning', $4, 'Psalm 3:1', 'ordinary')`,
+      [cong, markerA, markerB, tooOld],
+    );
+
+    let captured: AiCompletion | undefined;
+    const capturing: AiProvider = {
+      name: "capturing",
+      complete: (input) => {
+        captured = input;
+        return new FakeAiProvider().complete(input);
+      },
+    };
+
+    const svc = new LiturgyService(testPool(), capturing);
+    await svc.composeFor(cong, new Date(`${dayDate}T09:00:00Z`));
+
+    expect(captured).toBeDefined();
+    const payload = captured!.messages.map((m) => m.text).join("\n");
+    // The rule in LITURGY_SYSTEM references "prior_lines" — but a rule about
+    // something the model can't see is no rule. Assert the ACTUAL lines are
+    // in the payload the model receives, not merely that the prompt talks
+    // about a rule.
+    expect(payload).toContain(markerA);
+    expect(payload).toContain(markerB);
+    expect(payload).not.toContain(tooOld); // outside the 14-day window
+    expect(payload).toContain("prior_lines");
+  });
+});
+
+describe("seven-band persistence + backward compatibility", () => {
+  let cong: string;
+  beforeEach(async () => {
+    await resetDb();
+    cong = await createCongregation();
+  });
+
+  it("persists all seven bands and re-reads them correctly", async () => {
+    const svc = new LiturgyService(testPool(), new FakeAiProvider());
+    await svc.composeFor(cong, new Date("2026-07-20T09:00:00Z"));
+
+    const rows = await testPool().query<{ part: string }>(
+      `SELECT part FROM liturgies WHERE congregation_id = $1 AND day_date = '2026-07-20' ORDER BY part`,
+      [cong],
+    );
+    const parts = rows.rows.map((r) => r.part).sort();
+    expect(parts).toEqual([...BANDS].sort());
+
+    // Re-reading via composeFor again must return the SAME content (cache hit).
+    const reread = await svc.composeFor(cong, new Date("2026-07-20T09:00:00Z"));
+    expect(reread.cached).toBe(true);
+    for (const band of BANDS) {
+      expect(reread.day[band].line).toBeTruthy();
+    }
+  });
+
+  it("a four-part legacy row (pre-migration-187 shape) still serves without crashing", async () => {
+    // Simulate data written before this migration: only the four legacy
+    // parts, no spine column populated.
+    await testPool().query(
+      `INSERT INTO liturgies (congregation_id, day_date, part, body, scripture_ref, season)
+       VALUES ($1, '2026-07-20', 'morning', 'Legacy morning line.', 'Psalm 5:1', 'ordinary'),
+              ($1, '2026-07-20', 'midday', 'Legacy midday line.', 'Psalm 6:1', 'ordinary'),
+              ($1, '2026-07-20', 'evening', 'Legacy evening line.', 'Psalm 7:1', 'ordinary'),
+              ($1, '2026-07-20', 'night', 'Legacy night line.', 'Psalm 8:1', 'ordinary')`,
+      [cong],
+    );
+
+    const svc = new LiturgyService(testPool(), new FakeAiProvider());
+    const now = new Date("2026-07-20T09:00:00Z"); // EAT midday band
+    const result = await svc.composeFor(cong, now);
+    expect(result.cached).toBe(true); // legacy rows exist → served as-is, never force-recomposed
+    expect(result.day.midday.line).toBe("Legacy midday line.");
+    // The three new bands aren't in the legacy row set — they gracefully
+    // fall back rather than throwing.
+    expect(result.day.sunrise.line).toBe(FALLBACK_LITURGY.sunrise.line);
+    expect(result.day.afternoon.line).toBe(FALLBACK_LITURGY.afternoon.line);
+    expect(result.day.midnight.line).toBe(FALLBACK_LITURGY.midnight.line);
+
+    // current() must not crash reading this legacy day either, and should
+    // serve the legacy row's own content for the band it lands in (midday).
+    const current = await svc.current(cong, now);
+    expect(current.band).toBe("midday");
+    expect(current.line).toBe("Legacy midday line.");
+    expect(["morning", "midday", "evening", "night"]).toContain(current.part);
+  });
+});
+
+describe("per-band length guidance", () => {
+  it("the prompt encodes a distinct length band for every DayBand, not one global cap", () => {
+    // Sunrise/evening earn a fuller paragraph; midday/afternoon stay one breath.
+    expect(LITURGY_SYSTEM).toContain("sunrise (45-80 words");
+    expect(LITURGY_SYSTEM).toContain("evening (45-80 words");
+    expect(LITURGY_SYSTEM).toContain("midday (12-25 words");
+    expect(LITURGY_SYSTEM).toContain("afternoon (12-25 words");
+    expect(LITURGY_SYSTEM).toContain("morning (25-45 words");
+    expect(LITURGY_SYSTEM).toContain("night (25-45 words");
+    expect(LITURGY_SYSTEM).toContain("midnight (20-40 words");
+    // Not a single uniform cap repeated seven times.
+    const distinctLengthPhrases = new Set(
+      [...LITURGY_SYSTEM.matchAll(/\d+-\d+ words/g)].map((m) => m[0]),
+    );
+    expect(distinctLengthPhrases.size).toBeGreaterThan(1);
+  });
+
+  it("the fallback set itself varies in length per band (sunrise/evening fuller, midday/afternoon terse)", () => {
+    const wc = (s: string) => s.trim().split(/\s+/).length;
+    expect(wc(FALLBACK_LITURGY.sunrise.line)).toBeGreaterThanOrEqual(40);
+    expect(wc(FALLBACK_LITURGY.evening.line)).toBeGreaterThanOrEqual(40);
+    expect(wc(FALLBACK_LITURGY.midday.line)).toBeLessThanOrEqual(25);
+    expect(wc(FALLBACK_LITURGY.afternoon.line)).toBeLessThanOrEqual(25);
   });
 });
