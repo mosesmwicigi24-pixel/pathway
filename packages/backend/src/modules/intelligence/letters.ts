@@ -303,15 +303,21 @@ export class LettersService {
     // Their own previous letters — TRUE material for continuity ("three weeks
     // ago you started Level 2...") and for theme variety. Never fabricated:
     // only ever the exact highlights/theme we already stored for them.
-    const prior = await many<{ week_of: string; theme: string | null; highlights: unknown }>(
+    // LIMIT 4, and titles included: the prompt now forbids reusing a title it
+    // already sent, which it can only obey if it can SEE them. Two weeks of
+    // history was too short a memory for exactly the case that needs it — a
+    // quiet season, where the same headline otherwise returns every week from
+    // the same unchanged facts.
+    const prior = await many<{ week_of: string; title: string | null; theme: string | null; highlights: unknown }>(
       this.pool,
-      `SELECT week_of::text, theme, highlights FROM pastoral_letters
-        WHERE user_id = $1 AND week_of < $2 ORDER BY week_of DESC LIMIT 2`,
+      `SELECT week_of::text, title, theme, highlights FROM pastoral_letters
+        WHERE user_id = $1 AND week_of < $2 ORDER BY week_of DESC LIMIT 4`,
       [userId, weekOf],
     );
     const lastTheme = prior[0]?.theme ?? null;
     const priorContext = prior.map((p) => ({
       week_of: p.week_of,
+      title: p.title,
       theme: p.theme,
       moments: Array.isArray((p.highlights as StoredHighlights | null)?.moments)
         ? (p.highlights as StoredHighlights).moments
