@@ -95,6 +95,9 @@ describe("extractQuotableLines — real staged sample text", () => {
     expect(EXCLUDED_SLUGS.has("heavenly-marriages")).toBe(true);
     expect(EXCLUDED_SLUGS.has("the-power-of-becoming")).toBe(true);
     expect(EXCLUDED_SLUGS.has("leader-without-a-title")).toBe(true);
+    expect(EXCLUDED_SLUGS.has("altars-and-covenants")).toBe(true);
+    expect(EXCLUDED_SLUGS.has("faith")).toBe(true); // near-verbatim Hebrews 11 paraphrase
+    expect(EXCLUDED_SLUGS.has("he-is-coming-like-a-thief")).toBe(true); // PDF mid-sentence line-wrap artifacts
     // A genuinely-owned document stays eligible.
     expect(EXCLUDED_SLUGS.has("great-quotes")).toBe(false);
   });
@@ -116,13 +119,13 @@ describe("extractQuotableLines — real staged sample text", () => {
       "bearing-fruits",
       "change-your-mindset",
       "destiny",
-      "faith",
+      "knowing-your-assignment",
     ].flatMap((slug) => extractQuotableLines(loadCorpusFile(slug), { title: slug, ref: slug }));
     for (const c of all) {
       const words = c.text.split(/\s+/).length;
       expect(words).toBeGreaterThanOrEqual(6);
       expect(words).toBeLessThanOrEqual(25);
-      expect(c.text).toMatch(/[.!?]$/);
+      expect(c.text).toMatch(/[.!?]["'”’]?$/); // terminal punctuation, possibly inside a closing quote mark
     }
   });
 });

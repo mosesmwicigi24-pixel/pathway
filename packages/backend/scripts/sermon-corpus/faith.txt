@@ -2,6 +2,7 @@
 # Drive file id: 11-ELq_JdMFLU32F0UTtomj5bGEUOSdt2
 # Retrieved: 2026-08-12
 # Source: owner's Google Drive "Sermons" folder (see ../CURATION.md)
+# EXCLUDED FROM QUOTE EXTRACTION: Paraphrases nearly the entirety of Hebrews 11, verse by verse, closely enough that keeping it would attribute Scripture's own content to the owner as if it were his original teaching -- the same rule that drops verbatim citation, applied to close paraphrase.
 
 Faith
 

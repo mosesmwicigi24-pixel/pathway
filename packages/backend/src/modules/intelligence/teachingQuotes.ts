@@ -37,20 +37,38 @@ export const OWNER_ATTRIBUTION = "Pastor Moses";
 
 /** Staged documents (matched by file basename, without extension) that
  *  CURATION.md's owner-approved INCLUDE list named, but that turned out on
- *  inspection not to be safe to attribute to the owner. See
- *  scripts/sermon-corpus/CURATION.md's addendum for the full reasoning
- *  behind each: two contain large unattributed excerpts from other named
- *  authors (a Piper-style sermon, a Forbes.com article, a Crossway.org
- *  book, dadabhagwan.org), one is explicitly credited to a guest speaker,
- *  and one reads as collected external aphorisms with no first-person
- *  voice. Their raw text stays staged for audit; they are simply never
- *  fed to the extractor. */
+ *  inspection not to be safe to attribute to the owner, or not to produce
+ *  usable candidates at all. See scripts/sermon-corpus/CURATION.md's
+ *  addendum for the full reasoning behind each:
+ *   - "leadership", "the-power-of-becoming", "heavenly-marriages": large
+ *     unattributed excerpts from other named authors (a Piper-style
+ *     sermon, a Forbes.com article, a Crossway.org book, dadabhagwan.org).
+ *   - "influencing-the-salt": explicitly credited to a guest speaker.
+ *   - "leader-without-a-title": collected external aphorisms, no
+ *     first-person voice.
+ *   - "altars-and-covenants": so dominated by uncited Scripture narrative,
+ *     copied theological commentary, and pagan-mythology description that
+ *     line-level filtering left in far too much (a dry run produced 236 of
+ *     801 candidates from this one 86K-character document).
+ *   - "faith": paraphrases nearly the entirety of Hebrews 11, verse by
+ *     verse, closely enough that keeping it would attribute Scripture's
+ *     own content to the owner as if it were his original teaching — the
+ *     same rule that drops verbatim citation, applied to close paraphrase.
+ *   - "he-is-coming-like-a-thief": the source PDF's text extraction hard-
+ *     wrapped mid-sentence with blank lines between wraps, so the block
+ *     splitter treats every wrap as its own paragraph — every candidate
+ *     from this file was a sentence fragment ending mid-clause.
+ *  Their raw text stays staged for audit; they are simply never fed to
+ *  the extractor. */
 export const EXCLUDED_SLUGS: ReadonlySet<string> = new Set([
   "leadership",
   "the-power-of-becoming",
   "heavenly-marriages",
   "influencing-the-salt",
   "leader-without-a-title",
+  "altars-and-covenants",
+  "faith",
+  "he-is-coming-like-a-thief",
 ]);
 
 /** Verbatim strings identified as another author's words that survived
@@ -71,7 +89,10 @@ const KNOWN_NON_ORIGINAL_LINES: readonly string[] = [
 // the reference right next to the quoted text). Name-agnostic on purpose:
 // the corpus has misspelled book names ("Mathew", "Hebrew") that a fixed
 // book list would miss.
-const SCRIPTURE_REF_RE = /\b[1-3]?\s?[A-Z][A-Za-z]+\.?\s+\d{1,3}:\d{1,3}(?:[-–]\d{1,3})?\b/;
+// Two citation styles appear in this corpus: "Book C:V" (most of it) and,
+// occasionally, "Book C vs V" / "Book C v V" ("Mathew 24 vs 37").
+const SCRIPTURE_REF_RE =
+  /\b[1-3]?\s?[A-Z][A-Za-z]+\.?\s+\d{1,3}(?::\s?\d{1,3}(?:\s?[-–]\s?\d{1,3})?|\s+vs?\.?\s?\d{1,3})\b/;
 // Any hyperlink (markdown or bare) is a strong signal of copied/cited
 // material — this also happens to catch most of the theological-commentary
 // blocks identified during review (biblegateway.com, biblestudytools.com,
@@ -86,7 +107,8 @@ const NAMED_SOURCE_RE = /\b(testimony|speaker:|personal testimony)\b/i;
 // named, since several INCLUDEd documents (Gates and Doors, Gatekeepers,
 // Covenants, Altars and Covenants, Hearing from the Lord: Dreams) share
 // the same witchcraft/curses/demonic-covenant subject matter.
-const SENSITIVE_RE = /\b(witch\w*|demon\w*|curs(e|ed|es|ing)\b|occult\w*|divination\w*|diviners?|sorcer\w*|satan\w*|spell(s|ed|ing)?\b|medium\w*|spiritist\w*|molek\w*|possession\w*|exorcis\w*)\b/i;
+const SENSITIVE_RE =
+  /\b(witch\w*|demon\w*|curs(e|ed|es|ing)\b|occult\w*|divination\w*|diviners?|sorcer\w*|satan\w*|spell(s|ed|ing)?\b|medium\w*|spiritist\w*|molek\w*|possession\w*|exorcis\w*|altar\w*|territorial\w*|territory|principalit\w*|stronghold\w*|ancestral\w*|generational\w*|magic\w*)\b/i;
 // A light net for the specific private individuals named in this corpus
 // (found during the Drive review) — not a general name-recognition system.
 const PRIVATE_NAME_RE = /\b(Wairimu|Nganga|Jackline|Lennie|Shelley Zalis|Robyn Ward)\b/;
@@ -120,7 +142,8 @@ const SENTENCE_SPLIT_RE = /(?<=[.!?])\s+(?=[A-Z])/;
 // reference repeated in it — SCRIPTURE_REF_RE alone can't see that, so a
 // reference-only block poisons (drops) the block that immediately follows
 // it. See the "true vine" regression this caught in teachingQuotes.test.ts.
-const REFERENCE_ONLY_BLOCK_RE = /^[1-3]?\s?[A-Z][A-Za-z]+\.?\s+\d{1,3}:\d{1,3}(?:[-–]\d{1,3})?(?:,\s?\d{1,3}(?::\d{1,3})?)?(?:\s*[A-Za-z]{2,6}\.?)?$/;
+const REFERENCE_ONLY_BLOCK_RE =
+  /^[1-3]?\s?[A-Z][A-Za-z]+\.?\s+\d{1,3}:\s?\d{1,3}(?:\s?[-–]\s?\d{1,3})?(?:,\s?\d{1,3}(?::\d{1,3})?)?(?:\s*[A-Za-z]{2,6}\.?)?$/;
 
 export interface QuoteCandidate {
   text: string;
@@ -156,10 +179,17 @@ export function extractQuotableLines(text: string, source: QuoteSource): QuoteCa
       continue; // too short to be a candidate anyway, but be explicit
     }
 
+    // A raw line carrying a Scripture reference ANYWHERE in it is treated
+    // as Scripture-tainted in its entirety, not just the sentence fragment
+    // that happens to contain the reference token — this pastor routinely
+    // writes "Book C:V - <quoted verse text>. <more quoted verse text>."
+    // as one continuous line, and sentence-splitting it would otherwise
+    // separate the reference from the very quote it's citing, leaking the
+    // rest of the verse as if it were an uncited original line.
     const fragments = block
       .split("\n")
       .map(stripMarkup)
-      .filter((l) => l.length > 0)
+      .filter((l) => l.length > 0 && !SCRIPTURE_REF_RE.test(l))
       .flatMap((l) => l.split(SENTENCE_SPLIT_RE));
 
     let buffer = "";
@@ -177,15 +207,48 @@ export function extractQuotableLines(text: string, source: QuoteSource): QuoteCa
   return out;
 }
 
+// An ellipsis ("...", "…") means the source itself elided text — almost
+// always a truncated Scripture quotation carried over from a preceding
+// verse fragment, never a complete standalone thought.
+const ELLIPSIS_RE = /\.\.\.|…/;
+// A trailing bare number right before the final period ("...persecution
+// 36.") is a leaked verse/footnote number from Scripture commentary that
+// wasn't caught as a Book C:V reference.
+const TRAILING_VERSE_NUMBER_RE = /\s\d{1,3}\.$/;
+// A couple of specific dark phrases (child sacrifice, in this corpus
+// always a paraphrase of Deuteronomy 18) that survive because they don't
+// contain any single SENSITIVE_RE trigger word on their own.
+const KNOWN_SENSITIVE_PHRASES: readonly string[] = [
+  "sacrifices his son or daughter in the fire",
+  "sacrifices their son or daughter in the fire",
+];
+
 function finalizeCandidate(raw: string, source: QuoteSource): QuoteCandidate | null {
   const candidate = raw.replace(/\s+/g, " ").trim();
   if (!candidate) return null;
+  // A trailing comma or colon means the buffer ran out of fragments to
+  // merge before the thought actually finished (comma) or is a bare list
+  // introduction ("There are some of us who:") — either way it's not a
+  // complete standalone line, and papering over it with an appended
+  // period would misrepresent it as one.
+  if (/[,:;]$/.test(candidate)) return null;
+  // A candidate that starts mid-sentence (lowercase) is a broken
+  // continuation, not something that could plausibly open a surfaced quote.
+  if (/^[a-z]/.test(candidate)) return null;
+  // A candidate that starts with a bare digit is a leaked verse/list
+  // number (e.g. a bold "**15**" verse marker whose markup was stripped
+  // but the number itself wasn't followed by "." or ")" for the
+  // numbered-list stripper to catch).
+  if (/^\d/.test(candidate)) return null;
   if (SCRIPTURE_REF_RE.test(candidate)) return null;
   if (URL_RE.test(candidate)) return null;
   if (NAMED_SOURCE_RE.test(candidate)) return null;
   if (SENSITIVE_RE.test(candidate)) return null;
   if (PRIVATE_NAME_RE.test(candidate)) return null;
+  if (ELLIPSIS_RE.test(candidate)) return null;
+  if (TRAILING_VERSE_NUMBER_RE.test(candidate)) return null;
   if (KNOWN_NON_ORIGINAL_LINES.some((known) => candidate.includes(known))) return null;
+  if (KNOWN_SENSITIVE_PHRASES.some((known) => candidate.toLowerCase().includes(known))) return null;
 
   const wordCount = candidate.split(/\s+/).length;
   if (wordCount < MIN_WORDS || wordCount > MAX_WORDS) return null;
@@ -195,7 +258,21 @@ function finalizeCandidate(raw: string, source: QuoteSource): QuoteCandidate | n
   const letters = candidate.replace(/[^A-Za-z]/g, "");
   if (letters.length > 8 && letters === letters.toUpperCase()) return null;
 
-  const text = /[.!?]$/.test(candidate) ? candidate : `${candidate}.`;
+  // Title Case Heading Fragments ("Authority Over the Devil Through the
+  // Blood of Jesus") read as bullet-list section titles, not something a
+  // person actually said — if most content words (excluding the first,
+  // which is capitalized regardless) start uppercase, treat it as one.
+  const words = candidate.replace(/[^\w\s]/g, "").split(/\s+/).filter(Boolean).slice(1);
+  const eligible = words.filter((w) => w.length > 2);
+  if (eligible.length >= 4) {
+    const capitalized = eligible.filter((w) => /^[A-Z]/.test(w)).length;
+    if (capitalized / eligible.length > 0.6) return null;
+  }
+
+  // The candidate already ends with terminal punctuation, possibly inside
+  // a closing quote mark ('..."'); only append a period when there's
+  // truly none, so we never produce a doubled '."."'.
+  const text = /[.!?]["'”’]?$/.test(candidate) ? candidate : `${candidate}.`;
   return { text, sourceTitle: source.title, sourceRef: source.ref };
 }
 

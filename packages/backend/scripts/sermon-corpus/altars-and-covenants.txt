@@ -2,6 +2,7 @@
 # Drive file id: 1Oap790UGC7CVYB9Z7pz0UcY9W8C9Htia
 # Retrieved: 2026-08-12
 # Source: owner's Google Drive "Sermons" folder (see ../CURATION.md)
+# EXCLUDED FROM QUOTE EXTRACTION: Not a copyright problem — a volume/quality problem. A dry-run extraction pulled 236 of 801 candidates (nearly 30%) from this one 86K-character document alone: mostly uncited Scripture narrative, the same copied 'Ten brief observations' commentary found in Holy Communion/Covenants, and pagan-mythology description. Excluded wholesale rather than keyword-filtering a document this saturated.
 
 Dealing with ALTARS
 

@@ -2,6 +2,7 @@
 # Drive file id: 1tssH8Qi6gTxyYZ_aO4WbSUEcbWlTvkzi
 # Retrieved: 2026-08-12
 # Source: owner's Google Drive "Sermons" folder (see ../CURATION.md)
+# EXCLUDED FROM QUOTE EXTRACTION: The source PDF's text extraction hard-wrapped mid-sentence with blank lines between wraps, so the block splitter treats every wrap as its own paragraph -- every extracted candidate from this file was a sentence fragment ending mid-clause.
 
 Understanding times and seasons of prophesies: The rapture
 
