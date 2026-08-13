@@ -22,9 +22,19 @@
 // the four legacy part values, so a client that only ever reads those four
 // keeps working unchanged — the other three (sunrise/afternoon/midnight) are
 // purely additive. See rowsToDay()/composeFor() for exactly how.
+//
+// sermon-quotes (Step 4): a THIRD input alongside the spine and memory —
+// see teachingQuotes.ts. A small, rotating, not-recently-used selection of
+// the owner's own short teaching lines is offered to the composer; per
+// LITURGY_SYSTEM's QUOTES RULE it weaves one in ONLY when it genuinely fits
+// (verbatim, plainly attributed) and otherwise ignores the list entirely.
+// The library is a pure enhancement: selectQuoteCandidates()/markQuotesUsed()
+// are both best-effort, and an empty (or missing) teaching_quotes table
+// still composes a full seven-band day exactly as before.
 import type { Pool } from "pg";
 import type { AiProvider } from "../assistant/provider.js";
 import { LITURGY_SYSTEM } from "./prompts.js";
+import { markQuotesUsed, selectQuoteCandidates, type TeachingQuote } from "./teachingQuotes.js";
 
 /** The legacy four-window clock label — kept ONLY for current().part, which
  *  existing clients read expecting exactly these four strings. Computed by
@@ -598,8 +608,18 @@ export class LiturgyService {
 
     const spine = spineFor(dayDate);
     const priorLines = await this.priorLines(congregationId, dayDate);
+    // Best-effort: the quote library is an enhancement, never a dependency
+    // — a failure fetching candidates (or an empty/missing table) must
+    // still produce a full seven-band day, same as today.
+    let quoteCandidates: TeachingQuote[] = [];
+    try {
+      quoteCandidates = await selectQuoteCandidates(this.pool, { limit: 6 });
+    } catch {
+      /* proceed without quotes */
+    }
 
     let day: LiturgyDay;
+    let quoteIdsUsed: string[] = [];
     try {
       const raw = await this.provider.complete({
         system: LITURGY_SYSTEM,
@@ -615,6 +635,14 @@ export class LiturgyService {
             // against (a rule about lines the model can't see is no rule at
             // all — see the header comment on this file).
             prior_lines: priorLines,
+            // The church's own teaching lines that may fit today — see the
+            // QUOTES RULE in LITURGY_SYSTEM: woven in only when it genuinely
+            // fits, verbatim with attribution, or ignored entirely.
+            quotes: quoteCandidates.map((q) => ({
+              id: q.quoteId,
+              text: q.quoteText,
+              source: q.sourceTitle,
+            })),
           }),
         }],
         // Tier: deep. Volume here is the lowest in the whole intelligence layer
@@ -630,7 +658,14 @@ export class LiturgyService {
         maxTokens: 3200,
         feature: "daily_liturgy",
       });
-      day = this.parse(raw);
+      const parsed = this.parse(raw);
+      day = parsed.day;
+      // Trust but verify: only mark ids the model was ACTUALLY offered
+      // today as used — a hallucinated or stale id just silently matches
+      // no row (see markQuotesUsed), but filtering here keeps rotation
+      // bookkeeping honest even if that ever changes.
+      const offered = new Set(quoteCandidates.map((q) => q.quoteId));
+      quoteIdsUsed = parsed.quoteIdsUsed.filter((id) => offered.has(id));
     } catch {
       return { day: FALLBACK_LITURGY, cached: false }; // serve, don't cache — retry next call
     }
@@ -643,6 +678,10 @@ export class LiturgyService {
         [congregationId, dayDate, band, day[band].line, day[band].scripture, season, JSON.stringify(spine)],
       );
     }
+    // Best-effort rotation bookkeeping — never lets a usage-tracking hiccup
+    // undo a liturgy that already composed and cached successfully (see
+    // markQuotesUsed's own internal try/catch).
+    await markQuotesUsed(this.pool, quoteIdsUsed);
     return { day, cached: false };
   }
 
@@ -734,16 +773,22 @@ export class LiturgyService {
     return day;
   }
 
-  /** Strict-JSON parse with shape checks; throws to trigger the fallback. */
-  private parse(raw: string): LiturgyDay {
+  /** Strict-JSON parse with shape checks; throws to trigger the fallback.
+   *  Also pulls out any "quote_id"s the model reported using (see the
+   *  QUOTES RULE in LITURGY_SYSTEM) — kept OUT of LiturgyLine/LiturgyDay
+   *  on purpose: it's composeFor()'s own rotation bookkeeping, not part of
+   *  the client-facing liturgy shape. */
+  private parse(raw: string): { day: LiturgyDay; quoteIdsUsed: string[] } {
     const cleaned = raw.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-    const obj = JSON.parse(cleaned) as Record<string, { line?: unknown; scripture?: unknown }>;
+    const obj = JSON.parse(cleaned) as Record<string, { line?: unknown; scripture?: unknown; quote_id?: unknown }>;
     const day = {} as LiturgyDay;
+    const quoteIdsUsed: string[] = [];
     for (const band of BANDS) {
       const p = obj[band];
       if (!p || typeof p.line !== "string" || p.line.length < 8) throw new Error(`liturgy band missing: ${band}`);
       day[band] = { line: p.line, scripture: typeof p.scripture === "string" ? p.scripture : null };
+      if (typeof p.quote_id === "string" && p.quote_id.length > 0) quoteIdsUsed.push(p.quote_id);
     }
-    return day;
+    return { day, quoteIdsUsed };
   }
 }
