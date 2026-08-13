@@ -6,6 +6,7 @@
 // of logs nobody reads.
 import type { Pool } from "pg";
 import { many } from "../../db/db.js";
+import { background } from "../../db/background.js";
 import type { AiUsageEvent, AiUsageRecorder } from "./provider.js";
 
 /** Rough $/1M-token list prices (Anthropic first-party, cached at write time)
@@ -45,11 +46,12 @@ export class AiUsageService {
   /** A closure suitable for AnthropicProvider/GeminiProvider/GroqProvider's
    *  optional recordUsage — fire-and-forget, swallows its own errors so a
    *  telemetry hiccup can never surface to (or slow down) the member/leader
-   *  waiting on the actual completion. */
+   *  waiting on the actual completion. Tracked via background() so shutdown and
+   *  the test harness can drain it instead of racing it (db/background.ts). */
   recorder(): AiUsageRecorder {
     return (event: AiUsageEvent) => {
-      void this.pool
-        .query(
+      background(
+        this.pool.query(
           `INSERT INTO ai_usage_events
              (feature, tier, provider, model, input_tokens, output_tokens, latency_ms, success, error_code)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -64,10 +66,8 @@ export class AiUsageService {
             event.success,
             event.errorCode ?? null,
           ],
-        )
-        .catch(() => {
-          /* telemetry must never break a completion, or the process */
-        });
+        ),
+      );
     };
   }
 
