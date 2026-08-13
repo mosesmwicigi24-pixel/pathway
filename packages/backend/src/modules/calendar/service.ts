@@ -55,6 +55,21 @@ interface ExceptionRow {
 
 /** Rolling window every materialize/reconcile pass covers (EVENTS_ARCHITECTURE §2). */
 const RECONCILE_WINDOW_DAYS = 90;
+/**
+ * How far into the PAST a default materialize pass reaches. The rolling window was
+ * strictly forward ([now, now+90d]), which meant an occurrence that was never
+ * materialized while it was still in the future could never be materialized at all:
+ * a back-dated event (an admin recording last Sunday's service after the fact), an
+ * imported/restored series, or any occurrence whose series was created after it
+ * happened. Those occurrences project fine on `/calendar` (rule expansion is
+ * window-driven) but have no `events` row, and every past-facing reader — the
+ * command center's "recent occurrences" list, the attendance roster, the QR panel,
+ * the CSV export — reads materialized rows, so they silently showed nothing.
+ * Materializing backwards is safe: it is a pure `DO NOTHING` upsert, reminders are
+ * scheduled per-RSVP (never by scanning `events`), and reconcile's refresh/prune
+ * pass stays forward-only so history is never rewritten or retro-cancelled.
+ */
+const MATERIALIZE_BACKFILL_DAYS = 90;
 /** Default RSVP reminder offsets (minutes before start) — today's T-24h / T-1h. */
 const DEFAULT_REMINDER_OFFSETS_MIN = [1440, 60];
 
@@ -759,41 +774,47 @@ export class CalendarService {
   /**
    * Realize occurrences within [from, to] into `events` (idempotent upsert,
    * DO NOTHING). Window-parameterized — there is NO fixed horizon (§2); the
-   * default window is a rolling [now, now+90d]. Drafts and paused series are
-   * never materialized.
+   * default window is a rolling [now−90d, now+90d]: forward so upcoming
+   * occurrences exist before anyone asks, backward so occurrences that were
+   * never materialized while future still get a row (see
+   * MATERIALIZE_BACKFILL_DAYS). Drafts and paused series are never materialized.
    */
-  async materialize(seriesId: string, from: Date = new Date(), to?: Date): Promise<{ created: number }> {
-    const windowTo = to ?? new Date(from.getTime() + RECONCILE_WINDOW_DAYS * 86_400_000);
+  async materialize(seriesId: string, from?: Date, to?: Date): Promise<{ created: number }> {
+    const now = Date.now();
+    const windowFrom = from ?? new Date(now - MATERIALIZE_BACKFILL_DAYS * 86_400_000);
+    // An explicitly-passed `from` keeps the old "…+90d" span; the default (past)
+    // window still reaches 90 days past *now*, not 90 days past the backfill start.
+    const windowTo = to ?? new Date(Math.max(windowFrom.getTime(), now) + RECONCILE_WINDOW_DAYS * 86_400_000);
     const s = await this.seriesForMaterialize(seriesId);
     if (!s || s.status !== "active" || s.is_paused) return { created: 0 };
     const exceptions = (await this.exceptionsBySeries([seriesId])).get(seriesId) ?? new Map<number, ExceptionRow>();
-    const expected = this.expectedOccurrences(s, exceptions, from, windowTo);
-    let created = 0;
-    for (const occ of expected.values()) {
-      const eventId = occurrenceId(seriesId, occ.original);
-      const r = await this.pool.query(
-        `INSERT INTO events (event_id, congregation_id, cell_group_id, title, occurs_at, qr_secret, series_id, occurrence_start,
-                             rsvp_enabled, qr_enabled, allow_manual_checkin, checkin_opens_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-         ON CONFLICT (series_id, occurrence_start) DO NOTHING`,
-        [
-          eventId,
-          s.congregation_id,
-          s.cell_group_id,
-          s.title,
-          occ.actual,
-          randomBytes(24).toString("hex"),
-          seriesId,
-          occ.original,
-          s.rsvp_enabled ?? true,
-          s.qr_enabled ?? true,
-          s.manual_checkin_enabled ?? true,
-          this.opensAtFor(s, occ.actual),
-        ],
-      );
-      created += r.rowCount ?? 0;
-    }
-    return { created };
+    const expected = [...this.expectedOccurrences(s, exceptions, windowFrom, windowTo).values()];
+    if (expected.length === 0) return { created: 0 };
+    // One batched insert — the window is now twice as wide, and a per-occurrence
+    // round-trip on every reader's ensure-materialize (homeEvents, rosters) was
+    // already the expensive part of this path.
+    const r = await this.pool.query(
+      `INSERT INTO events (event_id, congregation_id, cell_group_id, title, occurs_at, qr_secret, series_id, occurrence_start,
+                           rsvp_enabled, qr_enabled, allow_manual_checkin, checkin_opens_at)
+       SELECT * FROM unnest($1::varchar[], $2::uuid[], $3::uuid[], $4::varchar[], $5::timestamptz[], $6::varchar[],
+                            $7::uuid[], $8::timestamptz[], $9::boolean[], $10::boolean[], $11::boolean[], $12::timestamptz[])
+       ON CONFLICT (series_id, occurrence_start) DO NOTHING`,
+      [
+        expected.map((occ) => occurrenceId(seriesId, occ.original)),
+        expected.map(() => s.congregation_id),
+        expected.map(() => s.cell_group_id),
+        expected.map(() => s.title),
+        expected.map((occ) => occ.actual),
+        expected.map(() => randomBytes(24).toString("hex")),
+        expected.map(() => seriesId),
+        expected.map((occ) => occ.original),
+        expected.map(() => s.rsvp_enabled ?? true),
+        expected.map(() => s.qr_enabled ?? true),
+        expected.map(() => s.manual_checkin_enabled ?? true),
+        expected.map((occ) => this.opensAtFor(s, occ.actual)),
+      ],
+    );
+    return { created: r.rowCount ?? 0 };
   }
 
   /**
@@ -818,7 +839,12 @@ export class CalendarService {
     // stops the forward-looking projection — migration 47's contract).
     if (!s || s.status !== "active" || s.is_paused) return { created: 0, refreshed: 0, pruned: 0 };
     const to = new Date(now.getTime() + days * 86_400_000);
-    const { created } = await this.materialize(seriesId, now, to);
+    // Materialize over [now−backfill, now+days] so the nightly sweep also heals
+    // series whose occurrences were never realized while they were still future
+    // (back-dated creation, import/restore). The refresh + prune pass below stays
+    // forward-only from `now`: past rows are history — never re-timed, never
+    // pruned, and never retro-notified as "cancelled".
+    const { created } = await this.materialize(seriesId, new Date(now.getTime() - MATERIALIZE_BACKFILL_DAYS * 86_400_000), to);
 
     const exceptions = (await this.exceptionsBySeries([seriesId])).get(seriesId) ?? new Map<number, ExceptionRow>();
     const expected = this.expectedOccurrences(s, exceptions, now, to);
@@ -1361,7 +1387,9 @@ export class CalendarService {
           AND congregation_id = $1`,
       [congregationId],
     );
-    for (const f of flagged) await this.materialize(f.series_id);
+    // Forward-only window on this hot path: Home renders `occurs_at >= now()`, so
+    // backfilling past occurrences here would be pure work for rows it never shows.
+    for (const f of flagged) await this.materialize(f.series_id, new Date());
     return many(
       this.pool,
       `SELECT e.event_id AS occurrence_id, e.series_id, e.title, s.location AS venue, e.occurs_at AS starts_at,
