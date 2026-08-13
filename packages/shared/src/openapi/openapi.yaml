@@ -1698,10 +1698,15 @@ paths:
         "422": { $ref: "#/components/responses/Unprocessable" }
 
   # --- Multiplier / admin portal (§3.3) ---
-  /cohorts/{cell_id}/members:
+  /cells/{cell_id}/members:
     get:
       tags: [portal]
-      summary: Cohort members sorted by e_score asc; scoped to caller's leader_assignments.
+      summary: A cell's members sorted by e_score asc; scoped to caller's leader_assignments.
+      description: >-
+        Canonical path. `/cohorts/{cell_id}/members` is the identical handler under the
+        pre-rename noun, kept for portal and iPad builds already released. The entity is
+        a cell (`cell_groups`); "cohort" survives elsewhere in this API only in its other,
+        unrelated sense — a join-month retention cohort.
       parameters:
         - { name: cell_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: band, in: query, schema: { type: string, enum: [thriving, steady, watch, at_risk] } }
@@ -1709,7 +1714,31 @@ paths:
         - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
-          description: Cohort page (ascending by e_score)
+          description: Cell page (ascending by e_score)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/EngagementBreakdown" } }
+                  next_cursor: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /cohorts/{cell_id}/members:
+    get:
+      tags: [portal]
+      deprecated: true
+      summary: Deprecated alias of /cells/{cell_id}/members (pre-rename noun).
+      description: Identical behaviour and response. Use `/cells/{cell_id}/members`.
+      parameters:
+        - { name: cell_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: band, in: query, schema: { type: string, enum: [thriving, steady, watch, at_risk] } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Cell page (ascending by e_score)
           content:
             application/json:
               schema:

@@ -25,7 +25,7 @@ export function kpiCards(o: OverviewKpis): KpiCard[] {
     { key: "certificates_this_month", label: "Certificates this month", value: n(o.certificates_this_month), tone: "neutral" },
     { key: "checked_in_this_week", label: "Checked in this week", value: n(o.checked_in_this_week), tone: "neutral" },
     { key: "modules_published", label: "Modules published", value: n(o.modules_published), tone: "neutral" },
-    { key: "cohorts_running", label: "Cohorts running", value: n(o.cohorts_running), tone: "neutral" },
+    { key: "cells_running", label: "Cells running", value: n(o.cells_running ?? o.cohorts_running), tone: "neutral" },
   ];
 }
 
