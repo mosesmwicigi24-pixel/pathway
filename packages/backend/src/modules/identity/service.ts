@@ -482,6 +482,30 @@ export class IdentityService {
         `INSERT INTO notification_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING`,
         [created.user_id],
       );
+      // Registering IS joining the pathway. Until 2026-08-14 it was not: the
+      // only code that created an enrollment was POST /v1/me/onboarding, and
+      // `SELECT count(*) FROM audit_log WHERE action='user.onboarded'` returned
+      // 0 in production — no client has ever called it. Every enrollment that
+      // exists was minted by a human in the portal via enrollment.start_set.
+      //
+      // So a member who downloaded the app and signed up got an account and no
+      // pathway, silently, and waited for an admin who was never told they were
+      // waiting. Twenty-eight of them, the longest for 42 days (migration 193
+      // is the backfill). An account with no enrollment is not a state this
+      // product has any meaning for, so it must not be reachable.
+      //
+      // Level 1 / active is the ordinary entry point; a leader can still set a
+      // different start level afterwards through the portal, which writes
+      // start_level / start_module_sequence and moves current_level with it.
+      // Same transaction as the user row: either a member exists with a pathway,
+      // or they do not exist.
+      const enrollment = await one<{ enrollment_id: string }>(
+        c,
+        `INSERT INTO enrollments (user_id, current_level, state) VALUES ($1, 1, 'active')
+         RETURNING enrollment_id`,
+        [created.user_id],
+      );
+      await recordChange(c, "enrollments", enrollment.enrollment_id, created.user_id, "upsert");
       await audit(c, created.user_id, "user.registered", "users", created.user_id, { self_signup: true });
       return created;
     });
