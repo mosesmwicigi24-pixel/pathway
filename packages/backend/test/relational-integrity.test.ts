@@ -32,10 +32,24 @@ describe("the unplaced member still gets a real liturgy", () => {
     // something distinguishable to inherit.
     await svc().composeFor(home, now);
 
+    // Stamp the composed row with a sentinel. The original assertion here was
+    // `not.toBe(FALLBACK_LITURGY[band].line)`, which only held while the fake
+    // AI provider happened to generate something different from the hardcoded
+    // constant for whatever band the clock was in when the suite ran — so the
+    // test passed in the afternoon and failed in the evening. A sentinel proves
+    // the actual claim (the unplaced member READS THE DEFAULT CONGREGATION'S
+    // ROW) without depending on generated content at all.
+    const sentinel = "SENTINEL composed line for the default congregation";
+    await testPool().query(
+      `UPDATE liturgies SET body = $1 WHERE congregation_id = $2 AND part = $3 AND day_date = current_date`,
+      [sentinel, home, bandOf(now)],
+    );
+
     const unplaced = await svc().current(null, now);
     const placed = await svc().current(home, now);
 
-    expect(unplaced.line).toBe(placed.line);
+    expect(placed.line).toBe(sentinel);
+    expect(unplaced.line).toBe(sentinel);
     expect(unplaced.line).not.toBe(FALLBACK_LITURGY[bandOf(now)].line);
   });
 
