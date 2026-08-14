@@ -969,12 +969,16 @@ export class AdminOpsService {
     gender: z.enum(AdminOpsService.GENDERS).optional(),
     programme: z.enum(AdminOpsService.PROGRAMMES).optional(),
     country_code: z.string().trim().length(2).toUpperCase().optional(),
+    // Who is still waiting for a cell. Twenty-eight members sat unplaced for up
+    // to 42 days because nothing in the portal could express this question —
+    // see migration 193 and the 2026-08-14 audit.
+    placement: z.enum(["awaiting", "placed"]).optional(),
     limit: z.coerce.number().int().min(1).max(200).default(50),
     cursor: z.string().uuid().optional(), // keyset: last user_id of the prior page
   });
 
   /** Congregation-wide member list for the ERP Members screen. */
-  async listMembers(q: z.infer<typeof AdminOpsService.ListMembers>): Promise<{ data: unknown[]; next_cursor: string | null }> {
+  async listMembers(q: z.infer<typeof AdminOpsService.ListMembers>): Promise<{ data: unknown[]; next_cursor: string | null; awaiting_placement: number; longest_wait_days: number }> {
     const params: unknown[] = [];
     const where: string[] = [`u.role = 'Student'`, `u.deleted_at IS NULL`];
     if (q.search) {
@@ -1005,6 +1009,8 @@ export class AdminOpsService {
       params.push(q.country_code);
       where.push(`u.country_code = $${params.length}`);
     }
+    if (q.placement === "awaiting") where.push(`u.cell_group_id IS NULL`);
+    if (q.placement === "placed") where.push(`u.cell_group_id IS NOT NULL`);
     if (q.cursor) {
       params.push(q.cursor);
       where.push(`u.user_id > $${params.length}::uuid`);
@@ -1038,7 +1044,22 @@ export class AdminOpsService {
     const hasMore = rows.length > q.limit;
     const page = hasMore ? rows.slice(0, q.limit) : rows;
     const last = page[page.length - 1];
-    return { data: page, next_cursor: hasMore && last ? String(last.user_id) : null };
+    // Deliberately NOT subject to the caller's filters, and returned on every
+    // page: the 28 went unnoticed for six weeks because seeing them required
+    // knowing to ask. This makes the question unavoidable instead of available.
+    const awaiting = await one<{ n: number; longest_wait_days: number | null }>(
+      this.replica,
+      `SELECT count(*)::int AS n,
+              max(date_part('day', now() - u.created_at))::int AS longest_wait_days
+         FROM users u
+        WHERE u.role = 'Student' AND u.deleted_at IS NULL AND u.cell_group_id IS NULL`,
+    );
+    return {
+      data: page,
+      next_cursor: hasMore && last ? String(last.user_id) : null,
+      awaiting_placement: awaiting.n,
+      longest_wait_days: awaiting.longest_wait_days ?? 0,
+    };
   }
 
   static readonly AddMember = z

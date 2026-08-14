@@ -3262,9 +3262,19 @@ paths:
   /admin/members:
     get:
       tags: [portal]
-      summary: Admin. Congregation-wide member list (search/cell/band/level/gender/programme/country filters, keyset-paged). Each row carries a derived status ("graduated" when the lifecycle flag is set, otherwise the server-computed engagement band) plus gender/city/programme/country_code/age.
+      summary: Admin. Congregation-wide member list (search/cell/band/level/gender/programme/country/placement filters, keyset-paged). Each row carries a derived status ("graduated" when the lifecycle flag is set, otherwise the server-computed engagement band) plus gender/city/programme/country_code/age.
       responses:
-        "200": { description: Members }
+        "200":
+          description: >-
+            { data, next_cursor, awaiting_placement, longest_wait_days }.
+            `awaiting_placement` counts live Students with no cell_group_id and
+            `longest_wait_days` is the oldest such account's age in days. Both are
+            computed across the whole congregation and are deliberately NOT subject
+            to the caller's filters — they ride on every page so the queue cannot be
+            hidden by filtering to a cell. The `placement` query filter
+            (awaiting|placed) narrows the rows themselves. Added after the
+            2026-08-14 audit found 28 members unplaced for up to 42 days with no
+            surface anywhere in the portal that could express the question.
         "403": { $ref: "#/components/responses/ForbiddenScope" }
     post:
       tags: [portal]

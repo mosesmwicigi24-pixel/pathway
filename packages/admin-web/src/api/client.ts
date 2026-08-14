@@ -1606,10 +1606,12 @@ export const OpsApi = {
       gender?: Gender;
       programme?: Programme;
       country_code?: string;
+      /** "awaiting" = members with no cell yet. */
+      placement?: "awaiting" | "placed";
       cursor?: string;
       limit?: number;
     } = {},
-  ) => api.get<{ data: MemberRow[]; next_cursor: string | null }>("/admin/members", { params: q }).then((r) => r.data),
+  ) => api.get<{ data: MemberRow[]; next_cursor: string | null; awaiting_placement: number; longest_wait_days: number }>("/admin/members", { params: q }).then((r) => r.data),
   memberDetail: (userId: string) => api.get<MemberDetail>(`/admin/members/${userId}`).then((r) => r.data),
   memberResults: (userId: string) => api.get<MemberResults>(`/admin/members/${userId}/results`).then((r) => r.data),
   memberWalk: (userId: string) => api.get<{ data: WalkEvent[] }>(`/admin/members/${userId}/walk`).then((r) => r.data.data),
