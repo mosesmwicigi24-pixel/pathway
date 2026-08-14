@@ -9,6 +9,7 @@ import type { Env } from "../../config/env.js";
 import { ApiError } from "../../http/errors.js";
 import { effectivePermissions, permissionKeys } from "../../http/auth.js";
 import { many, maybeOne, one, tx, recordChange, audit } from "../../db/db.js";
+import { background } from "../../db/background.js";
 import {
   signAccessToken,
   issueRefreshToken,
@@ -90,10 +91,9 @@ export class IdentityService {
    *  (WebAuthnService) — so there is never parallel token logic. */
   async issueSession(user: UserAuthRow, deviceId?: string | null): Promise<SessionTokens> {
     // True login telemetry (leadership analytics): every minted session is a
-    // front-door entry. Fire-and-forget — a logging hiccup never blocks login.
-    void this.pool
-      .query(`INSERT INTO auth_events (user_id, kind) VALUES ($1, 'login')`, [user.user_id])
-      .catch(() => {});
+    // front-door entry. Fire-and-forget — a logging hiccup never blocks login —
+    // but tracked, so shutdown and the test harness can drain it (background.ts).
+    background(this.pool.query(`INSERT INTO auth_events (user_id, kind) VALUES ($1, 'login')`, [user.user_id]));
     const access = signAccessToken(this.env, {
       sub: user.user_id,
       role: user.role,
