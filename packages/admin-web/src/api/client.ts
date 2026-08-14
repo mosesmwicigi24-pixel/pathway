@@ -224,7 +224,9 @@ export interface OverviewKpis {
   new_members_14d: number;
   new_members_prev_14d: number;
   modules_published: number;
-  cohorts_running: number;
+  cells_running: number;
+  /** @deprecated pre-rename alias for cells_running — the server still sends both. */
+  cohorts_running?: number;
   checked_in_this_week: number;
 }
 

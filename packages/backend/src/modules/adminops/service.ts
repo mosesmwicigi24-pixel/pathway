@@ -48,11 +48,18 @@ export class AdminOpsService {
            AND created_at >= now() - interval '28 days'
            AND created_at <  now() - interval '14 days')                                       AS new_members_prev_14d,
          (SELECT count(*) FROM modules WHERE status = 'published')                             AS modules_published,
-         (SELECT count(*) FROM cell_groups)                                                    AS cohorts_running,
+         (SELECT count(*) FROM cell_groups)                                                    AS cells_running,
          (SELECT count(*) FROM attendance_logs
            WHERE checked_in_at >= date_trunc('week', now()))                                   AS checked_in_this_week`,
     );
-    return Object.fromEntries(Object.entries(row).map(([k, v]) => [k, Number(v)]));
+    const out = Object.fromEntries(Object.entries(row).map(([k, v]) => [k, Number(v)]));
+    // `cohorts_running` counted cell_groups and always had — the name was left
+    // over from the pre-rename noun, so the portal tile read "Cohorts running"
+    // over a count of cells. The field is now named for what it counts, and the
+    // old key ships alongside it because portal and iPad builds already in the
+    // wild read that key. Drop it once no released client asks for it.
+    out.cohorts_running = out.cells_running ?? 0;
+    return out;
   }
 
   /**

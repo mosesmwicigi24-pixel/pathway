@@ -719,12 +719,20 @@ export class LiturgyService {
     let line = FALLBACK_LITURGY[band];
     let recordedUrl: string | null = null;
     let recordedDurationSec: number | null = null;
-    if (congregationId) {
-      const { day } = await this.composeFor(congregationId, now);
+    // A member who has signed in but not yet joined a cell has no congregation
+    // (onboarding sets it, registration deliberately does not — see migration
+    // 190). Reading corporate content from the DEFAULT congregation is not the
+    // same as belonging to it: they still do not appear in its roster, feeds or
+    // scoped queries. It only means the front door shows the real composed day
+    // — spine, quote, the pastor's voice — instead of a hardcoded stub, for as
+    // long as they are deciding where to belong.
+    const sourceId = congregationId ?? (await this.defaultCongregationId());
+    if (sourceId) {
+      const { day } = await this.composeFor(sourceId, now);
       line = day[band];
       const rec = await this.pool.query<{ audio_url: string; duration_sec: number }>(
         `SELECT audio_url, duration_sec FROM liturgy_recordings WHERE congregation_id = $1 AND band = $2`,
-        [congregationId, band],
+        [sourceId, band],
       );
       if (rec.rows.length > 0) {
         recordedUrl = rec.rows[0]!.audio_url;
@@ -748,9 +756,42 @@ export class LiturgyService {
     };
   }
 
-  /** Nightly cron: compose today's liturgy for every congregation. */
+  /**
+   * The congregation an unplaced member reads corporate content from
+   * (migration 190). Null when no congregation is marked default — in which
+   * case current() keeps the hardcoded fallback, which is still a real
+   * liturgy, just not this church's own composed one.
+   */
+  private async defaultCongregationId(): Promise<string | null> {
+    const r = await this.pool.query<{ congregation_id: string }>(
+      `SELECT congregation_id FROM congregations WHERE is_default LIMIT 1`,
+    );
+    return r.rows[0]?.congregation_id ?? null;
+  }
+
+  /**
+   * Nightly cron: compose today's liturgy for every congregation that someone
+   * can actually read.
+   *
+   * This used to loop over EVERY congregation. An empty one had accumulated 142
+   * composed liturgies — 49% of all the composition work in the database — each
+   * one a Claude call, none of them readable by anybody, because the
+   * congregation had no members. Composition is not free and got less free when
+   * the tiers moved up.
+   *
+   * The default congregation is composed even when empty: unplaced members read
+   * their liturgy from it (migration 190), so "no members of its own" does not
+   * mean "no readers".
+   */
   async composeAll(now: Date = new Date()): Promise<number> {
-    const congs = await this.pool.query(`SELECT congregation_id FROM congregations`);
+    const congs = await this.pool.query(
+      `SELECT c.congregation_id
+         FROM congregations c
+        WHERE c.is_default
+           OR EXISTS (SELECT 1 FROM users u
+                       WHERE u.congregation_id = c.congregation_id
+                         AND u.deleted_at IS NULL)`,
+    );
     let n = 0;
     for (const c of congs.rows) {
       try {
