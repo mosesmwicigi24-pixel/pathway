@@ -769,9 +769,29 @@ export class LiturgyService {
     return r.rows[0]?.congregation_id ?? null;
   }
 
-  /** Nightly cron: compose today's liturgy for every congregation. */
+  /**
+   * Nightly cron: compose today's liturgy for every congregation that someone
+   * can actually read.
+   *
+   * This used to loop over EVERY congregation. An empty one had accumulated 142
+   * composed liturgies — 49% of all the composition work in the database — each
+   * one a Claude call, none of them readable by anybody, because the
+   * congregation had no members. Composition is not free and got less free when
+   * the tiers moved up.
+   *
+   * The default congregation is composed even when empty: unplaced members read
+   * their liturgy from it (migration 190), so "no members of its own" does not
+   * mean "no readers".
+   */
   async composeAll(now: Date = new Date()): Promise<number> {
-    const congs = await this.pool.query(`SELECT congregation_id FROM congregations`);
+    const congs = await this.pool.query(
+      `SELECT c.congregation_id
+         FROM congregations c
+        WHERE c.is_default
+           OR EXISTS (SELECT 1 FROM users u
+                       WHERE u.congregation_id = c.congregation_id
+                         AND u.deleted_at IS NULL)`,
+    );
     let n = 0;
     for (const c of congs.rows) {
       try {

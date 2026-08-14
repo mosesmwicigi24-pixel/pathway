@@ -143,3 +143,29 @@ describe("cell is the noun; cohort still resolves for shipped clients", () => {
     expect(res.body.cohorts_running).toBe(res.body.cells_running);
   });
 });
+
+describe("liturgy is composed only where someone can read it", () => {
+  it("skips a congregation with no members", async () => {
+    const populated = await createCongregation("Populated");
+    const empty = await createCongregation("Empty");
+    await createUser({ congregationId: populated, role: "Student", email: "reader@dev.local" });
+
+    const n = await svc().composeAll();
+
+    // An empty congregation had accumulated 142 composed liturgies on
+    // production — 49% of all composition, every one a paid model call that
+    // nobody could open.
+    expect(n).toBe(1);
+    const rows = await testPool().query(`SELECT congregation_id FROM liturgies WHERE congregation_id = $1`, [empty]);
+    expect(rows.rowCount).toBe(0);
+  });
+
+  it("still composes the DEFAULT congregation when it has no members of its own", async () => {
+    const home = await createCongregation("Default but empty");
+    await testPool().query(`UPDATE congregations SET is_default = true WHERE congregation_id = $1`, [home]);
+
+    // "No members" is not "no readers": every unplaced member reads from here.
+    const n = await svc().composeAll();
+    expect(n).toBe(1);
+  });
+});
