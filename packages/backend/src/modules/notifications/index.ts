@@ -30,10 +30,12 @@ export function registerNotifications(ctx: AppContext): Router {
     auth,
     handler(async (req, res) => {
       const body = parseBody(
-        z.object({ ids: z.array(z.string().uuid()).min(1).optional() }).strict(),
+        // nullish, not optional: Android's kotlinx Json sends "ids": null for
+        // mark-all — null and absent must both mean "all".
+        z.object({ ids: z.array(z.string().uuid()).min(1).nullish() }).strict(),
         req.body ?? {},
       );
-      res.json(await svc.markRead(requirePrincipal(req).userId, body.ids));
+      res.json(await svc.markRead(requirePrincipal(req).userId, body.ids ?? undefined));
     }),
   );
 

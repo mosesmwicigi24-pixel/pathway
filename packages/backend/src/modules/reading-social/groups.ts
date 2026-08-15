@@ -119,8 +119,10 @@ export class ReadingSocialService {
 
   static readonly CreateGroup = z.object({
     plan_id: z.string().uuid(),
-    member_user_ids: z.array(z.string().uuid()).max(7).optional(),
-    name: z.string().trim().min(1).max(120).optional(),
+    // nullish, not optional: Android's kotlinx Json (encodeDefaults=true +
+    // explicitNulls default) sends null for unset fields.
+    member_user_ids: z.array(z.string().uuid()).max(7).nullish(),
+    name: z.string().trim().min(1).max(120).nullish(),
   });
 
   /**

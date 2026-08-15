@@ -80,7 +80,7 @@ const PULL_DOMAINS: Record<string, DomainSpec> = {
 const PAGE = 1000;
 
 export interface PullRequest {
-  device_id?: string | undefined;
+  device_id?: string | null | undefined;
   cursors?: Record<string, number> | undefined;
 }
 
@@ -92,7 +92,7 @@ export interface MutationResult {
 }
 
 export interface PushRequest {
-  device_id?: string | undefined;
+  device_id?: string | null | undefined;
   mutations: Array<{
     mutation_id: string;
     seq: number;

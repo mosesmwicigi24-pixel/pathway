@@ -89,8 +89,10 @@ export class ReadingInvitesService {
   }
 
   static readonly CreateInvite = z.object({
-    user_id: z.string().uuid().optional(),
-    message: z.string().max(500).optional(),
+    // nullish, not optional: Android's kotlinx Json (encodeDefaults=true +
+    // explicitNulls default) sends null for unset fields (null user_id = link invite).
+    user_id: z.string().uuid().nullish(),
+    message: z.string().max(500).nullish(),
     client_mutation_id: z.string().uuid().optional(),
   });
 

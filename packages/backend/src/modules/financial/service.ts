@@ -29,7 +29,9 @@ export class FinancialService {
     amount_minor: z.number().int().positive(),
     currency: z.string().length(3),
     method: z.enum(["card", "mpesa", "airtel", "paypal"]).default("card"),
-    phone_number: z.string().min(7).max(32).optional(), // mobile money; defaults to the profile phone
+    // nullish, not optional: Android's kotlinx Json sends "phone_number": null
+    // for non-mobile-money methods. Mobile money; defaults to the profile phone.
+    phone_number: z.string().min(7).max(32).nullish(),
     // "Named giving" (custom sheet, optional): a member-chosen label for the
     // gift — like an M-Pesa Paybill account name. Trimmed; empty → absent so
     // behavior is unchanged when the field isn't used. Sanitized separately
