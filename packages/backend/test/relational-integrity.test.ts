@@ -40,10 +40,21 @@ describe("the unplaced member still gets a real liturgy", () => {
     // the actual claim (the unplaced member READS THE DEFAULT CONGREGATION'S
     // ROW) without depending on generated content at all.
     const sentinel = "SENTINEL composed line for the default congregation";
-    await testPool().query(
-      `UPDATE liturgies SET body = $1 WHERE congregation_id = $2 AND part = $3 AND day_date = current_date`,
+    // No `day_date = current_date` predicate. That is evaluated in the DATABASE's
+    // timezone (UTC) while the composer stores the day in the CONGREGATION's
+    // (EAT, +3) — so between 21:00 and 24:00 UTC they are different dates, the
+    // UPDATE matched nothing, and the assertion below compared against whatever
+    // the fake provider had generated. CI caught it at 00:28 EAT. The suite is
+    // reset per test, so this congregation has exactly one row for this band.
+    const stamped = await testPool().query(
+      `UPDATE liturgies SET body = $1 WHERE congregation_id = $2 AND part = $3`,
       [sentinel, home, bandOf(now)],
     );
+    // Assert the SETUP worked before asserting what it proves. Without this a
+    // zero-row update surfaces as a confusing content mismatch instead of
+    // "your fixture never applied" — which is exactly how the first version of
+    // this test wasted a CI run.
+    expect(stamped.rowCount).toBe(1);
 
     const unplaced = await svc().current(null, now);
     const placed = await svc().current(home, now);
