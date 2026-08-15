@@ -1,0 +1,122 @@
+[
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "Module 10 asks us to settle two things before beginning. According to the introduction, what are they?",
+    "answer_options": [
+      "That every question has one neat answer, and that battles end at salvation",
+      "That following Jesus does not mean you stop having questions, and that the new life comes with a real battle",
+      "That questions show weak faith, and that hardship is God's punishment",
+      "That wisdom comes only through leaders, and that the battle is fought for us"
+    ],
+    "correct_answer": "That following Jesus does not mean you stop having questions, and that the new life comes with a real battle",
+    "difficulty_rating": 1
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "The module says that if life has felt harder since you believed, that is not a sign you did something wrong. What does it say this is a sign of?",
+    "answer_options": [
+      "That you have not yet prayed enough for protection",
+      "That your faith is still too small to bring peace",
+      "That God is testing whether you deserve His blessings",
+      "That you switched sides, and your God has already won"
+    ],
+    "correct_answer": "That you switched sides, and your God has already won",
+    "difficulty_rating": 1
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "On why bad things happen to good people, the module gently challenges the question itself using Romans 3:23. What does it say is the real wonder?",
+    "answer_options": [
+      "Not that hard things happen to good people, but that God is so good to people like us",
+      "That good people suffer more than bad people in this life",
+      "That God allows any suffering at all in the world He made",
+      "That suffering always ends once a person turns to Christ"
+    ],
+    "correct_answer": "Not that hard things happen to good people, but that God is so good to people like us",
+    "difficulty_rating": 2
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "The module lists the sources suffering can come from. Which option matches the list given under 'Where Does Suffering Come From?'",
+    "answer_options": [
+      "Weak faith, unconfessed sin, poor choices, and bad company",
+      "Fate, chance, generational curses, and divine anger",
+      "A broken world, other people's choices, your own choices, and a real enemy",
+      "God's discipline, natural law, human error, and coincidence"
+    ],
+    "correct_answer": "A broken world, other people's choices, your own choices, and a real enemy",
+    "difficulty_rating": 2
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "Referring to the man born blind in John 9:3, what point does the module make about suffering?",
+    "answer_options": [
+      "Suffering is not always punishment — the man's blindness was not from sin, but so God's works could be shown",
+      "Suffering is always traceable to someone's hidden sin",
+      "Physical healing depends on first confessing every sin",
+      "God sends blindness so that people will learn humility"
+    ],
+    "correct_answer": "Suffering is not always punishment — the man's blindness was not from sin, but so God's works could be shown",
+    "difficulty_rating": 3
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "The module illustrates God's role in pain with a doctor setting a broken bone. What is this illustration teaching?",
+    "answer_options": [
+      "Pain proves that God has stepped away until the healing is complete",
+      "God causes evil so that He can later display His power in healing it",
+      "Believers should avoid asking why and simply endure whatever comes",
+      "God is never the author of evil, but He works toward healing and purpose you cannot yet see"
+    ],
+    "correct_answer": "God is never the author of evil, but He works toward healing and purpose you cannot yet see",
+    "difficulty_rating": 3
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "On betting and Christianity, the module says the real issue is not the money. According to the teaching, what is the real issue?",
+    "answer_options": [
+      "The amount wagered — small stakes are harmless, large stakes are sinful",
+      "Your heart — where your trust is and where your treasure is",
+      "The legality of gambling in your country of residence",
+      "Whether the winnings are given generously to the church"
+    ],
+    "correct_answer": "Your heart — where your trust is and where your treasure is",
+    "difficulty_rating": 4
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "Under 'Faith vs. Fortune', the module names a devastating spiritual effect of gambling. What is it?",
+    "answer_options": [
+      "It wastes time that should be spent in church activities",
+      "It makes a person too wealthy to depend on God's provision",
+      "It weakens a person's faith by shifting their focus from God as their source to luck",
+      "It causes conflict with fellow believers over borrowed money"
+    ],
+    "correct_answer": "It weakens a person's faith by shifting their focus from God as their source to luck",
+    "difficulty_rating": 4
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "How does the module describe water baptism and its relationship to salvation?",
+    "answer_options": [
+      "It is the moment a believer is actually saved and born again",
+      "It is optional and carries no particular significance for a believer",
+      "It washes away only the sins committed before the baptism date",
+      "It is the outward declaration that you have died to the old life and risen new in Christ — it does not save you, but it is a step of obedience Jesus asked for"
+    ],
+    "correct_answer": "It is the outward declaration that you have died to the old life and risen new in Christ — it does not save you, but it is a step of obedience Jesus asked for",
+    "difficulty_rating": 5
+  },
+  {
+    "q_type": "MultipleChoice",
+    "question_text": "'Why Is It Suddenly Hard?' closes with four 'Note This' points about hardships. Which option states all four as taught?",
+    "answer_options": [
+      "Hardships are a reality in salvation; they test our faith; when endured we become mature and complete; and they produce everlasting glory",
+      "Hardships come from the enemy alone; they must be rebuked; they end quickly for the faithful; and they leave no lasting benefit",
+      "Hardships mean hidden sin; they call for fasting; they are removed by giving; and they return if faith weakens",
+      "Hardships are rare after salvation; they signal wrong choices; they are avoided by wisdom; and they fade with maturity"
+    ],
+    "correct_answer": "Hardships are a reality in salvation; they test our faith; when endured we become mature and complete; and they produce everlasting glory",
+    "difficulty_rating": 5
+  }
+]
