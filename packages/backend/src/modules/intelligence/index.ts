@@ -4,7 +4,9 @@
 // run so a SuperAdmin can fire the pipeline without waiting for the crons.
 // The AI provider stays server-side (§5.10); AI never gates, scores, advances,
 // or touches money (§1.1, §1.9) — it only ever writes words.
-import { mkdirSync, unlink } from "node:fs";
+import { mkdirSync } from "node:fs";
+import { unlink } from "node:fs/promises";
+import { background } from "../../db/background.js";
 import { extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
@@ -254,8 +256,29 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
         durationSec: duration_sec,
         recordedBy: p.userId,
       });
+      // Removing the superseded take must not delay the pastor's upload
+      // response — but `unlink(..., () => undefined)` made it invisible as well
+      // as non-blocking, and those are different things. A failed unlink was
+      // discarded in total, so an old recording that could not be removed leaked
+      // onto the VPS disk with nothing anywhere recording that it had happened.
+      //
+      // background() (added in #418 for exactly this shape) keeps it off the
+      // response path while leaving it observable: drainBackgroundWork() can
+      // wait for it, and a failure is now logged instead of vanishing. CI caught
+      // the race — the test asserted the old file was gone while the unlink was
+      // still in flight, which passed locally on a fast disk and failed on a
+      // slower runner.
       const oldFile = liturgyRecordingFile(previousAudioUrl);
-      if (oldFile) unlink(join(storageDir, oldFile), () => undefined);
+      if (oldFile) {
+        background(
+          unlink(join(storageDir, oldFile)).catch((e: unknown) => {
+            ctx.log.warn(
+              { err: e, file: oldFile, band },
+              "could not remove the superseded liturgy recording; it is now orphaned on disk",
+            );
+          }),
+        );
+      }
       res.status(201).json({ band, audio_url: `${publicBase}/${file.filename}`, duration_sec });
     }),
   );
@@ -266,7 +289,18 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
     const { band } = parseBody(LiturgyBandParam, req.params);
     const { audio_url } = await liturgyRecordings.remove(requirePrincipal(req).congregationId, band);
     const oldFile = liturgyRecordingFile(audio_url);
-    if (oldFile) unlink(join(storageDir, oldFile), () => undefined);
+    // Same treatment as the replace path above — one failure is a class, and
+    // this is the sibling occurrence.
+    if (oldFile) {
+      background(
+        unlink(join(storageDir, oldFile)).catch((e: unknown) => {
+          ctx.log.warn(
+            { err: e, file: oldFile, band },
+            "could not remove the deleted liturgy recording; it is now orphaned on disk",
+          );
+        }),
+      );
+    }
     res.json({ deleted: true });
   }));
 

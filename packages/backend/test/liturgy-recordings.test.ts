@@ -10,6 +10,7 @@ import { createCongregation, createUser } from "./helpers/factories.js";
 import { LiturgyService, BANDS } from "../src/modules/intelligence/liturgy.js";
 import { LiturgyRecordingService } from "../src/modules/intelligence/liturgyRecordings.js";
 import { FakeAiProvider } from "../src/modules/assistant/provider.js";
+import { drainBackgroundWork } from "../src/db/background.js";
 
 const storageDir = testEnv().MEDIA_STORAGE_DIR;
 const filenameOf = (url: string): string => url.split("/").pop()!;
@@ -140,6 +141,11 @@ describe("replacing a recording (upsert) — he will re-record", () => {
     expect(second.status).toBe(201);
     expect(second.body.audio_url).not.toBe(first.body.audio_url);
 
+    // The unlink is deliberately off the response path (a pastor waiting on an
+    // upload should not wait on housekeeping), so drain it before asserting on
+    // disk. Without this the assertion raced the unlink — it passed on a fast
+    // local disk and failed on a CI runner.
+    await drainBackgroundWork();
     // Old file is gone; the DB (and disk) reflect only the newest take.
     expect(existsSync(firstPath)).toBe(false);
     const secondPath = join(storageDir, filenameOf(second.body.audio_url));
@@ -170,6 +176,7 @@ describe("deleting a recording — that band alone falls back to synthesis", () 
     const del = await agent().delete("/v1/admin/liturgy/recordings/afternoon").set("Authorization", tok);
     expect(del.status).toBe(200);
     expect(del.body.deleted).toBe(true);
+    await drainBackgroundWork(); // same race as the replace path above
     expect(existsSync(path)).toBe(false);
 
     const list = await agent().get("/v1/admin/liturgy/recordings").set("Authorization", tok);
