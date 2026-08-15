@@ -5,10 +5,11 @@ import type EmbeddedPostgres from "embedded-postgres";
 import migrationRunner from "node-pg-migrate";
 import pg from "pg";
 import net from "node:net";
-import { readFileSync, readdirSync, mkdtempSync } from "node:fs";
+import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { findOrphanClusters, reapOrphanCluster } from "./orphanCluster.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const backendRoot = join(here, "..", "..");
@@ -18,32 +19,92 @@ export const TEST_DATABASE_URL = `postgres://nuru:nuru@localhost:${TEST_PG_PORT}
 type EmbeddedPostgresCtor = new (options: ConstructorParameters<typeof EmbeddedPostgres>[0]) => EmbeddedPostgres;
 
 let epg: EmbeddedPostgres;
+/** This run's data dir — never swept while in use. */
+let currentDataDir = "";
 /** The process listeners `embedded-postgres` installs — see teardown(). */
 let installedExitHooks: Array<{ event: "beforeExit" | "exit"; listener: (...args: never[]) => void }> = [];
 
-/** Resolves once nothing is listening on the test port, or throws saying who is. */
+const portInUse = (): Promise<boolean> =>
+  new Promise<boolean>((resolve) => {
+    const probe = net
+      .connect({ host: "127.0.0.1", port: TEST_PG_PORT })
+      .on("connect", () => {
+        probe.destroy();
+        resolve(true);
+      })
+      .on("error", () => resolve(false));
+  });
+
+/**
+ * Ensure nothing is on the test port — reaping a previous run's cluster if that
+ * is what is there.
+ *
+ * Waiting alone was not enough. A crashed run leaves a postmaster holding 55432
+ * with no one to stop it, so every subsequent run failed until a human noticed
+ * and intervened — and the intervention the old message suggested
+ * (`pkill -f 'nuru-pg-'`) was observed to report success and change nothing on
+ * 2026-08-15 — only `kill -9` freed the port. That run had died with the disk
+ * full, and a graceful shutdown needs to write a checkpoint. Reproduced on a
+ * healthy disk, pkill works fine, so the disk is the likeliest difference.
+ *
+ * So identify it, prove it is ours, and stop it properly (SIGINT, then SIGKILL).
+ * Anything on that port that is NOT ours is still a hard error — reaping a
+ * developer's real database because it happened to be on 55432 would be a far
+ * worse failure than the one being fixed.
+ */
 async function awaitFreePort(timeoutMs = 60_000): Promise<void> {
+  if (await portInUse()) {
+    for (const orphan of findOrphanClusters(TEST_PG_PORT)) {
+      const { pid, signal, dataDirRemoved } = reapOrphanCluster(orphan);
+      // Say it out loud. A test harness that silently kills processes is its own
+      // kind of problem.
+      console.warn(
+        `[test] reaped an orphaned embedded Postgres on port ${TEST_PG_PORT} ` +
+          `(pid ${pid}, ${signal}${dataDirRemoved ? ", data dir removed" : ""}). ` +
+          `Left by a previous run that died before teardown.`,
+      );
+    }
+  }
+
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const busy = await new Promise<boolean>((resolve) => {
-      const probe = net
-        .connect({ host: "127.0.0.1", port: TEST_PG_PORT })
-        .on("connect", () => {
-          probe.destroy();
-          resolve(true);
-        })
-        .on("error", () => resolve(false));
-    });
-    if (!busy) return;
+    if (!(await portInUse())) return;
     if (Date.now() > deadline) {
+      const stranger = findOrphanClusters(TEST_PG_PORT).length === 0;
       throw new Error(
-        `Port ${TEST_PG_PORT} is still in use after ${timeoutMs}ms. A previous run's embedded Postgres ` +
-          `is likely orphaned — the suite would otherwise silently run against that stale cluster. ` +
-          `Stop it with: pkill -f 'nuru-pg-'`,
+        `Port ${TEST_PG_PORT} is still in use after ${timeoutMs}ms. ` +
+          (stranger
+            ? `Whatever holds it is NOT one of our test clusters (no nuru-pg- data dir), so it was left ` +
+              `alone deliberately. Find it with: lsof -ti :${TEST_PG_PORT}`
+            : `An orphaned test cluster would not stop, even after SIGINT and SIGKILL. Check free disk ` +
+              `space — a Postgres shutdown has to write a checkpoint. Then: kill -9 $(lsof -ti :${TEST_PG_PORT})`) +
+          ` — the suite refuses to run against a stale cluster.`,
       );
     }
     await new Promise((r) => setTimeout(r, 500));
   }
+}
+
+/**
+ * Remove test cluster directories left by runs that died before teardown. Each
+ * is ~180 MB; 1.6 GB of them was found on one machine, having helped fill the
+ * disk whose filling killed the run that created the newest one. Only
+ * directories with no live process are touched.
+ */
+function sweepAbandonedDataDirs(): void {
+  const live = new Set(findOrphanClusters(TEST_PG_PORT).map((o) => o.dataDir));
+  let freed = 0;
+  for (const dir of readdirSync(tmpdir()).filter((d) => d.startsWith("nuru-pg-"))) {
+    const full = join(tmpdir(), dir);
+    if (live.has(full) || full === currentDataDir) continue;
+    try {
+      rmSync(full, { recursive: true, force: true });
+      freed += 1;
+    } catch {
+      /* in use by another checkout's run, or gone already */
+    }
+  }
+  if (freed > 0) console.warn(`[test] swept ${freed} abandoned test cluster director${freed === 1 ? "y" : "ies"}.`);
 }
 
 /**
@@ -75,6 +136,9 @@ export async function setup(): Promise<void> {
 
   const EmbeddedPostgresCtor = await importEmbeddedPostgres();
   const dataDir = mkdtempSync(join(tmpdir(), "nuru-pg-"));
+  currentDataDir = dataDir;
+  // Now that we know which directory is ours, clear out the dead ones.
+  sweepAbandonedDataDirs();
   epg = new EmbeddedPostgresCtor({
     databaseDir: dataDir,
     user: "nuru",
