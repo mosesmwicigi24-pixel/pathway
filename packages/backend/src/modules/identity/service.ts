@@ -27,6 +27,7 @@ import { hashPassword, verifyPassword, passwordNeedsRehash } from "./passwords.j
 import { renderPasswordReset } from "./email-templates.js";
 import { sealSecret, openSecret } from "./secretbox.js";
 import { buildEmailProvider, type EmailProvider } from "./email.js";
+import { normalizePhone } from "../../lib/phone.js";
 
 export interface SessionTokens {
   access_token: string;
@@ -794,7 +795,7 @@ export class IdentityService {
   static readonly UpdateMeSchema = z
     .object({
       full_name: z.string().min(1).max(255).optional(),
-      phone_number: z.string().min(3).max(32).optional(),
+      phone_number: z.string().min(3).max(32).transform((v) => normalizePhone(v) ?? v).optional(),
       cell_group_id: z.string().uuid().nullable().optional(),
       timezone: z.string().max(64).optional(),
       locale: z.string().max(12).optional(),
@@ -892,7 +893,7 @@ export class IdentityService {
   static readonly OnboardingSchema = z
     .object({
       date_of_birth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      phone_number: z.string().min(3).max(32),
+      phone_number: z.string().min(3).max(32).transform((v) => normalizePhone(v) ?? v),
       cell_group_id: z.string().uuid(),
       year_of_salvation: z.number().int().min(1900).max(2100).optional(),
       is_baptized: z.boolean().default(false),

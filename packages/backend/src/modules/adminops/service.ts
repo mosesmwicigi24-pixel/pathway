@@ -11,6 +11,7 @@ import { ApiError } from "../../http/errors.js";
 import { hashPassword } from "../identity/passwords.js";
 import { ChatService } from "../chat/service.js";
 import { CurriculumStatsService } from "../curriculum/stats.js";
+import { normalizePhone } from "../../lib/phone.js";
 
 export class AdminOpsService {
   private readonly chat: ChatService;
@@ -1065,7 +1066,7 @@ export class AdminOpsService {
   static readonly AddMember = z
     .object({
       full_name: z.string().min(1).max(255),
-      phone_number: z.string().min(7).max(32),
+      phone_number: z.string().min(7).max(32).transform((v) => normalizePhone(v) ?? v),
       email: z.string().email().optional(),
       date_of_birth: z.string().optional(), // ISO date
       cell_group_id: z.string().uuid(),
@@ -1166,7 +1167,7 @@ export class AdminOpsService {
   static readonly UpdateMember = z
     .object({
       full_name: z.string().min(1).max(255).optional(),
-      phone_number: z.string().min(7).max(32).optional(),
+      phone_number: z.string().min(7).max(32).transform((v) => normalizePhone(v) ?? v).optional(),
       email: z.string().email().nullable().optional(),
       date_of_birth: z.string().nullable().optional(), // ISO date
       gender: z.enum(AdminOpsService.GENDERS).nullable().optional(),
