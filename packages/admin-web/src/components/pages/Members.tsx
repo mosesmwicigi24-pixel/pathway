@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Search, Plus, ChevronDown, ArrowRight, Mail, UserCheck, UserPlus, Users as UsersIcon,
   ChevronRight, CheckCircle2, Flag, Download, Printer, X, GraduationCap, MoreVertical, Pencil, Check,
-  BarChart3, Award, Star, BookOpen, KeyRound, Copy, ShieldPlus,
+  BarChart3, Award, Star, BookOpen, KeyRound, Copy, ShieldPlus, Clock,
 } from "lucide-react";
 import {
   OpsApi, AdminApi, SystemApi, CurriculumApi,
@@ -108,6 +108,13 @@ export function Members(): ReactElement {
   const [countries, setCountries] = useState<Country[]>([]);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"All" | StatusKey>("All");
+  // Members with no cell, and the longest wait in days. Server-computed and
+  // returned on every roster page regardless of the filters above — the 28 who
+  // waited up to 42 days were invisible precisely because seeing them required
+  // knowing to look. See the 2026-08-14 audit and migration 193.
+  const [awaiting, setAwaiting] = useState(0);
+  const [longestWait, setLongestWait] = useState(0);
+  const [onlyAwaiting, setOnlyAwaiting] = useState(false);
   const [cellFilter, setCellFilter] = useState<string>("All"); // cell_group_id or "All" (server-side)
   const [countryFilter, setCountryFilter] = useState<string>("All"); // ISO-2 code or "All"
   const [addOpen, setAddOpen] = useState(false);
@@ -128,20 +135,24 @@ export function Members(): ReactElement {
   const PAGE = 100;
   // Every server-accepted filter in one place (search/band/country/cell go to the
   // DB; "graduated" is a derived flag with no server filter — handled client-side).
-  const serverQuery = useCallback((): { search?: string; band?: string; country_code?: string; cell_group_id?: string } => {
-    const q: { search?: string; band?: string; country_code?: string; cell_group_id?: string } = {};
+  type ServerQuery = { search?: string; band?: string; country_code?: string; cell_group_id?: string; placement?: "awaiting" | "placed" };
+  const serverQuery = useCallback((): ServerQuery => {
+    const q: ServerQuery = {};
     if (query.trim()) q.search = query.trim();
     if (status !== "All" && status !== "graduated") q.band = status;
     if (countryFilter !== "All") q.country_code = countryFilter;
     if (cellFilter !== "All") q.cell_group_id = cellFilter;
+    if (onlyAwaiting) q.placement = "awaiting";
     return q;
-  }, [query, status, countryFilter, cellFilter]);
+  }, [query, status, countryFilter, cellFilter, onlyAwaiting]);
 
   const load = useCallback(async () => {
     try {
       const r = await OpsApi.members({ ...serverQuery(), limit: PAGE });
       setRows(r.data);
       setNextCursor(r.next_cursor);
+      setAwaiting(r.awaiting_placement ?? 0);
+      setLongestWait(r.longest_wait_days ?? 0);
     } catch (e) { setError(errorMessage(e, "Could not load members.")); }
   }, [serverQuery]);
 
@@ -260,6 +271,38 @@ export function Members(): ReactElement {
             <button onClick={() => setAddOpen(true)} className="flex items-center gap-2 rounded-lg px-3" style={{ height: 32, background: "var(--nuru-gold)", color: "#fff", fontSize: 12, fontWeight: 600, border: "none" }}><Plus size={13} /> Add member</button>
           </div>
         </div>
+        {/* Members with no cell yet. Rendered ONLY when somebody is actually
+            waiting — a permanent "0 awaiting" tile is wallpaper, and wallpaper
+            is what let 28 people go unseen for six weeks. It names the longest
+            wait because "28 waiting" is a statistic and "someone has waited 42
+            days" is a person. Clicking filters the roster down to exactly them. */}
+        {awaiting > 0 && (
+          <button
+            onClick={() => setOnlyAwaiting((v) => !v)}
+            className="flex items-center gap-3 rounded-xl w-full mt-4 text-left"
+            style={{
+              padding: "12px 14px",
+              background: onlyAwaiting ? "rgba(245,199,126,0.22)" : "rgba(245,199,126,0.12)",
+              border: "1px solid rgba(245,199,126,0.38)",
+              cursor: "pointer",
+            }}
+          >
+            <span className="inline-flex items-center justify-center rounded-lg" style={{ width: 30, height: 30, background: "rgba(245,199,126,0.2)", flexShrink: 0 }}>
+              <Clock size={15} color="#F5C77E" />
+            </span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: "block", color: "#F5C77E", fontSize: 13, fontWeight: 700 }}>
+                {awaiting} {awaiting === 1 ? "member is" : "members are"} waiting for a cell
+              </span>
+              <span style={{ display: "block", color: "rgba(232,239,245,0.62)", fontSize: 11.5, marginTop: 1 }}>
+                {longestWait > 0
+                  ? `The longest has waited ${longestWait} ${longestWait === 1 ? "day" : "days"}. `
+                  : ""}
+                {onlyAwaiting ? "Showing only them — tap to show everyone." : "Tap to see who."}
+              </span>
+            </span>
+          </button>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
           {[
             { label: "Total members", value: String(counts.total), fg: "var(--tint-navy-fg)", bg: "var(--tint-navy-bg)", border: "rgba(29,78,134,0.18)", dot: false },
