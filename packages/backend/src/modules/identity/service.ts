@@ -795,6 +795,25 @@ export class IdentityService {
   static readonly UpdateMeSchema = z
     .object({
       full_name: z.string().min(1).max(255).optional(),
+      // Editable, per the owner's ruling of 2026-08-14: the assigned identifier
+      // is user_id, and everything else about a member may change. This field
+      // was previously withheld as "the login identity" — but a login
+      // credential the member cannot correct is a trap, not a safeguard. People
+      // mistype their address at signup, lose access to an old mailbox, or
+      // simply move on from one.
+      //
+      // Normalised the same way the login path reads it (trim + lowercase), so
+      // a member who types "Moses@Gmail.com " can still sign in afterwards.
+      // Order matters: .email() would run BEFORE .transform(), so "  Moses@Gmail.com "
+      // was rejected as malformed before it could be trimmed — the member gets a
+      // 400 for a stray space. Normalise first, then validate what will actually
+      // be stored.
+      email: z
+        .string()
+        .max(254)
+        .transform((v) => v.trim().toLowerCase())
+        .pipe(z.string().email())
+        .optional(),
       phone_number: z.string().min(3).max(32).transform((v) => normalizePhone(v) ?? v).optional(),
       cell_group_id: z.string().uuid().nullable().optional(),
       timezone: z.string().max(64).optional(),
@@ -808,7 +827,6 @@ export class IdentityService {
       row_version: z.number().int().positive(),
     })
     .strict(); // mass-assignment guard (§5.8): role/congregation_id are not writable
-    // email is intentionally not writable here — it is the login identity (§5.8).
 
   /** Update mutable profile fields with an optimistic-concurrency version check. */
   async updateMe(userId: string, input: z.infer<typeof IdentityService.UpdateMeSchema>): Promise<unknown> {
@@ -816,7 +834,29 @@ export class IdentityService {
       const sets: string[] = [];
       const params: unknown[] = [];
       let i = 1;
-      for (const field of ["full_name", "phone_number", "cell_group_id", "timezone", "locale", "gender", "city", "country_code", "date_of_birth", "socials", "avatar_url"] as const) {
+      // Changing the address someone signs in with is a security event, not a
+      // profile tweak, so it is checked and recorded rather than just written.
+      if (input.email !== undefined) {
+        const taken = await maybeOne<{ user_id: string }>(
+          c,
+          `SELECT user_id FROM users WHERE email = $1 AND deleted_at IS NULL AND user_id <> $2`,
+          [input.email, userId],
+        );
+        // Migration 190 made the unique index partial on live rows, so a
+        // retired account never blocks an address — but a live one must, and
+        // with a message rather than a raw constraint violation.
+        if (taken) throw new ApiError("CONFLICT", "That email is already in use by another account");
+      }
+      const previousEmail =
+        input.email === undefined
+          ? null
+          : (await maybeOne<{ email: string | null }>(
+              c,
+              `SELECT email FROM users WHERE user_id = $1 AND deleted_at IS NULL`,
+              [userId],
+            ))?.email ?? null;
+
+      for (const field of ["full_name", "email", "phone_number", "cell_group_id", "timezone", "locale", "gender", "city", "country_code", "date_of_birth", "socials", "avatar_url"] as const) {
         if (field in input && input[field] !== undefined) {
           sets.push(`${field} = $${i++}`);
           params.push(field === "socials" ? JSON.stringify(input[field]) : input[field]);
@@ -843,6 +883,14 @@ export class IdentityService {
         });
       }
       await recordChange(c, "users", userId, userId, "upsert");
+      if (input.email !== undefined && previousEmail !== input.email) {
+        // Whoever holds the account can now change how it is reached. If that
+        // was not the member, the trail is the only way anyone finds out.
+        await audit(c, userId, "user.email_changed", "users", userId, {
+          from: previousEmail,
+          to: input.email,
+        });
+      }
       return updated;
     });
   }
