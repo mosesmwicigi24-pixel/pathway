@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { agent } from "./helpers/app.js";
+import { createCongregation, createUser } from "./helpers/factories.js";
 
 beforeEach(async () => {
   await resetDb();
@@ -91,5 +92,29 @@ describe("a member who signs up is on the pathway", () => {
     );
     expect(after.rows[0].current_level).toBe(3);
     expect(after.rows[0].start_level).toBe(3);
+  });
+});
+
+describe("the backfill's definition of \"member\" (migration 193 + 194)", () => {
+  it("a retired account is not a member — it must not be enrolled or counted", async () => {
+    const cong = await createCongregation();
+    const gone = await createUser({ congregationId: cong, role: "Student", email: "retired@dev.local" });
+    await testPool().query(`DELETE FROM enrollments WHERE user_id = $1`, [gone.user_id]);
+    await testPool().query(`UPDATE users SET deleted_at = now() WHERE user_id = $1`, [gone.user_id]);
+
+    // Migration 193 selected on `role='Student' AND deleted_at IS NULL`. Six
+    // live @example.com test accounts satisfied that and were handed pathways.
+    // The guard is not "exclude test emails" — it is that the stranded-member
+    // query only ever counts accounts that are actually live.
+    const stranded = await testPool().query(
+      `SELECT count(*)::int AS n FROM users u
+         LEFT JOIN enrollments en ON en.user_id = u.user_id
+        WHERE u.deleted_at IS NULL AND u.role = 'Student' AND en.enrollment_id IS NULL`,
+    );
+    expect(stranded.rows[0].n).toBe(0);
+
+    const enrolled = await testPool().query(
+      `SELECT count(*)::int AS n FROM enrollments WHERE user_id = $1`, [gone.user_id]);
+    expect(enrolled.rows[0].n).toBe(0);
   });
 });
