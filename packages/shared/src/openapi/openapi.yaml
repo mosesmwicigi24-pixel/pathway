@@ -468,7 +468,14 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
     patch:
       tags: [auth]
-      summary: Update mutable profile fields with row_version check.
+      summary: >-
+        Update mutable profile fields with row_version check. `email` became
+        writable on 2026-08-15 (owner ruling: user_id is the assigned identifier,
+        everything else may change). It is trimmed and lowercased to match how
+        the login path reads it, must be unique among LIVE accounts — an address
+        held only by a soft-deleted account is free, per migration 190's partial
+        index — and a real change writes a `user.email_changed` audit row, since
+        it changes who can sign in. 409 CONFLICT if another live account holds it.
       requestBody:
         required: true
         content:
