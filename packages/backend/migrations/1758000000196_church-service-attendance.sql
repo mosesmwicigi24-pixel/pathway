@@ -1,4 +1,4 @@
--- Migration 156 · Church service attendance + attendance streaks
+-- Migration 196 · Church service attendance + attendance streaks
 -- ============================================================================
 -- Members scan the service QR on arrival and register their contact details
 -- with the check-in, so the roster is a real attendance record (who was in the
