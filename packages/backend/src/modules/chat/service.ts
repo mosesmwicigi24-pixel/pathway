@@ -5,10 +5,42 @@
 // no-ops (§1.7/§3.6). DMs respect minor-safety (D-M6): a member cannot open a
 // DM with a minor (nor a minor with anyone). Group rooms are auto-provisioned
 // per cell and the caller is auto-joined on first read.
+//
+// Chat Redesign C1 (docs/CHAT_REDESIGN.md, docs/CHAT_REDESIGN_PLAN.md) layers
+// three things on top of the above, all keyed off `chat_conversations.type`
+// (migration 161) and the space-lifecycle columns/tables (migration 163):
+//   - "no unsolicited DMs": createOrGetDm now requires an ACCEPTED connection
+//     before creating a NEW thread between two ordinary members (an EXISTING
+//     thread — including every one grandfathered by migration 162's backfill —
+//     is never re-gated; staff (Admin/SuperAdmin) keep the "reach anyone"
+//     support exception, on either side of the pair).
+//   - ordinary-Admin oversight (accessAsModerator / listAllForModeration /
+//     moderateMessage) is now scoped to type='SPACE' only. A DIRECT/DISCIPLER/
+//     PASTORAL/BROADCAST_RESPONSE thread is a private peer relationship, not a
+//     cell room — a SuperAdmin retains full reach (unchanged).
+//   - space membership grows a lifecycle: join requests reviewed by a leader or
+//     a space_roles-delegated moderator, and removed/suspended members (status
+//     column) are refused access() without deleting their history.
+//
+// Chat Redesign C2 adds two more things, still on `type`:
+//   - GET /chat/discipler/conversation: lazily resolves/creates the caller's
+//     DISCIPLER thread with their CURRENT assignment (discipleship.
+//     resolveCurrentDiscipler — an explicit ASSIGNMENT, never the cell-leader
+//     inference). Never reuses an ARCHIVED thread (migration 169) — a
+//     reassignment starts a genuinely fresh conversation.
+//   - Broadcast reply_policy (migration 165) is now ENFORCED at send time: a
+//     BROADCAST_RESPONSE thread's most recently delivered broadcast decides
+//     whether the RECIPIENT (never the broadcaster) may keep replying in it —
+//     see sendMessage's policy check and resolveLinkedReplyThread below.
 import type { Pool } from "pg";
 import { z } from "zod";
-import { many, maybeOne, one, tx, recordChange, type Queryable } from "../../db/db.js";
+import { many, maybeOne, one, tx, recordChange, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
+import { NotificationService } from "../notifications/service.js";
+import { resolveCurrentDiscipler } from "../discipleship/service.js";
+import { resolvePastorForMember } from "../pastoral/service.js";
+
+export type ConversationType = "SPACE" | "DIRECT" | "DISCIPLER" | "PASTORAL" | "BROADCAST" | "BROADCAST_RESPONSE";
 
 interface ConversationRow {
   conversation_id: string;
@@ -16,16 +48,132 @@ interface ConversationRow {
   is_public: boolean;
   congregation_id: string | null;
   cell_group_id: string | null;
+  type: ConversationType;
+  requires_approval: boolean;
 }
+
+/** A space's own head row, plus the field space-lifecycle methods need to find
+ *  its ORIGINAL leader (cell_groups.leader_user_id for a cell room,
+ *  chat_conversations.created_by for a topical space — migration 163's
+ *  rationale: never duplicated into space_roles, which holds only DELEGATED
+ *  grants). */
+interface SpaceRow {
+  conversation_id: string;
+  kind: "dm" | "group" | "space";
+  cell_group_id: string | null;
+  created_by: string | null;
+  congregation_id: string | null;
+}
+
+type SpaceRoleKind = "leader" | "moderator";
 
 /** Roles with cross-conversation oversight + moderation (§5.4). */
 type ViewerRole = string | undefined;
 const isModerator = (role: ViewerRole): boolean => role === "Admin" || role === "SuperAdmin";
 
+/** A broadcast as every path describes it — the send, the list, the detail — so
+ *  the client draws "the message you sent" from one shape, whichever door it
+ *  came through. */
+export type BroadcastReplyPolicy = "none" | "official_inbox" | "ordinary_chat" | "linked_thread";
+
+export interface BroadcastRow {
+  broadcast_id: string;
+  body: string;
+  msg_type: string;
+  attachment_url: string | null;
+  audience: "congregation" | "all";
+  recipient_count: number;
+  reply_policy: BroadcastReplyPolicy;
+  created_at: string;
+}
+const BROADCAST_COLS = "broadcast_id, body, msg_type, attachment_url, audience, recipient_count, reply_policy, created_at";
+
 type ModerationAction = "flag" | "unflag" | "remove" | "restore";
 
 export class ChatService {
-  constructor(private readonly pool: Pool) {}
+  private readonly notifications: NotificationService;
+
+  constructor(
+    private readonly pool: Pool,
+    notifications?: NotificationService,
+  ) {
+    this.notifications = notifications ?? new NotificationService(pool);
+  }
+
+  /** Best-effort notification — the state change it follows is already
+   *  authoritative in the database regardless of whether the nudge lands. */
+  private async notify(userId: string, template: string, payload: Record<string, unknown>): Promise<void> {
+    try {
+      await this.notifications.schedule({ userId, channel: "push", template, payload });
+    } catch {
+      // best-effort
+    }
+  }
+
+  /**
+   * A "new message" nudge for one recipient in one conversation — throttled
+   * (Chat Redesign C4): if this recipient already has a still-undelivered
+   * ('scheduled', not yet 'sent') notification of the SAME template for the
+   * SAME conversation, this is a no-op. Ten messages landing while a member's
+   * phone is offline should read as "you have unread messages in this
+   * thread", not trigger ten separate pushes — the FIRST one already told
+   * them, and the badge/preview updates the moment they open the app. Once
+   * that one is dispatched (status flips to 'sent'), the NEXT message is free
+   * to schedule a fresh nudge. Best-effort like `notify` — never blocks the
+   * send it follows.
+   *
+   * Mute-aware (migration 172, conversation_mutes): a recipient with an
+   * ACTIVE mute on this conversation (muted_until NULL = forever, or in the
+   * future) gets no nudge at all — checked before the throttle lookup so a
+   * muted thread never even occupies the "one outstanding nudge" slot.
+   * Applies uniformly to every typed template that flows through here,
+   * including `chat_broadcast` (`broadcast()` calls this same method) — the
+   * task's "broadcast nudges too". The unread badge/in-app state is
+   * unaffected; muting silences the PUSH, never the message itself.
+   */
+  private async notifyMessage(
+    userId: string,
+    template: string,
+    conversationId: string,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const muted = await maybeOne(
+        this.pool,
+        `SELECT 1 FROM conversation_mutes
+          WHERE conversation_id = $1 AND user_id = $2
+            AND (muted_until IS NULL OR muted_until > now())`,
+        [conversationId, userId],
+      );
+      if (muted) return;
+      const pending = await maybeOne(
+        this.pool,
+        `SELECT 1 FROM notifications
+          WHERE user_id = $1 AND status = 'scheduled' AND template = $2
+            AND payload->>'conversation_id' = $3
+          LIMIT 1`,
+        [userId, template, conversationId],
+      );
+      if (pending) return;
+      await this.notifications.schedule({
+        userId, channel: "push", template,
+        payload: { conversation_id: conversationId, ...payload },
+      });
+    } catch {
+      // best-effort
+    }
+  }
+
+  /** A short, human push preview for a message body — never the raw 20k-char
+   *  body, and never anything for a non-text message beyond naming its kind. */
+  private messagePreview(msgType: string, body: string): string {
+    if (msgType !== "text") {
+      const label = { voice: "a voice note", image: "a photo", file: "a file", video: "a video" }[msgType] ?? "an attachment";
+      return `Sent ${label}`;
+    }
+    const trimmed = body.trim();
+    return trimmed.length > 120 ? `${trimmed.slice(0, 117)}...` : trimmed;
+  }
 
   static readonly SendMessage = z.object({
     message_id: z.string().uuid(), // client-generated (offline-first)
@@ -50,10 +198,27 @@ export class ChatService {
 
   static readonly CreateDm = z.object({ user_id: z.string().uuid() });
 
+  static readonly InviteToThread = z.object({ user_id: z.string().uuid() });
+
   static readonly Broadcast = z.object({
     body: z.string().min(1).max(20_000), // for an image broadcast this is the caption
     msg_type: z.enum(["text", "image"]).default("text"),
     attachment_url: z.string().url().max(2000).optional(),
+    /** Who it reaches. OMIT IT and it means the WHOLE CHURCH — only a SuperAdmin
+     *  can broadcast at all, and when they simply type and send they mean
+     *  everyone. Pass "congregation" to narrow it to their own on purpose.
+     *
+     *  Deliberately NOT `.default("congregation")`: a schema default is applied
+     *  before the service sees the request, making "didn't say" indistinguishable
+     *  from "said congregation" — which is exactly how a broadcast quietly
+     *  reached 40 of 60 members, the other 19 having no congregation to be
+     *  scoped to. */
+    audience: z.enum(["congregation", "all"]).optional(),
+    /** Chat Redesign C2 (migration 165, docs/CHAT_REDESIGN_PLAN.md §2.6):
+     *  configurable reply behaviour. Omit it and today's exact behaviour is
+     *  unchanged (server default 'ordinary_chat') — see sendMessage's policy
+     *  check for what each of the other three modes actually does. */
+    reply_policy: z.enum(["none", "official_inbox", "ordinary_chat", "linked_thread"]).optional(),
     client_mutation_id: z.string().uuid().optional(),
   });
 
@@ -62,6 +227,12 @@ export class ChatService {
     title: z.string().min(3).max(200),
     topic: z.string().max(300).optional(),
     category: z.string().max(24).optional(),
+    /** Chat Redesign C4 (migration 170): opt this space into leader review
+     *  instead of instant join. Defaults FALSE (today's behaviour) — a
+     *  founder who wants a gated space says so explicitly. Cell rooms never
+     *  go through this path (joinSpace refuses kind='group' outright), so
+     *  "cell rooms always direct-join their own members" is unaffected. */
+    requires_approval: z.boolean().default(false),
     client_mutation_id: z.string().uuid().optional(),
   });
 
@@ -95,8 +266,8 @@ export class ChatService {
     if (!cell) return null;
     const convo = await one<{ conversation_id: string }>(
       c,
-      `INSERT INTO chat_conversations (conversation_id, kind, title, cell_group_id, congregation_id, is_public)
-       VALUES (gen_random_uuid(), 'group', $1, $2, $3, FALSE)
+      `INSERT INTO chat_conversations (conversation_id, kind, title, cell_group_id, congregation_id, is_public, type)
+       VALUES (gen_random_uuid(), 'group', $1, $2, $3, FALSE, 'SPACE')
        ON CONFLICT (cell_group_id) WHERE kind = 'group' DO NOTHING
        RETURNING conversation_id`,
       [`${cell.name} cell`, cellGroupId, cell.congregation_id],
@@ -219,17 +390,26 @@ export class ChatService {
     return { people };
   }
 
-  /** Membership-checked conversation fetch; public spaces are readable by congregation members. */
+  /** Membership-checked conversation fetch; public spaces are readable by
+   *  congregation members. A removed/suspended member (chat_members.status,
+   *  migration 163) is refused explicitly — their row still exists (history
+   *  kept), so this is a deliberate 403, not the "no existence leak" 404 an
+   *  outsider gets. */
   private async access(c: Queryable, userId: string, conversationId: string): Promise<ConversationRow> {
     const convo = await maybeOne<ConversationRow>(
       c,
-      `SELECT conversation_id, kind, is_public, congregation_id, cell_group_id
+      `SELECT conversation_id, kind, is_public, congregation_id, cell_group_id, type, requires_approval
          FROM chat_conversations WHERE conversation_id = $1`,
       [conversationId],
     );
     if (!convo) throw new ApiError("NOT_FOUND", "Conversation not found");
-    const member = await maybeOne(c, `SELECT 1 FROM chat_members WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId]);
-    if (member) return convo;
+    const member = await maybeOne<{ status: string }>(
+      c, `SELECT status FROM chat_members WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId],
+    );
+    if (member) {
+      if (member.status === "active") return convo;
+      throw new ApiError("FORBIDDEN_SCOPE", "You no longer have access to this conversation");
+    }
     const me = await this.me(c, userId);
     // A cell's group room belongs to every member of that cell — auto-join on access.
     if (convo.kind === "group" && convo.cell_group_id && me.cell_group_id === convo.cell_group_id) {
@@ -245,15 +425,38 @@ export class ChatService {
     throw new ApiError("NOT_FOUND", "Conversation not found"); // no existence leak
   }
 
-  /** Moderator conversation fetch — bypasses membership (Admin/SuperAdmin only). */
-  private async accessAsModerator(c: Queryable, conversationId: string): Promise<ConversationRow> {
+  /** Moderator conversation fetch — bypasses membership (Admin/SuperAdmin only).
+   *
+   *  EXCEPT for a non-SPACE thread (DIRECT/DISCIPLER/PASTORAL/BROADCAST_RESPONSE
+   *  — every flavour of 1:1), for anyone below SuperAdmin (Chat Redesign C1/C2,
+   *  docs/CHAT_REDESIGN_PLAN.md §5 permission matrix). A cell room or topical
+   *  space is a shared, moderated room — ordinary Admin oversight belongs there.
+   *  A DM is a private peer relationship (the whole point of the consent gate on
+   *  /chat/dms): whether it started as an answer to a broadcast, a discipling
+   *  conversation, or an ordinary DM with a now-accepted connection, oversight is
+   *  not a reason to read it. An Admin who needs ONE particular thread is invited
+   *  into it by name (inviteToThread) — the invitation is per-thread, never a
+   *  blanket grant. The shield is here rather than only in the list because a
+   *  conversation id is guessable-adjacent (it travels in payloads) and the list
+   *  is not the only door.
+   *
+   *  Members are unaffected: the sender and the recipient reach their own thread
+   *  through the ordinary membership path in access(), which never comes here. */
+  private async accessAsModerator(
+    c: Queryable,
+    conversationId: string,
+    viewerRole?: ViewerRole,
+  ): Promise<ConversationRow> {
     const convo = await maybeOne<ConversationRow>(
       c,
-      `SELECT conversation_id, kind, is_public, congregation_id, cell_group_id
+      `SELECT conversation_id, kind, is_public, congregation_id, cell_group_id, type, requires_approval
          FROM chat_conversations WHERE conversation_id = $1`,
       [conversationId],
     );
     if (!convo) throw new ApiError("NOT_FOUND", "Conversation not found");
+    if (viewerRole !== "SuperAdmin" && convo.type !== "SPACE") {
+      throw new ApiError("NOT_FOUND", "Conversation not found"); // no existence leak
+    }
     return convo;
   }
 
@@ -261,11 +464,20 @@ export class ChatService {
    * Admin/SuperAdmin oversight inbox: every conversation, with member count,
    * last-message preview, and a per-conversation count of flagged-but-not-hidden
    * messages. Server-authoritative (§1.1) — only moderators reach this path.
+   *
+   * Below SuperAdmin, only type='SPACE' rooms appear (Chat Redesign C1/C2):
+   * every 1:1 flavour — DIRECT, DISCIPLER, PASTORAL, BROADCAST_RESPONSE — is a
+   * private peer relationship now, not a shared room, so oversight does not
+   * belong here for any of them (this subsumes the old broadcast-only shield).
+   * An Admin who needs a particular thread is invited into it by name. Threads
+   * they are genuinely IN still reach them — through the personal inbox, as a
+   * member, like anyone else.
    */
-  private async listAllForModeration(): Promise<{ conversations: unknown[]; discover_spaces: unknown[] }> {
+  private async listAllForModeration(viewerRole?: ViewerRole): Promise<{ conversations: unknown[]; discover_spaces: unknown[] }> {
+    const spaceOnly = viewerRole !== "SuperAdmin";
     const conversations = await many(
       this.pool,
-      `SELECT cv.conversation_id, cv.kind, cv.is_public,
+      `SELECT cv.conversation_id, cv.kind, cv.type, cv.is_public,
               cv.title, cv.topic, cv.category,
               (SELECT count(*)::int FROM chat_members m2 WHERE m2.conversation_id = cv.conversation_id) AS member_count,
               lm.body AS last_body, lm.msg_type AS last_type, lm.created_at AS last_at,
@@ -286,9 +498,10 @@ export class ChatService {
              ORDER BY created_at DESC LIMIT 1
          ) lm ON TRUE
          LEFT JOIN users la ON la.user_id = lm.author_user_id
+        WHERE (NOT $1::boolean OR cv.type = 'SPACE')
         ORDER BY COALESCE(lm.created_at, cv.created_at) DESC
         LIMIT 500`,
-      [],
+      [spaceOnly],
     );
     return { conversations, discover_spaces: [] };
   }
@@ -300,13 +513,13 @@ export class ChatService {
     // `scope=mine` opts a moderator into the personal inbox instead (the web
     // portal uses it so staff see their own Spaces / DMs / Groups like mobile).
     if (isModerator(viewerRole) && scope !== "mine") {
-      const mod = await this.listAllForModeration();
+      const mod = await this.listAllForModeration(viewerRole);
       return { conversations: mod.conversations, discover_spaces: await this.discoverSpaces(userId) };
     }
     await tx(this.pool, async (c) => this.ensureCellGroup(c, userId));
     const conversations = await many(
       this.pool,
-      `SELECT cv.conversation_id, cv.kind, cv.is_public,
+      `SELECT cv.conversation_id, cv.kind, cv.type, cv.is_public,
               CASE WHEN cv.kind = 'dm' THEN other.full_name ELSE cv.title END AS title,
               CASE WHEN cv.kind = 'dm' THEN other.avatar_url ELSE NULL END AS avatar_url,
               CASE WHEN cv.kind = 'dm' THEN other.user_id ELSE NULL END AS peer_user_id,
@@ -323,7 +536,11 @@ export class ChatService {
                  WHERE cm.conversation_id = cv.conversation_id AND NOT cm.is_hidden) AS message_count,
               (SELECT count(*)::int FROM chat_reactions cr
                  JOIN chat_messages rm ON rm.message_id = cr.message_id
-                WHERE rm.conversation_id = cv.conversation_id AND NOT rm.is_hidden) AS reaction_count
+                WHERE rm.conversation_id = cv.conversation_id AND NOT rm.is_hidden) AS reaction_count,
+              -- Mute state (migration 172, Chat Redesign C4): additive, MINE only —
+              -- never inferred for the other side of a DM. Active whenever a row
+              -- exists and either has no expiry (forever) or hasn't expired yet.
+              (cmu.user_id IS NOT NULL AND (cmu.muted_until IS NULL OR cmu.muted_until > now())) AS muted
          FROM chat_members mem
          JOIN chat_conversations cv ON cv.conversation_id = mem.conversation_id
          LEFT JOIN LATERAL (
@@ -337,6 +554,7 @@ export class ChatService {
              ORDER BY created_at DESC LIMIT 1
          ) lm ON TRUE
          LEFT JOIN users la ON la.user_id = lm.author_user_id
+         LEFT JOIN conversation_mutes cmu ON cmu.conversation_id = cv.conversation_id AND cmu.user_id = $1
         WHERE mem.user_id = $1
         ORDER BY COALESCE(lm.created_at, cv.created_at) DESC
         LIMIT 200`,
@@ -377,16 +595,35 @@ export class ChatService {
    */
   async getConversation(userId: string, conversationId: string, viewerRole?: ViewerRole): Promise<unknown> {
     const moderator = isModerator(viewerRole);
-    const convo = moderator
-      ? await this.accessAsModerator(this.pool, conversationId)
+    // A moderator bypasses membership — but only into a SPACE (SuperAdmin
+    // bypasses everywhere). Every 1:1 flavour (DIRECT/DISCIPLER/PASTORAL/
+    // BROADCAST_RESPONSE) is shielded from ordinary Admin oversight; an Admin
+    // INVITED into one still gets in through the ordinary membership door
+    // instead, which is the whole point of inviting them to a thread rather
+    // than granting oversight over it.
+    let canOversee = false;
+    if (moderator) {
+      const head = await maybeOne<{ type: ConversationType }>(
+        this.pool, `SELECT type FROM chat_conversations WHERE conversation_id = $1`, [conversationId],
+      );
+      canOversee = viewerRole === "SuperAdmin" || head?.type === "SPACE";
+    }
+    const convo = canOversee
+      ? await this.accessAsModerator(this.pool, conversationId, viewerRole)
       : await this.access(this.pool, userId, conversationId);
     const head = await one<Record<string, unknown>>(
       this.pool,
-      `SELECT cv.conversation_id, cv.kind, cv.is_public, cv.topic, cv.category,
+      `SELECT cv.conversation_id, cv.kind, cv.type, cv.is_public, cv.topic, cv.category,
               CASE WHEN cv.kind = 'dm' THEN other.full_name ELSE cv.title END AS title,
               CASE WHEN cv.kind = 'dm' THEN other.avatar_url ELSE NULL END AS avatar_url,
               (SELECT count(*)::int FROM chat_members m2 WHERE m2.conversation_id = cv.conversation_id) AS member_count,
-              EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = cv.conversation_id AND m.user_id = $1) AS joined
+              EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = cv.conversation_id AND m.user_id = $1) AS joined,
+              -- Mute state (migration 172), additive — same MINE-only semantics as listConversations.
+              EXISTS (
+                SELECT 1 FROM conversation_mutes cmu
+                 WHERE cmu.conversation_id = cv.conversation_id AND cmu.user_id = $1
+                   AND (cmu.muted_until IS NULL OR cmu.muted_until > now())
+              ) AS muted
          FROM chat_conversations cv
          LEFT JOIN LATERAL (
             SELECT om.user_id FROM chat_members om WHERE om.conversation_id = cv.conversation_id AND om.user_id <> $1 LIMIT 1
@@ -399,6 +636,7 @@ export class ChatService {
       this.pool,
       `SELECT m.message_id, m.author_user_id, u.full_name AS author_name, u.avatar_url AS author_avatar, m.body, m.msg_type,
               m.attachment_url, m.attachment_meta, m.reply_to_id, m.ai_tag, m.is_edited, m.created_at,
+              m.broadcast_id,
               ${moderator ? "m.is_hidden, m.is_flagged, m.flag_reason, m.moderated_at," : ""}
               rt.body AS reply_body, ru.full_name AS reply_author,
               (m.author_user_id = $1) AS mine,
@@ -441,6 +679,51 @@ export class ChatService {
       if (convo.kind === "space") {
         await c.query(`INSERT INTO chat_members (conversation_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [conversationId, userId]);
       }
+      // A block stops NEW sends in both directions — existing history stays
+      // readable to both sides (no-data-loss; docs/CHAT_REDESIGN_PLAN.md §8 open
+      // question 5). Scoped to DIRECT — the ordinary peer-DM flavour a
+      // connection/block actually governs, not a discipling or pastoral thread.
+      if (convo.kind === "dm" && convo.type === "DIRECT") {
+        const blocked = await maybeOne(
+          c,
+          `SELECT 1 FROM chat_members m
+             JOIN user_connections uc
+               ON uc.user_a = LEAST(m.user_id, $2::uuid) AND uc.user_b = GREATEST(m.user_id, $2::uuid)
+            WHERE m.conversation_id = $1 AND m.user_id <> $2 AND uc.status = 'blocked'`,
+          [conversationId, userId],
+        );
+        if (blocked) throw new ApiError("FORBIDDEN_SCOPE", "This conversation is blocked");
+      }
+      // Broadcast reply_policy (Chat Redesign C2, migration 165, plan §2.6):
+      // the RECIPIENT's ability to keep talking in a BROADCAST_RESPONSE thread
+      // is governed by the most recently delivered broadcast's policy — the
+      // BROADCASTER (staff) is never gated, this only ever restricts the
+      // member answering. 'ordinary_chat' (the default) is today's actual,
+      // unchanged behaviour.
+      if (convo.kind === "dm" && convo.type === "BROADCAST_RESPONSE") {
+        const latest = await maybeOne<{ reply_policy: BroadcastReplyPolicy; sender_user_id: string }>(
+          c,
+          `SELECT b.reply_policy, b.sender_user_id
+             FROM chat_messages m JOIN chat_broadcasts b ON b.broadcast_id = m.broadcast_id
+            WHERE m.conversation_id = $1 AND m.broadcast_id IS NOT NULL
+            ORDER BY m.created_at DESC LIMIT 1`,
+          [conversationId],
+        );
+        if (latest && userId !== latest.sender_user_id && latest.reply_policy !== "ordinary_chat") {
+          // 'linked_thread': resolve where the reply SHOULD go (the sender's
+          // DISCIPLER or PASTORAL thread with this member, if either applies)
+          // and hand it back as a detail rather than silently writing the
+          // message somewhere the client didn't ask to post it — the client
+          // re-sends to that conversation_id itself.
+          const linkedConversationId = latest.reply_policy === "linked_thread"
+            ? await this.resolveLinkedReplyThread(c, userId, latest.sender_user_id)
+            : null;
+          throw new ApiError("FORBIDDEN_SCOPE", "Replies are not open for this message", {
+            reply_policy: latest.reply_policy,
+            ...(latest.reply_policy === "linked_thread" ? { linked_conversation_id: linkedConversationId } : {}),
+          });
+        }
+      }
       const res = await c.query(
         `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type, attachment_url, attachment_meta, reply_to_id, client_mutation_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (message_id) DO NOTHING RETURNING message_id`,
@@ -453,6 +736,45 @@ export class ChatService {
       if (res.rowCount === 0) return { message_id: input.message_id, duplicate: true };
       await c.query(`UPDATE chat_conversations SET updated_at = now() WHERE conversation_id = $1`, [conversationId]);
       await recordChange(c, "chat_messages", input.message_id, null, "upsert");
+
+      // New-message notifications (Chat Redesign C4, docs/CHAT_REDESIGN.md
+      // "Notifications" section): one typed template per 1:1 flavour. SPACE
+      // rooms are deliberately NOT nudged here — the owner brief's typed list
+      // names DM/discipler/pastoral/broadcast only; a cell/topical room's
+      // ordinary chatter pushing on every message would be exactly the spam
+      // the brief's own "batch/throttle sensibly" instruction warns against,
+      // and unread badges already cover it. BROADCAST_RESPONSE folds into the
+      // DM template — once the initial broadcast has landed (its own
+      // "chat_broadcast" nudge, see `broadcast()`), the thread behaves like
+      // an ordinary DM for every message after it.
+      const template: Record<string, string> = {
+        DIRECT: "chat_dm_message",
+        DISCIPLER: "chat_discipler_message",
+        PASTORAL: "chat_pastoral_message",
+        BROADCAST_RESPONSE: "chat_dm_message",
+      };
+      const notifTemplate = template[convo.type];
+      if (notifTemplate && convo.kind === "dm") {
+        const recipients = await many<{ user_id: string }>(
+          c,
+          `SELECT user_id FROM chat_members WHERE conversation_id = $1 AND user_id <> $2 AND status = 'active'`,
+          [conversationId, userId],
+        );
+        if (recipients.length) {
+          // Pastoral is GENERIC — no sender, no body (owner brief §"Notifications":
+          // "Locked pastoral → generic 'You have a new private pastoral message.'").
+          const payload = convo.type === "PASTORAL"
+            ? { title: "Nuru Pathway", body: "You have a new private pastoral message." }
+            : {
+                title: (await maybeOne<{ full_name: string }>(c, `SELECT full_name FROM users WHERE user_id = $1`, [userId]))?.full_name ?? "New message",
+                body: this.messagePreview(input.msg_type, input.body),
+                message_id: input.message_id,
+              };
+          for (const r of recipients) {
+            await this.notifyMessage(r.user_id, notifTemplate, conversationId, payload);
+          }
+        }
+      }
       return { message_id: input.message_id, duplicate: false };
     });
   }
@@ -507,6 +829,41 @@ export class ChatService {
     return { conversation_id: conversationId };
   }
 
+  static readonly MuteConversation = z.object({ until: z.string().datetime().nullish() });
+
+  /**
+   * Mute a conversation's push nudges for the caller (migration 172,
+   * `conversation_mutes`, Chat Redesign C4's "mute" control on the Chat and
+   * Talk with My Pastor ⋮ menus). `until` omitted/null = muted forever;
+   * an ISO timestamp mutes through that instant. Reuses `access()` for the
+   * "active participant" gate — same 404 (no existence leak) / 403 posture
+   * as every other member-scoped route. Idempotent: re-muting overwrites the
+   * prior `muted_until` via upsert rather than erroring or duplicating rows.
+   */
+  async muteConversation(
+    userId: string,
+    conversationId: string,
+    until?: string | null,
+  ): Promise<{ conversation_id: string; muted: true; muted_until: string | null }> {
+    await this.access(this.pool, userId, conversationId);
+    const mutedUntil = until ?? null;
+    await this.pool.query(
+      `INSERT INTO conversation_mutes (conversation_id, user_id, muted_until)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (conversation_id, user_id) DO UPDATE SET muted_until = EXCLUDED.muted_until`,
+      [conversationId, userId, mutedUntil],
+    );
+    return { conversation_id: conversationId, muted: true, muted_until: mutedUntil };
+  }
+
+  /** Unmute (migration 172). Idempotent — deleting a row that doesn't exist
+   *  (already unmuted, or never muted) is a no-op, not an error. */
+  async unmuteConversation(userId: string, conversationId: string): Promise<{ conversation_id: string; muted: false }> {
+    await this.access(this.pool, userId, conversationId);
+    await this.pool.query(`DELETE FROM conversation_mutes WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId]);
+    return { conversation_id: conversationId, muted: false };
+  }
+
   /** Read receipts for a message — who (other than the author) has seen it, and how
    *  many recipients there are. Author-only (the "eye" / Seen-by view). */
   async messageReaders(
@@ -543,12 +900,30 @@ export class ChatService {
    * SuperAdmin) may DM anyone (cross-congregation) so the portal can reach
    * everyone registered.
    */
+  /**
+   * Create or return the 1:1 DM with another member. Minor-safe everywhere. A
+   * member may only DM within their own congregation; portal staff (Admin/
+   * SuperAdmin) may DM anyone (cross-congregation) so the portal can reach
+   * everyone registered.
+   *
+   * Chat Redesign C1/C2 ("no unsolicited DMs", docs/CHAT_REDESIGN.md): an
+   * EXISTING thread between the two — including every DM grandfathered as an
+   * accepted connection by migration 162's backfill, and any DISCIPLER/
+   * PASTORAL/BROADCAST_RESPONSE thread that predates this feature — is always
+   * just returned; this endpoint's job has always been find-OR-create, and
+   * nothing already working is re-gated. The consent check applies only to
+   * creating a genuinely NEW thread, and only between two ordinary members:
+   * staff (Admin/SuperAdmin) keep the existing "reach anyone" support
+   * exception on EITHER side of the pair — a member has always been able to
+   * reach an Admin for support, and that does not become a hostile "unsolicited
+   * DM" just because the redesign shipped.
+   */
   async createOrGetDm(userId: string, otherUserId: string, viewerRole?: ViewerRole): Promise<{ conversation_id: string }> {
     if (otherUserId === userId) throw new ApiError("UNPROCESSABLE", "Cannot DM yourself");
     return tx(this.pool, async (c) => {
       const me = await this.me(c, userId);
-      const other = await maybeOne<{ congregation_id: string | null; is_minor: boolean }>(
-        c, `SELECT congregation_id, is_minor FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [otherUserId],
+      const other = await maybeOne<{ congregation_id: string | null; is_minor: boolean; role: string }>(
+        c, `SELECT congregation_id, is_minor, role FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [otherUserId],
       );
       if (!other) throw new ApiError("NOT_FOUND", "Member not found");
       if (me.is_minor || other.is_minor) throw new ApiError("FORBIDDEN_SCOPE", "Direct messages are unavailable for minors");
@@ -559,14 +934,36 @@ export class ChatService {
       // The DM is filed under the initiator's congregation (or the other member's,
       // for a not-yet-onboarded staff account).
       const dmCongregation = me.congregation_id ?? other.congregation_id;
+
+      const existing = await this.findDm(c, userId, otherUserId);
+      if (existing) return { conversation_id: existing };
+
+      // No thread yet — this WOULD be a brand-new, unsolicited DM. Gate it
+      // unless either side is staff.
+      const staffException = moderator || other.role === "Admin" || other.role === "SuperAdmin";
+      if (!staffException) {
+        const connected = await maybeOne(
+          c,
+          `SELECT 1 FROM user_connections WHERE user_a = LEAST($1::uuid,$2::uuid) AND user_b = GREATEST($1::uuid,$2::uuid) AND status = 'accepted'`,
+          [userId, otherUserId],
+        );
+        if (!connected) {
+          throw new ApiError("CONSENT_REQUIRED", "Send a connection request first", {
+            hint: "send a connection request first",
+          });
+        }
+      } else if (moderator) {
+        await audit(c, userId, "chat.dm.staff_exception", "chat_conversations", null, { with: otherUserId });
+      }
       const conversationId = await this.ensureDm(c, userId, otherUserId, dmCongregation);
       return { conversation_id: conversationId };
     });
   }
 
-  /** Find-or-create the 1:1 DM between two users — the raw ensure step shared by
-   *  createOrGetDm and broadcast. No policy checks here; callers gate first. */
-  private async ensureDm(c: Queryable, userId: string, otherUserId: string, congregationId: string | null): Promise<string> {
+  /** Does a 1:1 (kind='dm') conversation already exist between these two users?
+   *  Shared by createOrGetDm (the consent-gate's "existing thread" exemption)
+   *  and ensureDm (the raw find-or-create step also used by broadcast). */
+  private async findDm(c: Queryable, userId: string, otherUserId: string): Promise<string | null> {
     const existing = await maybeOne<{ conversation_id: string }>(
       c,
       `SELECT cv.conversation_id FROM chat_conversations cv
@@ -576,7 +973,14 @@ export class ChatService {
         LIMIT 1`,
       [userId, otherUserId],
     );
-    if (existing) return existing.conversation_id;
+    return existing?.conversation_id ?? null;
+  }
+
+  /** Find-or-create the 1:1 DM between two users — the raw ensure step shared by
+   *  createOrGetDm and broadcast. No policy checks here; callers gate first. */
+  private async ensureDm(c: Queryable, userId: string, otherUserId: string, congregationId: string | null): Promise<string> {
+    const existing = await this.findDm(c, userId, otherUserId);
+    if (existing) return existing;
 
     const convo = await one<{ conversation_id: string }>(
       c,
@@ -591,10 +995,113 @@ export class ChatService {
     return convo.conversation_id;
   }
 
-  /** Everyone a broadcast reaches: active members of the sender's congregation,
-   *  excluding the sender, soft-deleted accounts, and minors (D-M6 — a broadcast
-   *  materializes DMs, and DMs with minors are forbidden everywhere). */
-  private async broadcastRecipients(c: Queryable, senderId: string): Promise<string[]> {
+  /**
+   * GET /chat/discipler/conversation (Chat Redesign C2): resolve — lazily
+   * creating — the caller's DISCIPLER thread with their CURRENT assignment
+   * (discipleship.resolveCurrentDiscipler: discipler_assignments, falling
+   * back to a not-yet-migrated relationship_tree edge — NEVER the cell-leader
+   * inference; owner brief: "Tab active only when a valid discipler
+   * assignment exists"). 404 NOT_FOUND {no_discipler:true} if none. Minor-safe
+   * (D-M6) like every other DM. Never reuses an ARCHIVED thread (migration
+   * 169) — a reassignment starts a fresh, empty conversation, never merged
+   * into or exposed via the old one.
+   */
+  async openDisciplerConversation(userId: string): Promise<{ conversation_id: string }> {
+    return tx(this.pool, async (c) => {
+      const current = await resolveCurrentDiscipler(c, userId);
+      if (!current) throw new ApiError("NOT_FOUND", "No discipler assigned", { no_discipler: true });
+      const me = await this.me(c, userId);
+      const discipler = await maybeOne<{ is_minor: boolean; congregation_id: string | null }>(
+        c, `SELECT is_minor, congregation_id FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [current.discipler_user_id],
+      );
+      if (!discipler) throw new ApiError("NOT_FOUND", "No discipler assigned", { no_discipler: true });
+      if (me.is_minor || discipler.is_minor) {
+        throw new ApiError("FORBIDDEN_SCOPE", "Direct messages are unavailable for minors");
+      }
+      const existing = await maybeOne<{ conversation_id: string }>(
+        c,
+        `SELECT cv.conversation_id FROM chat_conversations cv
+          WHERE cv.kind = 'dm' AND cv.type = 'DISCIPLER' AND cv.archived_at IS NULL
+            AND EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = cv.conversation_id AND m.user_id = $1)
+            AND EXISTS (SELECT 1 FROM chat_members m2 WHERE m2.conversation_id = cv.conversation_id AND m2.user_id = $2)
+          LIMIT 1`,
+        [userId, current.discipler_user_id],
+      );
+      if (existing) return { conversation_id: existing.conversation_id };
+      const convo = await one<{ conversation_id: string }>(
+        c,
+        `INSERT INTO chat_conversations (conversation_id, kind, type, congregation_id, created_by)
+         VALUES (gen_random_uuid(), 'dm', 'DISCIPLER', $1, $2) RETURNING conversation_id`,
+        [me.congregation_id ?? discipler.congregation_id, userId],
+      );
+      await c.query(
+        `INSERT INTO chat_members (conversation_id, user_id) VALUES ($1, $2), ($1, $3)`,
+        [convo.conversation_id, userId, current.discipler_user_id],
+      );
+      return { conversation_id: convo.conversation_id };
+    });
+  }
+
+  /** Broadcast reply_policy='linked_thread' resolution (§2.6): if the
+   *  broadcaster is the RECIPIENT's current discipler or pastor, point at the
+   *  EXISTING (non-archived) DISCIPLER/PASTORAL thread between them — read-
+   *  only lookup, never creates one (a blocked POST that errors out should
+   *  not have a side effect). Null if neither relationship applies, or the
+   *  relevant thread was never opened. */
+  private async resolveLinkedReplyThread(c: Queryable, recipientUserId: string, broadcasterUserId: string): Promise<string | null> {
+    const discipler = await resolveCurrentDiscipler(c, recipientUserId);
+    if (discipler?.discipler_user_id === broadcasterUserId) {
+      const t = await maybeOne<{ conversation_id: string }>(
+        c,
+        `SELECT cv.conversation_id FROM chat_conversations cv
+          WHERE cv.kind = 'dm' AND cv.type = 'DISCIPLER' AND cv.archived_at IS NULL
+            AND EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = cv.conversation_id AND m.user_id = $1)
+            AND EXISTS (SELECT 1 FROM chat_members m2 WHERE m2.conversation_id = cv.conversation_id AND m2.user_id = $2)
+          LIMIT 1`,
+        [recipientUserId, broadcasterUserId],
+      );
+      if (t) return t.conversation_id;
+    }
+    const pastor = await resolvePastorForMember(c, recipientUserId);
+    if (pastor?.pastor_user_id === broadcasterUserId) {
+      const t = await maybeOne<{ conversation_id: string }>(
+        c,
+        `SELECT cv.conversation_id FROM chat_conversations cv
+          WHERE cv.kind = 'dm' AND cv.type = 'PASTORAL' AND cv.archived_at IS NULL
+            AND EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = cv.conversation_id AND m.user_id = $1)
+            AND EXISTS (SELECT 1 FROM chat_members m2 WHERE m2.conversation_id = cv.conversation_id AND m2.user_id = $2)
+          LIMIT 1`,
+        [recipientUserId, broadcasterUserId],
+      );
+      if (t) return t.conversation_id;
+    }
+    return null;
+  }
+
+  /** Everyone a broadcast reaches, excluding the sender, soft-deleted accounts,
+   *  and minors (D-M6 — a broadcast materializes DMs, and DMs with minors are
+   *  forbidden everywhere).
+   *
+   *  audience "congregation": active members of the sender's own congregation.
+   *  audience "all": every active member, congregation or not — the whole point
+   *  of the SuperAdmin reach is that it does not depend on where someone has
+   *  been filed. (Roughly a third of members currently have no congregation, so
+   *  a congregation-scoped fan-out would silently skip them.) */
+  private async broadcastRecipients(
+    c: Queryable,
+    senderId: string,
+    audience: "congregation" | "all",
+  ): Promise<string[]> {
+    if (audience === "all") {
+      const rows = await many<{ user_id: string }>(
+        c,
+        `SELECT user_id FROM users
+          WHERE user_id <> $1 AND deleted_at IS NULL AND is_minor = FALSE
+          ORDER BY user_id`,
+        [senderId],
+      );
+      return rows.map((r) => r.user_id);
+    }
     const me = await this.me(c, senderId);
     if (!me.congregation_id) throw new ApiError("UNPROCESSABLE", "You need a congregation to broadcast");
     const rows = await many<{ user_id: string }>(
@@ -620,39 +1127,323 @@ export class ChatService {
    * bytes went straight to Cloudinary via /chat/attachments/sign, §4.5); body
    * is then the caption.
    */
-  async broadcast(senderId: string, input: z.infer<typeof ChatService.Broadcast>): Promise<{ sent: number; duplicate: boolean }> {
+  async broadcast(
+    senderId: string,
+    input: z.infer<typeof ChatService.Broadcast>,
+    viewerRole?: ViewerRole,
+  ): Promise<BroadcastRow & { sent: number; duplicate: boolean }> {
+    // Unasked, the reach follows who you are: a SuperAdmin's broadcast means the
+    // WHOLE church — including the members filed under no congregation, who are
+    // not a rounding error (19 of 60 today). Anyone else means their own.
+    const audience = input.audience ?? (viewerRole === "SuperAdmin" ? "all" : "congregation");
+    // Reaching every congregation at once is a SuperAdmin act, however it arrives.
+    if (audience === "all" && viewerRole !== "SuperAdmin") {
+      throw new ApiError("FORBIDDEN_SCOPE", "Only a SuperAdmin can broadcast to every member");
+    }
     return tx(this.pool, async (c) => {
+      // Idempotent on the BROADCAST (§3.6), not on one lucky copy: a replay now
+      // returns the id and the count that actually landed, rather than
+      // recomputing today's membership and reporting a number that never
+      // happened.
+      // A replay returns the SAME sent thing, whole — so a client that lost the
+      // response (or retried from its offline queue) still renders the message
+      // exactly as it went out, rather than a bare id it cannot draw.
       if (input.client_mutation_id) {
-        const dup = await maybeOne(c, `SELECT 1 FROM chat_messages WHERE client_mutation_id = $1`, [input.client_mutation_id]);
-        if (dup) return { sent: (await this.broadcastRecipients(c, senderId)).length, duplicate: true };
+        const dup = await maybeOne<BroadcastRow>(
+          c,
+          `SELECT ${BROADCAST_COLS} FROM chat_broadcasts WHERE client_mutation_id = $1`,
+          [input.client_mutation_id],
+        );
+        if (dup) return { ...dup, sent: dup.recipient_count, duplicate: true };
       }
-      const recipients = await this.broadcastRecipients(c, senderId);
+      const recipients = await this.broadcastRecipients(c, senderId, audience);
       const me = await this.me(c, senderId);
-      let stampedMutationId = false;
+      // Return the whole row, not just its id: the moment a broadcast is sent the
+      // UI shows it as THE SENT MESSAGE — pinned at the top of its own page, with
+      // the server's own timestamp and the count it actually reached. Sending
+      // should not need a second round trip to find out what you just said.
+      const bc = await one<BroadcastRow>(
+        c,
+        `INSERT INTO chat_broadcasts
+           (sender_user_id, body, msg_type, attachment_url, audience, congregation_id, recipient_count, client_mutation_id, reply_policy)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${BROADCAST_COLS}`,
+        [
+          senderId, input.body, input.msg_type, input.attachment_url ?? null,
+          audience, audience === "all" ? null : me.congregation_id,
+          recipients.length, input.client_mutation_id ?? null,
+          input.reply_policy ?? "ordinary_chat",
+        ],
+      );
+      const sender = await maybeOne<{ full_name: string }>(c, `SELECT full_name FROM users WHERE user_id = $1`, [senderId]);
       for (const otherUserId of recipients) {
-        const conversationId = await this.ensureDm(c, senderId, otherUserId, me.congregation_id);
+        // An 'all' broadcast crosses congregations, so the DM belongs to the
+        // recipient's, not the sender's.
+        const dmCongregation = audience === "all"
+          ? (await this.me(c, otherUserId)).congregation_id ?? me.congregation_id
+          : me.congregation_id;
+        const conversationId = await this.ensureDm(c, senderId, otherUserId, dmCongregation);
         const msg = await one<{ message_id: string }>(
           c,
-          `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type, attachment_url, client_mutation_id)
+          `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type, attachment_url, broadcast_id)
            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6) RETURNING message_id`,
-          [
-            conversationId, senderId, input.body, input.msg_type,
-            input.attachment_url ?? null, stampedMutationId ? null : input.client_mutation_id ?? null,
-          ],
+          [conversationId, senderId, input.body, input.msg_type, input.attachment_url ?? null, bc.broadcast_id],
         );
-        stampedMutationId = true;
-        await c.query(`UPDATE chat_conversations SET updated_at = now() WHERE conversation_id = $1`, [conversationId]);
+        // A DM that has ever carried a broadcast copy is BROADCAST_RESPONSE —
+        // the same rule migration 161's backfill applied to EXISTING data,
+        // replicated here at write-time for conversations that are new or
+        // were something else (DIRECT/DISCIPLER) before this delivery. Takes
+        // precedence over any other type, mirroring the migration's ordering.
+        await c.query(
+          `UPDATE chat_conversations SET updated_at = now(),
+                  type = CASE WHEN type <> 'BROADCAST_RESPONSE' THEN 'BROADCAST_RESPONSE' ELSE type END
+             WHERE conversation_id = $1`,
+          [conversationId],
+        );
         await recordChange(c, "chat_messages", msg.message_id, null, "upsert");
+        // "new broadcast" notification (Chat Redesign C4, owner brief
+        // §"Notifications"). Named, unlike Pastoral — a broadcast is a public,
+        // verified-sender act, never anonymous.
+        await this.notifyMessage(otherUserId, "chat_broadcast", conversationId, {
+          title: sender?.full_name ?? "Broadcast",
+          body: this.messagePreview(input.msg_type, input.body),
+          broadcast_id: bc.broadcast_id,
+          message_id: msg.message_id,
+        });
       }
-      return { sent: recipients.length, duplicate: false };
+      return { ...bc, sent: recipients.length, duplicate: false };
     });
   }
 
-  /** Join a public space in the caller's congregation. */
+  /**
+   * Bring one more person into ONE thread — never into the broadcast.
+   *
+   * The unit of authorisation is deliberately the thread, not the broadcast: a
+   * SuperAdmin who wants a deacon on Ann's reply authorises them for ANN's
+   * thread, and gains them nothing anywhere else. There is no "share the
+   * broadcast" verb, because that would hand over sixty private conversations
+   * with one tap.
+   *
+   * The member is TOLD. A note lands in the thread naming who joined, because a
+   * person who wrote privately to their pastor is owed the knowledge that
+   * someone else is now reading — a silent reader is a betrayal, not a feature.
+   * The note is a real message, so it syncs, previews, and cannot be missed.
+   *
+   * The thread stops being a dm the moment a third person is in it (a dm's
+   * title/avatar is "the other member", which is meaningless once there are
+   * two of them), so it becomes a group titled for the member it is about.
+   */
+  async inviteToThread(
+    actorId: string,
+    conversationId: string,
+    input: z.infer<typeof ChatService.InviteToThread>,
+    viewerRole?: ViewerRole,
+  ): Promise<{ conversation_id: string; invited: string; already: boolean }> {
+    if (viewerRole !== "SuperAdmin") {
+      throw new ApiError("FORBIDDEN_SCOPE", "Only a SuperAdmin can bring someone into a thread");
+    }
+    return tx(this.pool, async (c) => {
+      const convo = await maybeOne<{ kind: string; congregation_id: string | null }>(
+        c,
+        `SELECT kind, congregation_id FROM chat_conversations WHERE conversation_id = $1`,
+        [conversationId],
+      );
+      if (!convo) throw new ApiError("NOT_FOUND", "Conversation not found");
+      // You may only widen a room you are in. Oversight is not authorship.
+      const mine = await maybeOne(
+        c, `SELECT 1 FROM chat_members WHERE conversation_id = $1 AND user_id = $2`, [conversationId, actorId],
+      );
+      if (!mine) throw new ApiError("FORBIDDEN_SCOPE", "You are not in this thread");
+      if (input.user_id === actorId) throw new ApiError("UNPROCESSABLE", "You are already here");
+
+      const guest = await maybeOne<{ full_name: string; is_minor: boolean }>(
+        c,
+        `SELECT full_name, is_minor FROM users WHERE user_id = $1 AND deleted_at IS NULL`,
+        [input.user_id],
+      );
+      if (!guest) throw new ApiError("NOT_FOUND", "Member not found");
+      if (guest.is_minor) throw new ApiError("FORBIDDEN_SCOPE", "Direct messages are unavailable for minors");
+
+      const already = await maybeOne(
+        c, `SELECT 1 FROM chat_members WHERE conversation_id = $1 AND user_id = $2`, [conversationId, input.user_id],
+      );
+      if (already) return { conversation_id: conversationId, invited: input.user_id, already: true };
+
+      await c.query(
+        `INSERT INTO chat_members (conversation_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [conversationId, input.user_id],
+      );
+      if (convo.kind === "dm") {
+        // Title it for the person it is ABOUT — the one member who isn't staff —
+        // so it stays findable for everyone now in it.
+        const subject = await maybeOne<{ full_name: string }>(
+          c,
+          `SELECT u.full_name FROM chat_members m
+             JOIN users u ON u.user_id = m.user_id
+            WHERE m.conversation_id = $1 AND m.user_id <> $2 AND m.user_id <> $3
+            ORDER BY u.full_name LIMIT 1`,
+          [conversationId, actorId, input.user_id],
+        );
+        await c.query(
+          `UPDATE chat_conversations SET kind = 'group', title = COALESCE(title, $2), updated_at = now()
+            WHERE conversation_id = $1`,
+          [conversationId, subject?.full_name ?? "Conversation"],
+        );
+      }
+      const actor = await maybeOne<{ full_name: string }>(
+        c, `SELECT full_name FROM users WHERE user_id = $1`, [actorId],
+      );
+      const note = await one<{ message_id: string }>(
+        c,
+        `INSERT INTO chat_messages (message_id, conversation_id, author_user_id, body, msg_type)
+         VALUES (gen_random_uuid(), $1, $2, $3, 'text') RETURNING message_id`,
+        [conversationId, actorId, `${actor?.full_name ?? "A leader"} invited ${guest.full_name} into this conversation.`],
+      );
+      await c.query(`UPDATE chat_conversations SET updated_at = now() WHERE conversation_id = $1`, [conversationId]);
+      await recordChange(c, "chat_messages", note.message_id, null, "upsert");
+      return { conversation_id: conversationId, invited: input.user_id, already: false };
+    });
+  }
+
+  /** Broadcasts newest first, each with the numbers that matter: how many it
+   *  reached, how many have seen it, how many answered.
+   *
+   *  The page opens on the last 4 — the ones still live enough to be worth
+   *  watching — and asks for the rest only when you say so. `limit` caps it;
+   *  `total` tells the client how many more there are, so "show all 12" can name
+   *  its number instead of guessing. */
+  async listBroadcasts(senderId: string, limit = 4): Promise<{ data: unknown[]; total: number }> {
+    const { n: total } = await one<{ n: number }>(
+      this.pool,
+      `SELECT count(*)::int AS n FROM chat_broadcasts WHERE sender_user_id = $1`,
+      [senderId],
+    );
+    const data = await many(
+      this.pool,
+      `SELECT b.broadcast_id, b.body, b.msg_type, b.attachment_url, b.audience,
+              b.recipient_count, b.reply_policy, b.created_at,
+              (SELECT count(DISTINCT r.author_user_id)::int
+                 FROM chat_messages copy
+                 JOIN chat_messages r ON r.conversation_id = copy.conversation_id
+                WHERE copy.broadcast_id = b.broadcast_id
+                  AND r.author_user_id <> b.sender_user_id
+                  AND r.created_at > copy.created_at
+                  AND r.deleted_at IS NULL AND NOT r.is_hidden) AS replied_count,
+              (SELECT count(*)::int
+                 FROM chat_messages copy
+                 JOIN chat_members mem ON mem.conversation_id = copy.conversation_id
+                                      AND mem.user_id <> b.sender_user_id
+                WHERE copy.broadcast_id = b.broadcast_id
+                  AND mem.last_read_at IS NOT NULL
+                  AND mem.last_read_at >= copy.created_at) AS seen_count
+         FROM chat_broadcasts b
+        WHERE b.sender_user_id = $1
+        ORDER BY b.created_at DESC
+        LIMIT $2`,
+      [senderId, limit],
+    );
+    return { data, total };
+  }
+
+  /**
+   * One broadcast and everything it stirred up: the message itself at the top,
+   * then every response beneath it — the church answering back in one place.
+   *
+   * A response needs no table of its own: it is any message in a delivered
+   * copy's conversation, written by the recipient, after the copy landed. Each
+   * carries its conversation_id, which IS the private thread with that person —
+   * already seeded with the broadcast as its top message. Promoting a response
+   * to a full conversation is therefore just opening it; there is nothing to
+   * create, and no context to re-attach.
+   */
+  async broadcastDetail(senderId: string, broadcastId: string, viewerRole?: ViewerRole): Promise<unknown> {
+    const b = await maybeOne<{ sender_user_id: string }>(
+      this.pool,
+      `SELECT broadcast_id, sender_user_id, body, msg_type, attachment_url, audience,
+              recipient_count, reply_policy, created_at
+         FROM chat_broadcasts WHERE broadcast_id = $1`,
+      [broadcastId],
+    );
+    if (!b) throw new ApiError("NOT_FOUND", "Broadcast not found");
+    // Your own — or any, if you are a SuperAdmin: broadcasts are the one place a
+    // SuperAdmin has oversight by role. For everyone else these replies are the
+    // private words of members answering ONE person (§5.4), so an Admin who needs
+    // a particular conversation is invited into that THREAD, never handed the
+    // broadcast.
+    if (b.sender_user_id !== senderId && viewerRole !== "SuperAdmin") {
+      throw new ApiError("FORBIDDEN_SCOPE", "Not your broadcast");
+    }
+    const responses = await many(
+      this.pool,
+      `SELECT r.message_id, r.conversation_id, r.body, r.msg_type, r.attachment_url,
+              r.created_at, u.user_id, u.full_name, u.avatar_url,
+              (SELECT count(*)::int FROM chat_messages n
+                WHERE n.conversation_id = r.conversation_id
+                  AND n.author_user_id = r.author_user_id
+                  AND n.deleted_at IS NULL AND NOT n.is_hidden) AS from_them
+         FROM chat_messages copy
+         JOIN chat_messages r ON r.conversation_id = copy.conversation_id
+                             AND r.created_at > copy.created_at
+         JOIN users u ON u.user_id = r.author_user_id
+        WHERE copy.broadcast_id = $1
+          AND r.author_user_id <> $2
+          AND r.deleted_at IS NULL AND NOT r.is_hidden
+        ORDER BY r.created_at DESC
+        LIMIT 500`,
+      // Exclude the BROADCAST'S sender, not the viewer — a SuperAdmin reading
+      // someone else's broadcast wants the members' answers, not to have their
+      // own messages filtered out of a thread they were never in.
+      [broadcastId, b.sender_user_id],
+    );
+    // Who it reached, and who has actually seen it — the ticks.
+    //
+    // delivered: the copy exists in their thread. A broadcast is written server-
+    //   side into every recipient's conversation in one transaction, so delivery
+    //   is not a hope: if the row is there, it arrived. One blue tick.
+    // seen_at: they opened the thread AFTER the copy landed (chat_members
+    //   .last_read_at, the same read receipt the rest of chat runs on). Two blue
+    //   ticks.
+    const recipients = await many(
+      this.pool,
+      `SELECT u.user_id, u.full_name, u.avatar_url,
+              copy.created_at AS delivered_at,
+              TRUE AS delivered,
+              (mem.last_read_at IS NOT NULL AND mem.last_read_at >= copy.created_at) AS seen,
+              CASE WHEN mem.last_read_at IS NOT NULL AND mem.last_read_at >= copy.created_at
+                   THEN mem.last_read_at END AS seen_at
+         FROM chat_messages copy
+         JOIN chat_members mem ON mem.conversation_id = copy.conversation_id
+                              AND mem.user_id <> $2
+         JOIN users u ON u.user_id = mem.user_id
+        WHERE copy.broadcast_id = $1
+        ORDER BY (mem.last_read_at IS NOT NULL AND mem.last_read_at >= copy.created_at) DESC,
+                 u.full_name`,
+      [broadcastId, b.sender_user_id],
+    );
+    const seenCount = (recipients as Array<{ seen: boolean }>).filter((r) => r.seen).length;
+    return { ...b, responses, recipients, delivered_count: recipients.length, seen_count: seenCount };
+  }
+
+  /**
+   * Join a public space in the caller's congregation. Chat Redesign C4
+   * (migration 170): a space with requires_approval=TRUE refuses a direct
+   * join for anyone not already a member — 403 FORBIDDEN_SCOPE,
+   * details.approval_required=true — so the client falls back to
+   * POST /chat/spaces/:id/join-requests (leader review, migration 163)
+   * instead. Never blocks a member who is ALREADY active (idempotent
+   * re-join), and never applies to cell rooms at all: joinSpace refuses
+   * kind='group' outright below, so "active cell members always direct-join
+   * their own room" (access()'s auto-join) is untouched by this gate.
+   */
   async joinSpace(userId: string, conversationId: string): Promise<{ conversation_id: string; joined: boolean }> {
     return tx(this.pool, async (c) => {
       const convo = await this.access(c, userId, conversationId);
       if (convo.kind !== "space") throw new ApiError("UNPROCESSABLE", "Not a space");
+      const already = await maybeOne<{ status: string }>(
+        c, `SELECT status FROM chat_members WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId],
+      );
+      if (!already && convo.requires_approval) {
+        throw new ApiError("FORBIDDEN_SCOPE", "This space requires approval to join", { approval_required: true });
+      }
       await c.query(`INSERT INTO chat_members (conversation_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [conversationId, userId]);
       // New self-registered members (no congregation yet) adopt the space's
       // congregation on join, so it becomes their home community.
@@ -675,9 +1466,9 @@ export class ChatService {
       }
       const me = await this.me(c, userId);
       const res = await c.query(
-        `INSERT INTO chat_conversations (conversation_id, kind, title, topic, category, congregation_id, is_public, created_by, client_mutation_id)
-         VALUES ($1, 'space', $2, $3, $4, $5, TRUE, $6, $7) ON CONFLICT (conversation_id) DO NOTHING RETURNING conversation_id`,
-        [input.conversation_id, input.title, input.topic ?? null, input.category ?? null, me.congregation_id, userId, input.client_mutation_id ?? null],
+        `INSERT INTO chat_conversations (conversation_id, kind, title, topic, category, congregation_id, is_public, created_by, client_mutation_id, type, requires_approval)
+         VALUES ($1, 'space', $2, $3, $4, $5, TRUE, $6, $7, 'SPACE', $8) ON CONFLICT (conversation_id) DO NOTHING RETURNING conversation_id`,
+        [input.conversation_id, input.title, input.topic ?? null, input.category ?? null, me.congregation_id, userId, input.client_mutation_id ?? null, input.requires_approval],
       );
       if (res.rowCount === 0) return { conversation_id: input.conversation_id, duplicate: true };
       await c.query(`INSERT INTO chat_members (conversation_id, user_id, role) VALUES ($1, $2, 'admin') ON CONFLICT DO NOTHING`, [input.conversation_id, userId]);
@@ -699,8 +1490,22 @@ export class ChatService {
   ): Promise<{ message_id: string; is_flagged: boolean; is_hidden: boolean }> {
     if (!isModerator(role)) throw new ApiError("FORBIDDEN_SCOPE", "Moderation requires Admin");
     return tx(this.pool, async (c) => {
-      const msg = await maybeOne<{ message_id: string }>(c, `SELECT message_id FROM chat_messages WHERE message_id = $1`, [messageId]);
+      const msg = await maybeOne<{ message_id: string; conversation_id: string }>(
+        c, `SELECT message_id, conversation_id FROM chat_messages WHERE message_id = $1`, [messageId],
+      );
       if (!msg) throw new ApiError("NOT_FOUND", "Message not found");
+      // Below SuperAdmin, moderation power is scoped to SPACE rooms only — the
+      // same boundary as accessAsModerator/listAllForModeration (Chat Redesign
+      // C1/C2). Any 1:1 flavour is a private peer relationship now, not
+      // something ordinary Admin oversight reaches into.
+      if (role !== "SuperAdmin") {
+        const convo = await maybeOne<{ type: ConversationType }>(
+          c, `SELECT type FROM chat_conversations WHERE conversation_id = $1`, [msg.conversation_id],
+        );
+        if (convo?.type !== "SPACE") {
+          throw new ApiError("FORBIDDEN_SCOPE", "Moderation is limited to spaces");
+        }
+      }
       let row: { is_flagged: boolean; is_hidden: boolean };
       switch (action) {
         case "flag":
@@ -717,6 +1522,336 @@ export class ChatService {
           break;
       }
       return { message_id: messageId, is_flagged: row.is_flagged, is_hidden: row.is_hidden };
+    });
+  }
+
+  static readonly ReportMessage = z.object({ reason: z.string().max(500).optional() });
+
+  /**
+   * Member-facing report (Chat Redesign C4, migration 171): any ACTIVE
+   * participant of the message's conversation may report it — the control
+   * the owner brief names on every surface (My Space, Chat) that never
+   * actually existed; only the ADMIN-side flag/unflag did. Idempotent per
+   * reporter+message (the migration's UNIQUE index) — reporting twice is a
+   * no-op, not a duplicate row or an error. Sets is_flagged (if not already)
+   * so the report surfaces in the EXISTING moderation queue
+   * (listAllForModeration's `flagged` count) rather than a parallel one.
+   * Reuses access() for the participant check — 404s outside membership/
+   * scope, the same no-existence-leak posture as every other member route.
+   */
+  async reportMessage(
+    reporterId: string,
+    messageId: string,
+    reason?: string,
+  ): Promise<{ message_id: string; reported: boolean; already: boolean }> {
+    return tx(this.pool, async (c) => {
+      const msg = await maybeOne<{ conversation_id: string }>(
+        c, `SELECT conversation_id FROM chat_messages WHERE message_id = $1 AND deleted_at IS NULL`, [messageId],
+      );
+      if (!msg) throw new ApiError("NOT_FOUND", "Message not found");
+      await this.access(c, reporterId, msg.conversation_id);
+      const res = await c.query(
+        `INSERT INTO message_reports (message_id, reporter_user_id, reason) VALUES ($1, $2, $3)
+         ON CONFLICT (message_id, reporter_user_id) DO NOTHING`,
+        [messageId, reporterId, reason ?? null],
+      );
+      const already = (res.rowCount ?? 0) === 0;
+      if (!already) {
+        await c.query(`UPDATE chat_messages SET is_flagged = TRUE WHERE message_id = $1 AND NOT is_flagged`, [messageId]);
+        await audit(c, reporterId, "message.reported", "chat_messages", messageId, {
+          conversation_id: msg.conversation_id, reason: reason ?? null,
+        });
+      }
+      return { message_id: messageId, reported: true, already };
+    });
+  }
+
+  // ================= Space lifecycle (Chat Redesign C1/C2) =================
+  // Join requests reviewed by a leader/delegated moderator (space_join_requests,
+  // migration 163), additive role delegation (space_roles), and removed/
+  // suspended member states enforced back in access() above. "Space" here means
+  // any type='SPACE' room — a cell's auto-provisioned group room, or a topical
+  // space (docs/CHAT_REDESIGN_PLAN.md §8 open question 4: unified plumbing).
+
+  /** A space's head row, keyed off type='SPACE' — 404s (space-not-found) for
+   *  anything else, including a perfectly real DIRECT/DISCIPLER conversation id;
+   *  these endpoints only make sense for a space. */
+  private async spaceHead(c: Queryable, conversationId: string): Promise<SpaceRow> {
+    const convo = await maybeOne<SpaceRow & { type: ConversationType }>(
+      c,
+      `SELECT conversation_id, kind, cell_group_id, created_by, congregation_id, type
+         FROM chat_conversations WHERE conversation_id = $1`,
+      [conversationId],
+    );
+    if (!convo || convo.type !== "SPACE") throw new ApiError("NOT_FOUND", "Space not found");
+    return convo;
+  }
+
+  /** The space's ORIGINAL leader — cell_groups.leader_user_id for a cell room,
+   *  chat_conversations.created_by for a topical space (migration 163's
+   *  rationale: already knowable, never duplicated into space_roles). */
+  private async originalSpaceLeader(c: Queryable, space: SpaceRow): Promise<string | null> {
+    if (space.kind === "group" && space.cell_group_id) {
+      const cell = await maybeOne<{ leader_user_id: string | null }>(
+        c, `SELECT leader_user_id FROM cell_groups WHERE cell_group_id = $1`, [space.cell_group_id],
+      );
+      return cell?.leader_user_id ?? null;
+    }
+    return space.created_by;
+  }
+
+  private async spaceRolesOf(c: Queryable, conversationId: string, userId: string): Promise<Set<SpaceRoleKind>> {
+    const rows = await many<{ role: SpaceRoleKind }>(
+      c, `SELECT role FROM space_roles WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId],
+    );
+    return new Set(rows.map((r) => r.role));
+  }
+
+  /** Leader-level power: manage delegated roles, plus everything moderate-level
+   *  can do. Original leader, a delegated 'leader' (co-leader), or Admin+. A
+   *  delegated 'moderator' does NOT qualify (matrix: "cannot grant leader"). */
+  private async assertSpaceLeaderPower(c: Queryable, space: SpaceRow, userId: string, viewerRole?: ViewerRole): Promise<void> {
+    if (isModerator(viewerRole)) return;
+    if ((await this.originalSpaceLeader(c, space)) === userId) return;
+    if ((await this.spaceRolesOf(c, space.conversation_id, userId)).has("leader")) return;
+    throw new ApiError("FORBIDDEN_SCOPE", "Space leader access required");
+  }
+
+  /** Moderate-level power: approve/decline joins, remove/suspend members.
+   *  Original leader, any delegated role (leader OR moderator), or Admin+. */
+  private async assertSpaceModeratePower(c: Queryable, space: SpaceRow, userId: string, viewerRole?: ViewerRole): Promise<void> {
+    if (isModerator(viewerRole)) return;
+    if ((await this.originalSpaceLeader(c, space)) === userId) return;
+    const roles = await this.spaceRolesOf(c, space.conversation_id, userId);
+    if (roles.has("leader") || roles.has("moderator")) return;
+    throw new ApiError("FORBIDDEN_SCOPE", "Space moderator access required");
+  }
+
+  /** Every recipient a join request should notify: the original leader plus
+   *  every space_roles grantee (leader or moderator), deduped. */
+  private async spaceLeadershipRecipients(c: Queryable, space: SpaceRow): Promise<string[]> {
+    const original = await this.originalSpaceLeader(c, space);
+    const delegated = await many<{ user_id: string }>(
+      c, `SELECT DISTINCT user_id FROM space_roles WHERE conversation_id = $1`, [space.conversation_id],
+    );
+    const ids = new Set(delegated.map((d) => d.user_id));
+    if (original) ids.add(original);
+    return [...ids];
+  }
+
+  // nullish, not optional: Android's kotlinx Json sends "message": null when unset.
+  static readonly RequestJoinSpace = z.object({ message: z.string().max(500).nullish() });
+
+  /**
+   * Ask to join a space that doesn't auto-entitle the caller (a cell room they
+   * aren't currently a member of, or a topical space). If they're already an
+   * active member (including a cell member who'd auto-join via access()), this
+   * is a no-op success rather than a pointless request. Notifies the space's
+   * leadership (original leader + any delegated leader/moderator).
+   */
+  async requestJoinSpace(
+    userId: string,
+    conversationId: string,
+    input: z.infer<typeof ChatService.RequestJoinSpace>,
+  ): Promise<{ status: "already_member" | "pending"; request_id?: string }> {
+    return tx(this.pool, async (c) => {
+      const space = await this.spaceHead(c, conversationId);
+      const already = await maybeOne<{ status: string }>(
+        c, `SELECT status FROM chat_members WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId],
+      );
+      if (already?.status === "active") return { status: "already_member" };
+      const pending = await maybeOne<{ request_id: string }>(
+        c, `SELECT request_id FROM space_join_requests WHERE conversation_id = $1 AND user_id = $2 AND status = 'pending'`,
+        [conversationId, userId],
+      );
+      if (pending) return { status: "pending", request_id: pending.request_id };
+      const row = await one<{ request_id: string }>(
+        c,
+        `INSERT INTO space_join_requests (conversation_id, user_id, message) VALUES ($1, $2, $3) RETURNING request_id`,
+        [conversationId, userId, input.message ?? null],
+      );
+      const requester = await maybeOne<{ full_name: string }>(c, `SELECT full_name FROM users WHERE user_id = $1`, [userId]);
+      for (const leaderId of await this.spaceLeadershipRecipients(c, space)) {
+        await this.notify(leaderId, "space_join_requested", {
+          conversation_id: conversationId,
+          request_id: row.request_id,
+          requester_id: userId,
+          requester_name: requester?.full_name ?? "A member",
+        });
+      }
+      await audit(c, userId, "space.join_requested", "space_join_requests", row.request_id, { conversation_id: conversationId });
+      return { status: "pending", request_id: row.request_id };
+    });
+  }
+
+  /** Pending join requests for a space — leader/delegated moderator/Admin+ only. */
+  async listJoinRequests(userId: string, conversationId: string, viewerRole?: ViewerRole): Promise<{ data: unknown[] }> {
+    const space = await this.spaceHead(this.pool, conversationId);
+    await this.assertSpaceModeratePower(this.pool, space, userId, viewerRole);
+    const data = await many(
+      this.pool,
+      `SELECT sjr.request_id, sjr.user_id, u.full_name, u.avatar_url, sjr.message, sjr.requested_at
+         FROM space_join_requests sjr JOIN users u ON u.user_id = sjr.user_id
+        WHERE sjr.conversation_id = $1 AND sjr.status = 'pending'
+        ORDER BY sjr.requested_at`,
+      [conversationId],
+    );
+    return { data };
+  }
+
+  /** Accept or decline a join request — leader/delegated moderator/Admin+ only.
+   *  Accepting upserts chat_members active (reviving a previously removed/
+   *  suspended row, if any — the natural "restore" path). Idempotent: deciding
+   *  an already-decided request returns its existing status rather than erroring. */
+  async decideJoinRequest(
+    actorId: string,
+    conversationId: string,
+    requestId: string,
+    decision: "accept" | "decline",
+    viewerRole?: ViewerRole,
+    note?: string,
+  ): Promise<{ request_id: string; status: string; already: boolean }> {
+    return tx(this.pool, async (c) => {
+      const space = await this.spaceHead(c, conversationId);
+      await this.assertSpaceModeratePower(c, space, actorId, viewerRole);
+      const req = await maybeOne<{ user_id: string; status: string }>(
+        c, `SELECT user_id, status FROM space_join_requests WHERE request_id = $1 AND conversation_id = $2`,
+        [requestId, conversationId],
+      );
+      if (!req) throw new ApiError("NOT_FOUND", "Join request not found");
+      if (req.status !== "pending") return { request_id: requestId, status: req.status, already: true };
+      const newStatus = decision === "accept" ? "accepted" : "declined";
+      await c.query(
+        `UPDATE space_join_requests SET status = $1, decided_by = $2, decided_at = now(), decision_note = $3 WHERE request_id = $4`,
+        [newStatus, actorId, note ?? null, requestId],
+      );
+      if (decision === "accept") {
+        await c.query(
+          `INSERT INTO chat_members (conversation_id, user_id, status) VALUES ($1, $2, 'active')
+           ON CONFLICT (conversation_id, user_id) DO UPDATE SET status = 'active', status_changed_by = $3, status_changed_at = now()`,
+          [conversationId, req.user_id, actorId],
+        );
+      }
+      await audit(c, actorId, decision === "accept" ? "space.join_accepted" : "space.join_declined", "space_join_requests", requestId, {});
+      await this.notify(req.user_id, decision === "accept" ? "space_join_accepted" : "space_join_declined", {
+        conversation_id: conversationId,
+      });
+      return { request_id: requestId, status: newStatus, already: false };
+    });
+  }
+
+  static readonly GrantSpaceRole = z.object({ user_id: z.string().uuid(), role: z.enum(["leader", "moderator"]) });
+
+  /** Delegate a co-leader/moderator role — leader-level power only (a delegated
+   *  moderator cannot grant further roles). Additive-only (migration 163) —
+   *  granting an already-held role is a no-op, not an error. */
+  async grantSpaceRole(
+    actorId: string,
+    conversationId: string,
+    input: z.infer<typeof ChatService.GrantSpaceRole>,
+    viewerRole?: ViewerRole,
+  ): Promise<{ conversation_id: string; user_id: string; role: SpaceRoleKind }> {
+    return tx(this.pool, async (c) => {
+      const space = await this.spaceHead(c, conversationId);
+      await this.assertSpaceLeaderPower(c, space, actorId, viewerRole);
+      const target = await maybeOne(c, `SELECT 1 FROM users WHERE user_id = $1 AND deleted_at IS NULL`, [input.user_id]);
+      if (!target) throw new ApiError("NOT_FOUND", "Member not found");
+      await c.query(
+        `INSERT INTO space_roles (conversation_id, user_id, role, granted_by) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (conversation_id, user_id, role) DO NOTHING`,
+        [conversationId, input.user_id, input.role, actorId],
+      );
+      await audit(c, actorId, "space.role_granted", "space_roles", input.user_id, { conversation_id: conversationId, role: input.role });
+      return { conversation_id: conversationId, user_id: input.user_id, role: input.role };
+    });
+  }
+
+  /** Revoke a delegated role — leader-level power only. */
+  async revokeSpaceRole(
+    actorId: string,
+    conversationId: string,
+    targetUserId: string,
+    role: SpaceRoleKind,
+    viewerRole?: ViewerRole,
+  ): Promise<{ conversation_id: string; user_id: string; role: SpaceRoleKind; revoked: boolean }> {
+    return tx(this.pool, async (c) => {
+      const space = await this.spaceHead(c, conversationId);
+      await this.assertSpaceLeaderPower(c, space, actorId, viewerRole);
+      await c.query(`DELETE FROM space_roles WHERE conversation_id = $1 AND user_id = $2 AND role = $3`, [conversationId, targetUserId, role]);
+      await audit(c, actorId, "space.role_revoked", "space_roles", targetUserId, { conversation_id: conversationId, role });
+      return { conversation_id: conversationId, user_id: targetUserId, role, revoked: true };
+    });
+  }
+
+  /** Remove or suspend a member — moderate-level power (leader/delegated
+   *  moderator/Admin+). The row is kept with a new status, not deleted — join/
+   *  leave history falls out of chat_members for free (migration 163). */
+  async setSpaceMemberStatus(
+    actorId: string,
+    conversationId: string,
+    targetUserId: string,
+    status: "removed" | "suspended",
+    viewerRole?: ViewerRole,
+  ): Promise<{ conversation_id: string; user_id: string; status: string }> {
+    return tx(this.pool, async (c) => {
+      const space = await this.spaceHead(c, conversationId);
+      await this.assertSpaceModeratePower(c, space, actorId, viewerRole);
+      const row = await maybeOne<{ user_id: string; status: string }>(
+        c,
+        `UPDATE chat_members SET status = $3, status_changed_by = $4, status_changed_at = now()
+           WHERE conversation_id = $1 AND user_id = $2 RETURNING user_id, status`,
+        [conversationId, targetUserId, status, actorId],
+      );
+      if (!row) throw new ApiError("NOT_FOUND", "Member not found in this space");
+      await audit(c, actorId, status === "removed" ? "space.member_removed" : "space.member_suspended", "chat_members", targetUserId, {
+        conversation_id: conversationId,
+      });
+      return { conversation_id: conversationId, ...row };
+    });
+  }
+
+  /**
+   * Derived cell membership on transfer (owner brief "My Space — derived
+   * membership": auto add/transfer, history kept). Hooked from
+   * adminops.updateMember when a member's cell_group_id changes: the OLD cell
+   * room's membership ENDS (status='removed', history kept in chat_members —
+   * not deleted) and the NEW cell room is auto-provisioned + joined, exactly
+   * like the auto-join a member gets on their first ordinary chat access —
+   * just eager instead of lazy, so it's true the moment the transfer happens,
+   * not the next time they open Chat. A no-op when the cell didn't actually
+   * change (e.g. an update that touches other fields only).
+   */
+  async transferCellMembership(
+    actorId: string,
+    userId: string,
+    fromCellGroupId: string | null,
+    toCellGroupId: string | null,
+  ): Promise<void> {
+    if (fromCellGroupId === toCellGroupId) return;
+    await tx(this.pool, async (c) => {
+      if (fromCellGroupId) {
+        const oldRoom = await maybeOne<{ conversation_id: string }>(
+          c, `SELECT conversation_id FROM chat_conversations WHERE cell_group_id = $1 AND kind = 'group'`, [fromCellGroupId],
+        );
+        if (oldRoom) {
+          await c.query(
+            `UPDATE chat_members SET status = 'removed', status_changed_by = $3, status_changed_at = now()
+               WHERE conversation_id = $1 AND user_id = $2 AND status = 'active'`,
+            [oldRoom.conversation_id, userId, actorId],
+          );
+        }
+      }
+      if (toCellGroupId) {
+        const newConversationId = await this.ensureGroupForCell(c, toCellGroupId);
+        if (newConversationId) {
+          await c.query(
+            `INSERT INTO chat_members (conversation_id, user_id, status) VALUES ($1, $2, 'active')
+             ON CONFLICT (conversation_id, user_id) DO UPDATE SET status = 'active', status_changed_by = $3, status_changed_at = now()`,
+            [newConversationId, userId, actorId],
+          );
+        }
+      }
+      await audit(c, actorId, "space.cell_transfer", "chat_members", userId, { from: fromCellGroupId, to: toCellGroupId });
     });
   }
 }

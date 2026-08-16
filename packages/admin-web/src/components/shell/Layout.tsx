@@ -5,13 +5,14 @@ import { useEffect, useState, type ReactElement } from "react";
 import { NavLink, Outlet, Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
   Bell, Search, User, LogOut, ChevronDown, ChevronUp,
-  ChevronLeft, ChevronRight, Menu, Check, Trash2, X, ArrowRight,
+  ChevronLeft, ChevronRight, Menu, Check, Trash2, X, ArrowRight, Fingerprint,
 } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
-import { logout } from "../../store/authSlice";
-import { MeApi } from "../../api/client";
+import { logout, setPermissions } from "../../store/authSlice";
+import { MeApi, WebAuthnApi } from "../../api/client";
+import { passkeyNudgeCandidate, dismissPasskeyNudge, clearPasswordLoginMarker } from "../../lib/passkeys";
 import { useIsMobile } from "./useIsMobile";
-import { navGroups, titleFor } from "./nav";
+import { navGroups, titleFor, navItemVisible } from "./nav";
 import { useNotifications, notifTimeAgo, CATEGORY_META } from "../notifications/NotificationsProvider";
 
 const SIDEBAR_FULL = 260;
@@ -23,7 +24,7 @@ export function Layout(): ReactElement {
   const navigate = useNavigate();
   const location = useLocation();
   const isMobile = useIsMobile();
-  const { accessToken, email, role } = useAppSelector((s) => s.auth);
+  const { accessToken, email, role, permissions } = useAppSelector((s) => s.auth);
 
   const [collapsed, setCollapsed] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -32,16 +33,35 @@ export function Layout(): ReactElement {
   // Real logged-in identity (name + role) from /me, so the shell shows the
   // registered person — not a guess parsed from their email address.
   const [me, setMe] = useState<{ full_name: string; role: string } | null>(null);
+  // One-time passkey nudge: after a PASSWORD login on a WebAuthn-capable
+  // browser with ZERO registered passkeys. Dismissal sticks (localStorage).
+  const [passkeyNudge, setPasskeyNudge] = useState(false);
 
   useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
   useEffect(() => {
-    if (!accessToken) { setMe(null); return; }
+    if (!accessToken || !passkeyNudgeCandidate()) return;
     let alive = true;
-    MeApi.me()
-      .then((r) => { if (alive) setMe({ full_name: r.profile.full_name, role: r.profile.role }); })
-      .catch(() => { /* fall back to the email-derived label */ });
+    WebAuthnApi.credentials()
+      .then((creds) => { if (alive && creds.length === 0) setPasskeyNudge(true); })
+      .catch(() => { /* nudge is best-effort — never block the shell */ });
     return () => { alive = false; };
   }, [accessToken]);
+  useEffect(() => {
+    if (!accessToken) { setMe(null); dispatch(setPermissions(null)); return; }
+    let alive = true;
+    MeApi.me()
+      .then((r) => {
+        if (!alive) return;
+        setMe({ full_name: r.profile.full_name, role: r.profile.role });
+        // Drives the sidebar filter below AND the route guard in App.tsx — a
+        // permitted-but-limited user sees only the items their permissions
+        // grant, everything else absent (not grayed). The server enforces
+        // every route regardless of what this shows.
+        dispatch(setPermissions(r.profile.permissions ?? []));
+      })
+      .catch(() => { /* fall back to the email-derived label; permissions stay null (fail open) */ });
+    return () => { alive = false; };
+  }, [accessToken, dispatch]);
 
   if (!accessToken) return <Navigate to="/login" replace />;
 
@@ -89,16 +109,20 @@ export function Layout(): ReactElement {
 
         {/* Nav groups */}
         <nav className="flex-1 overflow-y-auto no-scrollbar" style={{ padding: "12px 0" }}>
-          {navGroups.map((group) => (
+          {navGroups.map((group) => {
+            const visibleItems = group.items.filter((i) => navItemVisible(i, me?.role ?? role, permissions));
+            if (visibleItems.length === 0) return null; // a group with nothing to show doesn't show its header either
+            return (
             <div key={group.label} style={{ marginBottom: 4 }}>
               {!collapsed && (
                 <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(232,239,245,0.3)", textTransform: "uppercase", letterSpacing: "0.1em", padding: "10px 20px 4px" }}>{group.label}</div>
               )}
-              {group.items.map(({ path, label, icon: Icon }) => (
+              {visibleItems
+                .map(({ path, label, icon: Icon }) => (
                 <NavLink
                   key={path}
                   to={path}
-                  end={path === "/"}
+                  end={path === "/" || path === "/curriculum"}
                   title={collapsed ? label : undefined}
                   className="flex items-center"
                   style={({ isActive }) => ({
@@ -129,7 +153,8 @@ export function Layout(): ReactElement {
                 </NavLink>
               ))}
             </div>
-          ))}
+            );
+          })}
         </nav>
 
         {/* Bottom: profile + collapse */}
@@ -284,6 +309,24 @@ export function Layout(): ReactElement {
           </div>
         </header>
 
+        {passkeyNudge && (
+          <div className="flex items-center gap-3 shrink-0" style={{ background: "rgba(200,155,60,0.10)", borderBottom: "1px solid rgba(200,155,60,0.25)", padding: isMobile ? "10px 14px" : "10px 28px" }}>
+            <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 30, height: 30, background: "rgba(200,155,60,0.18)", color: "var(--nuru-gold)" }}><Fingerprint size={16} /></span>
+            <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--nuru-navy)" }}>
+              <strong>Skip the password next time</strong>{!isMobile && <span style={{ color: "var(--muted-foreground)" }}> — add Touch ID, Face ID or Windows Hello and sign in with one touch.</span>}
+            </div>
+            <button
+              onClick={() => { setPasskeyNudge(false); clearPasswordLoginMarker(); navigate("/profile?tab=passkeys"); }}
+              className="rounded-lg shrink-0"
+              style={{ padding: "7px 14px", background: "var(--nuru-gold)", color: "#fff", fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer" }}
+            >
+              Add a passkey
+            </button>
+            <button onClick={() => { setPasskeyNudge(false); dismissPasskeyNudge(); }} className="shrink-0 rounded-md p-1" aria-label="Dismiss" style={{ color: "var(--muted-foreground)", background: "none", border: "none", cursor: "pointer" }}>
+              <X size={15} />
+            </button>
+          </div>
+        )}
         <main className="flex-1 overflow-y-auto no-scrollbar"><Outlet /></main>
       </div>
 

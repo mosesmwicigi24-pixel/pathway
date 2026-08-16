@@ -9,12 +9,20 @@ import { z } from "zod";
 import { many, one, maybeOne, tx, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { hashPassword } from "../identity/passwords.js";
+import { ChatService } from "../chat/service.js";
+import { CurriculumStatsService } from "../curriculum/stats.js";
+import { normalizePhone } from "../../lib/phone.js";
 
 export class AdminOpsService {
+  private readonly chat: ChatService;
+
   constructor(
     private readonly pool: Pool,
     private readonly replica: Pool = pool,
-  ) {}
+    chat?: ChatService,
+  ) {
+    this.chat = chat ?? new ChatService(pool);
+  }
 
   // ---------------- Dashboard reports ----------------
 
@@ -35,12 +43,24 @@ export class AdminOpsService {
          (SELECT count(*) FROM reflection_reviews WHERE state = 'pending')                     AS pending_reviews,
          (SELECT count(*) FROM reflection_reviews
            WHERE state = 'pending' AND submitted_at < now() - interval '3 days')               AS reviews_overdue,
+         (SELECT count(*) FROM users WHERE role = 'Student' AND deleted_at IS NULL
+           AND created_at >= now() - interval '14 days')                                       AS new_members_14d,
+         (SELECT count(*) FROM users WHERE role = 'Student' AND deleted_at IS NULL
+           AND created_at >= now() - interval '28 days'
+           AND created_at <  now() - interval '14 days')                                       AS new_members_prev_14d,
          (SELECT count(*) FROM modules WHERE status = 'published')                             AS modules_published,
-         (SELECT count(*) FROM cell_groups)                                                    AS cohorts_running,
+         (SELECT count(*) FROM cell_groups)                                                    AS cells_running,
          (SELECT count(*) FROM attendance_logs
            WHERE checked_in_at >= date_trunc('week', now()))                                   AS checked_in_this_week`,
     );
-    return Object.fromEntries(Object.entries(row).map(([k, v]) => [k, Number(v)]));
+    const out = Object.fromEntries(Object.entries(row).map(([k, v]) => [k, Number(v)]));
+    // `cohorts_running` counted cell_groups and always had — the name was left
+    // over from the pre-rename noun, so the portal tile read "Cohorts running"
+    // over a count of cells. The field is now named for what it counts, and the
+    // old key ships alongside it because portal and iPad builds already in the
+    // wild read that key. Drop it once no released client asks for it.
+    out.cohorts_running = out.cells_running ?? 0;
+    return out;
   }
 
   /**
@@ -662,8 +682,8 @@ export class AdminOpsService {
       // on their first chat open (chat ensureCellGroup). Idempotent via the
       // partial unique index on (cell_group_id) WHERE kind = 'group'.
       await c.query(
-        `INSERT INTO chat_conversations (conversation_id, kind, title, cell_group_id, congregation_id, is_public)
-         VALUES (gen_random_uuid(), 'group', $1, $2, $3, FALSE)
+        `INSERT INTO chat_conversations (conversation_id, kind, title, cell_group_id, congregation_id, is_public, type)
+         VALUES (gen_random_uuid(), 'group', $1, $2, $3, FALSE, 'SPACE')
          ON CONFLICT (cell_group_id) WHERE kind = 'group' DO NOTHING`,
         [`${input.name} cell`, row.cell_group_id, cong.congregation_id],
       );
@@ -902,57 +922,14 @@ export class AdminOpsService {
   }
 
   /**
-   * Per-level curriculum analytics for the "Curriculum Levels" page: module
-   * counts, enrolled learners (by current_level), completion of published
-   * modules, certificates issued — plus a 6-month enrolment trend by level.
-   * Everything aggregated from authoritative tables.
+   * Per-level curriculum analytics for the "Curriculum Levels" page — plus a
+   * 6-month enrolment trend by level. The per-level numbers DELEGATE to the one
+   * curriculum stats source (curriculum/stats.ts, docs/CURRICULUM_ARCHITECTURE.md
+   * §3); this endpoint stays for the dashboards already consuming it and its
+   * response shape is unchanged.
    */
   async levelsReport(): Promise<Record<string, unknown>> {
-    const levels = await many(
-      this.replica,
-      `WITH mod AS (
-         SELECT level_number,
-                count(*)::int                                            AS modules_total,
-                count(*) FILTER (WHERE status = 'published')::int        AS modules_published,
-                count(*) FILTER (WHERE status = 'draft')::int            AS modules_draft,
-                count(*) FILTER (WHERE status = 'archived')::int         AS modules_archived
-           FROM modules GROUP BY level_number
-       ),
-       enr AS (
-         SELECT current_level AS level_number, count(*)::int AS learners
-           FROM enrollments GROUP BY current_level
-       ),
-       done AS (
-         SELECT m.level_number, count(*)::int AS completed
-           FROM module_progress mp
-           JOIN modules m       ON m.module_id = mp.module_id AND m.status = 'published'
-           JOIN enrollments e   ON e.enrollment_id = mp.enrollment_id AND e.current_level = m.level_number
-          WHERE mp.is_completed
-          GROUP BY m.level_number
-       ),
-       cert AS (
-         SELECT level_number, count(*)::int AS certificates
-           FROM certificates WHERE level_number IS NOT NULL AND revoked_at IS NULL
-          GROUP BY level_number
-       )
-       SELECT l.level_number, l.title, l.theme, l.duration, l.status, l.color,
-              COALESCE(mod.modules_total, 0)     AS modules_total,
-              COALESCE(mod.modules_published, 0) AS modules_published,
-              COALESCE(mod.modules_draft, 0)     AS modules_draft,
-              COALESCE(mod.modules_archived, 0)  AS modules_archived,
-              COALESCE(enr.learners, 0)          AS learners,
-              CASE WHEN COALESCE(enr.learners,0) > 0 AND COALESCE(mod.modules_published,0) > 0
-                   THEN round(COALESCE(done.completed,0)::numeric
-                              / (enr.learners * mod.modules_published) * 100)::int
-                   ELSE 0 END                    AS completion_pct,
-              COALESCE(cert.certificates, 0)     AS certificates
-         FROM levels l
-         LEFT JOIN mod  ON mod.level_number  = l.level_number
-         LEFT JOIN enr  ON enr.level_number  = l.level_number
-         LEFT JOIN done ON done.level_number = l.level_number
-         LEFT JOIN cert ON cert.level_number = l.level_number
-        ORDER BY l.level_number`,
-    );
+    const levels = await new CurriculumStatsService(this.replica).levelsReportRows();
 
     const trendRows = await many<{ ym: string; mon: string; level_number: number; n: number }>(
       this.replica,
@@ -993,12 +970,16 @@ export class AdminOpsService {
     gender: z.enum(AdminOpsService.GENDERS).optional(),
     programme: z.enum(AdminOpsService.PROGRAMMES).optional(),
     country_code: z.string().trim().length(2).toUpperCase().optional(),
+    // Who is still waiting for a cell. Twenty-eight members sat unplaced for up
+    // to 42 days because nothing in the portal could express this question —
+    // see migration 193 and the 2026-08-14 audit.
+    placement: z.enum(["awaiting", "placed"]).optional(),
     limit: z.coerce.number().int().min(1).max(200).default(50),
     cursor: z.string().uuid().optional(), // keyset: last user_id of the prior page
   });
 
   /** Congregation-wide member list for the ERP Members screen. */
-  async listMembers(q: z.infer<typeof AdminOpsService.ListMembers>): Promise<{ data: unknown[]; next_cursor: string | null }> {
+  async listMembers(q: z.infer<typeof AdminOpsService.ListMembers>): Promise<{ data: unknown[]; next_cursor: string | null; awaiting_placement: number; longest_wait_days: number }> {
     const params: unknown[] = [];
     const where: string[] = [`u.role = 'Student'`, `u.deleted_at IS NULL`];
     if (q.search) {
@@ -1029,6 +1010,8 @@ export class AdminOpsService {
       params.push(q.country_code);
       where.push(`u.country_code = $${params.length}`);
     }
+    if (q.placement === "awaiting") where.push(`u.cell_group_id IS NULL`);
+    if (q.placement === "placed") where.push(`u.cell_group_id IS NOT NULL`);
     if (q.cursor) {
       params.push(q.cursor);
       where.push(`u.user_id > $${params.length}::uuid`);
@@ -1062,13 +1045,28 @@ export class AdminOpsService {
     const hasMore = rows.length > q.limit;
     const page = hasMore ? rows.slice(0, q.limit) : rows;
     const last = page[page.length - 1];
-    return { data: page, next_cursor: hasMore && last ? String(last.user_id) : null };
+    // Deliberately NOT subject to the caller's filters, and returned on every
+    // page: the 28 went unnoticed for six weeks because seeing them required
+    // knowing to ask. This makes the question unavoidable instead of available.
+    const awaiting = await one<{ n: number; longest_wait_days: number | null }>(
+      this.replica,
+      `SELECT count(*)::int AS n,
+              max(date_part('day', now() - u.created_at))::int AS longest_wait_days
+         FROM users u
+        WHERE u.role = 'Student' AND u.deleted_at IS NULL AND u.cell_group_id IS NULL`,
+    );
+    return {
+      data: page,
+      next_cursor: hasMore && last ? String(last.user_id) : null,
+      awaiting_placement: awaiting.n,
+      longest_wait_days: awaiting.longest_wait_days ?? 0,
+    };
   }
 
   static readonly AddMember = z
     .object({
       full_name: z.string().min(1).max(255),
-      phone_number: z.string().min(7).max(32),
+      phone_number: z.string().min(7).max(32).transform((v) => normalizePhone(v) ?? v),
       email: z.string().email().optional(),
       date_of_birth: z.string().optional(), // ISO date
       cell_group_id: z.string().uuid(),
@@ -1169,7 +1167,7 @@ export class AdminOpsService {
   static readonly UpdateMember = z
     .object({
       full_name: z.string().min(1).max(255).optional(),
-      phone_number: z.string().min(7).max(32).optional(),
+      phone_number: z.string().min(7).max(32).transform((v) => normalizePhone(v) ?? v).optional(),
       email: z.string().email().nullable().optional(),
       date_of_birth: z.string().nullable().optional(), // ISO date
       gender: z.enum(AdminOpsService.GENDERS).nullable().optional(),
@@ -1183,20 +1181,28 @@ export class AdminOpsService {
     .strict();
 
   /** Edit an existing member's details (Members admin → edit). Mirrors addMember's
-   *  field set; reassigning the cell moves the member to that cell's congregation.
-   *  Audited. */
+   *  field set; reassigning the cell moves the member to that cell's congregation
+   *  AND transfers their derived Space (chat) membership — the owner brief's "My
+   *  Space — derived membership... auto add/transfer, history kept": the old
+   *  cell room's chat_members row ends (status='removed', kept, not deleted) and
+   *  the new cell room is auto-joined, the moment the transfer happens (see
+   *  ChatService.transferCellMembership, Chat Redesign C1/C2). Audited. */
   async updateMember(
     adminId: string,
     userId: string,
     input: z.infer<typeof AdminOpsService.UpdateMember>,
   ): Promise<unknown> {
-    return tx(this.pool, async (c) => {
-      const exists = await maybeOne(
+    let cellChanged = false;
+    let previousCellGroupId: string | null = null;
+    const result = await tx(this.pool, async (c) => {
+      const existing = await maybeOne<{ cell_group_id: string | null }>(
         c,
-        `SELECT 1 FROM users WHERE user_id = $1 AND role = 'Student' AND deleted_at IS NULL`,
+        `SELECT cell_group_id FROM users WHERE user_id = $1 AND role = 'Student' AND deleted_at IS NULL`,
         [userId],
       );
-      if (!exists) throw new ApiError("NOT_FOUND", "Member not found");
+      if (!existing) throw new ApiError("NOT_FOUND", "Member not found");
+      previousCellGroupId = existing.cell_group_id;
+      cellChanged = input.cell_group_id !== undefined && input.cell_group_id !== existing.cell_group_id;
       if (input.email) {
         const dup = await maybeOne(
           c,
@@ -1244,6 +1250,14 @@ export class AdminOpsService {
         [userId],
       );
     });
+    // Outside the member-record transaction (its own tx, chat/service.ts owns
+    // that boundary) so a chat-side hiccup never blocks the member edit itself
+    // — the derived Space membership is a downstream effect of the cell change,
+    // not a co-requisite of it.
+    if (cellChanged) {
+      await this.chat.transferCellMembership(adminId, userId, previousCellGroupId, input.cell_group_id ?? null);
+    }
+    return result;
   }
 
   static readonly SetStart = z

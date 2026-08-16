@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createCellGroup, createUser, createEnrollment, createModule } from "./helpers/factories.js";
-import { pickVerse, VERSE_POOL } from "../src/modules/home/verses.js";
+import { pickVerse, pickVerseArt, pickEncouragement, VERSE_ART, VERSE_POOL, ENCOURAGEMENTS } from "../src/modules/home/verses.js";
 
 let cong: string, cell: string, meId: string, meTok: string;
 const auth = (t: string) => ({ Authorization: t });
@@ -93,6 +93,9 @@ describe("GET /me/home/verse — mood-driven Verse for today", () => {
     expect(typeof res.body.theme).toBe("string");
     expect(typeof res.body.reason).toBe("string");
     expect(typeof res.body.text).toBe("string"); // we hold the verse text now
+    expect(typeof res.body.encouragement?.text).toBe("string");
+    expect(res.body.encouragement.text.length).toBeGreaterThan(0);
+    expect(typeof res.body.encouragement?.author).toBe("string");
     const lib = await testPool().query<{ n: number }>(
       `SELECT count(*)::int AS n FROM daily_verses WHERE reference = $1 AND theme = $2`,
       [res.body.reference, res.body.theme],
@@ -112,6 +115,8 @@ describe("GET /me/home/verse — mood-driven Verse for today", () => {
     expect(res.body.version).toBe("WEB");
     const all = Object.values(VERSE_POOL).flat();
     expect(all).toContain(res.body.reference); // vetted reference, never AI-invented
+    expect(typeof res.body.encouragement?.text).toBe("string");
+    expect(typeof res.body.encouragement?.author).toBe("string");
   });
 
   it("picks the verse by mood theme — meets a member in their season", async () => {
@@ -159,6 +164,76 @@ describe("pickVerse — deterministic, repeat-avoiding picker (unit)", () => {
   it("falls back to a deterministic pick when everything is recent", () => {
     const picked = pickVerse("prayer", "user-3", "2026-06-25", VERSE_POOL.prayer);
     expect(VERSE_POOL.prayer).toContain(picked);
+  });
+});
+
+describe("pickEncouragement — deterministic, theme-matched (unit)", () => {
+  it("is deterministic for the same (theme, day) and drawn from that theme's pool", () => {
+    const a = pickEncouragement("prayer", "2026-06-25");
+    const b = pickEncouragement("prayer", "2026-06-25");
+    expect(a).toEqual(b);
+    expect(ENCOURAGEMENTS.prayer.some((e) => e.text === a.text && e.author === a.author)).toBe(true);
+  });
+
+  it("every VerseTheme carries exactly 3 entries, two historic voices + Pastor Moses", () => {
+    for (const [theme, pool] of Object.entries(ENCOURAGEMENTS)) {
+      expect(pool.length).toBe(3);
+      expect(pool.filter((e) => e.author === "Pastor Moses").length).toBe(1);
+      expect(pool.filter((e) => e.author !== "Pastor Moses").length).toBe(2);
+      for (const e of pool) {
+        expect(e.text.length).toBeGreaterThan(0);
+        expect(e.author.length).toBeGreaterThan(0);
+      }
+      void theme;
+    }
+  });
+
+  it("unknown mood themes fall back to the union pool, still deterministically", () => {
+    const a = pickEncouragement("GRATITUDE & THANKFULNESS", "2026-07-13");
+    const b = pickEncouragement("GRATITUDE & THANKFULNESS", "2026-07-13");
+    expect(a).toEqual(b);
+    const all = Object.values(ENCOURAGEMENTS).flat();
+    expect(all.some((e) => e.text === a.text)).toBe(true);
+  });
+});
+
+describe("verse art — the day's tableau photograph (unit + wire)", () => {
+  it("pickVerseArt is deterministic per (user, day) and drawn from the curated set", () => {
+    const a = pickVerseArt("growth", "user-1", "2026-07-13");
+    const b = pickVerseArt("growth", "user-1", "2026-07-13");
+    expect(a).toEqual(b);
+    expect(VERSE_ART.growth.some((x) => x.url === a.url)).toBe(true);
+    expect(a.url.startsWith("https://")).toBe(true);
+    expect(a.alt.length).toBeGreaterThan(0);
+  });
+
+  it("unknown mood themes fall back to the union pool, still deterministically", () => {
+    const a = pickVerseArt("GRATITUDE & THANKFULNESS", "user-9", "2026-07-13");
+    const b = pickVerseArt("GRATITUDE & THANKFULNESS", "user-9", "2026-07-13");
+    expect(a).toEqual(b);
+    const all = Object.values(VERSE_ART).flat();
+    expect(all.some((x) => x.url === a.url)).toBe(true);
+  });
+
+  it("every theme carries at least three curated images with https urls and alt text", () => {
+    for (const pool of Object.values(VERSE_ART)) {
+      expect(pool.length).toBeGreaterThanOrEqual(3);
+      for (const art of pool) {
+        expect(art.url).toMatch(/^https:\/\/images\.unsplash\.com\/photo-/);
+        expect(art.alt.length).toBeGreaterThan(5);
+      }
+    }
+  });
+
+  it("GET /me/home/verse includes the art on both fresh and cached reads", async () => {
+    const first = await agent().get("/v1/me/home/verse").set(auth(meTok));
+    expect(first.status).toBe(200);
+    expect(typeof first.body.art?.url).toBe("string");
+    expect(first.body.art.url.startsWith("https://")).toBe(true);
+    expect(typeof first.body.art?.alt).toBe("string");
+    const second = await agent().get("/v1/me/home/verse").set(auth(meTok)); // cached path
+    expect(second.status).toBe(200);
+    expect(second.body.art).toEqual(first.body.art); // stable through the day
   });
 });
 

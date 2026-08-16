@@ -6,7 +6,7 @@
 // opens the next level. Every usher is scope-checked, audited, and notified.
 import type { Pool } from "pg";
 import { z } from "zod";
-import { many, maybeOne, tx, recordChange, audit } from "../../db/db.js";
+import { many, maybeOne, tx, recordChange, audit, enqueueOutbox } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { assertCellInScope } from "../../http/auth.js";
 import type { Principal } from "../../http/http.js";
@@ -115,6 +115,18 @@ export class LevelAdvancementService {
       const advanced = (upd.rowCount ?? 0) > 0;
       if (advanced) {
         await recordChange(c, "enrollments", null, adv.user_id, "upsert");
+        // Certificate issuance RIDES the advancement (§2.4 single advancement
+        // writer, docs/CURRICULUM_ARCHITECTURE.md): the usher is the sole
+        // advancer, so the level credential is enqueued here (transactional
+        // outbox) — the reflection-approve path no longer issues it.
+        await enqueueOutbox(c, "certificate.issue", {
+          user_id: adv.user_id,
+          level_number: adv.level_number,
+        });
+        await enqueueOutbox(c, "notification.level_completed", {
+          user_id: adv.user_id,
+          level_number: adv.level_number,
+        });
         try {
           await this.notifications.schedule({
             userId: adv.user_id,

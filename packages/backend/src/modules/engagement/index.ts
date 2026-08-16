@@ -23,10 +23,18 @@ export function registerEngagement(ctx: AppContext): Router {
   const auth = authenticate(ctx.env);
   const r = engagementRouter;
 
-  // Cohort table: members of a cell, lowest engagement first; Instructor+ only,
-  // scoped to the caller's leader_assignments (§5.4). Cursor-paginated (§3.1).
+  // A cell's members, lowest engagement first; Instructor+ only, scoped to the
+  // caller's leader_assignments (§5.4). Cursor-paginated (§3.1).
+  //
+  // Two paths, one handler. The entity is a CELL — the table is `cell_groups`,
+  // the path parameter has always been `cell_id`, and the portal calls them
+  // cells. `/cohorts` was the pre-rename noun; it stays mounted because
+  // shipped iPad and portal builds still call it, and breaking them to tidy a
+  // word is not a trade worth making. "Cohort" survives elsewhere in the code
+  // with its OTHER, correct meaning: a join-month retention cohort, which is
+  // not this and must not be renamed with it.
   r.get(
-    "/cohorts/:cell_id/members",
+    ["/cells/:cell_id/members", "/cohorts/:cell_id/members"],
     auth,
     requireRole("Instructor"),
     handler(async (req, res) => {

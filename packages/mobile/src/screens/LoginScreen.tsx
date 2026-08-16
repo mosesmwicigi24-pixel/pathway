@@ -141,7 +141,7 @@ export function LoginScreen(): ReactElement {
         setNotice("Reset link generated (dev). Set your new password below.");
         setMode("reset");
       } else {
-        setNotice("If an account exists for that email, a reset link is on its way.");
+        setNotice("If an account exists for that email, a reset code is on its way. Enter it below.");
       }
     } catch {
       setError("Couldn't request a reset. Try again.");
@@ -149,7 +149,7 @@ export function LoginScreen(): ReactElement {
   }
 
   async function submitReset(): Promise<void> {
-    if (!token.trim()) { setError("Paste the reset token from your email."); return; }
+    if (!token.trim()) { setError("Enter the reset code from your email."); return; }
     if (newPassword.length < 8) { setError("Password must be at least 8 characters."); return; }
     setBusy(true); setError(null);
     try {
@@ -158,7 +158,7 @@ export function LoginScreen(): ReactElement {
       setNotice("Password reset. Sign in with your new password.");
       setMode("login");
     } catch {
-      setError("That reset link is invalid or has expired.");
+      setError("That reset code is invalid or has expired.");
     } finally { setBusy(false); }
   }
 
@@ -171,7 +171,7 @@ export function LoginScreen(): ReactElement {
 
   const heading = mode === "register" ? "Create account" : mode === "forgot" ? "Reset password" : mode === "reset" ? "Set a new password" : mode === "mfa" ? "Two-factor code" : null;
   const subhead = mode === "register" ? "Begin your discipleship journey on Pathway."
-    : mode === "forgot" ? "Enter your account email and we'll send you a reset link."
+    : mode === "forgot" ? "Enter your account email and we'll send you a reset code."
     : mode === "reset" ? "Choose a new password for your account."
     : mode === "mfa" ? "Enter the 6-digit code from your authenticator app, or a recovery code."
     : null;
@@ -225,8 +225,8 @@ export function LoginScreen(): ReactElement {
           ) : null}
 
           {mode === "reset" ? (
-            <Field label="RESET TOKEN" icon={<Lock size={18} color={INPUT_PLACEHOLDER} />}>
-              <TextInput value={token} onChangeText={setToken} placeholder="Paste the token from your email" placeholderTextColor={INPUT_PLACEHOLDER} autoCapitalize="none" autoCorrect={false} style={st.input} />
+            <Field label="RESET CODE" icon={<Lock size={18} color={INPUT_PLACEHOLDER} />}>
+              <TextInput value={token} onChangeText={setToken} placeholder="Enter the code from your email" placeholderTextColor={INPUT_PLACEHOLDER} autoCapitalize="characters" autoCorrect={false} style={st.input} />
             </Field>
           ) : mode === "mfa" ? (
             <Field label="VERIFICATION CODE" icon={<Lock size={18} color={INPUT_PLACEHOLDER} />}>
@@ -293,7 +293,7 @@ export function LoginScreen(): ReactElement {
           ) : mode === "register" ? (
             <PButton variant="gold" onPress={() => void submitRegister()} disabled={busy}>{busy ? "Creating…" : "Create account"}</PButton>
           ) : mode === "forgot" ? (
-            <PButton variant="gold" onPress={() => void submitForgot()} disabled={busy}>{busy ? "Sending…" : "Send reset link"}</PButton>
+            <PButton variant="gold" onPress={() => void submitForgot()} disabled={busy}>{busy ? "Sending…" : "Send reset code"}</PButton>
           ) : mode === "mfa" ? (
             <PButton variant="gold" onPress={() => void submitMfaLogin()} disabled={busy}>{busy ? "Verifying…" : "Verify & sign in"}</PButton>
           ) : (

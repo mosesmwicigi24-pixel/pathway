@@ -2,6 +2,7 @@
 // at-least-once redelivery is safe. New asynchronous side effects (notifications,
 // media renders) register here as their modules land.
 import type { AppContext } from "../http/context.js";
+import { maybeOne } from "../db/db.js";
 import { CertificateService } from "../modules/certificates/service.js";
 import { buildObjectStore } from "../modules/certificates/objectStore.js";
 import { EngagementService } from "../modules/engagement/service.js";
@@ -33,8 +34,9 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
     await video.transcodeAsset({ media_asset_id: String(p.media_asset_id), content_hash: String(p.content_hash) });
   });
 
-  // Features v2 §C.3: materialize a series' occurrences into events (idempotent).
-  const calendar = new CalendarService(ctx.db.primary, ctx.env.CAL_MATERIALIZE_HORIZON_DAYS, ctx.env.CAL_MAX_INSTANCES);
+  // Features v2 §C.3 / EVENTS_ARCHITECTURE §2: materialize a series' occurrences
+  // into events over the rolling default window (idempotent upsert).
+  const calendar = new CalendarService(ctx.db.primary, ctx.env.CAL_MAX_INSTANCES);
   handlers.set("calendar.materialize", async (p) => {
     await calendar.materialize(String(p.series_id));
   });
@@ -54,7 +56,8 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
     });
   });
 
-  // Flow B: an approved reflection enqueues this; issue the level credential.
+  // The discipler-usher advancement enqueues this (§2.4 single advancement
+  // writer); issue the level credential.
   handlers.set("certificate.issue", async (p) => {
     await certs.issue(String(p.user_id), p.level_number == null ? null : Number(p.level_number));
   });
@@ -73,12 +76,55 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
       payload: p,
     });
   });
+  // Bug fix (giving receipts were silently discarded — buildDispatchProvider
+  // never had an email provider wired up, see dispatch.ts): the outbox
+  // payload only carries ids, on purpose (§1.6 outbox rows should be small
+  // and re-derivable) — enrich it here with everything the receipt email
+  // needs to render, straight from the ledger, so dispatch.ts can stay a
+  // dumb renderer with no DB access of its own.
   handlers.set("giving.receipt", async (p) => {
+    const transactionId = String(p.transaction_id ?? "");
+    const userId = String(p.user_id ?? "");
+    if (!transactionId || !userId) return; // malformed payload — nothing to receipt
+
+    const txn = await maybeOne<{
+      amount_minor: string;
+      currency: string;
+      fund: string | null;
+      created_at: string;
+      settled_at: string | null;
+      receipt_code: string | null;
+    }>(
+      ctx.db.primary,
+      `SELECT t.amount_minor, t.currency, f.name AS fund, t.created_at, t.settled_at, t.receipt_code
+         FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
+        WHERE t.transaction_id = $1 AND t.user_id = $2`,
+      [transactionId, userId],
+    );
+    if (!txn) return; // transaction gone/reassigned since enqueue — idempotent no-op
+
+    const who = await maybeOne<{ full_name: string; congregation: string | null }>(
+      ctx.db.primary,
+      `SELECT u.full_name, c.name AS congregation
+         FROM users u LEFT JOIN congregations c ON c.congregation_id = u.congregation_id
+        WHERE u.user_id = $1`,
+      [userId],
+    );
+
     await notifications.schedule({
-      userId: String(p.user_id ?? ""),
+      userId,
       channel: "email",
       template: "giving_receipt",
-      payload: p,
+      payload: {
+        transaction_id: transactionId,
+        amount_minor: Number(txn.amount_minor), // integer minor units — never a float
+        currency: txn.currency,
+        fund: txn.fund ?? "General Fund",
+        member_name: who?.full_name ?? null,
+        congregation: who?.congregation ?? "Nuru Place Church",
+        date: txn.settled_at ?? txn.created_at,
+        receipt_code: txn.receipt_code,
+      },
     });
   });
 

@@ -348,7 +348,9 @@ export class GrowthService {
   static readonly VerseSave = z.object({
     saved_verse_id: z.string().uuid(), // client-generated
     reference: z.string().min(3).max(80),
-    version: z.string().min(2).max(12).default("KJV"),
+    // nullish: Android's kotlinx Json sends "version": null when unset, which
+    // .default() alone rejects — null and absent must both mean "KJV".
+    version: z.string().min(2).max(12).nullish().transform((v) => v ?? "KJV"),
     verse_text: z.string().max(2000).nullable().optional(),
     note: z.string().max(2000).nullable().optional(),
     client_mutation_id: z.string().uuid().optional(),
@@ -556,7 +558,8 @@ export class GrowthService {
     });
   }
 
-  static TalkAssist = z.object({ draft: z.string().max(2000).optional() }).strict();
+  // nullish, not optional: Android's kotlinx Json sends "draft": null when unset.
+  static TalkAssist = z.object({ draft: z.string().max(2000).nullish() }).strict();
 
   /** Draft (or polish) a member's Talk-it-Over response with the Nuru AI.
    *  The model sees the day's questions plus the member's own words; the result

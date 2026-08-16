@@ -11,7 +11,7 @@
 // this page owns its own 30s ticker since only one studio page is mounted at
 // a time.
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Disc3, ListMusic, Radio as RadioIcon } from "lucide-react";
 import { RadioApi, type RadioProgram } from "../../api/client";
 import {
@@ -25,6 +25,21 @@ export function UploadsSessions(): ReactElement {
   const [programs, setPrograms] = useState<RadioProgram[]>([]);
   const [previewTitle, setPreviewTitle] = useState<string | null>(null);
   const [nowPlaying, setNowPlaying] = useState<string | null>(null);
+
+  // Deep link from the broadcast desk: /uploads-sessions?open=<programId> is
+  // consumed ONCE (stripped from the URL with replace so back/refresh don't
+  // re-trigger it) and handed to the Sessions panel, which auto-scrolls to and
+  // gold-flashes that session's card.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [focusId, setFocusId] = useState<string | null>(null);
+  useEffect(() => {
+    const open = searchParams.get("open");
+    if (!open) return;
+    setFocusId(open);
+    const next = new URLSearchParams(searchParams);
+    next.delete("open");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // Program list — only for the page-level live context (the panels load their
   // own lists); refreshed by the same event fan-out the panels listen to.
@@ -120,6 +135,7 @@ export function UploadsSessions(): ReactElement {
             onEdit={openInStudio}
             liveProgramId={liveId}
             nowPlaying={nowPlaying}
+            focusProgramId={focusId}
           />
         </div>
       </div>

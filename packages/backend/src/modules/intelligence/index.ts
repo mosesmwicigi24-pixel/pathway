@@ -4,12 +4,19 @@
 // run so a SuperAdmin can fire the pipeline without waiting for the crons.
 // The AI provider stays server-side (§5.10); AI never gates, scores, advances,
 // or touches money (§1.1, §1.9) — it only ever writes words.
-import { Router } from "express";
+import { mkdirSync } from "node:fs";
+import { unlink } from "node:fs/promises";
+import { background } from "../../db/background.js";
+import { extname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { Router, type NextFunction, type Request, type Response } from "express";
+import multer from "multer";
 import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { buildAiProvider, type AiProvider } from "../assistant/provider.js";
+import { AiUsageService } from "../assistant/usage.js";
 import { NotificationService } from "../notifications/service.js";
 import { ContentIndexService } from "./content.js";
 import { StoryService } from "./story.js";
@@ -17,15 +24,18 @@ import { LettersService } from "./letters.js";
 import { SignalsService } from "./signals.js";
 import { LearningService, EXPLAIN_STYLES, type ExplainStyle } from "./learning.js";
 import { LiturgyService } from "./liturgy.js";
+import { LiturgyRecordingService } from "./liturgyRecordings.js";
 import { CommunityService, type BlessingKind } from "./community.js";
 import { EchoesService } from "./echoes.js";
 import { WalkService } from "./walk.js";
+import { PrayerAiService } from "./prayer.js";
 import { ApiError } from "../../http/errors.js";
 
 export const intelligenceRouter: Router = Router();
 
 export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvider): Router {
-  const provider = providerOverride ?? buildAiProvider(ctx.env);
+  const usage = new AiUsageService(ctx.db.primary);
+  const provider = providerOverride ?? buildAiProvider(ctx.env, usage.recorder());
   const content = new ContentIndexService(ctx.db.primary);
   const story = new StoryService(ctx.db.primary, provider);
   const notifications = new NotificationService(ctx.db.primary);
@@ -33,8 +43,10 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   const signals = new SignalsService(ctx.db.primary, provider, story, notifications);
   const learning = new LearningService(ctx.db.primary, provider);
   const liturgy = new LiturgyService(ctx.db.primary, provider);
+  const liturgyRecordings = new LiturgyRecordingService(ctx.db.primary);
   const community = new CommunityService(ctx.db.primary, notifications);
   const echoes = new EchoesService(ctx.db.primary);
+  const prayerAi = new PrayerAiService(ctx.db.primary, provider);
   const auth = authenticate(ctx.env);
   const r = intelligenceRouter;
 
@@ -49,6 +61,16 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
 
   r.post("/me/letters/:id/read", auth, handler(async (req, res) => {
     res.json(await letters.markRead(requirePrincipal(req).userId, String(req.params.id ?? "")));
+  }));
+
+  // --- AI Prayer Points (Prayer Room tab 4) — consent-gated (§1.1) ---
+  r.post("/me/prayer/assist", auth, handler(async (req, res) => {
+    const input = parseBody(PrayerAiService.Assist, req.body ?? {});
+    res.json(await prayerAi.assist(requirePrincipal(req).userId, input));
+  }));
+
+  r.post("/me/prayer/points", auth, handler(async (req, res) => {
+    res.json(await prayerAi.points(requirePrincipal(req).userId));
   }));
 
   // --- AI personalization consent (the covenant switch) ---
@@ -92,6 +114,13 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
     res.json(await letters.runWeekly(input.user_id ? { userIds: [input.user_id] } : {}));
   }));
 
+  // --- AI cost/usage observability (Admin+): what is the AI layer doing and
+  // spending, aggregated by feature/tier/model — see assistant/usage.ts. ---
+  r.get("/admin/intelligence/ai-usage", auth, requireRole("Admin"), handler(async (req, res) => {
+    const days = Math.min(Math.max(Number(req.query.since_days ?? 30) || 30, 1), 365);
+    res.json(await usage.summary(days));
+  }));
+
   // --- Shepherd's Pulse (Phase 2): leader-scoped signals + the Flock Brief ---
   r.get("/admin/intelligence/signals", auth, requireRole("Instructor"), handler(async (req, res) => {
     const since = Math.min(Math.max(Number(req.query.since_days ?? 14) || 14, 1), 60);
@@ -100,6 +129,13 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
 
   r.post("/admin/intelligence/signals/:id/ack", auth, requireRole("Instructor"), handler(async (req, res) => {
     res.json(await signals.acknowledge(requirePrincipal(req), String(req.params.id ?? "")));
+  }));
+
+  // AI capability: draft a check-in for the person behind one signal — a
+  // suggestion only, the leader edits and sends it themselves (§1.1: AI
+  // never originates outreach, it only ever writes words for a human to use).
+  r.post("/admin/intelligence/signals/:id/draft-outreach", auth, requireRole("Instructor"), handler(async (req, res) => {
+    res.json(await signals.draftOutreach(requirePrincipal(req), String(req.params.id ?? "")));
   }));
 
   r.get("/admin/intelligence/flock-brief", auth, requireRole("Instructor"), handler(async (req, res) => {
@@ -139,6 +175,133 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
       requirePrincipal(req).userId,
     ]);
     res.json(await liturgy.current(me.rows[0]?.congregation_id ?? null));
+  }));
+
+  // --- The pastor's own voice on the liturgy (owner request, 2026-08-12) ---
+  // Admin-only (never a member capability — a member must never be able to
+  // write here). Bytes land on the same /media disk everything else in this
+  // app uses (§ media module precedent: /me/media/audio, /admin/media/audio/
+  // upload). One recording per (congregation, band); re-recording REPLACES
+  // it (upsert) — see LiturgyRecordingService / migration 189 for why this is
+  // keyed by band alone, not by day.
+  const storageDir = ctx.env.MEDIA_STORAGE_DIR ?? "/tmp/nuru-media";
+  try { mkdirSync(storageDir, { recursive: true }); } catch { /* best-effort; route fails loudly if unwritable */ }
+  const publicBase = (ctx.env.MEDIA_PUBLIC_BASE_URL ?? "http://localhost:8080/media").replace(/\/+$/, "");
+  const LITURGY_AUDIO_MAX = 20 * 1024 * 1024; // generous for several minutes of AAC/MP3 — a spoken band, not a sermon
+  const LITURGY_AUDIO_EXTS = new Set([".mp3", ".wav", ".m4a", ".aac", ".alac"]);
+  const LITURGY_AUDIO_MIMES = new Set([
+    "audio/mpeg", "audio/mp3",
+    "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave",
+    "audio/aac", "audio/aacp", "audio/x-aac",
+    "audio/mp4", "audio/x-m4a", "audio/m4a",
+    "audio/alac",
+  ]);
+  const liturgyAudioUpload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, storageDir),
+      filename: (_req, file, cb) => {
+        const ext = (extname(file.originalname) || ".m4a").toLowerCase().replace(/[^.a-z0-9]/g, "") || ".m4a";
+        cb(null, `liturgy_${randomUUID()}${ext}`);
+      },
+    }),
+    limits: { fileSize: LITURGY_AUDIO_MAX, files: 1 },
+    fileFilter: (_req, file, cb) => {
+      const ext = (extname(file.originalname) || "").toLowerCase();
+      if (LITURGY_AUDIO_MIMES.has(file.mimetype ?? "") || LITURGY_AUDIO_EXTS.has(ext)) cb(null, true);
+      else cb(new ApiError("VALIDATION_FAILED", "Only MP3, WAV, AAC or ALAC (.m4a) audio can be uploaded"));
+    },
+  });
+  const uploadLiturgyAudio = (req: Request, res: Response, next: NextFunction): void =>
+    liturgyAudioUpload.single("file")(req, res, (err: unknown) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        return next(
+          new ApiError(
+            "VALIDATION_FAILED",
+            err.code === "LIMIT_FILE_SIZE" ? "Recording exceeds the 20 MB upload limit" : err.message,
+          ),
+        );
+      }
+      return next(err);
+    });
+  // Map a stored recording URL back to its on-disk filename (for cleanup on replace/delete).
+  const liturgyRecordingFile = (url: string | null): string | null =>
+    url && url.startsWith(publicBase + "/") ? url.slice(publicBase.length + 1) : null;
+
+  const LiturgyBandParam = z.object({
+    band: z.enum(["sunrise", "morning", "midday", "afternoon", "evening", "night", "midnight"]),
+  });
+  const LiturgyRecordingBody = z.object({ duration_sec: z.coerce.number().int().min(1).max(900) });
+
+  // Admin recorder UI: which of the seven bands already have the pastor's own
+  // voice, and which are still synthesised. Never a completion meter — mixed
+  // coverage is the permanent, normal state (see migration 189).
+  r.get("/admin/liturgy/recordings", auth, requireRole("Admin"), handler(async (req, res) => {
+    res.json({ data: await liturgyRecordings.list(requirePrincipal(req).congregationId) });
+  }));
+
+  // Record (or re-record) the pastor's own voice for one band. Replaces
+  // whatever was there (upsert) — the old file is best-effort unlinked.
+  r.post(
+    "/admin/liturgy/recordings/:band",
+    auth, requireRole("Admin"), uploadLiturgyAudio,
+    handler(async (req, res) => {
+      const file = req.file;
+      if (!file) throw new ApiError("VALIDATION_FAILED", "No audio was uploaded (field 'file')");
+      const { band } = parseBody(LiturgyBandParam, req.params);
+      const { duration_sec } = parseBody(LiturgyRecordingBody, req.body ?? {});
+      const p = requirePrincipal(req);
+      const { previousAudioUrl } = await liturgyRecordings.upsert(p.congregationId, band, {
+        audioUrl: `${publicBase}/${file.filename}`,
+        durationSec: duration_sec,
+        recordedBy: p.userId,
+      });
+      // Removing the superseded take must not delay the pastor's upload
+      // response — but `unlink(..., () => undefined)` made it invisible as well
+      // as non-blocking, and those are different things. A failed unlink was
+      // discarded in total, so an old recording that could not be removed leaked
+      // onto the VPS disk with nothing anywhere recording that it had happened.
+      //
+      // background() (added in #418 for exactly this shape) keeps it off the
+      // response path while leaving it observable: drainBackgroundWork() can
+      // wait for it, and a failure is now logged instead of vanishing. CI caught
+      // the race — the test asserted the old file was gone while the unlink was
+      // still in flight, which passed locally on a fast disk and failed on a
+      // slower runner.
+      const oldFile = liturgyRecordingFile(previousAudioUrl);
+      if (oldFile) {
+        background(
+          unlink(join(storageDir, oldFile)).catch((e: unknown) => {
+            ctx.log.warn(
+              { err: e, file: oldFile, band },
+              "could not remove the superseded liturgy recording; it is now orphaned on disk",
+            );
+          }),
+        );
+      }
+      res.status(201).json({ band, audio_url: `${publicBase}/${file.filename}`, duration_sec });
+    }),
+  );
+
+  // Delete a band's recording — that band falls back to synthesis
+  // immediately; no other band is affected.
+  r.delete("/admin/liturgy/recordings/:band", auth, requireRole("Admin"), handler(async (req, res) => {
+    const { band } = parseBody(LiturgyBandParam, req.params);
+    const { audio_url } = await liturgyRecordings.remove(requirePrincipal(req).congregationId, band);
+    const oldFile = liturgyRecordingFile(audio_url);
+    // Same treatment as the replace path above — one failure is a class, and
+    // this is the sibling occurrence.
+    if (oldFile) {
+      background(
+        unlink(join(storageDir, oldFile)).catch((e: unknown) => {
+          ctx.log.warn(
+            { err: e, file: oldFile, band },
+            "could not remove the deleted liturgy recording; it is now orphaned on disk",
+          );
+        }),
+      );
+    }
+    res.json({ deleted: true });
   }));
 
   r.get("/community/moments", auth, handler(async (req, res) => {

@@ -184,6 +184,76 @@ describe("mobile money (same trust model as Stripe, §5.6)", () => {
     expect((await testPool().query(`SELECT count(*)::int AS n FROM ledger_entries`)).rows[0].n).toBe(0);
   });
 
+  it("named giving: an account_name rides the STK push as metadata.reference, persists, and is returned", async () => {
+    // Parsed through the schema first (as the router does via parseBody) so
+    // the trim transform runs — the raw string has leading/trailing spaces.
+    const parsed = FinancialService.GivingIntent.parse({
+      fund: "mission",
+      amount_minor: 15000,
+      currency: "KES",
+      method: "mpesa",
+      account_name: "  Thanksgiving  ",
+      idempotency_key: "give-name-001",
+    });
+    const intent = (await svc.createGivingIntent(user, parsed)) as { transaction_id: string; provider_ref: string };
+
+    // Plumbed through to the provider so the real Daraja adapter can sanitize +
+    // send it as AccountReference (sanitization itself is unit-tested on
+    // sanitizeAccountReference in mpesa-daraja.test.ts).
+    expect(mpesa.initiated.at(-1)!.metadata.reference).toBe("Thanksgiving");
+
+    const stored = await testPool().query(`SELECT account_name FROM transactions WHERE transaction_id=$1`, [
+      intent.transaction_id,
+    ]);
+    expect(stored.rows[0].account_name).toBe("Thanksgiving");
+
+    const hist = await supertest(app).get("/v1/giving/history").set({ Authorization: userTok });
+    const rec = (hist.body.data as Array<{ transaction_id: string; account_name: string | null }>).find(
+      (r) => r.transaction_id === intent.transaction_id,
+    );
+    expect(rec?.account_name).toBe("Thanksgiving");
+
+    const detail = (await svc.givingDetail(user, intent.transaction_id)) as { account_name: string | null };
+    expect(detail.account_name).toBe("Thanksgiving");
+  });
+
+  it("named giving: absent account_name leaves everything unchanged (no reference key, null column)", async () => {
+    const intent = (await svc.createGivingIntent(user, {
+      fund: "mission",
+      amount_minor: 15000,
+      currency: "KES",
+      method: "mpesa",
+      idempotency_key: "give-name-002",
+    })) as { transaction_id: string };
+
+    // No `reference` key set at all — the provider falls back to its own
+    // fund/default AccountReference, exactly as before this feature existed.
+    expect(mpesa.initiated.at(-1)!.metadata).not.toHaveProperty("reference");
+
+    const stored = await testPool().query(`SELECT account_name FROM transactions WHERE transaction_id=$1`, [
+      intent.transaction_id,
+    ]);
+    expect(stored.rows[0].account_name).toBeNull();
+  });
+
+  it("named giving: an empty/whitespace-only account_name is treated as absent", async () => {
+    const parsed = FinancialService.GivingIntent.parse({
+      fund: "mission",
+      amount_minor: 15000,
+      currency: "KES",
+      method: "mpesa",
+      account_name: "   ",
+      idempotency_key: "give-name-003",
+    });
+    expect(parsed.account_name).toBeUndefined(); // schema-level: whitespace-only → absent
+    const intent = (await svc.createGivingIntent(user, parsed)) as { transaction_id: string };
+    expect(mpesa.initiated.at(-1)!.metadata).not.toHaveProperty("reference");
+    const stored = await testPool().query(`SELECT account_name FROM transactions WHERE transaction_id=$1`, [
+      intent.transaction_id,
+    ]);
+    expect(stored.rows[0].account_name).toBeNull();
+  });
+
   it("HTTP callback route verifies the HMAC end-to-end", async () => {
     const created = await supertest(app)
       .post("/v1/giving/intents")

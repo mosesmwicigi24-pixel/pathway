@@ -32,3 +32,6 @@ ios/Pods/
 # machine-local Claude Code permissions (never shared)
 .claude/settings.local.json
 docker-compose.override.yml
+
+# Local release/agent worktrees — never part of a commit
+.worktrees/

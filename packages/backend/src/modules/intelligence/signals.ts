@@ -18,7 +18,7 @@ import type { Principal } from "../../http/http.js";
 import type { AiProvider } from "../assistant/provider.js";
 import type { NotificationService } from "../notifications/service.js";
 import type { StoryService } from "./story.js";
-import { EMOTION_SYSTEM, FLOCK_BRIEF_SYSTEM } from "./prompts.js";
+import { DRAFT_OUTREACH_SYSTEM, EMOTION_SYSTEM, FLOCK_BRIEF_SYSTEM } from "./prompts.js";
 import { LettersService } from "./letters.js";
 
 const CRISIS_RX = /suicid|kill myself|end my life|end it all|self.?harm|no reason to live|want to die|take my own life/i;
@@ -137,7 +137,7 @@ export class SignalsService {
           messages: [{ role: "user", text: item.text }],
           tier: "fast",
           maxTokens: 160,
-          temperature: 0,
+          feature: "emotion_classifier",
         });
         const parsed = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)) as {
           tone?: string;
@@ -258,6 +258,53 @@ export class SignalsService {
     return row;
   }
 
+  /** Draft a check-in message for the person behind ONE signal — on request,
+   *  not on a cron. Small, grounded extension of the Shepherd's Pulse: same
+   *  RBAC scoping as acknowledge() (leader must own this signal or be
+   *  Admin+), same privacy footprint as the Flock Brief (facts + the signal's
+   *  own summary, never raw reflection/journal text), same "suggestion only"
+   *  contract as the prayer assistant (nothing is sent or persisted here —
+   *  the leader edits and sends it themselves). Fails honestly: on any AI
+   *  failure this throws (never a fabricated "personal" message). */
+  async draftOutreach(principal: Principal, signalId: string): Promise<{ suggestion: string }> {
+    const allowed =
+      principal.role === "Admin" || principal.role === "SuperAdmin"
+        ? null
+        : await this.flockOf(principal.userId);
+    const signal = await maybeOne<{ user_id: string; full_name: string; summary: string }>(
+      this.pool,
+      `SELECT s.user_id, u.full_name, s.summary
+         FROM signals s JOIN users u ON u.user_id = s.user_id
+        WHERE s.signal_id = $1 AND ($2::uuid[] IS NULL OR s.user_id = ANY($2::uuid[]))`,
+      [signalId, allowed],
+    );
+    if (!signal) throw new ApiError("NOT_FOUND", "Signal not found");
+
+    const story = await this.story.get(signal.user_id);
+    const facts = story
+      ? {
+          level: story.facts.level,
+          overall: story.facts.scores.overall,
+          trend: story.facts.scores.trend_delta,
+          active_days_28: story.facts.active_days_28,
+        }
+      : {};
+    const suggestion = await this.provider.complete({
+      system: DRAFT_OUTREACH_SYSTEM,
+      messages: [
+        {
+          role: "user",
+          text: `Person: ${signal.full_name.split(" ")[0]}\nSignal: ${signal.summary}\nOther facts: ${JSON.stringify(facts)}`,
+        },
+      ],
+      tier: "standard",
+      effort: "low", // on-demand, leader is waiting — keep it snappy
+      maxTokens: 500,
+      feature: "draft_outreach",
+    });
+    return { suggestion: suggestion.trim().slice(0, 1000) };
+  }
+
   /** Compose this week's Flock Brief for every leader with people. */
   async composeBriefs(now = new Date()): Promise<{ week_of: string; written: number; skipped: number }> {
     const weekOf = LettersService.weekOf(now);
@@ -312,8 +359,10 @@ export class SignalsService {
           system: FLOCK_BRIEF_SYSTEM,
           messages: [{ role: "user", text: `Week of ${weekOf}. Your people:\n${JSON.stringify(people)}` }],
           tier: "deep",
-          maxTokens: 700,
-          temperature: 0.5,
+          // 1800, not 700: deep-tier thinking is on by default and shares the
+          // max_tokens budget with the visible briefing — leave it headroom.
+          maxTokens: 1800,
+          feature: "flock_brief",
         });
         const inserted = await maybeOne<{ brief_id: string }>(
           this.pool,

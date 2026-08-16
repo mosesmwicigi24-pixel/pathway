@@ -8,6 +8,7 @@ import { authenticate, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { CurriculumService } from "./service.js";
 import { AdminCurriculumService } from "./admin.js";
+import { CurriculumStatsService } from "./stats.js";
 import { ScriptureService, buildScriptureProvider } from "./scripture.js";
 import { MediaService } from "../media/service.js";
 import { renderSafeMarkdown } from "./markdown.js";
@@ -23,6 +24,7 @@ export function registerCurriculum(ctx: AppContext): Router {
   // (§4.5). Unconfigured (no CLOUDINARY_URL) → raw refs pass through unsigned.
   const svc = new CurriculumService(ctx.db.primary, ctx.redis, new MediaService(ctx.env.CLOUDINARY_URL));
   const admin = new AdminCurriculumService(ctx.db.primary);
+  const stats = new CurriculumStatsService(ctx.db.replica); // one stats source, replica reads (§3)
   const scripture = new ScriptureService(buildScriptureProvider(ctx.env), ctx.env.YOUVERSION_LANGUAGE_RANGES, ctx.redis);
   const auth = authenticate(ctx.env);
   const perm = requirePermission(ctx.db.replica); // RBAC: curriculum modules levels/cms/quiz (§5.4)
@@ -105,6 +107,24 @@ export function registerCurriculum(ctx: AppContext): Router {
   // =================================================================
   // Admin curriculum CMS (RBAC: Admin/SuperAdmin only, §5.4)
   // =================================================================
+
+  // ---- One stats source (docs/CURRICULUM_ARCHITECTURE.md §3) ----
+  // The Curriculum Dashboard payload in one call: totals, per-level summary
+  // cards, pipeline counts. Same perm as the other curriculum admin reads.
+  r.get("/admin/curriculum/summary", auth, perm("levels", "view"), handler(async (_req, res) => {
+    res.json(await stats.summary());
+  }));
+
+  // Completeness report: {severity, level_number, module_id?, code, message}.
+  r.get("/admin/curriculum/validate", auth, perm("levels", "view"), handler(async (_req, res) => {
+    res.json({ data: await stats.validate() });
+  }));
+
+  // Audit-log slice classified server-side (published|edited|review|video|quiz|module|milestone).
+  r.get("/admin/curriculum/activity", auth, perm("levels", "view"), handler(async (req, res) => {
+    const q = parseBody(z.object({ limit: z.coerce.number().int().min(1).max(200).default(40) }), req.query);
+    res.json({ data: await stats.activity(q.limit) });
+  }));
 
   // ---- Levels ----
   r.get("/admin/levels", auth, perm("levels", "view"), handler(async (_req, res) => {

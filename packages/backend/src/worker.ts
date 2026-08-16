@@ -20,18 +20,22 @@ import { EngagementService } from "./modules/engagement/service.js";
 import { PartitionMaintenance, refreshMinorFlags } from "./jobs/maintenance.js";
 import { GamificationService } from "./modules/gamification/service.js";
 import { AnnouncementService } from "./modules/announcements/service.js";
+import { CalendarService } from "./modules/calendar/service.js";
+import { buildEmailProvider } from "./modules/identity/email.js";
 import { FinancialService } from "./modules/financial/service.js";
 import { buildPaymentGateway } from "./modules/financial/gateway.js";
 import { buildMobileMoneyProviders } from "./modules/financial/providers.js";
 import { RadioService } from "./modules/radio/service.js";
 import { buildStreamProvider } from "./modules/radio/provider.js";
 import { buildAiProvider } from "./modules/assistant/provider.js";
+import { AiUsageService } from "./modules/assistant/usage.js";
 import { ContentIndexService } from "./modules/intelligence/content.js";
 import { StoryService } from "./modules/intelligence/story.js";
 import { LettersService } from "./modules/intelligence/letters.js";
 import { SignalsService } from "./modules/intelligence/signals.js";
 import { LiturgyService } from "./modules/intelligence/liturgy.js";
 import { CommunityService } from "./modules/intelligence/community.js";
+import { LiveService } from "./modules/live/service.js";
 
 function main(): void {
   const env = loadEnv();
@@ -49,7 +53,11 @@ function main(): void {
 
   // Scheduled announcements: dispatch any whose send time has arrived (B5).
   // dispatchDue() is idempotent per (recipient, channel), so overlap is safe.
-  const announcements = new AnnouncementService(db.primary);
+  // EVENTS_ARCHITECTURE §5: the email channel rides the same SMTP EmailProvider
+  // as password reset (Brevo in prod; logging fallback when SMTP env is absent,
+  // so dev/tests run offline). SMS/WhatsApp have NO provider bound — deliveries
+  // record suppressed(no_provider), never a fabricated "delivered".
+  const announcements = new AnnouncementService(db.primary, { email: buildEmailProvider(env, log) });
   const annTimer = setInterval(
     () => void announcements.dispatchDue().catch((err) => log.error({ err }, "announcement dispatch failed")),
     60_000,
@@ -75,6 +83,29 @@ function main(): void {
   );
   stops.push(() => clearInterval(radioTimer));
 
+  // Nuru Live (docs/LIVE_STREAMING.md L1): auto-end orphaned streams — first
+  // the publisher-liveness check (MediaMTX confirms no publisher, past a 90s
+  // grace) which is how most broadcaster-crashed streams actually get
+  // cleared within minutes; the 12h absolute fallback still catches anything
+  // left over from a sustained MediaMTX control-API outage. Also registers a
+  // recording_url once MediaMTX's fMP4 segment for the window shows up on
+  // disk. ~2min tick.
+  const live = new LiveService(
+    db.primary,
+    env.LIVE_RECORDINGS_DIR,
+    env.LIVE_RTMP_BASE_URL,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    env.LIVE_MEDIAMTX_API_BASE,
+  );
+  const liveTimer = setInterval(
+    () => void live.sweep().catch((err) => log.error({ err }, "live sweep failed")),
+    2 * 60_000,
+  );
+  stops.push(() => clearInterval(liveTimer));
+
   // Daily jobs on cron (server local time). Each guards its own errors.
   const engagement = new EngagementService(db.primary, db.replica);
   const partitions = new PartitionMaintenance(db.primary);
@@ -86,7 +117,8 @@ function main(): void {
   // rebuild (03:00 EAT), and the Sunday Letter run (Sunday 16:00 EAT). Every
   // job is idempotent (wipe+refill index; story upsert; letters UNIQUE per
   // user+week), and a missing AI key degrades to the offline fake provider.
-  const aiProvider = buildAiProvider(env);
+  const aiUsage = new AiUsageService(db.primary);
+  const aiProvider = buildAiProvider(env, aiUsage.recorder());
   const contentIndex = new ContentIndexService(db.primary);
   const memberStory = new StoryService(db.primary, aiProvider);
   const intelNotifications = new NotificationService(db.primary);
@@ -95,8 +127,26 @@ function main(): void {
   const liturgy = new LiturgyService(db.primary, aiProvider);
   const communityIntel = new CommunityService(db.primary, intelNotifications);
 
+  // EVENTS_ARCHITECTURE §2/§7: the calendar's reconcile sweep + automation crons.
+  const calendar = new CalendarService(db.primary, env.CAL_MAX_INSTANCES);
+
   const tasks = [
     cron.schedule("0 2 * * *", safe("engagement recompute", () => engagement.runRecompute())),
+    // §2: nightly reconcile — materialize a rolling [now, now+90d] window for
+    // every active series AND refresh/prune drifted materialized rows.
+    cron.schedule("30 2 * * *", safe("events reconcile sweep", async () => {
+      const out = await calendar.reconcileSweep();
+      log.info(out, "events reconciled");
+    })),
+    // §7: per-series automations (auto-archive daily; low-RSVP alerts hourly).
+    cron.schedule("0 5 * * *", safe("events auto-archive", async () => {
+      const n = await calendar.runAutoArchive();
+      if (n > 0) log.info({ archived: n }, "occurrences auto-archived");
+    })),
+    cron.schedule("15 * * * *", safe("low-RSVP alerts", async () => {
+      const n = await calendar.runLowRsvpAlerts();
+      if (n > 0) log.info({ alerted: n }, "low-RSVP alerts sent");
+    })),
     cron.schedule("0 0 * * *", safe("intelligence reindex + story rebuild", async () => {
       await contentIndex.reindexAll();
       const { rebuilt } = await memberStory.rebuildAll();

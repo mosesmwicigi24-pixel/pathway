@@ -75,3 +75,145 @@ export function pickVerse(theme: VerseTheme, userId: string, dayKey: string, rec
   // Everything in the pool was seen recently — fall back to the deterministic pick.
   return pool[start]!;
 }
+
+// ============================ Verse art =====================================
+// The tableau layer: each theme carries a small, hand-curated set of warm,
+// faceless photographs (fruit on the vine, bread, wheat at dawn, still water)
+// so the day's verse arrives as something beheld, not only read. Server-chosen
+// so every surface agrees; clients fall back to the plain card offline. All
+// URLs verified live at curation time; Unsplash CDN with width/quality caps
+// keeps the download modest on mobile data.
+
+export interface VerseArt {
+  url: string;
+  alt: string;
+}
+
+const U = (id: string) => `https://images.unsplash.com/photo-${id}?auto=format&fit=crop&w=1080&q=70`;
+
+export const VERSE_ART: Record<VerseTheme, VerseArt[]> = {
+  foundations: [
+    { url: U("1457530378978-8bac673b8062"), alt: "New seedlings breaking through the soil" },
+    { url: U("1507525428034-b723cf961d3e"), alt: "A soft sunrise over a quiet shore" },
+    { url: U("1433086966358-54859d0ed716"), alt: "A waterfall pouring through green cliffs" },
+  ],
+  return: [
+    { url: U("1470071459604-3b5ec3a7fe05"), alt: "The sun breaking over a green valley" },
+    { url: U("1506744038136-46273834b3fb"), alt: "Morning mist lifting off a mountain river" },
+    { url: U("1470252649378-9c29740c9fa8"), alt: "Golden sunrise over an open field" },
+  ],
+  prayer: [
+    { url: U("1495616811223-4d98c6e9c869"), alt: "A still lake and jetty at dusk" },
+    { url: U("1475924156734-496f6cac6ec1"), alt: "Dawn light over a quiet sea" },
+    { url: U("1418065460487-3e41a6c84dc5"), alt: "Mist resting on a pine forest" },
+    { url: U("1519681393784-d120267933ba"), alt: "A sky full of stars over the mountains" },
+  ],
+  word: [
+    { url: U("1504052434569-70ad5836ab65"), alt: "An open Bible held in one hand" },
+    { url: U("1470115636492-6d2b56f9146d"), alt: "Light breaking through tall trees onto the road" },
+    { url: U("1519791883288-dc8bd696e667"), alt: "An open book glowing with warm light" },
+    { url: U("1544716278-ca5e3f4abd8c"), alt: "An open book beside morning coffee" },
+  ],
+  habits: [
+    { url: U("1476820865390-c52aeebb9891"), alt: "A long road through autumn trees" },
+    { url: U("1441974231531-c6227db76b6e"), alt: "A sunlit path through the forest" },
+    { url: U("1447752875215-b2761acb3c5d"), alt: "A footbridge leading into the woods" },
+  ],
+  growth: [
+    { url: U("1537640538966-79f369143f8f"), alt: "Grapes ripening on the vine in golden light" },
+    { url: U("1423483641154-5411ec9c0ddf"), alt: "Two hands full of harvested grapes" },
+    { url: U("1502082553048-f009c37129b9"), alt: "A great tree standing alone in a green field" },
+  ],
+  fellowship: [
+    { url: U("1549931319-a545dcf3bc73"), alt: "A loaf of bread, sliced and ready to share" },
+    { url: U("1464226184884-fa280b87c399"), alt: "Bowls of fresh harvest vegetables" },
+    { url: U("1518495973542-4542c06a5843"), alt: "Sunlight through the canopy of a great tree" },
+  ],
+  uplift: [
+    { url: U("1490750967868-88aa4486c946"), alt: "Golden poppies open to a blue sky" },
+    { url: U("1465146344425-f00d5f5c8f07"), alt: "Wildflowers scattered through a wheat field" },
+    { url: U("1500382017468-9049fed747ef"), alt: "Sun rays pouring over a wheat field" },
+  ],
+};
+
+/**
+ * Deterministic art for (user, day): same tableau all day, fresh tomorrow.
+ * Mood-library themes ("Gratitude", "Fear & Anxiety", …) aren't art-keyed —
+ * they draw from the union of every pool so each day still lands somewhere
+ * beautiful rather than always on one theme's images.
+ */
+export function pickVerseArt(theme: VerseTheme | string, userId: string, dayKey: string): VerseArt {
+  const pool = VERSE_ART[(theme as VerseTheme)] ?? Object.values(VERSE_ART).flat();
+  return pool[hash(`${userId}|${dayKey}|art`) % pool.length]!;
+}
+
+// ========================= Verse encouragement ===============================
+// A short encouragement under the verse: two historic voices matched to the
+// theme's mood, plus one pastoral line in Pastor Moses' own voice, direct and
+// second-person. Server-chosen, rotated by EAT day so it's stable through the
+// day and fresh tomorrow — same congregation-wide determinism as the art.
+
+export interface Encouragement {
+  text: string;
+  author: string;
+}
+
+export const ENCOURAGEMENTS: Record<VerseTheme, [Encouragement, Encouragement, Encouragement]> = {
+  foundations: [
+    { text: "You have made us for yourself, O Lord, and our heart is restless until it rests in you.", author: "Augustine" },
+    { text: "What comes into our minds when we think about God is the most important thing about us.", author: "A.W. Tozer" },
+    { text: "You were dead, and now you are alive in Christ — this is who you really are today. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  return: [
+    { text: "There is no pit so deep that God's love is not deeper still.", author: "Corrie ten Boom" },
+    { text: "Grace grows best in winter.", author: "Charles Spurgeon" },
+    { text: "Wherever you've been, the Father is already running to meet you — come home today. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  prayer: [
+    { text: "Every great movement of God can be traced to a kneeling figure.", author: "D.L. Moody" },
+    { text: "According to the importance of prayer, so, generally, is the opposition made to it.", author: "George Müller" },
+    { text: "Prayer is not a performance — it is a child talking to a Father who is already listening. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  word: [
+    { text: "The Bible was not given for our information but for our transformation.", author: "D.L. Moody" },
+    { text: "Visit many good books, but live in the Bible.", author: "Charles Spurgeon" },
+    { text: "Don't just read the Word today — let it read you, and obey the part that stings. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  habits: [
+    { text: "By perseverance the snail reached the ark.", author: "Charles Spurgeon" },
+    { text: "Worry does not empty tomorrow of its sorrow, it empties today of its strength.", author: "Corrie ten Boom" },
+    { text: "Small, faithful, and daily — that is how a life is built that lasts into eternity. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  growth: [
+    { text: "Do the next thing.", author: "Elisabeth Elliot" },
+    { text: "God's work done in God's way will never lack God's supply.", author: "Hudson Taylor" },
+    { text: "Maturity is not knowing more verses — it is looking more like Jesus each week. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  fellowship: [
+    { text: "Find out how much God has given you and from it take what you need; the rest is needed by others.", author: "Augustine" },
+    { text: "It is not so much that God calls us to work for Him as that He calls us to walk with Him.", author: "Hudson Taylor" },
+    { text: "You were never meant to walk this out alone — find your people and let them find you. — Pastor Moses", author: "Pastor Moses" },
+  ],
+  uplift: [
+    { text: "Never be afraid to trust an unknown future to a known God.", author: "Corrie ten Boom" },
+    { text: "Faith is the gaze of a soul upon a saving God.", author: "A.W. Tozer" },
+    { text: "Those who are strong in the Lord will not be anxious, and will have peace of heart. — Pastor Moses", author: "Pastor Moses" },
+  ],
+};
+
+/** Days since the Unix epoch for an EAT calendar day string ("YYYY-MM-DD"). */
+function epochDay(dayKey: string): number {
+  return Math.floor(Date.parse(`${dayKey}T00:00:00Z`) / 86_400_000);
+}
+
+/**
+ * Today's encouragement for a theme — rotated by EAT day (whole-congregation
+ * deterministic, like the art). Mood-library theme strings that aren't one of
+ * the fixed VerseTheme keys fall back to the union of every pool, same
+ * pattern as pickVerseArt.
+ */
+export function pickEncouragement(theme: VerseTheme | string, dayKey: string): Encouragement {
+  const pool = ENCOURAGEMENTS[(theme as VerseTheme)] ?? Object.values(ENCOURAGEMENTS).flat();
+  const idx = ((epochDay(dayKey) % pool.length) + pool.length) % pool.length;
+  return pool[idx]!;
+}

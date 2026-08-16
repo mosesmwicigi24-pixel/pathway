@@ -195,7 +195,7 @@ export class StoryService {
           messages: [{ role: "user", text: JSON.stringify(built.facts) }],
           tier: "fast",
           maxTokens: 260,
-          temperature: 0.4,
+          feature: "story_narrative",
         });
       } catch {
         narrative = ""; // the nightly batch must never die on one member

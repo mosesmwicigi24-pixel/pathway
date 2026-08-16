@@ -5,7 +5,7 @@
 // check-ins (with a reason) and walk-in/first-time guests; the roster view powers
 // the portal's Attendance screen (checked-in, guests, RSVP'd-but-absent).
 import type { Pool } from "pg";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { many, maybeOne, one, tx, enqueueOutbox, audit, recordActivityEvent } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
@@ -16,6 +16,10 @@ import type { Principal } from "../../http/http.js";
 export function eventScanToken(qrSecret: string, eventId: string): string {
   return createHmac("sha256", qrSecret).update(eventId).digest("hex");
 }
+
+/** How long an issued QR token stays valid before the panel rotates the secret
+ *  (EVENTS_ARCHITECTURE §6 — time-boxed rotation; a screenshot goes stale). */
+const QR_TOKEN_TTL_MIN = 30;
 
 function tokensMatch(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -171,6 +175,168 @@ export class AttendanceService {
       await audit(c, principal.userId, "attendance.guest_added", "events", eventId, { guest_name: input.guest_name });
       return row;
     });
+  }
+
+  // ---------------- Real QR + export + insights (EVENTS_ARCHITECTURE §6) ----------------
+
+  /**
+   * The admin QR panel: issues the SAME HMAC scan token the member check-in
+   * validator (checkIn above) verifies — the consoles finally render a code
+   * members can actually scan. Time-boxed: once the token is older than
+   * QR_TOKEN_TTL_MIN the secret rotates (invalidating screenshots) and a fresh
+   * token is issued; expires_at tells the console when to auto-refresh.
+   */
+  async qrPanel(principal: Principal, eventId: string): Promise<Record<string, unknown>> {
+    const ev = await maybeOne<{
+      cell_group_id: string | null;
+      qr_enabled: boolean;
+      qr_secret: string;
+      qr_rotated_at: string | null;
+      checkin_opens_at: string | null;
+      occurs_at: string;
+    }>(
+      this.pool,
+      `SELECT cell_group_id, qr_enabled, qr_secret, qr_rotated_at, checkin_opens_at, occurs_at
+         FROM events WHERE event_id = $1`,
+      [eventId],
+    );
+    if (!ev) throw new ApiError("NOT_FOUND", "Event not found");
+    await assertCellInScope(this.pool, principal, ev.cell_group_id ?? "");
+    if (!ev.qr_enabled) throw new ApiError("UNPROCESSABLE", "QR check-in is not enabled for this event");
+
+    const ttlMs = QR_TOKEN_TTL_MIN * 60_000;
+    let secret = ev.qr_secret;
+    let rotatedAt = ev.qr_rotated_at ? new Date(ev.qr_rotated_at) : null;
+    if (!rotatedAt || Date.now() >= rotatedAt.getTime() + ttlMs) {
+      secret = randomBytes(24).toString("hex");
+      rotatedAt = new Date();
+      await this.pool.query(`UPDATE events SET qr_secret = $2, qr_rotated_at = $3 WHERE event_id = $1`, [
+        eventId,
+        secret,
+        rotatedAt.toISOString(),
+      ]);
+      await audit(this.pool, principal.userId, "attendance.qr_rotated", "events", eventId, {});
+    }
+    const token = eventScanToken(secret, eventId);
+    return {
+      event_id: eventId,
+      scan_token: token,
+      // What the rendered QR encodes; the member app parses event_id + token and
+      // POSTs /events/{id}/attendance (the frozen member contract).
+      checkin_url: `nuru://checkin?event_id=${encodeURIComponent(eventId)}&scan_token=${token}`,
+      expires_at: new Date(rotatedAt.getTime() + ttlMs).toISOString(),
+      checkin_opens_at: ev.checkin_opens_at,
+      occurs_at: ev.occurs_at,
+    };
+  }
+
+  /** §6: the export button becomes real — roster + guests + no-shows, one CSV. */
+  async rosterCsv(principal: Principal, eventId: string): Promise<string> {
+    const roster = (await this.roster(principal, eventId)) as {
+      checked_in: Array<{ full_name: string; method: string; note: string | null; checked_in_at: string }>;
+      guests: Array<{ guest_name: string; phone: string | null; first_time: boolean; created_at: string }>;
+      rsvp_no_show: Array<{ full_name: string }>;
+    };
+    const esc = (v: unknown): string => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines: string[] = ["name,type,status,method,first_time,timestamp"];
+    for (const r of roster.checked_in) {
+      lines.push([esc(r.full_name), "member", "checked_in", esc(r.method), "", esc(r.checked_in_at)].join(","));
+    }
+    for (const g of roster.guests) {
+      lines.push([esc(g.guest_name), "guest", "checked_in", "manual", String(g.first_time), esc(g.created_at)].join(","));
+    }
+    for (const a of roster.rsvp_no_show) {
+      lines.push([esc(a.full_name), "member", "rsvp_no_show", "", "", ""].join(","));
+    }
+    return lines.join("\n") + "\n";
+  }
+
+  /**
+   * §6: /admin/events/insights — ONLY numbers the schema actually knows:
+   * RSVP→check-in conversion over the last 10 completed occurrences, first-time
+   * guests (30d), manual check-ins (7d), RSVP'd-but-absent for the most recent
+   * occurrence of each active series, and upcoming events with low RSVPs /
+   * cell no-response counts. Nothing fabricated.
+   */
+  async insights(principal: Principal): Promise<Record<string, unknown>> {
+    const cong = principal.congregationId;
+    const conversion = await one<{ going: number; checked_in: number }>(
+      this.pool,
+      `WITH recent AS (
+         SELECT event_id FROM events
+          WHERE congregation_id = $1 AND occurs_at < now()
+          ORDER BY occurs_at DESC LIMIT 10)
+       SELECT (SELECT count(*)::int FROM event_rsvps r WHERE r.status = 'going' AND r.event_id IN (SELECT event_id FROM recent)) AS going,
+              (SELECT count(*)::int FROM attendance_logs a WHERE a.event_id IN (SELECT event_id FROM recent)) AS checked_in`,
+      [cong],
+    );
+    const firstTime = await one<{ n: number }>(
+      this.pool,
+      `SELECT count(*)::int AS n FROM event_guests g JOIN events e ON e.event_id = g.event_id
+        WHERE e.congregation_id = $1 AND g.first_time AND g.created_at >= now() - interval '30 days'`,
+      [cong],
+    );
+    const manual = await one<{ n: number }>(
+      this.pool,
+      `SELECT count(*)::int AS n FROM attendance_logs a JOIN events e ON e.event_id = a.event_id
+        WHERE e.congregation_id = $1 AND a.method = 'manual' AND a.checked_in_at >= now() - interval '7 days'`,
+      [cong],
+    );
+    // RSVP'd-but-absent for the most recent completed occurrence of each active series.
+    const recentNoShows = await many(
+      this.pool,
+      `SELECT s.series_id, s.title, e.event_id AS occurrence_id, e.occurs_at,
+              (SELECT count(*)::int FROM event_rsvps r
+                WHERE r.event_id = e.event_id AND r.status = 'going'
+                  AND NOT EXISTS (SELECT 1 FROM attendance_logs a WHERE a.event_id = r.event_id AND a.user_id = r.user_id)) AS absent
+         FROM event_series s
+         JOIN LATERAL (
+           SELECT event_id, occurs_at FROM events e
+            WHERE e.series_id = s.series_id AND e.occurs_at < now()
+            ORDER BY e.occurs_at DESC LIMIT 1
+         ) e ON TRUE
+        WHERE s.congregation_id = $1 AND s.deleted_at IS NULL AND s.status = 'active'
+        ORDER BY e.occurs_at DESC`,
+      [cong],
+    );
+    // Upcoming 14 days: real going counts, low-RSVP flag (per-series automation
+    // threshold, else 5), and cell no-response counts where derivable.
+    const upcoming = await many(
+      this.pool,
+      `SELECT e.event_id AS occurrence_id, e.title, e.occurs_at, s.series_id,
+              (SELECT count(*)::int FROM event_rsvps r WHERE r.event_id = e.event_id AND r.status = 'going') AS going,
+              COALESCE((s.automation->'low_rsvp_alert'->>'threshold')::int, 5) AS threshold,
+              CASE WHEN e.cell_group_id IS NOT NULL THEN
+                (SELECT count(*)::int FROM users u
+                  WHERE u.cell_group_id = e.cell_group_id AND u.deleted_at IS NULL
+                    AND NOT EXISTS (SELECT 1 FROM event_rsvps r WHERE r.event_id = e.event_id AND r.user_id = u.user_id))
+              END AS no_response
+         FROM events e LEFT JOIN event_series s ON s.series_id = e.series_id
+        WHERE e.congregation_id = $1 AND e.archived_at IS NULL
+          AND e.occurs_at >= now() AND e.occurs_at < now() + interval '14 days'
+        ORDER BY e.occurs_at ASC
+        LIMIT 50`,
+      [cong],
+    );
+    const going = conversion.going;
+    const checkedIn = conversion.checked_in;
+    return {
+      conversion: {
+        going,
+        checked_in: checkedIn,
+        rate: going > 0 ? Math.round((checkedIn / going) * 100) : null,
+      },
+      first_time_guests_30d: firstTime.n,
+      manual_checkins_7d: manual.n,
+      recent_no_shows: recentNoShows,
+      upcoming: (upcoming as Array<{ going: number; threshold: number }>).map((u) => ({
+        ...u,
+        low_rsvp: u.going < u.threshold,
+      })),
+    };
   }
 
   /** The portal roster: checked-in (with method), guests, and RSVP'd-but-absent. */

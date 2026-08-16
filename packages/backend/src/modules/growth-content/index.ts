@@ -9,6 +9,7 @@ import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { GrowthContentService } from "./service.js";
 import { AdminGrowthService } from "./admin.js";
+import { ReadingSocialService } from "../reading-social/groups.js";
 
 const PlanIdParam = z.object({ id: z.string().uuid() });
 const idOf = (req: { params: Record<string, string | undefined> }, k = "id"): string => req.params[k] ?? "";
@@ -18,6 +19,10 @@ export const growthContentRouter: Router = Router();
 export function registerGrowthContent(ctx: AppContext): Router {
   const svc = new GrowthContentService(ctx.db.primary);
   const adminSvc = new AdminGrowthService(ctx.db.primary);
+  // Reading & Social R1 (spec §3 progress notifications): fan out to shared
+  // plan groupmates on a day completion. Best-effort — ReadingSocialService
+  // wraps this in its own try/catch, so it never affects the response below.
+  const readingSocial = new ReadingSocialService(ctx.db.primary);
   const auth = authenticate(ctx.env);
   const adminOnly = [auth, requireRole("Admin")] as const;
   const r = growthContentRouter;
@@ -52,12 +57,21 @@ export function registerGrowthContent(ctx: AppContext): Router {
   r.post("/growth/plans/:id/complete-day", auth, handler(async (req, res) => {
     const { id } = parseBody(PlanIdParam, req.params);
     const input = parseBody(GrowthContentService.CompleteDay, req.body);
-    res.json(await svc.completeDay(requirePrincipal(req).userId, id, input));
+    const userId = requirePrincipal(req).userId;
+    const result = await svc.completeDay(userId, id, input);
+    await readingSocial.notifyDayCompleted(userId, id, input.day_number);
+    res.json(result);
   }));
   // YouVersion reader: mark one day-segment complete (rolls the day up when all done).
   r.post("/growth/segments/:id/complete", auth, handler(async (req, res) => {
     const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
-    res.json(await svc.completeSegment(requirePrincipal(req).userId, id));
+    const userId = requirePrincipal(req).userId;
+    const result = (await svc.completeSegment(userId, id)) as { day_completed: boolean; day_number: number; progress?: { plan_id: string } | null };
+    if (result.day_completed) {
+      const planId = result.progress?.plan_id;
+      if (planId) await readingSocial.notifyDayCompleted(userId, planId, result.day_number);
+    }
+    res.json(result);
   }));
 
   r.get("/growth/resources", auth, handler(async (_req, res) => {

@@ -1,5 +1,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
+// NOTE (2026-08-02): historical generator — do NOT rerun wholesale. The module 7-10
+// sections of seed-level1.sql were later re-authored (pastoral team) and hand-synced
+// from the production export; rerunning this script would regenerate the superseded
+// PDF-derived versions and lose that content. Modules 1-6 sections still match.
+//
 // Level 1 module map (titles from the PDF). 1-7 have full content + quizzes;
 // 8-10 are outline-only (no quiz). Final Assessment (exit_exam) moves to seq 11.
 const MODULES = [

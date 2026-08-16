@@ -1,11 +1,11 @@
-// Level Quiz Builder — the dedicated page (/quiz-builder). Left: a level picker.
-// Right: the selected level's FINAL ASSESSMENT, which in our server-authoritative
-// model (§1.9) is the level's exit-exam module's question bank plus the level's
-// exam settings (pass mark + reveal/shuffle flags). The six-type question editor
-// is the shared <ModuleQuizBuilder>; this wrapper only resolves the exit-exam
-// module and wires settings to updateExam (level-exam endpoint, PR #117).
+// Level Quiz Builder — the context-aware full-screen exam editor (/quiz-builder).
+// Launched from the Curriculum Workspace with ?level=N — the picker rail is
+// SKIPPED because the click already knew the level (§5.2: it never asks the
+// admin to re-select what the click already knew). Standalone (no ?level) it
+// keeps the level picker. Right: the level's FINAL ASSESSMENT — the exit-exam
+// module's question bank plus the level's exam settings, saved via updateExam.
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronRight, BookOpen, Layers, Check, Award, Clock, Lock, Plus } from "lucide-react";
 import {
   CurriculumApi, type AdminLevel, type AdminModuleSummary,
@@ -35,8 +35,12 @@ function examSettings(lvl: AdminLevel): QuizSettings {
 
 export function QuizBuilder(): ReactElement {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // ?level=N — launched with context: preselect the level, skip the picker rail.
+  const levelParam = searchParams.get("level");
+  const contextLevel = levelParam != null && Number.isFinite(parseInt(levelParam, 10)) ? parseInt(levelParam, 10) : null;
   const [levels, setLevels] = useState<AdminLevel[]>([]);
-  const [selNo, setSelNo] = useState<number | null>(null);
+  const [selNo, setSelNo] = useState<number | null>(contextLevel);
   const [examModuleId, setExamModuleId] = useState<string | null>(null);
   const [examMissing, setExamMissing] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -121,7 +125,9 @@ export function QuizBuilder(): ReactElement {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10.5, color: "rgba(232,239,245,0.45)", marginBottom: 6 }}>
-              <button onClick={() => navigate("/cms")} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(232,239,245,0.45)", fontSize: 10.5 }}>Curriculum</button>
+              <button onClick={() => navigate("/curriculum")} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(232,239,245,0.45)", fontSize: 10.5 }}>Curriculum</button>
+              <ChevronRight size={10} />
+              <button onClick={() => navigate(`/curriculum/workspace${contextLevel != null ? `?level=${contextLevel}` : ""}`)} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(232,239,245,0.45)", fontSize: 10.5 }}>Workspace</button>
               <ChevronRight size={10} /><span style={{ color: "rgba(232,239,245,0.75)" }}>Level Quiz Builder</span>
             </div>
             <h1 style={{ fontFamily: "var(--font-display)", fontSize: 26, color: "#fff", lineHeight: 1.1, letterSpacing: "-0.01em" }}>Level Quiz Builder</h1>
@@ -139,7 +145,9 @@ export function QuizBuilder(): ReactElement {
       </div>
 
       <div className="r-split" style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        {/* LEFT — level selector */}
+        {/* LEFT — level selector. SKIPPED when launched with ?level=N context:
+            the workspace click already knew the level (§5.2). */}
+        {contextLevel != null ? null : (
         <div className="r-split-rail" style={{ width: 288, flexShrink: 0, background: "var(--card)", borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
             <p style={{ fontSize: 11, color: "var(--muted-foreground)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>Select a level</p>
@@ -173,6 +181,7 @@ export function QuizBuilder(): ReactElement {
             </div>
           </div>
         </div>
+        )}
 
         {/* RIGHT — exam builder */}
         <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>

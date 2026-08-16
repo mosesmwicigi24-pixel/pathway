@@ -9,6 +9,7 @@ import { ApiError } from "../../http/errors.js";
 import { IdentityService } from "../identity/service.js";
 import { sealSecret } from "../identity/secretbox.js";
 import type { Env } from "../../config/env.js";
+import { normalizePhone } from "../../lib/phone.js";
 
 type Step = "profile" | "cell_selection" | "guardian_consent" | "literacy_quiz" | "notifications" | "done";
 
@@ -80,7 +81,7 @@ export class OnboardingService {
   static readonly Profile = z
     .object({
       date_of_birth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      phone_number: z.string().min(3).max(32),
+      phone_number: z.string().min(3).max(32).transform((v) => normalizePhone(v) ?? v),
       year_of_salvation: z.number().int().min(1900).max(2100).optional(),
       is_baptized: z.boolean().default(false),
     })

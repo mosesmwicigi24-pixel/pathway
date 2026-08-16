@@ -25,6 +25,7 @@ tags:
   - name: announcements
   - name: proximity
   - name: radio
+  - name: live
   - name: system
 
 security:
@@ -76,10 +77,35 @@ paths:
               schema: { $ref: "#/components/schemas/TokenPair" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+  /auth/confirm-password:
+    post:
+      tags: [identity]
+      summary: >-
+        Step-up: prove you are the account owner, right now (§5.3). Re-mints the
+        CALLER'S OWN access token with a fresh pwd_at; routes behind the password
+        step-up (the Broadcast reads/sends, thread invites) admit it for 15
+        minutes. Any MFA stamp on the old token is carried across, so confirming a
+        password never downgrades a stronger session. Failures count toward the
+        SAME lockout as login. Clients call this after a 403 carrying
+        details.password_required, then retry with the new token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "200": { description: "{ access_token, expires_in, confirmed_at } — replace the stored access token with this one." }
+        "401": { description: "AUTH_REQUIRED — wrong password (counts toward lockout)." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "429": { description: "RATE_LIMITED — too many failed attempts; the account is in cooldown." }
   /auth/login:
     post:
       tags: [auth]
-      summary: Email + password sign-in (argon2id verify). Generic error on bad credentials; 403 if suspended or (under scope=admin) a member signs into a staff console; 429 if locked after repeated failures.
+      summary: Email + password sign-in (argon2id verify). Generic error on bad credentials; 403 if suspended, if (under scope=admin) a member signs into a staff console, or if the account has scope=admin but grants NO portal permission at all; 429 if locked after repeated failures.
       security: []
       requestBody:
         required: true
@@ -94,7 +120,13 @@ paths:
                 scope:
                   type: string
                   enum: [admin]
-                  description: Sent by the admin consoles (web portal + iPad). Under this scope a self-registered member (Student role) is refused with 403; the member app omits it.
+                  description: >-
+                    Sent by the admin consoles (web portal + iPad). Under this
+                    scope a self-registered member (Student role, not
+                    elevated) is refused with 403, and so is any staff/elevated
+                    account whose effective RBAC permission set is empty (an
+                    Instructor with no role assigned, or a freshly-elevated
+                    member with no role/grant yet) — the member app omits it.
       responses:
         "200":
           description: A token pair, OR a 2FA challenge when the account has a second factor enabled.
@@ -150,7 +182,11 @@ paths:
   /auth/password/forgot:
     post:
       tags: [auth]
-      summary: Request a password-reset link. Always 200 (no account enumeration).
+      summary: Request a password reset. Always 200 (no account enumeration).
+      description: >
+        Emails a short 8-character reset code (e.g. "K7F4-P2XN") plus a link
+        to the portal reset page carrying the same code, if the account
+        exists and has a password.
       security: []
       requestBody:
         required: true
@@ -163,7 +199,7 @@ paths:
                 email: { type: string, format: email }
       responses:
         "200":
-          description: Reset requested (link delivered if the account exists)
+          description: Reset requested (code + link delivered if the account exists)
           content:
             application/json:
               schema:
@@ -171,11 +207,16 @@ paths:
                 required: [sent]
                 properties:
                   sent: { type: boolean }
-                  dev_token: { type: string, description: "Non-production only: the raw reset token, for testing." }
+                  dev_token: { type: string, description: "Non-production only: the raw reset link token, for testing." }
+                  dev_code: { type: string, description: "Non-production only: the raw reset code, for testing." }
   /auth/password/reset:
     post:
       tags: [auth]
-      summary: Consume a reset token and set a new password; revokes all sessions.
+      summary: Consume a reset code or link token and set a new password; revokes all sessions.
+      description: >
+        `token` accepts either credential from the forgot-password email: the
+        short reset code (case-insensitive, dashes optional) or the long link
+        token. Either redeems the same request.
       security: []
       requestBody:
         required: true
@@ -185,7 +226,7 @@ paths:
               type: object
               required: [token, new_password]
               properties:
-                token: { type: string }
+                token: { type: string, description: "The reset code (e.g. \"K7F4-P2XN\") or the long link token." }
                 new_password: { type: string, minLength: 8 }
       responses:
         "200":
@@ -295,6 +336,126 @@ paths:
                 properties:
                   mfa_enabled: { type: boolean, enum: [false] }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/webauthn/register/options:
+    post:
+      tags: [auth]
+      summary: Begin passkey enrollment for the caller — WebAuthn creation options (platform authenticator, userVerification required); the challenge is stored server-side, single-use, 5-minute TTL (§5.3).
+      responses:
+        "200":
+          description: PublicKeyCredentialCreationOptions (JSON), passed to the browser's startRegistration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebAuthnOptions" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/webauthn/register/verify:
+    post:
+      tags: [auth]
+      summary: Verify the attestation and store the passkey on the caller's account. The challenge is burned on use.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [response]
+              properties:
+                response: { type: object, description: "RegistrationResponseJSON from the browser's startRegistration." }
+                device_label: { type: string, maxLength: 120, description: "Shown in Profile ▸ Passkeys, e.g. \"Mac · Chrome\"." }
+      responses:
+        "201":
+          description: Passkey stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credential_id]
+                properties:
+                  credential_id: { type: string }
+                  device_label: { type: [string, "null"] }
+                  created_at: { type: string, format: date-time }
+        "400": { description: Validation failed }
+        "401": { description: "AUTH_REQUIRED — attestation failed, or the challenge is unknown/expired/replayed." }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /auth/webauthn/credentials:
+    get:
+      tags: [auth]
+      summary: The caller's registered passkeys (Profile ▸ Passkeys).
+      responses:
+        "200":
+          description: Passkey list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [credential_id]
+                      properties:
+                        credential_id: { type: string }
+                        device_label: { type: [string, "null"] }
+                        created_at: { type: string, format: date-time }
+                        last_used_at: { type: [string, "null"], format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/webauthn/credentials/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke one of the caller's passkeys. Owner-scoped — someone else's credential id 404s.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Passkey revoked }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /auth/webauthn/login/options:
+    post:
+      tags: [auth]
+      summary: Request passkey sign-in options for an email. Anti-enumeration — an unknown email or an account without passkeys gets the SAME well-formed options with empty allowCredentials, never an error.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+                scope: { type: string, enum: [admin], description: "Sent by the admin consoles; the gate itself is enforced at verify." }
+      responses:
+        "200":
+          description: PublicKeyCredentialRequestOptions (JSON), passed to the browser's startAuthentication
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebAuthnOptions" }
+        "400": { description: Validation failed }
+  /auth/webauthn/login/verify:
+    post:
+      tags: [auth]
+      summary: Verify a passkey assertion and mint the same session as password login. Same staff-only gate under scope=admin (403 FORBIDDEN_SCOPE); userVerification=required counts as strong auth, so no TOTP step follows.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [response]
+              properties:
+                response: { type: object, description: "AuthenticationResponseJSON from the browser's startAuthentication." }
+                scope: { type: string, enum: [admin] }
+      responses:
+        "200":
+          description: Access + refresh pair
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "400": { description: Validation failed }
+        "401": { description: "AUTH_REQUIRED — assertion failed, unknown passkey, or the challenge is unknown/expired/replayed." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /me:
     get:
       tags: [auth]
@@ -308,7 +469,14 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
     patch:
       tags: [auth]
-      summary: Update mutable profile fields with row_version check.
+      summary: >-
+        Update mutable profile fields with row_version check. `email` became
+        writable on 2026-08-15 (owner ruling: user_id is the assigned identifier,
+        everything else may change). It is trimmed and lowercased to match how
+        the login path reads it, must be unique among LIVE accounts — an address
+        held only by a soft-deleted account is free, per migration 190's partial
+        index — and a real change writes a `user.email_changed` audit row, since
+        it changes who can sign in. 409 CONFLICT if another live account holds it.
       requestBody:
         required: true
         content:
@@ -370,16 +538,28 @@ paths:
   /me/letters:
     get:
       tags: [progress]
-      summary: My Sunday Letters (AI-composed weekly pastoral letters), newest first.
+      summary: >-
+        My Sunday Letters — the keepable archive of my own weekly
+        AI-composed pastoral letters, newest first.
       responses:
-        "200": { description: "{ data: [{ letter_id, week_of, body, scripture_ref, created_at, read_at }] }" }
+        "200":
+          description: >-
+            { data: [{ letter_id, week_of, title, salutation, theme,
+            image_key, body, scripture_ref, highlights: string[], next_step:
+            { label, route, params? } | null, share_line, created_at,
+            read_at }] }. `theme`/`image_key` are one of the fixed letter
+            theme vocabulary (dawn, water, path, harvest, shelter, light,
+            seed, garden, mountain, rest) — never a third-party URL. Letters
+            written before this contract existed still serve with null-safe
+            defaults (a generic title/salutation/theme, empty highlights, no
+            next_step/share_line).
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/letters/latest:
     get:
       tags: [progress]
-      summary: My most recent Sunday Letter (or letter:null before the first one).
+      summary: My most recent Sunday Letter (or letter:null before it's arrived).
       responses:
-        "200": { description: "{ letter: {...} | null }" }
+        "200": { description: "{ letter: {...} | null } — same shape as GET /me/letters." }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/letters/{id}/read:
     post:
@@ -414,6 +594,38 @@ paths:
       responses:
         "200": { description: "{ opt_out }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/prayer/assist:
+    post:
+      tags: [progress]
+      summary: >-
+        Gemini-in-Gmail style prayer draft — composes a short prayer in the
+        member's own voice from a few seed points (or a gentle starter when
+        none are given). Returns a SUGGESTION only; nothing is posted or
+        persisted, the member always prays/sends it themselves. Consent-gated.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                seed: { type: string, maxLength: 4000, description: A few seed points/thoughts in the member's own words. Omit for a gentle starter prayer. }
+      responses:
+        "200": { description: "{ suggestion }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: CONSENT_REQUIRED — the member has opted out of AI personalization (POST /me/ai/consent to opt back in). }
+  /me/prayer/points:
+    post:
+      tags: [progress]
+      summary: >-
+        The corpus generator — reads ACROSS the member's own Selah thoughts,
+        private prayer journal, and published prayer-wall posts and distills
+        them into concise prayer points. Read-only over the caller's own data
+        only. Consent-gated.
+      responses:
+        "200": { description: "{ points: string[] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: CONSENT_REQUIRED — the member has opted out of AI personalization (POST /me/ai/consent to opt back in). }
   /admin/intelligence/reindex:
     post:
       tags: [admin]
@@ -454,6 +666,25 @@ paths:
         "200": { description: "{ signal_id, acknowledged_at }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: Not in my flock }
+  /admin/intelligence/signals/{id}/draft-outreach:
+    post:
+      tags: [admin]
+      summary: Instructor+. AI-draft a short check-in message for the person behind ONE signal in my flock — a SUGGESTION only, grounded in facts I already see (name, level, trend, activity, the signal's own summary — never raw reflection/journal text). Nothing is sent or persisted; I edit and send it myself. 404 outside my scope.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ suggestion }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Not in my flock }
+  /admin/intelligence/ai-usage:
+    get:
+      tags: [admin]
+      summary: Admin. Cost/usage observability for the AI layer — aggregated by feature/tier/provider/model over a rolling window (default 30 days) rather than raw event rows. Estimated cost is a rough list-price ballpark, not a billing reconciliation.
+      parameters:
+        - { name: since_days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 365, default: 30 } }
+      responses:
+        "200": { description: "{ since_days, total_calls, total_estimated_cost_usd, rows: [{ feature, tier, provider, model, calls, failures, avg_latency_ms, total_input_tokens, total_output_tokens, estimated_cost_usd }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /admin/intelligence/flock-brief:
     get:
       tags: [admin]
@@ -564,10 +795,49 @@ paths:
   /home/liturgy:
     get:
       tags: [growth]
-      summary: The liturgy line for RIGHT NOW (EAT clock) — part (morning|midday|evening|night), church season, Sunday flag. AI-composed once per congregation per day; deterministic fallback when the model is down.
+      summary: The liturgy line for RIGHT NOW (EAT clock) — church season, Sunday flag, grounded in a daily scripture spine (a psalm + gospel + epistle passage) and composed with 14 days of memory so it doesn't repeat. AI-composed once per congregation per day, seven bands at once; deterministic fallback (all seven bands) when the model is down.
       responses:
-        "200": { description: "{ part, season, is_sunday, line, scripture_ref }" }
+        "200": { description: "{ part, band, season, is_sunday, line, scripture_ref, art: { url, alt }, charge, verse_line: { reference, text }, recorded_audio_url, recorded_audio_duration_sec } — band is the 7-band clock (sunrise|morning|midday|afternoon|evening|night|midnight); `line`/`scripture_ref` are now that BAND's own composed content (sunrise/evening are a fuller 45-80 word paragraph, midday/afternoon one breath at 12-25 words). `part` is a legacy 4-value field (morning|midday|evening|night, computed from a coarser clock) kept ONLY for clients built before the seven-band composer — four of the seven band names are literally the four legacy part values, so those clients keep reading a value they understand. This endpoint still only returns ONE band's line ('right now') — a client wanting to show all seven bands for the day would need a new endpoint (not yet built) rather than this one. art is the hour's tableau photograph, disjoint from the verse card's; charge is a second authored exhortation line for the band; verse_line is curated scripture for the band, distinct from `line`/`scripture_ref`. recorded_audio_url/recorded_audio_duration_sec (migration 189) are non-null only when the pastor has recorded THIS band himself — the client should prefer playing that over synthesizing `line`; both null is the normal case for most bands and is never presented as missing. No admin identity or other personal data rides on these two fields — corporate content only." }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/liturgy/recordings:
+    get:
+      tags: [admin]
+      summary: Admin. The pastor's own recordings for all seven bands, in clock order — drives the admin recorder UI's "which bands already have his voice" view. Never exposed to members.
+      responses:
+        "200": { description: "{ data: [{ band, audio_url, duration_sec, recorded_at }] } — always all 7 bands; audio_url/duration_sec/recorded_at are null for a band that's still synthesised (the normal, not degraded, state)" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/liturgy/recordings/{band}:
+    post:
+      tags: [admin]
+      summary: Admin. Record (or re-record — upserts) the pastor's own voice for ONE band. Replaces whatever was there for that band; the other six bands are never touched ("per band, never all-or-nothing"). Audio lands on our own /media disk (same storage as every other upload in this app).
+      parameters:
+        - { name: band, in: path, required: true, schema: { type: string, enum: [sunrise, morning, midday, afternoon, evening, night, midnight] } }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, duration_sec]
+              properties:
+                file: { type: string, format: binary }
+                duration_sec: { type: integer, minimum: 1, maximum: 900 }
+      responses:
+        "201": { description: "{ band, audio_url, duration_sec }" }
+        "400": { description: Validation failed (not audio / too large / no file / bad duration) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    delete:
+      tags: [admin]
+      summary: Admin. Remove the pastor's recording for one band — that band falls back to synthesis immediately; no other band is affected.
+      parameters:
+        - { name: band, in: path, required: true, schema: { type: string, enum: [sunrise, morning, midday, afternoon, evening, night, midnight] } }
+      responses:
+        "200": { description: "{ deleted: true }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: No recording for that band }
   /community/moments:
     get:
       tags: [community]
@@ -597,7 +867,7 @@ paths:
   /admin/intelligence/liturgy/run:
     post:
       tags: [admin]
-      summary: Admin. Compose today's liturgy for every congregation now. Cached per congregation+day.
+      summary: Admin. Compose today's liturgy (all seven bands) for every congregation now. Cached per congregation+day — a congregation with any existing rows for the day is left as-is.
       responses:
         "200": { description: "{ composed }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -880,6 +1150,41 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
   # --- Admin curriculum CMS (Admin/SuperAdmin only, §5.4) ---
+  # One stats source (docs/CURRICULUM_ARCHITECTURE.md §3): dashboard, validation
+  # and classified activity all read curriculum/stats.ts.
+  /admin/curriculum/summary:
+    get:
+      tags: [curriculum]
+      summary: Admin. Curriculum Dashboard payload in one call — totals, per-level summary cards, pipeline counts (one stats source, replica reads).
+      responses:
+        "200": { description: Summary }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/curriculum/validate:
+    get:
+      tags: [curriculum]
+      summary: "Admin. Completeness report — issues as {severity, level_number, module_id?, code, message}, errors first."
+      responses:
+        "200": { description: Issues }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/curriculum/activity:
+    get:
+      tags: [curriculum]
+      summary: Admin. Audit-log slice classified server-side (published|edited|review|video|quiz|module|milestone).
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 40 } }
+      responses:
+        "200": { description: Activity }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/modules/{id}/media:
+    get:
+      tags: [curriculum]
+      summary: Admin. Media placements of a module (asset id/title/duration/status/thumbnail + position/required), position-ordered.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Placements }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/levels:
     get:
       tags: [curriculum]
@@ -896,7 +1201,7 @@ paths:
   /admin/levels/{n}:
     put:
       tags: [curriculum]
-      summary: Admin. Update a level's title/theme/pass mark.
+      summary: Admin. Update a level's title/theme/metadata. required_exam_pass_mark is NOT accepted here — the exam endpoint owns it (one editor per entity).
       parameters:
         - { name: n, in: path, required: true, schema: { type: integer, minimum: 1 } }
       responses:
@@ -1170,7 +1475,7 @@ paths:
   /admin/roles/{key}:
     put:
       tags: [system]
-      summary: RBAC. Update a role's name/description/status (rolesAdmin:edit).
+      summary: RBAC. Update a role's name/type/description/status (rolesAdmin:edit).
       parameters: [{ name: key, in: path, required: true, schema: { type: string } }]
       responses:
         "200": { description: Updated }
@@ -1556,10 +1861,15 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   # --- Multiplier / admin portal (§3.3) ---
-  /cohorts/{cell_id}/members:
+  /cells/{cell_id}/members:
     get:
       tags: [portal]
-      summary: Cohort members sorted by e_score asc; scoped to caller's leader_assignments.
+      summary: A cell's members sorted by e_score asc; scoped to caller's leader_assignments.
+      description: >-
+        Canonical path. `/cohorts/{cell_id}/members` is the identical handler under the
+        pre-rename noun, kept for portal and iPad builds already released. The entity is
+        a cell (`cell_groups`); "cohort" survives elsewhere in this API only in its other,
+        unrelated sense — a join-month retention cohort.
       parameters:
         - { name: cell_id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: band, in: query, schema: { type: string, enum: [thriving, steady, watch, at_risk] } }
@@ -1567,7 +1877,31 @@ paths:
         - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
-          description: Cohort page (ascending by e_score)
+          description: Cell page (ascending by e_score)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/EngagementBreakdown" } }
+                  next_cursor: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /cohorts/{cell_id}/members:
+    get:
+      tags: [portal]
+      deprecated: true
+      summary: Deprecated alias of /cells/{cell_id}/members (pre-rename noun).
+      description: Identical behaviour and response. Use `/cells/{cell_id}/members`.
+      parameters:
+        - { name: cell_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: band, in: query, schema: { type: string, enum: [thriving, steady, watch, at_risk] } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Cell page (ascending by e_score)
           content:
             application/json:
               schema:
@@ -1614,7 +1948,7 @@ paths:
   /reviews/{id}/decision:
     post:
       tags: [portal]
-      summary: Approve/reject a reflection; approval flips the level and triggers certificate issuance.
+      summary: Approve/reject a reflection. Records the decision ONLY — advancement + certificate belong to the usher path (§2.4 single advancement writer).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       requestBody:
@@ -1665,7 +1999,8 @@ paths:
       tags: [portal]
       summary: >-
         Instructor+. Usher a member into the next level — marks the advancement ushered,
-        advances current_level to N+1 (idempotent), and notifies the member. Cell-scoped (§5.4).
+        advances current_level to N+1 (idempotent), issues the level certificate via the
+        outbox (§2.4 single advancement writer), and notifies the member. Cell-scoped (§5.4).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       requestBody:
@@ -1982,7 +2317,7 @@ paths:
   /admin/media:
     get:
       tags: [system]
-      summary: Admin. Video Library — managed assets with linked module, stuck-encoding flag, external + library fields, derived views/completion.
+      summary: "Admin. Video Library — managed assets with placements[] ({module_id, module_title, level_number} — authoritative), the legacy attached_module_* mirror fields (transition), stuck-encoding flag, external + library fields, derived views/completion."
       parameters:
         - { name: status, in: query, required: false, schema: { type: string, enum: [uploading, transcoding, ready, failed] } }
         - { name: video_source, in: query, required: false, schema: { type: string, enum: [cloudinary, youtube, vimeo, direct, private] } }
@@ -2203,6 +2538,41 @@ paths:
       responses:
         "200": { description: Thumbnail cleared }
         "404": { $ref: "#/components/responses/NotFound" }
+  # Media placements (docs/CURRICULUM_ARCHITECTURE.md §2.2): one asset, many
+  # modules; placements are authoritative and maintain the modules.media_asset_id
+  # mirror so member reads stay byte-identical.
+  /admin/media/{id}/placements:
+    post:
+      tags: [system]
+      summary: Admin. Place an asset in a module (level inferred from the module, never asked). 409 on the duplicate (asset, module) pair.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [module_id]
+              properties:
+                module_id: { type: string, format: uuid }
+                position: { type: integer, description: Order within the module (lowest = primary/mirrored). }
+                required: { type: boolean }
+      responses:
+        "201": { description: Placement }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/media/placements/{placementId}:
+    delete:
+      tags: [system]
+      summary: Admin. Remove one placement (never the asset); the module's mirror column follows its remaining lowest-position placement.
+      parameters:
+        - { name: placementId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Removed }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # --- Calendar (Features v2 §C) ---
   /calendar:
@@ -2276,22 +2646,58 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /admin/events/series:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:view). The console's series list — every series in
+        the caller's congregation with a REAL windowed next_at (never derived
+        from visible occurrences), cadence label, occurrence/RSVP/attendance/
+        follow counts, status and home flags. Filters: status (all|active|draft|
+        paused), q (title/location/category), limit.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [all, active, draft, paused], default: all } }
+        - { name: q, in: query, schema: { type: string, maxLength: 120 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+      responses:
+        "200": { description: Series list }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
     post:
       tags: [system]
       summary: >-
-        Leader+/Admin. Create an event series (validated RRULE). Accepts either the
-        canonical body (dtstart_local) or the portal's shape (start_date + start_time
-        / starts_at, and a members|public|leaders visibility vocabulary). Open-ended
-        RRULEs are bounded server-side (§C.4). status=draft records the series without
-        materializing occurrences or showing it to members until published.
+        Leader+/Admin (events:create). Create an event series (validated RRULE).
+        Accepts either the canonical body (dtstart_local) or the portal's shape
+        (start_date + start_time / starts_at, and a members|public|leaders
+        visibility vocabulary). Open-ended RRULEs (no COUNT/UNTIL) are legal —
+        windowed expansion makes them safe. status=draft records the series
+        without materializing occurrences or showing it to members until
+        published. Per-series `automation` (reminder_offsets_min,
+        auto_archive_days, low_rsvp_alert, qr_auto_ready) is validated JSONB.
       responses:
         "201": { description: Series created }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "422": { $ref: "#/components/responses/Unprocessable" }
   /admin/events/series/{id}:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:view). Command-center detail — series fields +
+        cadence + next_at, upcoming projected occurrences (with going/checked-in
+        counts), recent completed occurrences, exceptions, and linked
+        announcements (series- and event-attached).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Series detail }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
     put:
       tags: [system]
-      summary: Leader+/Admin. Edit a series (future occurrences).
+      summary: >-
+        Leader+/Admin (events:edit). Edit a series — now including the ops
+        toggles (rsvp_enabled, qr_enabled, manual_checkin_enabled,
+        reminders_enabled, checkin_opens_min_before), video_url and automation.
+        Materialized rows are reconciled synchronously (title/time refresh;
+        rows the edited rule no longer produces are cancelled with notice).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
@@ -2305,6 +2711,86 @@ paths:
       responses:
         "200": { description: Deleted }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/events/series/{id}/timeline:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:view). The audit-log slice for a series, its
+        occurrences and its linked announcements (created/edited/exception/
+        QR rotated/sent/…) — a filtered read over the existing audit trail.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Timeline entries }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/events/series/{id}/split:
+    post:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:edit). Google-style "this and following" — the old
+        series is bounded to UNTIL = pivot−1s and a new linked series
+        (split_from) starts at pivot_start_at carrying `changes`. Exceptions at/
+        after the pivot move over; RSVPs on matching instants migrate; orphaned
+        old occurrences are reconciled away (cancellation notice to RSVPs).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "201": { description: "{ series, new_series }" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /admin/events/search:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:view). Archive-wide search — series + upcoming
+        occurrences + announcements matched on title/location/category
+        (ILIKE, trigram-indexed). Congregation-scoped.
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 1, maxLength: 120 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        "200": { description: "{ series, occurrences, announcements }" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/events/insights:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:view). Real insights only (nothing fabricated):
+        RSVP→check-in conversion over the last 10 completed occurrences,
+        first-time guests (30d), manual check-ins (7d), RSVP'd-but-absent for
+        the latest occurrence of each active series, and upcoming events with
+        going counts / low-RSVP flags / cell no-response counts.
+      responses:
+        "200": { description: Insights }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/events/{id}/qr:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:edit; cell-scoped). The REAL check-in QR — issues
+        the same HMAC scan token the member POST /events/{id}/attendance
+        validator verifies. Time-boxed: the secret rotates once the token
+        expires (screenshots go stale); expires_at drives console auto-refresh.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ scan_token, checkin_url, expires_at, checkin_opens_at }" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /admin/events/{id}/attendance.csv:
+    get:
+      tags: [system]
+      summary: >-
+        Leader+/Admin (events:export; cell-scoped). Attendance export — one CSV
+        of checked-in members (with method), guests, and RSVP'd no-shows.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "text/csv attachment" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/events/series/{id}/exceptions:
     post:
       tags: [system]
@@ -2657,7 +3143,7 @@ paths:
   /admin/reports/overview:
     get:
       tags: [portal]
-      summary: Admin. Dashboard KPI block (members, learners, engagement, certs, reviews…).
+      summary: Admin. Dashboard KPI block (members, learners, engagement, certs, reviews, new_members_14d/new_members_prev_14d…).
       responses:
         "200": { description: KPI aggregates }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
@@ -2838,6 +3324,32 @@ paths:
       responses:
         "200": { description: Featured event or null }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/events/series/{id}/show-on-home:
+    parameters:
+      - $ref: "#/components/parameters/IdPath"
+    patch:
+      tags: [calendar]
+      summary: Admin. Show/hide this event series on the Home "Upcoming events" list (any number may be flagged; server caps the list at 5).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [show_on_home]
+              properties:
+                show_on_home: { type: boolean }
+      responses:
+        "200": { description: Updated }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /home/events:
+    get:
+      tags: [calendar]
+      summary: Member. Up to 5 soonest upcoming occurrences from portal-curated (show_on_home) series, soonest first.
+      responses:
+        "200": { description: Home events list }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /moments:
     get:
       tags: [calendar]
@@ -2913,9 +3425,19 @@ paths:
   /admin/members:
     get:
       tags: [portal]
-      summary: Admin. Congregation-wide member list (search/cell/band/level/gender/programme/country filters, keyset-paged). Each row carries a derived status ("graduated" when the lifecycle flag is set, otherwise the server-computed engagement band) plus gender/city/programme/country_code/age.
+      summary: Admin. Congregation-wide member list (search/cell/band/level/gender/programme/country/placement filters, keyset-paged). Each row carries a derived status ("graduated" when the lifecycle flag is set, otherwise the server-computed engagement band) plus gender/city/programme/country_code/age.
       responses:
-        "200": { description: Members }
+        "200":
+          description: >-
+            { data, next_cursor, awaiting_placement, longest_wait_days }.
+            `awaiting_placement` counts live Students with no cell_group_id and
+            `longest_wait_days` is the oldest such account's age in days. Both are
+            computed across the whole congregation and are deliberately NOT subject
+            to the caller's filters — they ride on every page so the queue cannot be
+            hidden by filtering to a cell. The `placement` query filter
+            (awaiting|placed) narrows the rows themselves. Added after the
+            2026-08-14 audit found 28 members unplaced for up to 42 days with no
+            surface anywhere in the portal that could express the question.
         "403": { $ref: "#/components/responses/ForbiddenScope" }
     post:
       tags: [portal]
@@ -3286,6 +3808,43 @@ paths:
       responses:
         "200": { description: Deleted (idempotent) }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/thoughts:
+    get:
+      tags: [progress]
+      summary: Selah — My Thoughts. My private rich-text journal, newest first (private — no leader/admin read path exists).
+      responses:
+        "200": { description: "{ data: [{ thought_id, title, body, body_spans, drawing_urls, created_at, updated_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [progress]
+      summary: Create/update a thought (client-generated id; LWW; offline-queueable).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ThoughtUpsert" }
+      responses:
+        "200": { description: Upserted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /me/thoughts/{id}:
+    get:
+      tags: [progress]
+      summary: One of my thoughts. Not-mine and not-found both resolve to 404 (private ground — never confirms another member's content exists).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: The thought }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [progress]
+      summary: Hard-delete a thought (privacy); tombstoned to all devices.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Deleted (idempotent) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/notifications:
     get:
       tags: [progress]
@@ -3461,10 +4020,51 @@ paths:
         "200": { description: Deleted }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/announcements/{id}/duplicate:
+    post:
+      tags: [announcements]
+      summary: >-
+        Admin. Duplicate → a fresh draft clone (also "resend" = duplicate + send,
+        and "use as template" — no separate template entity).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "201": { description: Draft clone }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/announcements/{id}/archive:
+    post:
+      tags: [announcements]
+      summary: >-
+        Admin. Archive (distinct from delete) — leaves the default list and the
+        member feed, history preserved. A scheduled announcement must be
+        cancelled first (409).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Archived }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/announcements/{id}/restore:
+    post:
+      tags: [announcements]
+      summary: Admin. Restore an archived announcement.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Restored }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/announcements/{id}/send:
     post:
       tags: [announcements]
-      summary: Admin. Send now — fans out per recipient×channel (idempotent); push/email respect quiet hours.
+      summary: >-
+        Admin. Send now — fans out per recipient×channel (idempotent),
+        congregation-scoped audience. Channel honesty: push rides notifications
+        (quiet hours/caps), email rides the SMTP EmailProvider (delivered = SMTP
+        accepted), sms/whatsapp record suppressed(no_provider) until a provider
+        exists, banner is delivered in-app.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
@@ -3562,7 +4162,13 @@ paths:
   /growth/plans/{id}:
     get:
       tags: [progress]
-      summary: Reading-plan detail with days and my progress.
+      summary: >-
+        Reading-plan detail with days and my progress. Each day carries `locked`
+        — true while an earlier day is unfinished. A locked day keeps its shape
+        (title, reference, the kinds of its parts) but its `content` and
+        `video_url` come back null on the day and every segment, so no client can
+        render past the gate. `next_day` is the first unfinished day (null when
+        the plan is done).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
@@ -3582,7 +4188,10 @@ paths:
   /growth/plans/{id}/complete-day:
     post:
       tags: [progress]
-      summary: Mark a reading-plan day complete; advances progress.
+      summary: >-
+        Seal a reading-plan day. The client asks; the SERVER decides (§1.1) — a
+        day is finished when its parts are, never on the client's say-so.
+        Idempotent: re-sealing a finished day returns the same progress.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       requestBody:
@@ -3596,8 +4205,14 @@ paths:
                 day_number: { type: integer, minimum: 1 }
       responses:
         "200": { description: Progress }
+        "400": { description: "VALIDATION_FAILED — day beyond the plan length" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
+        "404": { description: "NOT_FOUND — no such plan, or that day is not in it" }
+        "409":
+          description: >-
+            CONTENT_INCOMPLETE — parts of this day are still unread
+            (details.parts_remaining), or GATE_LOCKED — an earlier day is
+            unfinished (details.next_day names the day to go back to).
   /growth/plans/{planId}/days/{dayNumber}/reflection:
     get:
       tags: [progress]
@@ -3709,13 +4324,29 @@ paths:
   /growth/segments/{id}/complete:
     post:
       tags: [progress]
-      summary: Mark one reading-plan day SEGMENT complete (YouVersion reader); rolls the day up when all are done.
+      summary: >-
+        Mark one reading-plan day PART complete (YouVersion reader); rolls the
+        day up when all of them are done. Gated the same way as sealing the day —
+        the day CTA is not the only door in.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: "{ segment_id, day_number, day_completed, progress }" }
+        "200":
+          description: >-
+            { segment_id, day_number, day_completed, day_complete,
+            next_day_number, next_day_unlocked, progress }. day_complete and
+            day_completed are the same value (day_complete is the current
+            name; day_completed is kept for older clients). next_day_number /
+            next_day_unlocked are computed in the same transaction as the
+            write, so a client acting on the LAST segment's response — rather
+            than re-fetching the plan — never sees a stale "locked" answer
+            from a completion still in flight through the offline queue.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >-
+            GATE_LOCKED — this part belongs to a day that has not opened yet
+            because an earlier day is unfinished (details.next_day).
   /growth/resources:
     get:
       tags: [progress]
@@ -3730,6 +4361,183 @@ paths:
       responses:
         "200": { description: Mentor }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # --- Reading & Social R1: "Read with a Friend" (spec §3/§6) ---
+  /reading/groups:
+    post:
+      tags: [progress]
+      summary: >-
+        Create-or-get my shared plan group for a plan. If I already have an
+        active group for this plan_id, that SAME group is returned (never a
+        duplicate). Any member_user_ids named must already be an accepted
+        connection of mine (else 403 CONSENT_REQUIRED, details.hint =
+        "connect first") and are sent a targeted invite (idempotent — an
+        existing pending invite to the same person is a no-op).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan_id]
+              properties:
+                plan_id: { type: string, format: uuid }
+                member_user_ids: { type: array, maxItems: 7, items: { type: string, format: uuid } }
+                name: { type: string, maxLength: 120 }
+      responses:
+        "201": { description: "Group — { group_id, plan_id, created_by, name, created_at, archived_at, plan, members: [...] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE (minor-safety) or CONSENT_REQUIRED (an entry in member_user_ids is not yet an accepted connection)." }
+        "404": { $ref: "#/components/responses/NotFound" }
+    get:
+      tags: [progress]
+      summary: My active shared plan groups — plan summary + full member list, each with current_day/completed_days/days_done/completed_at (scoped to co-members of the same group, never a bare private-progress lookup).
+      responses:
+        "200": { description: "{ data: [Group, ...] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /reading/groups/{id}:
+    get:
+      tags: [progress]
+      summary: Full group detail — active member only. 403 (not 404) for a non-member, so a stray id never confirms a group's existence to a stranger.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Group }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reading/groups/{id}/archive:
+    post:
+      tags: [progress]
+      summary: End a shared plan — creator only. Soft state; membership + history are kept. Idempotent.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ group_id, archived_at }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reading/groups/{id}/leave:
+    post:
+      tags: [progress]
+      summary: Leave a shared plan group — any active member (including the creator; ownership is not reassigned). Idempotent.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ group_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reading/groups/{id}/invites:
+    post:
+      tags: [progress]
+      summary: >-
+        Mint an invite in an existing group — active member only. user_id set
+        → targeted invite (requires an already-accepted connection, else 403
+        CONSENT_REQUIRED). user_id omitted → mints a fresh open share-link
+        invite (no connection gate, no expiry) that MULTIPLE friends may
+        redeem, since it never leaves 'pending' on accept. Idempotent on
+        client_mutation_id.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: string, format: uuid }
+                message: { type: string, maxLength: 500 }
+                client_mutation_id: { type: string, format: uuid }
+      responses:
+        "201": { description: Invite }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "CONFLICT — already an active member, or the group has ended." }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    get:
+      tags: [progress]
+      summary: Pending + past invites for a group — active member only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ data: [Invite, ...] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reading/groups/{id}/invites/{invite_id}/revoke:
+    post:
+      tags: [progress]
+      summary: Revoke a pending invite — the inviter or the group's creator. Idempotent.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: invite_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ invite_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /reading/invites/{token}:
+    get:
+      tags: [progress]
+      summary: Authenticated in-app invite preview (plan title/cover/description/day_count, inviter name, message, active member_count) — what the app calls right after a deep link opens it while logged in.
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: InvitePreview }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "NOT_FOUND — unknown, expired, revoked, or declined token." }
+  /reading/invites/{token}/accept:
+    post:
+      tags: [progress]
+      summary: >-
+        Redeem an invite: joins the group, enrolls in the underlying plan,
+        and establishes an accepted connection with the inviter if none
+        exists yet (creates one on the spot rather than requiring it
+        pre-exist — docs/READING_SOCIAL_PLAN.md Open Question 2). A targeted
+        invite must belong to the caller (else 403). Idempotent: replaying an
+        already-accepted targeted invite by the same caller is a no-op; an
+        open-link invite never leaves 'pending', so it stays redeemable by
+        other friends.
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "{ group_id, status, joined }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — this invite targets someone else, the connection is blocked, or a minor is involved." }
+        "404": { description: "NOT_FOUND — unknown, expired, revoked, or declined token." }
+        "409": { description: "CONFLICT — the shared plan has ended." }
+  /reading/invites/{token}/decline:
+    post:
+      tags: [progress]
+      summary: Decline a targeted invite — the named invitee only (403 on an open share-link — there is no single party to decline it for everyone).
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "{ status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /join/{token}:
+    get:
+      tags: [progress]
+      summary: >-
+        PUBLIC, unauthenticated deep-link landing page (spec §6). Not a JSON
+        route — server-rendered HTML with OpenGraph/Twitter-card meta (plan
+        title, cover image, description, day count, inviter first name),
+        escaped against XSS, plus an inline script that attempts the app's
+        `nuru://` custom-scheme deep link and falls back to the platform
+        store after ~1.2s. A crawler (WhatsApp/iMessage preview bots) reads
+        only the meta tags and never runs the script. Bad/expired/revoked/
+        declined tokens render a friendly 404 HTML page, never the JSON error
+        envelope.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "OG-rich HTML landing page", content: { text/html: { schema: { type: string } } } }
+        "404": { description: "HTML 404 page — unknown, expired, revoked, or declined token.", content: { text/html: { schema: { type: string } } } }
 
   /home/disciplers:
     get:
@@ -3758,7 +4566,7 @@ paths:
       tags: [progress]
       summary: My "Verse for today" — chosen from the mood library to meet the season I'm in (cached daily).
       responses:
-        "200": { description: "Tailored verse: { reference, version, theme, reason, mood?, text? }" }
+        "200": { description: "Tailored verse: { reference, version, theme, reason, mood?, text?, art?: { url, alt }, encouragement?: { text, author } } — art is the current 7-band tableau photograph (disjoint from the liturgy card's), deterministic per (band, day); encouragement is a short word alongside the verse — two historic voices matched to the theme's mood plus one pastoral line, rotated by EAT day" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/home/verse/reactions:
     get:
@@ -3901,6 +4709,85 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/discipler-assignments:
+    post:
+      tags: [portal]
+      summary: >-
+        Assign (or REASSIGN) a member's discipler (Chat Redesign C2) —
+        history-preserving, unlike the one-shot POST /relationships. Ends the
+        disciple's prior active row (end_reason=reassigned) and archives the
+        OLD DISCIPLER conversation between disciple and former discipler
+        (chat_conversations.archived_at) — never merged into or exposed via
+        the new assignment. Scope: assertCellInScope (Instructor+, scoped to
+        the disciple's cell; Admin/SuperAdmin unrestricted) — same authority
+        as POST /relationships.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disciple_user_id, discipler_user_id]
+              properties:
+                disciple_user_id: { type: string, format: uuid }
+                discipler_user_id: { type: string, format: uuid }
+      responses:
+        "201": { description: "{ assignment_id, disciple_user_id, discipler_user_id, reassigned }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    get:
+      tags: [portal]
+      summary: A disciple's full discipler-assignment history, newest first. Same scope as the POST above.
+      parameters:
+        - name: disciple_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: "{ data: [{ assignment_id, disciple_user_id, discipler_user_id, discipler_full_name, assigned_by, assigned_at, ended_at, end_reason }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/pastor-assignments:
+    post:
+      tags: [portal]
+      summary: >-
+        Name (or rename) a member's pastor, or a congregation's default
+        pastoral account (Chat Redesign C2, "Talk with My Pastor"). Admin+.
+        Ends the prior active row for the same key (member, or congregation
+        default) before inserting the new one — history-preserving.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pastor_user_id]
+              properties:
+                member_user_id: { type: [string, "null"], format: uuid, description: "Omit/null for a congregation-wide default row (then assignment_kind must be default and congregation_id required)." }
+                congregation_id: { type: string, format: uuid }
+                pastor_user_id: { type: string, format: uuid }
+                assignment_kind: { type: string, enum: [primary, campus, cell, default], default: primary }
+      responses:
+        "201": { description: "{ assignment_id, reassigned }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    get:
+      tags: [portal]
+      summary: A member's full pastor-assignment history, newest first. Admin+.
+      parameters:
+        - name: member_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: "{ data: [{ assignment_id, member_user_id, congregation_id, pastor_user_id, pastor_full_name, assignment_kind, assigned_by, assigned_at, ended_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
 
   # --- Growth-content authoring (Admin+) — every mobile growth element editable ---
   /admin/growth/devotionals:
@@ -4137,11 +5024,11 @@ paths:
   /chat/conversations/{id}:
     get:
       tags: [progress]
-      summary: A conversation's messages (reactions, reply previews); 404 outside my membership/scope (no existence leak).
+      summary: A conversation's messages (reactions, reply previews); 404 outside my membership/scope (no existence leak). Head carries `type` (Chat Redesign C4) alongside `kind`.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
-        "200": { description: Conversation }
+        "200": { description: "Conversation — head includes type: SPACE|DIRECT|DISCIPLER|PASTORAL|BROADCAST|BROADCAST_RESPONSE, plus muted: boolean (migration 172, mine only)." }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /chat/conversations/{id}/messages:
@@ -4164,6 +5051,45 @@ paths:
         "200": { description: Read }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /chat/conversations/{id}/mute:
+    put:
+      tags: [progress]
+      summary: >-
+        Mute this conversation's push nudges for me (Chat Redesign C4,
+        migration 172) — active participant only; idempotent (re-muting
+        overwrites the prior expiry). Suppresses every typed nudge
+        (chat_dm_message / chat_discipler_message / chat_pastoral_message /
+        chat_broadcast) for this recipient in this conversation while active;
+        never affects the other participant, in-app unread state, or message
+        delivery itself.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                until:
+                  type: [string, "null"]
+                  format: date-time
+                  description: "ISO timestamp to mute through; omitted or null = muted forever."
+      responses:
+        "200": { description: "{ conversation_id, muted: true, muted_until }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [progress]
+      summary: Unmute (Chat Redesign C4, migration 172) — active participant only; idempotent.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ conversation_id, muted: false }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /chat/messages/{id}/reactions:
     post:
       tags: [progress]
@@ -4184,6 +5110,27 @@ paths:
         "200": { description: Readers + recipient/read counts }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/messages/{id}/report:
+    post:
+      tags: [progress]
+      summary: >-
+        Report a message (Chat Redesign C4) — any ACTIVE participant of its
+        conversation, once (idempotent per reporter+message). Sets the
+        message's is_flagged so it surfaces in the existing Admin moderation
+        queue's `flagged` count — no parallel queue.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { reason: { type: string, maxLength: 500 } }
+      responses:
+        "201": { description: "{ message_id, reported: true, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
   /chat/messages/{id}:
     patch:
@@ -4253,16 +5200,206 @@ paths:
   /chat/dms:
     post:
       tags: [progress]
-      summary: Open (or fetch) a 1:1 DM with another member; minor-safe (D-M6); same congregation.
+      summary: >-
+        Open (or fetch) a 1:1 DM with another member; minor-safe (D-M6); same
+        congregation. Chat Redesign C1/C2 (docs/CHAT_REDESIGN.md): an EXISTING
+        thread (including any DM grandfathered as an accepted connection by
+        migration 162's backfill) is always just returned. Creating a NEW
+        thread between two ordinary members now requires an accepted
+        connection first (403 CONSENT_REQUIRED, details.hint = "send a
+        connection request first") — see /chat/connections/requests. Staff
+        (Admin/SuperAdmin) keep the "reach anyone" support exception on either
+        side of the pair.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
       responses:
         "201": { description: Conversation }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: FORBIDDEN_SCOPE (minor-safety, or cross-congregation) or CONSENT_REQUIRED (no accepted connection for a brand-new thread).
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/discipler/conversation:
+    get:
+      tags: [progress]
+      summary: >-
+        My Discipler (Chat Redesign C2): resolve — lazily creating — my
+        DISCIPLER thread with my CURRENT assignment (discipler_assignments,
+        falling back to a not-yet-migrated relationship_tree edge — NEVER the
+        cell-leader inference). Minor-safe (D-M6). Never reuses an ARCHIVED
+        thread from a prior assignment.
+      responses:
+        "200": { description: "{ conversation_id }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: "NOT_FOUND, details.no_discipler = true — no valid discipler assignment exists." }
+  /chat/connections/requests:
+    post:
+      tags: [progress]
+      summary: >-
+        Ask to connect with another member — the consent handshake in front of
+        Chat (Chat Redesign C1/C2). Minor-safe (D-M6). If the OTHER party
+        already has a pending ask to the caller, both sides resolve to
+        accepted immediately (a mutual ask). 409 CONFLICT if a request is
+        already pending in either direction, or the pair is already connected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+                message: { type: string, maxLength: 500 }
+                client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
+      responses:
+        "201": { description: "{ request_id, status, duplicate, mutual }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "CONFLICT — already pending, or already connected." }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    get:
+      tags: [progress]
+      summary: My pending connection requests, incoming or outgoing.
+      parameters:
+        - name: direction
+          in: query
+          required: true
+          schema: { type: string, enum: [incoming, outgoing] }
+      responses:
+        "200": { description: "{ data: [{ request_id, status, message, created_at, user_id, full_name, avatar_url }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /chat/connections/requests/{id}/accept:
+    post:
+      tags: [progress]
+      summary: Accept a connection request — recipient only. Creates the accepted connection (does NOT auto-create the DM; POST /chat/dms still does that, now gated on this).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ request_id, status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/connections/requests/{id}/decline:
+    post:
+      tags: [progress]
+      summary: Decline a connection request — recipient only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ request_id, status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/connections/requests/{id}:
+    delete:
+      tags: [progress]
+      summary: Cancel a still-pending request I sent — requester only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ request_id, status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/connections:
+    get:
+      tags: [progress]
+      summary: My accepted connections — who I can already chat with.
+      responses:
+        "200": { description: "{ data: [{ user_id, full_name, avatar_url, status, established_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /chat/connections/{user_id}/remove:
+    post:
+      tags: [progress]
+      summary: Remove an accepted connection — either party. Existing DM history is kept (no-data-loss); a NEW thread needs a fresh accepted connection.
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ user_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/connections/{user_id}/block:
+    post:
+      tags: [progress]
+      summary: Block a member — stops NEW sends in both directions (existing history stays readable). Cancels any pending request between them.
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ user_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /chat/connections/{user_id}/unblock:
+    post:
+      tags: [progress]
+      summary: Unblock — blocker only. Reverts to "removed" (not connected); a fresh request is needed to chat again.
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ user_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/pastoral:
+    post:
+      tags: [progress]
+      summary: >-
+        Talk with My Pastor (Chat Redesign C2): create-or-open MY thread with
+        my CURRENT pastor. Resolution order: my own active assignment → my
+        congregation's active default → the congregation's earliest-created
+        SuperAdmin (audit-logged every time this last-resort fallback actually
+        fires). No step-up — this is my own conversation.
+      responses:
+        "201": { description: "{ conversation_id, pastor_user_id, source }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: "NOT_FOUND, details.no_pastor = true — no pastor resolves at all (no assignment, no default, no SuperAdmin)." }
+  /chat/pastoral/eligibility:
+    get:
+      tags: [progress]
+      summary: >-
+        Side-effect-free probe (Chat Redesign C4): have I EVER held a
+        pastor_assignments row as the pastor? No step-up (unlike the inbox
+        below) — reveals nothing private, only whether the Pastoral Inbox tab
+        applies to me. For a non-SuperAdmin assigned pastor's client to show
+        its own inbox entry without a failed, step-up-gated request first.
+      responses:
+        "200": { description: "{ is_pastor: boolean }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /chat/pastoral/inbox:
+    get:
+      tags: [progress]
+      summary: >-
+        Pastoral Inbox ("Talk with Your Pastor"): every PASTORAL thread the
+        caller is the pastor of, or every PASTORAL thread for a SuperAdmin's
+        oversight reach. Refused (403) for anyone who has never held a pastor
+        assignment and isn't SuperAdmin. Password step-up required (§5.3) —
+        same posture as Broadcast.
+      responses:
+        "200": { description: "{ data: [{ conversation_id, archived_at, updated_at, member_user_id, member_name, member_avatar_url, last_body, last_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — no pastor assignment on file and not SuperAdmin, OR password_required (step-up)." }
   /chat/broadcast:
     post:
       tags: [progress]
-      summary: Staff broadcast (Instructor+) — deliver ONE message to every active member of the sender's congregation as an individual DM from the sender (no group room; replies return as normal 1:1 threads). Minors excluded (D-M6). Idempotent on client_mutation_id. May carry an image (msg_type=image + attachment_url uploaded via /chat/attachments/sign) — body is then the caption.
+      summary: >-
+        Broadcast — Admin+ ONLY. Not Instructor; a cell leader is a member who is
+        not an admin, and the Broadcast does not exist for them (no tab, and 403
+        here if they ask anyway). Delivers ONE message to every active member as
+        an individual DM from the sender (no group room; replies return as normal
+        1:1 threads, private to the sender). Minors excluded (D-M6). Idempotent on
+        client_mutation_id. May carry an image (msg_type=image + attachment_url
+        uploaded via /chat/attachments/sign) — body is then the caption. Recorded
+        as a chat_broadcasts row, so the send is addressable afterwards via
+        /chat/broadcasts. Password step-up required (§5.3).
       requestBody:
         required: true
         content:
@@ -4274,17 +5411,57 @@ paths:
                 body: { type: string, minLength: 1, maxLength: 20000, description: "The message text (the caption, for an image broadcast)." }
                 msg_type: { type: string, enum: [text, image], default: text }
                 attachment_url: { type: string, format: uri, maxLength: 2000, description: Cloudinary secure_url of the uploaded image (the caption travels in body). }
+                audience:
+                  type: string
+                  enum: [congregation, all]
+                  description: >-
+                    Who it reaches. OMIT IT and the server picks the honest default
+                    for who you are — a SuperAdmin means the whole church ("all"),
+                    anyone else means their own congregation. There is deliberately
+                    no schema default: one would be applied before the service sees
+                    the request, making "didn't say" indistinguishable from "said
+                    congregation" — which is exactly how a SuperAdmin's broadcast
+                    quietly reached 40 of 60 members, the other 19 having no
+                    congregation to be scoped to. "all" is SuperAdmin-only however
+                    it arrives; anyone else asking for it gets 403 FORBIDDEN_SCOPE.
+                reply_policy:
+                  type: string
+                  enum: [none, official_inbox, ordinary_chat, linked_thread]
+                  default: ordinary_chat
+                  description: >-
+                    Chat Redesign C2. Omit it and today's exact behaviour is
+                    unchanged (ordinary_chat — the recipient may reply freely
+                    in the shared thread). 'none'/'official_inbox' refuse the
+                    recipient's reply with 403 FORBIDDEN_SCOPE, details.reply_policy
+                    set accordingly (the broadcaster is never gated). 'linked_thread'
+                    also refuses the shared-thread reply, but resolves
+                    details.linked_conversation_id to the recipient's DISCIPLER
+                    or PASTORAL thread with the sender when one applies (null
+                    otherwise) — the client re-sends there instead.
                 client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
       responses:
         "201":
-          description: Delivery count
+          description: >-
+            The message AS SENT — the same shape /chat/broadcasts/{id} returns, so
+            the UI pins it at the top of its page immediately, with the server's
+            timestamp and the count it actually reached. Sending never needs a
+            second round trip to find out what you just said. A replay returns it
+            whole too, not a bare id the client cannot draw.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  sent: { type: integer, description: Number of members the message was delivered to. }
-                  duplicate: { type: boolean, description: True when a replayed client_mutation_id short-circuited. }
+                  broadcast_id: { type: string, format: uuid, description: "The send itself — pass to /chat/broadcasts/{id} to see who answered." }
+                  body: { type: string, description: "What you said (the caption, for an image broadcast)." }
+                  msg_type: { type: string, enum: [text, voice, image, file, video] }
+                  attachment_url: { type: [string, "null"] }
+                  audience: { type: string, enum: [congregation, all] }
+                  recipient_count: { type: integer, description: "How many members it reached, recorded at send time." }
+                  reply_policy: { type: string, enum: [none, official_inbox, ordinary_chat, linked_thread] }
+                  created_at: { type: string, format: date-time, description: "The server's timestamp — display this, not the device clock." }
+                  sent: { type: integer, description: "Same as recipient_count; kept for callers that read it." }
+                  duplicate: { type: boolean, description: "True when a replayed client_mutation_id short-circuited. Everything else is what actually landed, not a recount of today's membership." }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "422": { $ref: "#/components/responses/Unprocessable" }
@@ -4303,6 +5480,29 @@ paths:
     post:
       tags: [progress]
       summary: Leader curates a public space for the congregation (Instructor+); optional category tag (e.g. youth, marketplace).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [conversation_id, title]
+              properties:
+                conversation_id: { type: string, format: uuid }
+                title: { type: string, minLength: 3, maxLength: 200 }
+                topic: { type: string, maxLength: 300 }
+                category: { type: string, maxLength: 24 }
+                requires_approval:
+                  type: boolean
+                  default: false
+                  description: >-
+                    Chat Redesign C4 (migration 170). FALSE (default) is
+                    today's instant-join behaviour. TRUE refuses a direct
+                    POST /chat/spaces/{id}/join (403 FORBIDDEN_SCOPE,
+                    details.approval_required=true) for anyone not already an
+                    active member — the client falls back to
+                    POST /chat/spaces/{id}/join-requests for leader review.
+                client_mutation_id: { type: string, format: uuid, description: Replays with the same id are no-ops. }
       responses:
         "201": { description: Created }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -4317,12 +5517,216 @@ paths:
   /chat/spaces/{id}/join:
     post:
       tags: [progress]
-      summary: Join a public space in my congregation.
+      summary: >-
+        Join a public space in my congregation. Chat Redesign C4: refused
+        (403 FORBIDDEN_SCOPE, details.approval_required=true) when the space
+        has requires_approval=true and I'm not already an active member — use
+        POST /chat/spaces/{id}/join-requests instead. Never applies to a
+        cell's own room: active cell members always direct-join it (unchanged,
+        access()'s auto-join).
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
         "200": { description: Joined }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE, details.approval_required=true — this space requires leader review; use join-requests instead." }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "UNPROCESSABLE — not a space (e.g. a cell room, which has no direct-join route at all)." }
+  /chat/spaces/{id}/join-requests:
+    post:
+      tags: [progress]
+      summary: >-
+        Ask to join a space that doesn't auto-entitle me (a cell room I'm not
+        currently in, or a topical space) — Chat Redesign C1/C2. A no-op
+        success if I'm already an active member. Notifies the space's
+        leadership (original leader + any delegated leader/moderator).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { message: { type: string, maxLength: 500 } }
+      responses:
+        "201": { description: "{ status: already_member|pending, request_id? }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    get:
+      tags: [progress]
+      summary: Pending join requests for a space — leader/delegated moderator/Admin+ only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "{ data: [{ request_id, user_id, full_name, avatar_url, message, requested_at }] }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/join-requests/{reqId}/accept:
+    post:
+      tags: [progress]
+      summary: Accept a space join request — leader/delegated moderator/Admin+ only. Adds (or revives) an active chat_members row.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: reqId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ request_id, status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/join-requests/{reqId}/decline:
+    post:
+      tags: [progress]
+      summary: Decline a space join request — leader/delegated moderator/Admin+ only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: reqId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ request_id, status, already }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/roles:
+    post:
+      tags: [progress]
+      summary: Delegate a co-leader/moderator role for a space — leader-level power only (original leader, a delegated leader, or Admin+; a delegated moderator cannot grant roles).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, role]
+              properties:
+                user_id: { type: string, format: uuid }
+                role: { type: string, enum: [leader, moderator] }
+      responses:
+        "201": { description: "{ conversation_id, user_id, role }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/roles/{user_id}/{role}:
+    delete:
+      tags: [progress]
+      summary: Revoke a delegated space role — leader-level power only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: role, in: path, required: true, schema: { type: string, enum: [leader, moderator] } }
+      responses:
+        "200": { description: "{ conversation_id, user_id, role, revoked }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/members/{user_id}/remove:
+    post:
+      tags: [progress]
+      summary: Remove a member from a space — leader/delegated moderator/Admin+ only. History is kept (chat_members.status), not deleted.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ conversation_id, user_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/spaces/{id}/members/{user_id}/suspend:
+    post:
+      tags: [progress]
+      summary: Suspend a member from a space — leader/delegated moderator/Admin+ only.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: user_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: "{ conversation_id, user_id, status }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /chat/conversations/{id}/invite:
+    post:
+      tags: [progress]
+      summary: >-
+        Bring one more person into ONE thread — never into the broadcast.
+        SuperAdmin only, and only a thread they are already in: the unit of
+        authorisation is deliberately the conversation, so authorising a deacon
+        for one member's reply grants them nothing anywhere else. The member is
+        TOLD — a note lands in the thread naming who joined, because someone who
+        wrote privately to their pastor is owed the knowledge that another person
+        is now reading. A dm becomes a group on the first invite (a dm's title is
+        "the other member", which is meaningless once there are two of them).
+        Minors are refused (D-M6).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: string, format: uuid }
+      responses:
+        "201": { description: "{ conversation_id, invited, already } — already=true when they were in it (no second notice)." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — not a SuperAdmin, not in this thread, or the invitee is a minor." }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /chat/broadcasts:
+    get:
+      tags: [progress]
+      summary: >-
+        My broadcasts, newest first — the LAST 4 by default, because that is what
+        is still live enough to watch. Each carries recipient_count (how many it
+        reached, at send time), seen_count (how many have opened it) and
+        replied_count (how many answered). SuperAdmin only: the whole thing is a
+        conversation between the SuperAdmin and one member, and nobody else is in
+        it (§5.4). Password step-up required (§5.3).
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 4 }
+          description: How many to return. Ask for more when the member taps "show all".
+      responses:
+        "200":
+          description: >-
+            { data: [{ broadcast_id, body, msg_type, attachment_url, audience,
+            recipient_count, seen_count, replied_count, created_at }], total } —
+            `total` is every broadcast you have sent, so "show all N" can name its
+            number rather than guess.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — SuperAdmin only, or the password step-up is missing/stale (details.password_required)." }
+  /chat/broadcasts/{id}:
+    get:
+      tags: [progress]
+      summary: >-
+        One broadcast: the message, then every response to it. A response is any
+        message a recipient wrote in their delivered copy's conversation after it
+        landed — no reply table exists or is needed. Each response carries the
+        conversation_id of the private thread it came from, ALREADY seeded with
+        the broadcast as its top message, so promoting a response to a full
+        conversation is a navigation rather than a creation.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: >-
+            The broadcast, its responses, and its ticks.
+            responses[] — every reply, each carrying the conversation_id of the
+            private thread it came from (already seeded with the broadcast as its
+            top message, so opening it is a navigation, not a creation).
+            recipients[] — one row per member it reached: { user_id, full_name,
+            avatar_url, delivered (always true — a broadcast is written into every
+            thread server-side in one transaction, so arrival is a fact, not a
+            hope: ONE blue tick), delivered_at, seen (they opened the thread after
+            it landed: TWO blue ticks), seen_at }.
+            Plus delivered_count and seen_count.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: "FORBIDDEN_SCOPE — not your broadcast" }
         "404": { $ref: "#/components/responses/NotFound" }
   /chat/messages/{id}/flag:
     post:
@@ -5116,6 +6520,513 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  # --- Nuru Live (docs/LIVE_STREAMING.md, phase L1) — self-hosted MediaMTX;
+  # L0 infra (RTMP ingest, HLS out, fMP4 recordings) already lives on the VPS. ---
+  /live/streams:
+    post:
+      tags: [live]
+      summary: >-
+        Mint a stream + one-time publish key (permission live:go). Church scope
+        additionally requires the caller be staff (the "unscoped" grant); cell
+        scope requires Admin/SuperAdmin or the cell in the caller's
+        leader_assignments. Refused if that scope target already has a live
+        stream (409) — UNLESS the caller is the stream's own owner (or holds
+        live:manage) AND MediaMTX confirms no publisher is actually connected
+        to it (a previous session that died abnormally — crash, network loss),
+        in which case the stale stream is auto-ended and the new one is minted
+        instead of erroring. A non-owner without live:manage always gets the
+        plain 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, title, kind]
+              properties:
+                scope: { type: string, enum: [church, cell] }
+                cell_id: { type: string, format: uuid, description: "Required when scope=cell; omitted for scope=church." }
+                title: { type: string, maxLength: 200 }
+                kind: { type: string, enum: [video, audio] }
+      responses:
+        "201":
+          description: Minted stream + publish credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stream_id, rtmp_url, stream_key, path]
+                properties:
+                  stream_id: { type: string, format: uuid }
+                  rtmp_url: { type: string, description: "Publish target; the broadcaster appends ?user=<stream_id>&pass=<stream_key>." }
+                  stream_key: { type: string, description: "One-time plaintext publish key — only sha256 is stored server-side." }
+                  path: { type: string, description: "MediaMTX path — 'church' or 'cell/{cell_id}'." }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: "NOT_FOUND — unknown cell_id." }
+        "409":
+          description: >-
+            CONFLICT — that scope target already has a live stream, AND either
+            (a) the caller is not its owner and holds no live:manage (plain
+            409, no details), or (b) MediaMTX confirms a publisher is still
+            actually connected — details.reason = "publisher_connected",
+            details.stream_id + details.started_by name the still-live
+            stream, so a client can offer "End the previous broadcast?".
+  /live/auth:
+    post:
+      tags: [live]
+      summary: >-
+        MediaMTX authHTTP webhook (UNAUTHENTICATED — no bearer JWT; MediaMTX has
+        no user session, only the stream's own publish key or a guest token.
+        Reachable only from localhost in prod). action=publish on a
+        church/cell path validates stream_id/password/path strictly against
+        live_streams; other church/cell actions (read/playback/…) are left
+        open. L6a (docs/LIVE_INTERACTIVE.md): on a guest WebRTC path
+        (path="guest/{streamId}/{userId}"), action=publish is allowed only
+        for that (stream,user)'s 'accepted' guest row presenting its own
+        matching guest_token while the stream is live; action=read is allowed
+        for either the stream's own owner publish key or any 'accepted'
+        guest's own token on the SAME stream (guests may preview each other).
+        Every other action on any path is left open, unchanged. `user` is
+        intentionally OPTIONAL: MediaMTX v1.19.3 sends no `user` at all for
+        WHIP/WHEP publish/read unless the client authenticates with HTTP
+        Basic (query-param creds are ignored — docs/LIVE_STREAMING.md); an
+        absent/empty `user` is simply a credential that fails every
+        allow-check below and is denied, not a malformed request. Any body
+        this endpoint cannot parse at all also resolves to 401, never
+        400/500 — an authentication webhook must always answer allow/deny,
+        never "your request was invalid" (that broke MediaMTX's own retry
+        logic in production).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, action]
+              properties:
+                user: { type: string, description: "The stream_id (church/cell publish), or the guest's own user_id (guest publish/read). Optional/empty for actions MediaMTX doesn't attach credentials to." }
+                password: { type: string }
+                path: { type: string }
+                action: { type: string }
+      responses:
+        "200": { description: Authorized }
+        "401": { description: "Rejected — either the credentials don't authorize this action/path, or the body itself couldn't be parsed. Never 400." }
+  /live/streams/{id}/end:
+    post:
+      tags: [live]
+      summary: End a live stream — the broadcaster, a live:manage holder, or Admin/SuperAdmin. Idempotent. Best-effort inline recording registration.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: "{ stream_id, status, ended_at }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /live/now:
+    get:
+      tags: [live]
+      summary: >-
+        Streams currently live that the caller may watch — church always; cell
+        streams only for that cell's members (or Admin/SuperAdmin/live:manage).
+        L1.5 (infinite fan-out, docs/LIVE_STREAMING.md): when the server has
+        LIVE_CDN_BASE configured, a church-scope row's hls_url is the ABSOLUTE
+        Cloudflare R2 CDN URL (a VPS-local publisher daemon mirrors the church
+        HLS playlist/segments there) and an additional hls_fallback_url field
+        carries the direct relative URL for clients to fail over to if the CDN
+        copy 404s. Without LIVE_CDN_BASE, or for cell-scope rows, hls_url is
+        always the direct relative URL and hls_fallback_url is absent. L1.5b
+        (docs/LIVE_CDN_PERSTREAM.md): when the server ALSO has
+        LIVE_CDN_PER_STREAM enabled, the church hls_url is scoped by
+        stream_id ("<LIVE_CDN_BASE>/live-cdn/church/<stream_id>/index.m3u8")
+        instead of the legacy static path — fixes a flicker bug where a new
+        broadcast could briefly serve the previous stream's cached CDN
+        manifest/segments. Default off; hls_fallback_url is unaffected either
+        way.
+      responses:
+        "200":
+          description: "{ data: [{ stream_id, scope, cell_id, title, kind, started_at, hls_url, hls_fallback_url?, started_by_name, viewer_count }, ...] }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /live/church/current:
+    get:
+      tags: [live]
+      summary: >-
+        L1.5b (docs/LIVE_CDN_PERSTREAM.md): the currently-live church stream's
+        id, or null. Deliberately UNAUTHENTICATED — same trust boundary as the
+        MediaMTX authHTTP webhook (POST /live/auth): meant to be reachable
+        only from the VPS's own loopback, polled by the CDN publisher daemon
+        (ops/live-cdn/publisher.py) to learn which stream_id to mirror
+        per-stream CDN objects under. Reveals nothing a member's own GET
+        /live/now wouldn't already show.
+      responses:
+        "200":
+          description: "{ stream_id: string | null }"
+  /live/streams/{id}/heartbeat:
+    post:
+      tags: [live]
+      summary: Viewer presence heartbeat — upserts (stream, caller, last_seen=now), updates viewer_peak, opportunistically prunes stale rows.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: "{ ok: true }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /live/recordings:
+    get:
+      tags: [live]
+      summary: Ended streams with a registered recording (VOD), same visibility rules as /live/now.
+      parameters:
+        - name: scope
+          in: query
+          schema: { type: string, enum: [church, cell] }
+        - name: cell_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: "{ data: [{ stream_id, scope, cell_id, title, kind, started_at, ended_at, recording_url }, ...] }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ---- Recording stewardship (owner-managed keep/delete) --------------------
+  /live/recordings/mine:
+    get:
+      tags: [live]
+      summary: >-
+        Recordings belonging to streams the caller started; a live:manage
+        holder instead sees every non-deleted recording (oversight). A
+        "recording" is 1:1 with the stream that produced it, so recording_id
+        equals stream_id — there is no separate recordings table.
+        duration/size are not modeled anywhere in this schema and are
+        deliberately omitted rather than fabricated. Newest (by ended_at)
+        first.
+      responses:
+        "200":
+          description: "{ data: [{ recording_id, stream_id, scope, cell_id, title, kind, started_at, ended_at, url }, ...] }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /live/recordings/{id}:
+    delete:
+      tags: [live]
+      summary: >-
+        Delete (hide) one recording — the stream's own owner or a live:manage
+        holder. SOFT-delete only: sets recording_deleted_at and the row is
+        excluded from /live/recordings and /live/recordings/mine everywhere
+        after; the on-disk file is not removed (see OPS FOLLOW-UP in
+        src/modules/live/index.ts — neither the api nor worker container
+        currently mounts the MediaMTX recordings directory). Idempotent — a
+        repeat delete of an already-deleted recording is a silent no-op, not
+        an error. 404 if the stream doesn't exist or never had a recording.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "204": { description: Recording deleted (or already deleted) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---- L5 interactions (docs/LIVE_INTERACTIVE.md) — PINNED wire contract ----
+  /live/streams/{id}/reactions:
+    post:
+      tags: [live]
+      summary: >-
+        Append a like/love/fire reaction event. Server-rate-limited to >=1s/user
+        (429 RATE_LIMITED on a faster repeat). 409 CONFLICT once the stream
+        has ended.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: { type: string, enum: [like, love, fire] }
+      responses:
+        "204": { description: Reaction recorded }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { description: "RATE_LIMITED — faster than one reaction per second." }
+  /live/streams/{id}/hand:
+    post:
+      tags: [live]
+      summary: >-
+        Idempotent upsert of one raise-hand state per (stream, caller). 409
+        CONFLICT once the stream has ended.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [raised]
+              properties:
+                raised: { type: boolean }
+      responses:
+        "204": { description: Hand state updated }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /live/streams/{id}/messages:
+    get:
+      tags: [live]
+      summary: >-
+        Live chat, ascending, capped at 200/poll. Allowed while the stream has
+        ended (grace read for the client's last poll).
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - name: since
+          in: query
+          description: ISO 8601 timestamp cursor; omit for the most recent 200.
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: "{ messages: [{ message_id, user_id, full_name, avatar_url, body, sent_at }, ...] }"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [live]
+      summary: Send a live chat message (trimmed, 1-500 chars). 409 CONFLICT once the stream has ended.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        "201":
+          description: "{ message_id, user_id, full_name, avatar_url, body, sent_at }"
+        "400": { description: Validation failed — empty or over 500 chars. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /live/streams/{id}/pulse:
+    get:
+      tags: [live]
+      summary: >-
+        One snapshot for the whole interactive overlay — viewer_count (same
+        window as /live/now), reaction totals + last ~20 events, currently
+        raised hands, and active (invited/accepted) guests. Poll every 3s
+        (broadcaster) / 5s (viewer). Allowed while the stream has ended (grace
+        read).
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: >-
+            { viewer_count, reactions: { like, love, fire }, recent_reactions:
+            [{ emoji, at }, ...], hands: [{ user_id, full_name, avatar_url,
+            raised_at }, ...], guests: [{ user_id, full_name, avatar_url,
+            status, whep_url? }, ...] }. L6a (docs/LIVE_INTERACTIVE.md):
+            whep_url is ADDITIVE and owner-only — present on each guest entry
+            only when the caller is the stream's own broadcaster (the device
+            that subscribes to each guest's WebRTC feed to composite it
+            locally); absent for every other caller, including the guests
+            themselves.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /live/streams/{id}/guests/{userId}:
+    post:
+      tags: [live]
+      summary: >-
+        Invite a viewer as an L6 on-stage guest — broadcaster only, cap 6
+        active (invited+accepted), target may not be the broadcaster
+        themselves. Re-inviting an already invited/accepted guest is an
+        idempotent no-op. Rides the existing push path (template
+        `live_guest_invite`) to knock the invitee even if backgrounded. 409
+        CONFLICT once the stream has ended, or once the cap is reached.
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - { $ref: "#/components/parameters/UserIdPath" }
+      responses:
+        "204": { description: Invited }
+        "400": { description: "VALIDATION_FAILED — target is the broadcaster." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [live]
+      summary: >-
+        Remove a guest — the broadcaster, or the guest themselves (leave).
+        Idempotent (an already-terminal or never-invited row is a silent
+        no-op). 409 CONFLICT once the stream has ended.
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - { $ref: "#/components/parameters/UserIdPath" }
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /live/streams/{id}/guests/respond:
+    post:
+      tags: [live]
+      summary: >-
+        Accept or decline a pending guest invite — invitee only. 404 if there
+        is no invite currently in 'invited' status for the caller. 409
+        CONFLICT once the stream has ended.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accept]
+              properties:
+                accept: { type: boolean }
+      responses:
+        "204": { description: Response recorded }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  # ---- L6a — guest WebRTC publish authorization (docs/LIVE_INTERACTIVE.md) --
+  /live/streams/{id}/guests/me/ingest:
+    get:
+      tags: [live]
+      summary: >-
+        The caller's own WHIP publish credentials for this stream's guest
+        slot — call once accepted, before starting the WebRTC publish.
+        403 unless the caller is currently an 'accepted' guest of a LIVE
+        stream (never invited, still 'invited', declined, removed, or the
+        stream has since ended all 403 here).
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: >-
+            { whip_url, token, path }. whip_url =
+            "<LIVE_WEBRTC_BASE_URL>/guest/{id}/{callerUserId}/whip" — the
+            caller WHIP-publishes camera+mic there, authenticating with
+            `token` (query/user-pass credentials, matching the existing
+            rtmp_url convention). `path` is the bare MediaMTX path, same value
+            embedded in whip_url.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---- Share links (docs/LIVE_SHARE.md "Share a broadcast") -----------------
+  # The public GET /w/{token} landing page is a server-rendered web page, not
+  # a JSON API route — it's mounted outside /v1 and gets only a minimal stub
+  # entry below (for the §3.7 route-parity guard), with the real
+  # documentation living in docs/LIVE_SHARE.md instead, mirroring how
+  # /join/{token} does the same thing elsewhere in this file.
+  /live/replays/{id}/share:
+    post:
+      tags: [live]
+      summary: >-
+        Mint (or return the still-active) a public share link for a
+        broadcast's recording. Same visibility rule as watching it (church
+        always; cell requires membership, Admin/SuperAdmin, or live:manage).
+        404 if the broadcast has no recording (or it was deleted). Idempotent
+        while the token is still active; a previously revoked token is
+        replaced with a fresh one rather than resurrected.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: "{ url, title, started_at, expires_at }. url = \"<PUBLIC_WEB_BASE>/w/<token>\". expires_at is always null — the link itself never expires, only DELETE (revoke) kills it."
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, title, started_at, expires_at]
+                properties:
+                  url: { type: string, format: uri }
+                  title: { type: string }
+                  started_at: { type: string, format: date-time }
+                  expires_at: { type: [string, "null"], format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [live]
+      summary: >-
+        Revoke a broadcast's share link — same entitlement rule as minting
+        it. Idempotent: revoking a never-shared or already-revoked broadcast
+        is a silent no-op, not an error.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "204": { description: Revoked (or already revoked/never shared) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /live/replays/{id}/media:
+    get:
+      tags: [live]
+      summary: >-
+        Signed, UNAUTHENTICATED media hand-off backing the public share
+        page's <video> element — no bearer JWT; the HMAC query signature
+        (`t`) + expiry (`e`) IS the authorization, since the page has no
+        session to present. On success, delegates the actual bytes to nginx
+        via an X-Accel-Redirect response header (docs/LIVE_SHARE.md has the
+        exact nginx block) so Node never proxies the file and Range/seeking
+        keep working; the JSON response body is empty. Only ever serves
+        scope='church' recordings — refuses even a validly-signed request for
+        a cell-scope stream (defense in depth; nothing in this API ever mints
+        such a signature).
+      security: []
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - name: t
+          in: query
+          required: true
+          schema: { type: string }
+          description: HMAC-SHA256(streamId + "." + e), base64url.
+        - name: e
+          in: query
+          required: true
+          schema: { type: integer }
+          description: Unix seconds the signature expires at.
+      responses:
+        "200": { description: "X-Accel-Redirect issued; nginx streams the file." }
+        "403": { description: "FORBIDDEN_SCOPE — missing, tampered, or expired signature." }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---- Public pages (docs/LIVE_SHARE.md) — minimal stubs for the §3.7 route
+  # parity guard (test/openapi-routes.test.ts requires every mounted Express
+  # route to appear here); the real documentation for both lives in the doc,
+  # mirroring how /join/{token} above does the same thing.
+  /live/poster-default.svg:
+    get:
+      tags: [live]
+      summary: >-
+        PUBLIC, unauthenticated static asset — the branded fallback poster
+        the /w/{token} share page uses for `og:image` / `<video poster=...>`
+        when a recording has no ffmpeg-generated poster_url yet
+        (docs/LIVE_SHARE.md "Poster thumbnail" follow-up).
+      security: []
+      responses:
+        "200": { description: "image/svg+xml", content: { image/svg+xml: { schema: { type: string } } } }
+  /w/{token}:
+    get:
+      tags: [live]
+      summary: >-
+        PUBLIC, unauthenticated broadcast share page (docs/LIVE_SHARE.md).
+        Not a JSON route — server-rendered HTML with Open Graph/Twitter Card
+        meta, an inline <video> for scope='church' recordings, and a "for
+        members of {cell}" notice with NO video/media URL for scope='cell'
+        (the privacy fix). Escaped against XSS. Unknown/revoked tokens, and
+        streams whose recording was deleted, render a friendly 404 HTML page,
+        never the JSON error envelope.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "OG-rich HTML share page (video for church, notice-only for cell)", content: { text/html: { schema: { type: string } } } }
+        "404": { description: "HTML 404 page — unknown, revoked, or deleted-recording token.", content: { text/html: { schema: { type: string } } } }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -5123,6 +7034,11 @@ components:
   parameters:
     IdPath:
       name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UserIdPath:
+      name: userId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -5873,6 +7789,15 @@ components:
         refresh_token: { type: string, description: Rotating refresh token (returned once) }
         token_type: { type: string, enum: [Bearer] }
         expires_in: { type: integer, description: Access-token lifetime in seconds }
+        permissions:
+          type: array
+          items: { type: string }
+          description: >-
+            Present only on a scope="admin" login/passkey-verify: the caller's
+            granted permission keys ("module:capability"), or the full
+            module × capability grid for SuperAdmin/Admin. Absent for the
+            member app (never sends scope) and for the 2FA-completion
+            endpoint — also mirrored on GET /me for those cases.
     RefreshRequest:
       type: object
       required: [refresh_token]
@@ -5900,6 +7825,15 @@ components:
             locale: { type: string }
             is_minor: { type: boolean }
             mfa_enabled: { type: boolean, description: Whether the member has 2FA turned on }
+            role_keys: { type: array, items: { type: string }, description: Assigned RBAC role keys (rbac_user_roles) }
+            permissions:
+              type: array
+              items: { type: string }
+              description: >-
+                Effective granted permission keys ("module:capability") — role
+                grants ∪ direct per-user grants, or the full grid for
+                SuperAdmin/Admin. Empty for an ordinary member. The web/iPad
+                shells filter their sidebar to exactly these.
             row_version: { type: integer }
         enrollment:
           type: [object, "null"]
@@ -5965,6 +7899,21 @@ components:
           type: array
           items: { type: string }
           description: One-time recovery codes, returned ONCE on the call that first enables 2FA.
+    WebAuthnOptions:
+      type: object
+      required: [challenge]
+      description: A WebAuthn options object (creation or request), passed to the browser ceremony verbatim. Only the server-stored challenge is contractual; the rest follows the WebAuthn L3 JSON shapes.
+      properties:
+        challenge: { type: string, description: "base64url — single-use, 5-minute TTL, stored server-side" }
+        allowCredentials:
+          type: array
+          description: Request options only — the account's registered credential ids (empty for unknown emails, by design).
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              transports: { type: array, items: { type: string } }
+      additionalProperties: true
     MfaChallenge:
       type: object
       required: [mfa_required, mfa_token]
@@ -5997,6 +7946,16 @@ components:
         currency: { type: string, minLength: 3, maxLength: 3 }
         method: { type: string, enum: [card, mpesa, airtel], default: card }
         phone_number: { type: string, description: "Mobile money only — where the STK push lands; defaults to the profile phone" }
+        account_name:
+          type: string
+          maxLength: 60
+          description: >-
+            "Named giving" (custom sheet, optional): a member-chosen label for
+            this gift (e.g. "Tithe", "Building Fund"), trimmed. Persists on the
+            transaction for receipts/statements/portal Finance. For mpesa/airtel,
+            a sanitized (alphanumeric + spaces, truncated to 12 chars) version
+            rides the STK push AccountReference so it shows on the church's
+            M-Pesa statement; absent falls back to the existing default reference.
         idempotency_key: { type: string, minLength: 8, maxLength: 255, description: Client-supplied; replays return the same transaction }
     GivingIntentResult:
       type: object
@@ -6029,6 +7988,7 @@ components:
         status: { type: string }
         fund: { type: [string, "null"] }
         receipt_code: { type: [string, "null"], description: M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL); null for older or non-mobile-money gifts }
+        account_name: { type: [string, "null"], description: "Named giving: the member's own label for this gift, as entered; null when not used" }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
 
@@ -6044,6 +8004,7 @@ components:
         method: { type: string }
         provider_ref: { type: [string, "null"] }
         receipt_code: { type: [string, "null"], description: M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL); null for older or non-mobile-money gifts }
+        account_name: { type: [string, "null"], description: "Named giving: the member's own label for this gift, as entered; null when not used" }
         schedule_id: { type: [string, "null"], format: uuid }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
@@ -6199,6 +8160,35 @@ components:
         verse_text: { type: [string, "null"], maxLength: 2000 }
         note: { type: [string, "null"], maxLength: 2000 }
         client_mutation_id: { type: string, format: uuid }
+    ThoughtUpsert:
+      type: object
+      required: [thought_id, body]
+      properties:
+        thought_id: { type: string, format: uuid, description: Client-generated (offline-first) }
+        title: { type: [string, "null"], maxLength: 200 }
+        body: { type: string, maxLength: 20000, description: Portable markdown }
+        body_spans:
+          type: [array, "null"]
+          maxItems: 2000
+          description: WYSIWYG span attributes (bold/italic/color/font/spacing ranges) the client editor needs to reconstruct exact formatting.
+          items:
+            type: object
+            required: [start, end]
+            properties:
+              start: { type: integer, minimum: 0 }
+              end: { type: integer, minimum: 0 }
+              bold: { type: boolean }
+              italic: { type: boolean }
+              color: { type: string, maxLength: 20 }
+              font: { type: string, maxLength: 60 }
+              spacing: { type: number, minimum: 0.8, maximum: 2.5, description: Per-span line-height multiplier; global reading spacing applies on top at render time. }
+        drawing_urls:
+          type: array
+          maxItems: 50
+          items: { type: string, format: uri, maxLength: 2048 }
+          description: Cloudinary secure_urls from the existing chat/media sign flow (POST /chat/attachments/sign) — pen/stylus strokes.
+        updated_at: { type: string, format: date-time, description: LWW anchor — stale replays are no-ops }
+        client_mutation_id: { type: string, format: uuid }
     AnnouncementCompose:
       type: object
       required: [title, body, channels, audience]
@@ -6226,6 +8216,16 @@ components:
                 level_number: { type: integer, minimum: 1 }
         scheduled_at: { type: string, format: date-time, description: Omit to keep as draft until /send }
         banner_expires_at: { type: string, format: date-time }
+        primary_image_url: { type: ["string", "null"], maxLength: 2048 }
+        gallery_image_urls: { type: array, maxItems: 5, items: { type: string, maxLength: 2048 } }
+        series_id:
+          type: ["string", "null"]
+          format: uuid
+          description: "Attachment mode (EVENTS_ARCHITECTURE §5): series-attached. Mutually exclusive with event_occurrence_id."
+        event_occurrence_id:
+          type: ["string", "null"]
+          maxLength: 100
+          description: "Attachment mode: one occurrence (materialized or synthetic series:ISO id). Mutually exclusive with series_id."
     ReflectionSubmit:
       type: object
       required: [reflection_text]
@@ -6385,6 +8385,14 @@ components:
       properties:
         conversation_id: { type: string, format: uuid }
         kind: { type: string, enum: [dm, group, space] }
+        type:
+          type: string
+          enum: [SPACE, DIRECT, DISCIPLER, PASTORAL, BROADCAST, BROADCAST_RESPONSE]
+          description: >-
+            Chat Redesign C4: the security class (never inferred from title).
+            Additive field — existing clients that don't read it are
+            unaffected; new clients use it instead of heuristic de-duping by
+            kind/title.
         is_public: { type: boolean }
         title: { type: [string, "null"], description: "For a DM, the peer's name" }
         avatar_url: { type: [string, "null"] }
@@ -6403,4 +8411,10 @@ components:
         unread: { type: integer }
         message_count: { type: integer }
         reaction_count: { type: integer }
+        muted:
+          type: boolean
+          description: >-
+            Chat Redesign C4 (migration 172): true when I have an ACTIVE mute
+            on this conversation (muted_until NULL = forever, or still in the
+            future). Additive, MINE only — never the other participant's state.
         signature: { type: string, description: "HMAC-SHA256 detached signature (§5.5 KMS stand-in)" }

@@ -7,7 +7,7 @@
 >
 > Keep it current: any change that adds/removes a feature on any surface updates a row here.
 
-Last full audit: **2026-06-30**.
+Last full audit: **2026-07-12** (two-direction agent sweep; see §Standardization below).
 
 ---
 
@@ -98,15 +98,14 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | Reflection Queue | /admin/reflections (+decision, history) | ✅ | ✅ | Parity |
 | **Discipleship Hub** | `/disciples` (+`:id`) — reuses `/chat/dms`·`/reviews/levels/:id/usher`·`/admin/reflections/:id/decision` | ✅ | ✅ | ~~D-11~~ **RESOLVED 2026-07-04** — iPad console ported section-for-section (triaged roster, dossier, inline message/usher/reflection actions). The port surfaced a web bug: UsherCard passed user_id where the route keys on the ADVANCEMENT id (every web usher 404'd) — fixed on web same day. Known asymmetry: dossier access allows relationship_tree edges OR leader_assignments, but usher scope checks leader_assignments only (edge-only disciplers see 'ready' but can't usher — backend decision pending) |
 | Chat (oversight) | /chat/* + moderation + /assistant/chat | ✅ | ✅ | Parity (iPad mute/archive local-only) |
-| Events | calendar, /admin/events/*, announcements, moments | ✅ | ✅ | Parity (iPad adds client-rendered QR) |
+| **Events Operations Center** | `/admin/events/series` (+detail/timeline/split/search/insights/qr/attendance.csv), windowed `/calendar`, announcements lifecycle | ✅ | ✅ | **RE-ARCHITECTED 2026-07-19** (docs/EVENTS_ARCHITECTURE.md) — future-events bug root-caused (5 stacked horizons) and killed: windowed month-paged calendars on BOTH consoles, real server-issued QR (the old client-faked QR is gone), real insights (hard-coded tiles deleted), Event Command Center with timeline + CSV export, Google-style edit scopes (exception / split / series), Announcements Studio (3 attachment modes, wired targeting + scheduling, duplicate/archive/restore, honest channels — SMS/WhatsApp greyed until a provider exists). Native closed its reschedule-occurrence + announcement-edit gaps. |
 | Finance (read-only) | /admin/finance/* | ✅ | ✅ | Parity (presentation reimagined on iPad) |
 | Certificates | /admin/certificates, /verify/{code} | ✅ | ✅ | Parity |
 | Badges | /admin/badges | ✅ | ✅ | Parity |
-| Curriculum Levels | reports/levels | ✅ | ✅ | Parity |
-| CMS — Curriculum | /admin/levels·modules·questions | ✅ | ✅ | Parity |
-| Level Detail | Web: dedicated `/cms/level/:id` editor · iPad: same view as CMS | ✅ | ⚠️ | **D-02** iPad "Level Detail" == CMS view (title only) |
-| Quiz Builder | /admin/…/exam, questions | ✅ | ✅ | Parity |
-| Video Library | /admin/media (+external) | ✅ | ⚠️ | **D-03** iPad lacks the chunked video-upload pipeline (`/admin/media/videos/chunk·finalize`); external/URL only |
+| **Curriculum Dashboard** | `/admin/curriculum/{summary,validate,activity}` (one stats source) | ✅ | ✅ | **RE-ARCHITECTED 2026-07-18** (docs/CURRICULUM_ARCHITECTURE.md) — replaces Curriculum Levels + CMS Curriculum on BOTH consoles: health grid, clickable pipeline, ranked needs-attention (server validation), classified activity, grouped quick actions, collapsed analytics, one-Open level cards |
+| **Levels & Modules Workspace** | /admin/levels·modules·questions + `/admin/modules/{id}/media` | ✅ | ✅ | **RE-ARCHITECTED 2026-07-18** — replaces Level Detail: tree + sectioned module editor (Overview/Content/Media placements/Quiz/Publishing). Native gained EDITABLE module question banks (was read-only); exam settings + exam_status gate surfaced at the level node. Old routes redirect; native's duplicate `.levelDetail` entry deleted |
+| Quiz Builder (context-aware) | /admin/…/exam, questions | ✅ | ✅ | Specialized exam editor launched WITH context (web `?level=N`, native router preselect) — never re-selects; sidebar entries removed both consoles |
+| Video Library | /admin/media (+external, chunk·finalize, thumbnail, **placements**) | ✅ | ✅ | **PLACEMENT-AWARE 2026-07-18** — one asset, many module placements (level inferred, per-placement remove, 409 duplicate guard); the level-tag "attachment" and media→module title reverse-write are gone. (~~D-03~~ history: refuted stale 2026-07-12) |
 | Content Studio | /admin/growth/* + /admin/levels/:n/encouragements | ✅ | ✅ | ~~D-04~~ resolved — iPad Content Studio now has the Encouragements section |
 | **Intelligence** | Both: **`/admin/analytics/intelligence`** | ✅ | ✅ | ~~D-05~~ **RESOLVED** 2026-06-30 — iPad rebuilt on the canonical endpoint; devices/app-area/activity/location now real |
 | Users | /admin/users | ✅ | ✅ | Parity |
@@ -115,12 +114,18 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | Countries | /admin/countries | ✅ | ✅ | Parity (no delete either side) |
 | Languages | /admin/languages | ✅ | ✅ | Parity |
 | My Profile | /me (+password, activity) | ✅ | ✅ | Parity |
+| **Biometric sign-in** | `/auth/webauthn/*` (passkeys) · native LocalAuthentication | ✅ | ✅ | **LIVE 2026-07-18** — deliberate platform expression, same outcome (no password retyping): web registers **passkeys** (WebAuthn, Touch ID/Face ID/Windows Hello; Login button + Profile Passkeys tab + enrollment nudge; staff-scope gate + audit identical to password login, UV=required bypasses TOTP) · iPad/Mac use **Face ID/Touch ID** (LAContext) as an opt-in lock gate + login fast path over the persisted session — native passkeys impossible on the free Apple team (no associated-domains). Passwords are never stored on any surface. |
 | **Radio Studio** | `/admin/radio/programs` (+go-live/end/rotate-key/health/comments/tracks/audio-upload/schedule-conflicts/mic-bridge) | ✅ | ✅ | **LIVE 2026-07-03** — real broadcast on self-hosted **Icecast** (`RADIO_STREAM_PROVIDER=icecast`) + **liquidsoap** playout engine (playlist bed + jingle queue + live-mic harbor). iPad broadcasts a connected USB mic natively (AVAudioEngine→AAC→Icecast SOURCE) with boost + **On-air/Cue in-ear monitor**. Session audio upload (≤110 MB, MP3/WAV/AAC/ALAC), playlists, loop modes, now-playing. Member app plays the live stream with auto-reconnect + adaptive buffer. See [[radio-live-icecast]]. **2026-07-05**: single-live rule + overlap warnings + auto-air deferral on both consoles; WEB now broadcasts a mic too (device picker w/ hot-plug, real meters/boost, MediaRecorder → WS mic-bridge) and has Listen (Broadcast/Monitor/Cue) with a feedback guard — web/iPad mic parity reached, different transports (WS bridge vs native TCP). |
 | **Audio Mixer** | `/admin/radio/mixer/{scenes,jingles}` + `/mixer/live/{levels,eq,jingle,status}` | ✅ | ✅ | **LIVE 2026-07-03** — drives the liquidsoap mix over telnet: mic/bed/jingle/master faders (gliding), per-bus 3-band EQ + compressor, jingle fire, and sound presets (Talk Show / Podcast / Voice Over Music / Warm Music / Bright). Consoles hydrate from the engine's real state so settings survive navigation. Admin-only (not a member surface) |
-| Module Preview (learner) | /admin/modules/:id (+questions) | ✅ | ❌ | **D-06** iPad has no standalone learner-preview |
+| Module Preview (learner) | /admin/modules/:id (+questions) | ✅ | ✅ | ~~D-06~~ **RESOLVED 2026-07-12** — native Learner Preview sheet off the module editor; renders the CURRENT unsaved draft (ahead of web's saved-only) |
 | Reset Password page | /auth/password/reset | ✅ | ❌ | Minor — iPad login only |
 
-**Bottom line:** ~22 of 24 admin pages are at parity. Concrete drift is D-01…D-06.
+**Bottom line (2026-07-12):** ZERO open capability gaps between web, iPad and Mac. Every page and every in-page capability is at parity or deliberately platform-expressed (§Standardization).
+
+### Standardization sweep — 2026-07-12 (two agent audits, both directions, then 5 build crews)
+**Web → native (closed):** Flock Brief / Shepherd's Pulse (whole page — had never been in this ledger), Level Reviews usher-triage queue, learner Module Preview (D-06), markdown toolbar + Write/Preview (D-02), video thumbnail upload, chat oversight extras (edit / restore / hard delete / attachment send), forgot-password link.
+**Native → web (closed):** multi-file upload queue with per-file progress + retry, bulk select + bulk add/delete, drag-to-reorder playlists, session deep link (?open=), zero-signal silence watchdog, device connect/disconnect toasts + label-based mic brand registry, Roles EDIT modal (and the backend PUT silently dropping role_type — fixed, tested).
+**Deliberate platform expressions (NOT gaps — do not chase):** USB mic brand sensing depth (native reads OS device metadata; browsers only see labels post-permission — label fuzzy-match is the web ceiling) · native session View modals + capped previews vs web inline scroll lists (both functionally complete) · admin password-reset placement (web: members list · native: member detail — same capability) · mic transport (native raw TCP SOURCE vs web WebSocket bridge — same behavior) · Mac-only window/idiom features.
 
 ---
 
@@ -150,13 +155,13 @@ Shares with admin surfaces: the backend, `@nuru/shared`, and `tokens.ts`.
 | ID | Drift | Surfaces | Severity | Action |
 |---|---|---|---|---|
 | ~~D-01~~ | ~~Cell Detail uses legacy `/cohorts/{id}/members`~~ | iPad | ~~Med~~ | **DONE 2026-06-30** — iPad Cell Detail repointed to `/admin/reports/engagement` + `/admin/members` (filtered by `cell_group_id`), mirroring web; legacy `/cohorts` call removed. (Backend `/cohorts/:cell_id/members` + `/cells/:id/milestones` terminology cleanup still open — see D-09.) |
-| D-02 | "Level Detail" duplicates the CMS view | iPad | Low | Either make it a distinct per-level editor (match web) or drop the sidebar entry |
-| D-03 | No chunked video upload | iPad | Med | Port `/admin/media/videos/chunk·finalize` flow, or accept external-only (decide) |
+| ~~D-02~~ | ~~Level Detail duplicates CMS~~ | iPad | ~~Low~~ | **DONE 2026-07-12** — markdown toolbar + Write/Preview toggle added (the real substance); dedicated-route difference accepted as layout |
+| ~~D-03~~ | ~~No chunked video upload~~ | iPad | ~~Med~~ | **STALE 2026-07-12** — audit found the full ChunkUploader already shipped; ledger was wrong. Thumbnail upload/clear added for full parity |
 | ~~D-04~~ | ~~No Encouragements authoring~~ | iPad | ~~Med~~ | **DONE 2026-06-30** — per-level Encouragements section added to Content Studio (level picker + CRUD on `/admin/levels/:n/encouragements` + `/admin/encouragements/:id`) |
 | ~~D-05~~ | ~~Intelligence not on the canonical endpoint~~ | iPad | ~~High~~ | **DONE 2026-06-30** — iPad People Intelligence rebuilt on `/admin/analytics/intelligence`; devices/app-area/activity-by-hour/giving-frequency/location now render real data. Only the backend's own not-captured flags remain labeled: device model, screen dwell, login timestamp, geo lat/lng |
-| D-06 | No learner Module Preview | iPad | Low | Add, or mark N/A for iPad |
+| ~~D-06~~ | ~~No learner Module Preview~~ | iPad | ~~Low~~ | **DONE 2026-07-12** — Learner Preview sheet (previews unsaved drafts) |
 | D-07 | Tokens hand-ported to Swift | iPad | Med | Generate `NuruTheme.swift` from `tokens.ts`/a `tokens.json` so brand can't fork |
-| D-08 | iPad presentation pass not on web | Web | **DONE 2026-06-30** | iPad has precedence (§0). Web palette added to `admin-web` CSS (admin-only; mobile untouched). **All 24 admin pages ported** to the iPad design (typecheck 0, Vite build green). Two small follow-ups: (a) **Quiz Builder** — the exam-settings/field/colour asks live in the shared `components/curriculum/ModuleQuizBuilder.tsx` (out of the page-file scope); (b) **Roles** — web has no role-EDIT modal (a feature gap, not a port). |
+| D-08 | iPad presentation pass not on web | Web | **DONE 2026-06-30** | iPad has precedence (§0). Web palette added to `admin-web` CSS (admin-only; mobile untouched). **All 24 admin pages ported** to the iPad design (typecheck 0, Vite build green). Two small follow-ups: (a) **Quiz Builder** — the exam-settings/field/colour asks live in the shared `components/curriculum/ModuleQuizBuilder.tsx` (out of the page-file scope); (b) ~~Roles — web has no role-EDIT modal~~ **DONE 2026-07-12** (dual-mode RoleModal + backend role_type persist fix). |
 | ~~D-10~~ | ~~admin-web `tsc` typecheck broken (851 errors)~~ | Web | ~~tooling~~ | **DONE 2026-06-30** — web-only react-redux/@reduxjs-toolkit resolved React/@types/react peers to the React 19 store copy, poisoning JSX types. Pinned their peers to React 18 via scoped `pnpm.overrides`. admin-web 851→0; mobile still 0; root `pnpm typecheck` green. |
 | D-09 | Terminology mix (Cohort vs Cell) at the wire | Backend | Med | Plan an additive rename; keep old paths until clients migrate |
 | ~~D-11~~ | ~~Discipleship Hub not on iPad~~ | iPad | ~~Med~~ | **DONE 2026-07-04** — DisciplesView.swift (roster + dossier + actions) under Operations. Bonus: found + fixed the web usher advancement-id 404. Open follow-up: usher scope ignores relationship_tree edges (backend) |

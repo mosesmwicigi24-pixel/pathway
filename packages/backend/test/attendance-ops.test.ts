@@ -162,7 +162,9 @@ describe("cancel/reschedule notifications + materialized toggles", () => {
     const series = (await svc.createSeries(principal(adminId, "Admin"), {
       title: "Midweek Service",
       timezone: "Africa/Nairobi",
-      dtstart_local: "2026-07-01T18:00:00",
+      // Dynamic future start — a hardcoded date rots once the calendar passes
+      // it (the materializer only writes future occurrences).
+      dtstart_local: `${new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10)}T18:00:00`,
       duration_min: 90,
       rrule: "FREQ=WEEKLY;COUNT=3",
       visibility: "congregation",

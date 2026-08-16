@@ -1,6 +1,6 @@
 // Calendar subsystem (Features v2 §C): TZ-aware recurrence, projection,
 // materialization, RSVP, visibility scoping, RRULE allow-list.
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createCellGroup, createUser, createLeaderAssignment } from "./helpers/factories.js";
 import { validateRrule, expandOccurrences } from "../src/modules/calendar/recurrence.js";
@@ -10,10 +10,13 @@ import type { Principal } from "../src/http/http.js";
 const svc = () => new CalendarService(testPool());
 const principal = (userId: string, role: Principal["role"], cong: string): Principal => ({ userId, role, congregationId: cong });
 
-// materialize() only creates occurrences from `now` forward, so series tests must
-// be anchored in the FUTURE or they rot as real time passes. This yields a weekly
-// series starting `weeksAhead` from today plus a projection window that covers all
-// `count` occurrences. (Date.now() is fine in tests — only workflow scripts ban it.)
+// materialize()'s default window is anchored on `now` (now−90d … now+90d), so any
+// series test with a HARDCODED dtstart rots as real time passes — silently, and long
+// after the commit that wrote it. Anchor series in the FUTURE with this helper, or
+// pin `now` (see the date-pinned window describe at the bottom of this file). It
+// yields a weekly series starting `weeksAhead` from today plus a projection window
+// covering all `count` occurrences. (Date.now() is fine in tests — only workflow
+// scripts ban it.)
 const pad = (n: number): string => String(n).padStart(2, "0");
 function futureWeekly(count: number, weeksAhead = 1): { dtstart_local: string; rrule: string; from: string; to: string } {
   const d = new Date();
@@ -26,10 +29,14 @@ function futureWeekly(count: number, weeksAhead = 1): { dtstart_local: string; r
 }
 
 describe("RRULE recurrence engine (§C.0/§D.2/§C.4)", () => {
-  it("rejects disallowed or unbounded rules and accepts a valid one", () => {
+  it("rejects disallowed rules, accepts valid + open-ended ones", () => {
     expect(() => validateRrule("FREQ=YEARLY;COUNT=5")).toThrow();
     expect(() => validateRrule("FREQ=WEEKLY;INTERVAL=8;COUNT=5")).toThrow();
-    expect(() => validateRrule("FREQ=DAILY")).toThrow(); // unbounded
+    // EVENTS_ARCHITECTURE §2: open-ended rules are LEGAL — windowed expansion
+    // makes unbounded recurrence safe (the old rule silently killed long-running
+    // series). INTERVAL/COUNT caps stay as DoS guards.
+    expect(() => validateRrule("FREQ=DAILY")).not.toThrow();
+    expect(() => validateRrule("FREQ=WEEKLY;COUNT=9999")).toThrow(); // COUNT cap stays
     expect(() => validateRrule("FREQ=WEEKLY;BYDAY=SU;COUNT=4")).not.toThrow();
   });
 
@@ -143,8 +150,8 @@ describe("Events tab: category, going counts, series follow, cell summary", () =
 
     const projected = (await svc().projectRange(member, win.from, win.to)) as Array<{ category: string; going: number }>;
     expect(projected[0]!.category).toBe("worship");
-    // materialize only creates future occurrences, so the RSVP lands on whichever
-    // occurrence got materialized — assert exactly one "going" across the series.
+    // The RSVP lands on whichever occurrence sorted first — assert exactly one
+    // "going" across the series rather than pinning it to a position.
     expect(projected.reduce((sum, o) => sum + o.going, 0)).toBe(1);
   });
 
@@ -348,14 +355,18 @@ describe("admin portal Create-event contract (POST /admin/events/series)", () =>
       visibility: "congregation", // "members" → congregation
       status: "active",
     });
-    // category is now persisted (Events make filter + badge); other presentational-only
-    // fields are still dropped, not rejected (no .strict() failure).
+    // category is now persisted (Events make filter + badge); presentational-only
+    // fields are still dropped, not rejected (no .strict() failure) — but
+    // manual_checkin_enabled is no longer one of them: EVENTS_ARCHITECTURE §3
+    // wires it as a real series column copied onto occurrences.
     expect((parsed as Record<string, unknown>).category).toBe("worship");
-    expect((parsed as Record<string, unknown>).manual_checkin_enabled).toBeUndefined();
+    expect((parsed as Record<string, unknown>).manual_checkin_enabled).toBe(true);
   });
 
-  it("bounds the portal's open-ended RRULE so it passes validation and creates", async () => {
-    // The modal emits FREQ=WEEKLY;BYDAY=SU with no COUNT/UNTIL — previously a 422.
+  it("keeps the portal's open-ended RRULE open-ended and creates (EVENTS_ARCHITECTURE §2)", async () => {
+    // The modal emits FREQ=WEEKLY;BYDAY=SU with no COUNT/UNTIL. The old code
+    // stamped a static UNTIL = creation + 12 months — series died a year in.
+    // Open-ended rules are now legal: windowed expansion makes them safe.
     const parsed = CalendarService.CreateSeries.parse({
       title: "Weekly Service",
       timezone: "Africa/Nairobi",
@@ -365,11 +376,14 @@ describe("admin portal Create-event contract (POST /admin/events/series)", () =>
       visibility: "members",
       rrule: "FREQ=WEEKLY;BYDAY=SU",
     });
-    expect(parsed.rrule).toMatch(/UNTIL=\d{8}T\d{6}Z$/);
+    expect(parsed.rrule).toBe("FREQ=WEEKLY;BYDAY=SU"); // no injected UNTIL
     const s = (await svc().createSeries(principal(admin, "Admin", cong), parsed)) as { series_id: string };
     const projected = await svc().projectRange(member, "2026-07-01T00:00:00Z", "2026-08-15T00:00:00Z");
     expect(projected.length).toBeGreaterThan(0);
     expect((projected[0] as { series_id: string }).series_id).toBe(s.series_id);
+    // …and it is still alive YEARS after creation (the 12-month death is gone).
+    const farOut = await svc().projectRange(member, "2029-07-01T00:00:00Z", "2029-08-15T00:00:00Z");
+    expect(farOut.filter((o) => (o as { series_id: string }).series_id === s.series_id).length).toBeGreaterThan(0);
   });
 
   it("Save as draft: hidden from members, visible to the admin, and not materialized", async () => {
@@ -471,7 +485,9 @@ describe("RSVP roster (Events page)", () => {
       title: "Cell A Gathering",
       cell_group_id: cellA,
       timezone: "Africa/Nairobi",
-      dtstart_local: "2026-06-07T18:00:00",
+      // Dynamic future start — a hardcoded date rots once the calendar passes
+      // it (the materializer only writes future occurrences).
+      dtstart_local: `${new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10)}T18:00:00`,
       duration_min: 60,
       rrule: "FREQ=WEEKLY;COUNT=6",
       visibility: "cell",
@@ -573,12 +589,16 @@ describe("event images + homepage feature (migration 52)", () => {
   });
 
   it("stores a cover + gallery, surfaces them on the member detail carousel, and features one on the homepage", async () => {
+    // Anchored in the future via futureWeekly: a hardcoded dtstart made this test
+    // depend on the wall-clock date it ran on (it started failing once its last
+    // occurrence fell behind `now`). See the date-pinned window regression below.
+    const win = futureWeekly(8);
     const s = (await svc().createSeries(principal(admin, "Admin", cong), {
       title: "Easter Convention",
       timezone: "Africa/Nairobi",
-      dtstart_local: "2026-06-07T09:00:00",
+      dtstart_local: win.dtstart_local,
       duration_min: 90,
-      rrule: "FREQ=WEEKLY;BYDAY=SU;COUNT=8",
+      rrule: win.rrule,
       visibility: "congregation",
       primary_image_url: "https://res.cloudinary.com/x/cover.jpg",
       gallery_image_urls: ["https://res.cloudinary.com/x/g1.jpg", "https://res.cloudinary.com/x/g2.jpg"],
@@ -620,6 +640,194 @@ describe("event images + homepage feature (migration 52)", () => {
     const row = await testPool().query("SELECT primary_image_url, gallery_image_urls FROM event_series WHERE series_id=$1", [s.series_id]);
     expect(row.rows[0].primary_image_url).toContain("new.jpg");
     expect(row.rows[0].gallery_image_urls).toHaveLength(1);
+  });
+});
+
+// The default materialize window is the one thing in this subsystem that reads the
+// wall clock, so it is the one thing that can rot silently: a test with hardcoded
+// dates passes until real time drifts past them (that is exactly how the migration-52
+// test above began failing). `now` is PINNED here, so these assertions mean the same
+// thing on every future run — and they pin BOTH edges of the window, so neither
+// direction can be narrowed without a red test.
+describe("materialize window semantics — date-pinned (no wall-clock dependence)", () => {
+  const PINNED_NOW = new Date("2026-07-31T09:00:00.000Z");
+  let cong: string, admin: string;
+
+  beforeEach(async () => {
+    await resetDb();
+    cong = await createCongregation();
+    admin = (await createUser({ congregationId: cong, role: "Admin", email: "a@dev.local" })).user_id;
+    // Fake Date ONLY — faking timers too would stall the pg driver's own callbacks.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(PINNED_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  afterAll(async () => {
+    await closeTestPool();
+  });
+
+  const mkSeries = async (title: string, dtstartLocal: string, rrule: string): Promise<string> =>
+    (
+      (await svc().createSeries(principal(admin, "Admin", cong), {
+        title,
+        timezone: "Africa/Nairobi",
+        dtstart_local: dtstartLocal,
+        duration_min: 90,
+        rrule,
+        visibility: "congregation",
+      })) as { series_id: string }
+    ).series_id;
+
+  it("realizes occurrences BEHIND now — a back-dated series is not invisible to the portal", async () => {
+    // Every occurrence (Jun 7 … Jul 26) is already past at the pinned `now`. Under
+    // the old forward-only window this materialized nothing at all: the occurrences
+    // projected on /calendar but had no `events` row, so the command center's
+    // "recent occurrences" list, the attendance roster, the QR panel and the CSV
+    // export — all of which read materialized rows — silently showed an empty series.
+    const sid = await mkSeries("Easter Convention", "2026-06-07T09:00:00", "FREQ=WEEKLY;BYDAY=SU;COUNT=8");
+
+    const mat = await svc().materialize(sid);
+    expect(mat.created).toBe(8);
+    const rows = await testPool().query(
+      "SELECT occurs_at FROM events WHERE series_id=$1 ORDER BY occurrence_start",
+      [sid],
+    );
+    expect(rows.rowCount).toBe(8);
+    expect(new Date(rows.rows[0].occurs_at).getTime()).toBeLessThan(PINNED_NOW.getTime());
+
+    // The portal symptom itself: past occurrences now reach "recent".
+    const detail = (await svc().adminSeriesDetail(principal(admin, "Admin", cong), sid)) as { recent: unknown[] };
+    expect(detail.recent.length).toBeGreaterThan(0);
+
+    // Idempotent: a second pass inserts nothing (ON CONFLICT DO NOTHING).
+    expect((await svc().materialize(sid)).created).toBe(0);
+  });
+
+  it("still realizes occurrences AHEAD of now, and stops at both window edges", async () => {
+    // Forward edge: inside +90d materializes, beyond it does not (the rolling
+    // window is what keeps an open-ended series from expanding without bound).
+    const future = await mkSeries("Spring Convention", "2026-08-02T09:00:00", "FREQ=WEEKLY;BYDAY=SU;COUNT=4");
+    expect((await svc().materialize(future)).created).toBe(4);
+
+    const openEnded = await mkSeries("Sunday Service", "2026-08-02T09:00:00", "FREQ=WEEKLY;BYDAY=SU");
+    const { created } = await svc().materialize(openEnded);
+    const beyond = await testPool().query(
+      `SELECT count(*)::int AS n FROM events WHERE series_id=$1 AND occurrence_start > $2::timestamptz + interval '90 days'`,
+      [openEnded, PINNED_NOW.toISOString()],
+    );
+    expect(created).toBeGreaterThan(0);
+    expect(beyond.rows[0].n).toBe(0);
+
+    // Backward edge: a series that finished more than 90 days ago stays out.
+    const ancient = await mkSeries("Last Year's Camp", "2026-01-04T09:00:00", "FREQ=WEEKLY;BYDAY=SU;COUNT=8");
+    expect((await svc().materialize(ancient)).created).toBe(0);
+  });
+
+  it("the nightly reconcile heals past occurrences without pruning or re-timing history", async () => {
+    const sid = await mkSeries("Cell Gathering", "2026-06-07T18:00:00", "FREQ=WEEKLY;BYDAY=SU;COUNT=8");
+    const swept = await svc().reconcileSweep(PINNED_NOW);
+    expect(swept.created).toBe(8); // the sweep backfills what was never materialized
+
+    // Past rows are history: the refresh/prune pass stays forward-only, so nothing
+    // that already happened is re-timed, deleted, or retro-notified as cancelled.
+    const again = await svc().reconcileSeries(sid, PINNED_NOW);
+    expect(again).toMatchObject({ created: 0, refreshed: 0, pruned: 0 });
+    const rows = await testPool().query("SELECT count(*)::int AS n FROM events WHERE series_id=$1", [sid]);
+    expect(rows.rows[0].n).toBe(8);
+  });
+});
+
+describe("Home 'Upcoming events' list — show_on_home (migration 160)", () => {
+  let cong: string, admin: string, member: string;
+  beforeEach(async () => {
+    await resetDb();
+    cong = await createCongregation();
+    admin = (await createUser({ congregationId: cong, role: "Admin", email: "a@dev.local" })).user_id;
+    member = (await createUser({ congregationId: cong, role: "Student", email: "m@dev.local" })).user_id;
+  });
+  afterAll(async () => {
+    await closeTestPool();
+  });
+
+  // One-off series (no rrule) anchored `daysAhead` from now — mirrors futureWeekly's
+  // "anchor in the future" rule, but for a single occurrence rather than a recurrence.
+  function futureOneOff(daysAhead: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    d.setHours(9, 0, 0, 0);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T09:00:00`;
+  }
+
+  it("toggles show_on_home on and off (round trip); non-admins are refused", async () => {
+    const s = (await svc().createSeries(principal(admin, "Admin", cong), {
+      title: "Youth Night",
+      timezone: "Africa/Nairobi",
+      dtstart_local: futureOneOff(3),
+      duration_min: 60,
+      visibility: "congregation",
+    })) as { series_id: string };
+
+    const before = await testPool().query("SELECT show_on_home FROM event_series WHERE series_id=$1", [s.series_id]);
+    expect(before.rows[0].show_on_home).toBe(false);
+
+    const on = await svc().setSeriesShowOnHome(principal(admin, "Admin", cong), s.series_id, true);
+    expect(on.show_on_home).toBe(true);
+    const after = await testPool().query("SELECT show_on_home FROM event_series WHERE series_id=$1", [s.series_id]);
+    expect(after.rows[0].show_on_home).toBe(true);
+
+    const off = await svc().setSeriesShowOnHome(principal(admin, "Admin", cong), s.series_id, false);
+    expect(off.show_on_home).toBe(false);
+
+    await expect(svc().setSeriesShowOnHome(principal(member, "Student", cong), s.series_id, true)).rejects.toThrow();
+  });
+
+  it("GET /home/events (homeEvents) returns only flagged series, soonest first, capped at 5 even with 6 flagged", async () => {
+    const flaggedTitles: string[] = [];
+    for (let i = 1; i <= 6; i++) {
+      const s = (await svc().createSeries(principal(admin, "Admin", cong), {
+        title: `Home Event ${i}`,
+        timezone: "Africa/Nairobi",
+        dtstart_local: futureOneOff(i),
+        duration_min: 60,
+        visibility: "congregation",
+        primary_image_url: "https://res.cloudinary.com/x/event.jpg",
+      })) as { series_id: string };
+      await svc().materialize(s.series_id);
+      await svc().setSeriesShowOnHome(principal(admin, "Admin", cong), s.series_id, true);
+      flaggedTitles.push(`Home Event ${i}`);
+    }
+    // An un-flagged series, even one sooner than all the flagged ones, must never appear.
+    const unflagged = (await svc().createSeries(principal(admin, "Admin", cong), {
+      title: "Not curated for Home",
+      timezone: "Africa/Nairobi",
+      dtstart_local: futureOneOff(1),
+      duration_min: 60,
+      visibility: "congregation",
+    })) as { series_id: string };
+    await svc().materialize(unflagged.series_id);
+
+    const home = (await svc().homeEvents(member, cong)) as Array<{
+      occurrence_id: string;
+      series_id: string;
+      title: string;
+      venue: string | null;
+      starts_at: string;
+      primary_image_url: string | null;
+      my_rsvp: string | null;
+    }>;
+    expect(home).toHaveLength(5); // server caps at 5, never 6
+    expect(home.map((h) => h.title)).not.toContain("Not curated for Home");
+    // Soonest first — "Home Event 6" (furthest out) is excluded by the cap.
+    expect(home.map((h) => h.title)).toEqual(flaggedTitles.slice(0, 5));
+    const starts = home.map((h) => new Date(h.starts_at).getTime());
+    expect(starts).toEqual([...starts].sort((a, b) => a - b));
+    for (const row of home) {
+      expect(row.occurrence_id).toBeTruthy();
+      expect(row.primary_image_url).toContain("event.jpg");
+      expect(row.my_rsvp).toBeNull(); // no RSVP recorded yet
+    }
   });
 });
 

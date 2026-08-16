@@ -9,6 +9,23 @@ import type { Pool } from "pg";
 import { z } from "zod";
 import { many, maybeOne, one, tx, recordActivityEvent } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
+import type { PoolClient } from "pg";
+
+/** The day the member is standing on: the first one they have not finished.
+ *  A plan is walked, not skimmed — day N opens only once 1..N-1 are done.
+ *  Returns dayCount + 1 when the whole plan is finished (nothing left locked). */
+function firstUnfinishedDay(finished: ReadonlySet<number>, dayCount: number): number {
+  for (let n = 1; n <= dayCount; n++) if (!finished.has(n)) return n;
+  return dayCount + 1;
+}
+
+/** A day is locked while an earlier day is still unfinished. A day the member
+ *  has already finished is never locked — out-of-order legacy progress stays
+ *  readable rather than being taken back from them. */
+function dayLocked(dayNumber: number, finished: ReadonlySet<number>, dayCount: number): boolean {
+  if (finished.has(dayNumber)) return false;
+  return dayNumber > firstUnfinishedDay(finished, dayCount);
+}
 
 export class GrowthContentService {
   constructor(private readonly pool: Pool) {}
@@ -147,7 +164,7 @@ export class GrowthContentService {
   }
 
   async planDetail(userId: string, planId: string): Promise<unknown> {
-    const plan = await maybeOne<{ completed_days: number[] | null }>(
+    const plan = await maybeOne<{ completed_days: number[] | null; day_count: number }>(
       this.pool,
       `SELECT p.plan_id, p.title, p.subtitle, p.description, p.category, p.day_count, p.image_url,
               pr.current_day, pr.completed_days, (pr.user_id IS NOT NULL) AS enrolled
@@ -185,20 +202,44 @@ export class GrowthContentService {
       list.push(s);
       byDay.set(s.plan_day_id, list);
     }
+    // What the member has actually finished, by the same union the gate uses:
+    // recorded in completed_days, or every part of the day read.
     const completedDays = new Set(plan.completed_days ?? []);
+    const dayCount = plan.day_count;
+    const finished = new Set<number>();
+    for (const d of dayRows) {
+      const segs = byDay.get(d.plan_day_id) ?? [];
+      const segDone = segs.length > 0 && segs.every((s) => s.completed);
+      if (segDone || completedDays.has(d.day_number)) finished.add(d.day_number);
+    }
+    const nextDay = firstUnfinishedDay(finished, dayCount);
     const days = dayRows.map((d) => {
+      const locked = dayLocked(d.day_number, finished, dayCount);
       const segments = (byDay.get(d.plan_day_id) ?? []).map((s) => ({
         segment_id: s.segment_id, sort: s.sort, kind: s.kind, title: s.title,
-        reference: s.reference, content: s.content, video_url: s.video_url,
-        image_url: s.image_url, completed: s.completed,
+        reference: s.reference,
+        // A locked day keeps its shape — the journey ahead stays visible, with
+        // its title and reference — but not its words. Withholding the body is
+        // the same discipline as the §1.9 hard lock: the API never ships
+        // content the member has not yet walked the way to, so no client
+        // (or an old one, or a curl) can render past the gate.
+        content: locked ? null : s.content,
+        video_url: locked ? null : s.video_url,
+        image_url: s.image_url,
+        completed: s.completed,
       }));
       const segDone = segments.length > 0 && segments.every((s) => s.completed);
       return {
-        day_number: d.day_number, reference: d.reference, title: d.title, content: d.content,
-        segments, completed: segDone || completedDays.has(d.day_number),
+        day_number: d.day_number, reference: d.reference, title: d.title,
+        content: locked ? null : d.content,
+        segments,
+        completed: segDone || completedDays.has(d.day_number),
+        locked,
       };
     });
-    return { ...plan, days };
+    // The one day the member should be on — what the clients point at when they
+    // turn someone back from a locked day.
+    return { ...plan, next_day: nextDay > dayCount ? null : nextDay, days };
   }
 
   /** Enroll (idempotent) — first read starts the plan. */
@@ -216,21 +257,85 @@ export class GrowthContentService {
 
   static readonly CompleteDay = z.object({ day_number: z.number().int().min(1) });
 
-  /** Mark a day complete; advances current_day and stamps completion when done. */
+  /** Every day of this plan the member has genuinely finished: recorded in
+   *  completed_days, OR every one of its parts read. The two can drift on rows
+   *  written before day completion was verified, so the gate trusts the union —
+   *  it never takes progress away, it only refuses to invent it. */
+  private async finishedDays(
+    c: Pool | PoolClient,
+    userId: string,
+    planId: string,
+  ): Promise<Set<number>> {
+    const rows = await many<{ day_number: number }>(
+      c,
+      `SELECT d.day_number
+         FROM reading_plan_days d
+        WHERE d.plan_id = $2
+          AND (
+            d.day_number = ANY(COALESCE(
+              (SELECT completed_days FROM reading_plan_progress WHERE user_id = $1 AND plan_id = $2), '{}'::int[]))
+            OR (
+              EXISTS (SELECT 1 FROM reading_plan_day_segments s WHERE s.plan_day_id = d.plan_day_id)
+              AND NOT EXISTS (
+                SELECT 1 FROM reading_plan_day_segments s
+                  LEFT JOIN reading_plan_segment_progress sp
+                    ON sp.segment_id = s.segment_id AND sp.user_id = $1
+                 WHERE s.plan_day_id = d.plan_day_id AND sp.user_id IS NULL)
+            )
+          )`,
+      [userId, planId],
+    );
+    return new Set(rows.map((r) => r.day_number));
+  }
+
+  /** Seal a day. The client asks; the SERVER decides (§1.1) — a day is finished
+   *  when its parts are finished, never on the client's say-so, and only once
+   *  every earlier day is behind it. Idempotent: re-sealing a done day is a
+   *  no-op that returns the same progress. */
   async completeDay(
     userId: string,
     planId: string,
     input: z.infer<typeof GrowthContentService.CompleteDay>,
   ): Promise<unknown> {
+    return tx(this.pool, async (c) => {
     const plan = await maybeOne<{ day_count: number }>(
-      this.pool,
+      c,
       `SELECT day_count FROM reading_plans WHERE plan_id = $1 AND is_active`,
       [planId],
     );
     if (!plan) throw new ApiError("NOT_FOUND", "Reading plan not found");
     if (input.day_number > plan.day_count) throw new ApiError("VALIDATION_FAILED", "Day beyond the plan length");
+    // completed_days is a bare int[] with no FK — check the day is real, or the
+    // old path would happily record days that do not exist.
+    const day = await maybeOne<{ plan_day_id: string }>(
+      c,
+      `SELECT plan_day_id FROM reading_plan_days WHERE plan_id = $1 AND day_number = $2`,
+      [planId, input.day_number],
+    );
+    if (!day) throw new ApiError("NOT_FOUND", "That day is not in this plan");
+
+    const finished = await this.finishedDays(c, userId, planId);
+    if (dayLocked(input.day_number, finished, plan.day_count)) {
+      throw new ApiError("GATE_LOCKED", "Finish the earlier days of this plan first", {
+        next_day: firstUnfinishedDay(finished, plan.day_count),
+      });
+    }
+    // The heart of it: no sealing a day whose parts are still unread.
+    const remaining = await one<{ n: number }>(
+      c,
+      `SELECT COUNT(*)::int AS n
+         FROM reading_plan_day_segments s
+         LEFT JOIN reading_plan_segment_progress sp ON sp.segment_id = s.segment_id AND sp.user_id = $1
+        WHERE s.plan_day_id = $2 AND sp.user_id IS NULL`,
+      [userId, day.plan_day_id],
+    );
+    if (remaining.n > 0) {
+      throw new ApiError("CONTENT_INCOMPLETE", "Finish every part of this day first", {
+        parts_remaining: remaining.n,
+      });
+    }
     return one(
-      this.pool,
+      c,
       `INSERT INTO reading_plan_progress (user_id, plan_id, current_day, completed_days)
        VALUES ($1, $2, LEAST($3 + 1, $4), ARRAY[$3]::int[])
        ON CONFLICT (user_id, plan_id) DO UPDATE SET
@@ -245,6 +350,7 @@ export class GrowthContentService {
        RETURNING plan_id, current_day, completed_days, completed_at`,
       [userId, planId, input.day_number, plan.day_count],
     );
+    });
   }
 
   /** Mark a single plan-day SEGMENT complete (YouVersion reader). Enrolls if
@@ -262,6 +368,15 @@ export class GrowthContentService {
         [segmentId],
       );
       if (!seg) throw new ApiError("NOT_FOUND", "Segment not found");
+      // Same gate as sealing a day: you cannot read your way into day 5 while
+      // day 2 is still open. Checked here too — the day CTA is not the only
+      // door into a part (deep links, an older client, a replayed queue).
+      const finished = await this.finishedDays(c, userId, seg.plan_id);
+      if (dayLocked(seg.day_number, finished, seg.day_count)) {
+        throw new ApiError("GATE_LOCKED", "Finish the earlier days of this plan first", {
+          next_day: firstUnfinishedDay(finished, seg.day_count),
+        });
+      }
       // Engaging Scripture in a plan counts toward the Word score (§1.8) — once
       // per day, like memory-verse practice. Reading/devotional/scripture qualify.
       if (seg.kind === "scripture" || seg.kind === "reading" || seg.kind === "devotional") {
@@ -289,6 +404,13 @@ export class GrowthContentService {
       );
       const dayComplete = remaining.n === 0;
       let progress: unknown = null;
+      // next_day_number / next_day_unlocked answer the exact question the
+      // client asks right after this call ("can I go on?") — computed here,
+      // in the same transaction as the write, so the client never has to
+      // guess or re-derive it from a possibly-stale plan fetch (§1.1: the
+      // server decides gating, never the client).
+      let nextDayNumber: number | null = null;
+      let nextDayUnlocked = false;
       if (dayComplete) {
         progress = await one(
           c,
@@ -303,8 +425,29 @@ export class GrowthContentService {
            RETURNING plan_id, current_day, completed_days, completed_at`,
           [userId, seg.plan_id, seg.day_number, seg.day_count],
         );
+        if (seg.day_number < seg.day_count) {
+          nextDayNumber = seg.day_number + 1;
+          // Re-derive "finished" post-write (authoritative, not assumed) and
+          // gate the next day the same way every other read path does.
+          const finishedAfter = await this.finishedDays(c, userId, seg.plan_id);
+          nextDayUnlocked = !dayLocked(nextDayNumber, finishedAfter, seg.day_count);
+        }
       }
-      return { segment_id: segmentId, day_number: seg.day_number, day_completed: dayComplete, progress };
+      return {
+        segment_id: segmentId,
+        day_number: seg.day_number,
+        day_completed: dayComplete,
+        // Additive fields for the offline-sync race (a client that fetches
+        // the next day before its queued completion lands otherwise caches a
+        // stale "locked" answer): the ack from the LAST segment of a day now
+        // says outright whether the day sealed and whether the next one is
+        // already open, so the client can act on this response directly
+        // instead of re-fetching into a race.
+        day_complete: dayComplete,
+        next_day_number: nextDayNumber,
+        next_day_unlocked: nextDayUnlocked,
+        progress,
+      };
     });
   }
 

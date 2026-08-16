@@ -98,3 +98,19 @@ SELECT role_key, 'members', 'proximity'
   FROM rbac_roles
  WHERE role_key IN ('super_admin', 'system_admin', 'national_director', 'regional_coach')
 ON CONFLICT DO NOTHING;
+
+-- ── Live streaming (Nuru Live phase L1, docs/LIVE_STREAMING.md) ──
+-- `go` mints/starts a broadcast; `manage` ends anyone's stream. Church-wide
+-- "go" additionally requires the caller to be staff (checked in the live
+-- module, not here); cell-scoped "go" additionally requires the target cell
+-- be in the caller's leader_assignments (also checked in the live module) —
+-- discipler's grant below is meaningful only in combination with that scoping.
+INSERT INTO rbac_role_permissions (role_key, module_id, capability)
+SELECT role_key, 'live', cap
+  FROM rbac_roles, (VALUES ('go'), ('manage')) AS g(cap)
+ WHERE (role_key = 'super_admin')
+    OR (role_key = 'system_admin' AND cap = 'manage')
+    OR (role_key = 'national_director')
+    OR (role_key = 'events_coordinator' AND cap = 'go')
+    OR (role_key = 'discipler' AND cap = 'go')
+ON CONFLICT DO NOTHING;

@@ -124,6 +124,8 @@ export interface CohortPage {
 export interface DevSession {
   access_token: string;
   refresh_token: string;
+  /** Present only on a scope="admin" login/passkey-verify — see MeProfile.permissions. */
+  permissions?: string[];
 }
 
 /** Returned by /auth/login when the account has 2FA on. */
@@ -219,8 +221,12 @@ export interface OverviewKpis {
   reflections_this_week: number;
   pending_reviews: number;
   reviews_overdue: number;
+  new_members_14d: number;
+  new_members_prev_14d: number;
   modules_published: number;
-  cohorts_running: number;
+  cells_running: number;
+  /** @deprecated pre-rename alias for cells_running — the server still sends both. */
+  cohorts_running?: number;
   checked_in_this_week: number;
 }
 
@@ -512,6 +518,10 @@ export interface MeProfile {
   account_status: string;
   require_2fa: boolean;
   role_keys: string[];
+  /** Effective RBAC permission keys ("module:capability") — role grants ∪
+   *  direct grants, or the full grid for SuperAdmin/Admin. Drives the sidebar
+   *  and route guard (nav.tsx navItemVisible / pathPermissions). */
+  permissions: string[];
   row_version: number;
 }
 export interface MeActivityRow { audit_id: number; action: string; entity: string; entity_id: string | null; occurred_at: string }
@@ -522,6 +532,44 @@ export const MeApi = {
   changePassword: (current_password: string, new_password: string) =>
     api.post<{ changed: boolean }>("/me/password", { current_password, new_password }).then((r) => r.data),
   activity: () => api.get<{ data: MeActivityRow[] }>("/me/activity").then((r) => r.data.data),
+};
+
+// ---- Passkeys / WebAuthn (§5.3 strong auth) ----
+// The options objects are handed to @simplewebauthn/browser's ceremonies
+// verbatim; only `challenge` (server-stored, single-use) is contractual.
+export type WebAuthnOptions = Record<string, unknown> & { challenge: string };
+
+export interface PasskeyCredential {
+  credential_id: string;
+  device_label: string | null;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+export const WebAuthnApi = {
+  /** Creation options for enrolling a passkey on the signed-in account. */
+  registerOptions: () => api.post<WebAuthnOptions>("/auth/webauthn/register/options").then((r) => r.data),
+  /** Store the attestation produced by startRegistration. */
+  registerVerify: (response: unknown, deviceLabel?: string) =>
+    api
+      .post<PasskeyCredential>("/auth/webauthn/register/verify", {
+        response,
+        ...(deviceLabel ? { device_label: deviceLabel } : {}),
+      })
+      .then((r) => r.data),
+  /** The account's registered passkeys (Profile ▸ Passkeys). */
+  credentials: () => api.get<{ data: PasskeyCredential[] }>("/auth/webauthn/credentials").then((r) => r.data.data),
+  /** Revoke one of the caller's own passkeys (owner-scoped server-side). */
+  removeCredential: (credentialId: string) =>
+    api.delete(`/auth/webauthn/credentials/${encodeURIComponent(credentialId)}`).then(() => undefined),
+  /** Request options for a passkey sign-in. Anti-enumeration: an unknown email
+   *  gets the same well-formed options with empty allowCredentials. */
+  loginOptions: (email: string) =>
+    api.post<WebAuthnOptions>("/auth/webauthn/login/options", { email, scope: "admin" }).then((r) => r.data),
+  /** Verify the assertion → the SAME session as password login (staff gate and
+   *  all — scope:"admin" keeps this console staff-only, §5.4). */
+  loginVerify: (response: unknown) =>
+    api.post<DevSession>("/auth/webauthn/login/verify", { response, scope: "admin" }).then((r) => r.data),
 };
 
 export interface LevelAnalyticsRow {
@@ -772,6 +820,108 @@ export interface ModuleVersion {
   created_at: string;
 }
 
+// ---- One stats source (docs/CURRICULUM_ARCHITECTURE.md §3) ----
+// The Curriculum Dashboard reads GET /admin/curriculum/summary in ONE call;
+// shapes mirror backend curriculum/stats.ts (CurriculumStatsService.summary).
+export interface CurriculumSummaryTotals {
+  levels: { published: number; draft: number; in_review: number; total: number };
+  modules: { published: number; draft: number; archived: number; total: number };
+  modules_missing_video: number;
+  modules_missing_quiz: number;
+  modules_missing_content: number;
+  learners_active: number;
+  avg_completion_pct: number;
+  avg_quiz_score: number | null;
+  certificates_issued: number;
+  badges_configured: number;
+  reflection_queue: number;
+  level_reviews_waiting: number;
+  video_assets: { attached: number; unattached: number; total: number };
+}
+export interface CurriculumLevelCard {
+  level_number: number;
+  title: string;
+  theme: string | null;
+  color: string;
+  status: LevelStatus;
+  locked: boolean;
+  duration: string | null;
+  modules_published: number;
+  modules_draft: number;
+  modules_total: number;
+  modules_archived: number;
+  quiz: { exam_exists: boolean; exam_published: boolean; exam_question_count: number | null; question_count: number };
+  videos_attached: number;
+  estimated_minutes: number;
+  learners: number;
+  completion_pct: number;
+  certificates: number;
+  last_updated: string | null;
+  validation: { errors: number; warnings: number; status: "errors" | "warnings" | "ok" };
+}
+export interface CurriculumPipeline { drafts: number; in_review: number; locked: number; live: number }
+export interface CurriculumSummary {
+  totals: CurriculumSummaryTotals;
+  pipeline: CurriculumPipeline;
+  levels: CurriculumLevelCard[];
+}
+
+/** One row of the completeness report (GET /admin/curriculum/validate). */
+export interface CurriculumValidationIssue {
+  severity: "error" | "warning" | "info";
+  level_number: number;
+  module_id: string | null;
+  code: string;
+  message: string;
+}
+
+export type CurriculumActivityKind =
+  | "published" | "edited" | "review" | "video" | "quiz" | "module" | "milestone";
+/** Audit-log slice classified SERVER-side (GET /admin/curriculum/activity). */
+export interface CurriculumActivityRow {
+  audit_id: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  action: string;
+  entity: string;
+  entity_id: string | null;
+  metadata: Record<string, unknown> | null;
+  occurred_at: string;
+  kind: CurriculumActivityKind;
+}
+
+// ---- Media placements (§2.2 — one asset, many modules) ----
+/** A placement as listed for a MODULE (GET /admin/modules/:id/media) — carries
+ *  the asset's library fields so the workspace Media section renders directly. */
+export interface ModulePlacementRow {
+  placement_id: string;
+  media_asset_id: string;
+  position: number;
+  required: boolean;
+  title: string | null;
+  caption: string | null;
+  duration_sec: number | null;
+  status: MediaStatus;
+  thumbnail_url: string | null;
+  video_source: VideoSource;
+  external_url: string | null;
+}
+/** A placement as carried on a media LIST row (GET /admin/media rows.placements[]).
+ *  The level is derived from the module — never stored, never asked for twice. */
+export interface AssetPlacement {
+  module_id: string;
+  module_title: string;
+  level_number: number;
+}
+/** Row returned by POST /admin/media/:id/placements. */
+export interface PlacementCreated {
+  placement_id: string;
+  media_asset_id: string;
+  module_id: string;
+  position: number;
+  required: boolean;
+}
+
 // A member who passed a level exam and is AWAITING their discipler to usher them
 // into the next level. Server-scoped to the signed-in leader's cells (§5.4).
 export interface LevelReviewRow {
@@ -786,9 +936,28 @@ export interface LevelReviewRow {
 const unwrap = <T>(p: Promise<{ data: { data: T } }>): Promise<T> => p.then((r) => r.data.data);
 
 export const CurriculumApi = {
+  // One stats source (§3): dashboard payload / completeness report / classified
+  // activity. summary() is a bare object; validate()/activity() use {data:[…]}.
+  curriculumSummary: () =>
+    api.get<CurriculumSummary>("/admin/curriculum/summary").then((r) => r.data),
+  curriculumValidate: () =>
+    unwrap(api.get<{ data: CurriculumValidationIssue[] }>("/admin/curriculum/validate")),
+  curriculumActivity: (limit?: number) =>
+    unwrap(
+      api.get<{ data: CurriculumActivityRow[] }>(
+        "/admin/curriculum/activity",
+        limit ? { params: { limit } } : undefined,
+      ),
+    ),
+  // Placements of ONE module, position-ordered, with the asset's library fields.
+  modulePlacements: (id: string) =>
+    unwrap(api.get<{ data: ModulePlacementRow[] }>(`/admin/modules/${id}/media`)),
+
   levels: () => unwrap(api.get<{ data: AdminLevel[] }>("/admin/levels")),
   createLevel: (body: Record<string, unknown>) =>
     api.post<AdminLevel>("/admin/levels", body).then((r) => r.data),
+  // ONE editor per entity (§2.5): updateLevel no longer accepts
+  // required_exam_pass_mark — exam fields go through updateExam ONLY.
   updateLevel: (n: number, body: Record<string, unknown>) =>
     api.put<AdminLevel>(`/admin/levels/${n}`, body).then((r) => r.data),
   updateExam: (
@@ -1198,6 +1367,8 @@ export interface CalendarOccurrence {
   end_at: string;
   original_start_at: string;
   rescheduled?: boolean;
+  // Curated for the member Home "Upcoming events" list (up to 5, soonest first).
+  show_on_home?: boolean;
 }
 
 export interface EventExceptionBody {
@@ -1237,6 +1408,168 @@ export interface RsvpRoster {
   no_response_scope: "cell" | "none";
 }
 
+// ---- Admin series API (EVENTS_ARCHITECTURE §3) — the console's source of truth ----
+
+/** Per-series automation config (§7), stored as JSONB and executed by worker crons. */
+export interface SeriesAutomation {
+  reminder_offsets_min?: number[];
+  auto_archive_days?: number | null;
+  low_rsvp_alert?: { threshold: number; offset_min?: number } | null;
+  qr_auto_ready?: boolean;
+}
+
+export type SeriesStatus = "draft" | "active";
+export type SeriesVisibility = "congregation" | "cell" | "leaders";
+
+/** Row from GET /admin/events/series — real windowed next_at, cadence, counts. */
+export interface AdminSeriesRow {
+  series_id: string;
+  congregation_id: string;
+  cell_group_id: string | null;
+  cell_name: string | null;
+  title: string;
+  description: string | null;
+  location: string | null;
+  category: string | null;
+  timezone: string;
+  dtstart_local: string;
+  duration_min: number;
+  rrule: string | null;
+  visibility: SeriesVisibility;
+  status: SeriesStatus;
+  is_paused: boolean;
+  is_featured: boolean;
+  show_on_home: boolean;
+  primary_image_url: string | null;
+  gallery_image_urls: string[] | null;
+  video_url: string | null;
+  rsvp_enabled: boolean;
+  qr_enabled: boolean;
+  manual_checkin_enabled: boolean;
+  reminders_enabled: boolean;
+  checkin_opens_min_before: number | null;
+  automation: SeriesAutomation | null;
+  split_from: string | null;
+  created_by: string;
+  created_at: string;
+  occurrence_count: number;
+  rsvp_count: number;
+  attendance_count: number;
+  follow_count: number;
+  cadence: string;
+  next_at: string | null;
+  next_occurrence_id: string | null;
+}
+
+export interface SeriesExceptionRow {
+  exception_id: string;
+  original_start_at: string;
+  is_cancelled: boolean;
+  new_start_at: string | null;
+  new_end_at: string | null;
+  note: string | null;
+}
+
+export interface SeriesLinkedAnnouncement {
+  announcement_id: string;
+  title: string;
+  status: "draft" | "scheduled" | "sent" | "cancelled";
+  sent_at: string | null;
+  scheduled_at: string | null;
+  archived_at: string | null;
+  attachment: "series" | "event";
+}
+
+/** GET /admin/events/series/:id — full command-center detail. */
+export interface AdminSeriesDetail extends AdminSeriesRow {
+  upcoming: Array<{
+    occurrence_id: string;
+    start_at: string;
+    original_start_at: string;
+    rescheduled: boolean;
+    going: number;
+    checked_in: number;
+  }>;
+  recent: Array<{
+    occurrence_id: string;
+    occurs_at: string;
+    archived_at: string | null;
+    going: number;
+    checked_in: number;
+    guests: number;
+  }>;
+  exceptions: SeriesExceptionRow[];
+  announcements: SeriesLinkedAnnouncement[];
+}
+
+/** GET /admin/events/series/:id/timeline — the audit-log slice (§3). */
+export interface SeriesTimelineEntry {
+  audit_id: number;
+  actor_id: string | null;
+  actor_name: string | null;
+  action: string;
+  entity: string;
+  entity_id: string | null;
+  metadata: Record<string, unknown> | null;
+  occurred_at: string;
+}
+
+/** GET /admin/events/search — archive-wide search (§3). */
+export interface EventsSearchResult {
+  series: Array<{
+    series_id: string;
+    title: string;
+    location: string | null;
+    category: string | null;
+    status: SeriesStatus;
+    is_paused: boolean;
+    dtstart_local: string;
+    rrule: string | null;
+  }>;
+  occurrences: Array<{ occurrence_id: string; series_id: string; title: string; occurs_at: string }>;
+  announcements: Array<{
+    announcement_id: string;
+    title: string;
+    status: "draft" | "scheduled" | "sent" | "cancelled";
+    sent_at: string | null;
+    archived_at: string | null;
+  }>;
+}
+
+/** GET /admin/events/insights — only numbers the schema knows (§6). */
+export interface EventsInsights {
+  conversion: { going: number; checked_in: number; rate: number | null };
+  first_time_guests_30d: number;
+  manual_checkins_7d: number;
+  recent_no_shows: Array<{ series_id: string; title: string; occurrence_id: string; occurs_at: string; absent: number }>;
+  upcoming: Array<{
+    occurrence_id: string;
+    title: string;
+    occurs_at: string;
+    series_id: string | null;
+    going: number;
+    threshold: number;
+    no_response: number | null;
+    low_rsvp: boolean;
+  }>;
+}
+
+/** GET /admin/events/:id/qr — the REAL HMAC scan token members validate (§6). */
+export interface EventQrPanel {
+  event_id: string;
+  scan_token: string;
+  checkin_url: string;
+  expires_at: string;
+  checkin_opens_at: string | null;
+  occurs_at: string;
+}
+
+/** POST /admin/events/series/:id/split — Google-style "this and following" (§2). */
+export interface SeriesSplitResult {
+  series: AdminSeriesRow;
+  new_series: AdminSeriesRow;
+}
+
 // Series row returned by pause/resume (calendar service, PR #127). Only the fields
 // the Events page reads are typed; the row carries more.
 export interface MomentRow {
@@ -1273,9 +1606,12 @@ export const OpsApi = {
       gender?: Gender;
       programme?: Programme;
       country_code?: string;
+      /** "awaiting" = members with no cell yet. */
+      placement?: "awaiting" | "placed";
       cursor?: string;
+      limit?: number;
     } = {},
-  ) => api.get<{ data: MemberRow[]; next_cursor: string | null }>("/admin/members", { params: q }).then((r) => r.data),
+  ) => api.get<{ data: MemberRow[]; next_cursor: string | null; awaiting_placement: number; longest_wait_days: number }>("/admin/members", { params: q }).then((r) => r.data),
   memberDetail: (userId: string) => api.get<MemberDetail>(`/admin/members/${userId}`).then((r) => r.data),
   memberResults: (userId: string) => api.get<MemberResults>(`/admin/members/${userId}/results`).then((r) => r.data),
   memberWalk: (userId: string) => api.get<{ data: WalkEvent[] }>(`/admin/members/${userId}/walk`).then((r) => r.data.data),
@@ -1342,9 +1678,38 @@ export const OpsApi = {
   reflectionHistory: (id: string) =>
     api.get<{ data: ReflectionHistoryRow[] }>(`/admin/reflections/${id}/history`).then((r) => r.data.data),
 
+  // Windowed calendar read — callers page by VISIBLE RANGE (EVENTS_ARCHITECTURE
+  // §4; see useCalendarRange). Never a fixed "next 60 days" constant.
   calendar: (fromIso: string, toIso: string) =>
     api.get<{ data: CalendarOccurrence[] }>("/calendar", { params: { from: fromIso, to: toIso } }).then((r) => r.data.data),
   roster: (eventId: string) => api.get<EventRoster>(`/admin/events/${eventId}/attendance`).then((r) => r.data),
+  // ---- Admin series API (EVENTS_ARCHITECTURE §3) ----
+  adminSeriesList: (q: { status?: "all" | "active" | "draft" | "paused"; q?: string; limit?: number } = {}) =>
+    api.get<{ data: AdminSeriesRow[] }>("/admin/events/series", { params: q }).then((r) => r.data.data),
+  adminSeriesDetail: (seriesId: string) =>
+    api.get<AdminSeriesDetail>(`/admin/events/series/${seriesId}`).then((r) => r.data),
+  adminSeriesTimeline: (seriesId: string) =>
+    api.get<{ data: SeriesTimelineEntry[] }>(`/admin/events/series/${seriesId}/timeline`).then((r) => r.data.data),
+  splitSeries: (seriesId: string, body: { pivot_start_at: string; changes?: Record<string, unknown> }) =>
+    api.post<SeriesSplitResult>(`/admin/events/series/${seriesId}/split`, body).then((r) => r.data),
+  eventsSearch: (q: string, limit = 20) =>
+    api.get<EventsSearchResult>("/admin/events/search", { params: { q, limit } }).then((r) => r.data),
+  eventsInsights: () => api.get<EventsInsights>("/admin/events/insights").then((r) => r.data),
+  // Real QR (§6): the HMAC scan token the member check-in validator verifies.
+  eventQr: (eventId: string) => api.get<EventQrPanel>(`/admin/events/${eventId}/qr`).then((r) => r.data),
+  // Attendance CSV export (§6). Fetched through the authed axios instance (a bare
+  // <a href> would drop the Bearer header), then handed to the browser as a file.
+  downloadAttendanceCsv: async (eventId: string): Promise<void> => {
+    const res = await api.get<Blob>(`/admin/events/${eventId}/attendance.csv`, { responseType: "blob" });
+    const url = URL.createObjectURL(res.data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `attendance-${eventId.replace(/[^A-Za-z0-9_-]/g, "_")}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
   rsvpRoster: (occurrenceId: string) =>
     api.get<RsvpRoster>(`/admin/events/${occurrenceId}/rsvps`).then((r) => r.data),
   manualCheckIn: (eventId: string, body: { user_id: string; note?: string }) =>
@@ -1369,6 +1734,10 @@ export const OpsApi = {
     api.post(`/admin/events/series/${seriesId}/homepage`, {}).then((r) => r.data),
   clearSeriesHomepage: (seriesId: string) =>
     api.delete(`/admin/events/series/${seriesId}/homepage`).then((r) => r.data),
+  // Show/hide this series on the member Home "Upcoming events" list (up to 5,
+  // soonest first — any number may be flagged; the server caps the list).
+  setSeriesShowOnHome: (seriesId: string, showOnHome: boolean) =>
+    api.patch<{ show_on_home: boolean }>(`/admin/events/series/${seriesId}/show-on-home`, { show_on_home: showOnHome }).then((r) => r.data),
   pauseSeries: (seriesId: string) =>
     api.post<EventSeriesRow>(`/admin/events/series/${seriesId}/pause`, {}).then((r) => r.data),
   resumeSeries: (seriesId: string) =>
@@ -1395,29 +1764,54 @@ export interface AnnouncementRow {
   body: string;
   channels: AnnouncementChannel[];
   audience_kind: "all" | "cells" | "level";
+  audience_cells: string[] | null;
+  audience_level: number | null;
   status: "draft" | "scheduled" | "sent" | "cancelled";
   scheduled_at: string | null;
   sent_at: string | null;
+  banner_expires_at: string | null;
   created_at: string;
   delivered_count?: number;
   opened_count?: number;
   primary_image_url: string | null;
   gallery_image_urls: string[] | null;
+  video_url?: string | null;
   is_featured: boolean;
+  // §5 attachment — the three modes: standalone / series-attached / event-attached.
+  series_id: string | null;
+  event_occurrence_id: string | null;
+  archived_at: string | null;
 }
 
+/** Per-channel delivery stats — real numbers only (§5): nothing we cannot
+ *  measure is displayed. `opened` counts banner taps only. */
 export interface AnnouncementStats {
   channel: string;
   targeted: number;
   delivered: number;
+  queued: number;
   suppressed: number;
+  failed: number;
   opened: number;
+  suppressed_reasons: Record<string, number>;
 }
 
+/** The audience payload the Compose schema expects (discriminated union). */
+export type AnnouncementAudience =
+  | { kind: "all" }
+  | { kind: "cells"; cell_group_ids: string[] }
+  | { kind: "level"; level_number: number };
+
 export const AnnouncementsApi = {
-  list: (status?: string) =>
+  list: (q: { status?: string; archived?: boolean; limit?: number } = {}) =>
     api
-      .get<{ data: AnnouncementRow[] }>("/admin/announcements", { params: status ? { status } : {} })
+      .get<{ data: AnnouncementRow[] }>("/admin/announcements", {
+        params: {
+          ...(q.status ? { status: q.status } : {}),
+          ...(q.archived ? { archived: true } : {}),
+          ...(q.limit ? { limit: q.limit } : {}),
+        },
+      })
       .then((r) => r.data.data),
   create: (body: Record<string, unknown>) =>
     api.post<AnnouncementRow>("/admin/announcements", body).then((r) => r.data),
@@ -1429,6 +1823,10 @@ export const AnnouncementsApi = {
   update: (id: string, body: Record<string, unknown>) =>
     api.put<AnnouncementRow>(`/admin/announcements/${id}`, body).then((r) => r.data),
   remove: (id: string) => api.delete(`/admin/announcements/${id}`).then((r) => r.data),
+  // §5 lifecycle: duplicate (also "resend" / "use as template"), archive, restore.
+  duplicate: (id: string) => api.post<AnnouncementRow>(`/admin/announcements/${id}/duplicate`).then((r) => r.data),
+  archive: (id: string) => api.post<AnnouncementRow>(`/admin/announcements/${id}/archive`).then((r) => r.data),
+  restore: (id: string) => api.post<AnnouncementRow>(`/admin/announcements/${id}/restore`).then((r) => r.data),
   setHomepage: (id: string) =>
     api.post(`/admin/announcements/${id}/homepage`, {}).then((r) => r.data),
   clearHomepage: (id: string) =>
@@ -1492,6 +1890,9 @@ export interface TransactionRow {
   currency: string;
   status: string;
   fund: string | null;
+  // "Named giving": the member's own label for this gift (e.g. "Tithe",
+  // "Building Fund"), as entered on the custom giving sheet. Null when unused.
+  account_name: string | null;
   method: string | null;
   created_at: string;
   settled_at: string | null;
@@ -1607,6 +2008,7 @@ export interface MediaAssetRow {
   video_source: VideoSource;
   external_url: string | null;
   external_video_id: string | null;
+  title: string | null;
   caption: string | null;
   level_number: number | null;
   is_homepage: boolean;
@@ -1614,8 +2016,11 @@ export interface MediaAssetRow {
   duration_sec: number | null;
   error_detail: string | null;
   created_at: string;
+  /** Legacy single-module mirror fields (transition) — placements[] is authoritative. */
   attached_module_title: string | null;
   attached_module_id: string | null;
+  /** Authoritative attachment list (§2.2): every module this asset is placed in. */
+  placements: AssetPlacement[];
   is_stuck: boolean;
   views: number | null;
   completion: number | null;
@@ -1764,6 +2169,14 @@ export const MediaApi = {
     api.delete<{ is_homepage: false }>(`/admin/media/${assetId}/homepage`).then((r) => r.data),
   archive: (assetId: string) =>
     api.delete<{ archived: boolean }>(`/admin/media/${assetId}`).then((r) => r.data),
+  // Placements (§2.2): place an asset in a module (level inferred server-side
+  // from the module — never asked). 409 CONFLICT on the duplicate (asset,
+  // module) pair. Removing deletes ONE placement, never the asset; the module's
+  // media_asset_id mirror column follows automatically.
+  addPlacement: (assetId: string, body: { module_id: string; position?: number; required?: boolean }) =>
+    api.post<PlacementCreated>(`/admin/media/${assetId}/placements`, body).then((r) => r.data),
+  removePlacement: (placementId: string) =>
+    api.delete<{ deleted: boolean }>(`/admin/media/placements/${placementId}`).then((r) => r.data),
 };
 
 // ---- Chat (oversight console over the member-facing mobile chat; chat module) ----
@@ -1937,6 +2350,15 @@ export const ChatApi = {
     api
       .post<{ message_id: string; emoji: string; on: boolean }>(`/chat/messages/${messageId}/reactions`, { emoji })
       .then((r) => r.data),
+  // Author-only (the server enforces it): edit/soft-delete MY own messages.
+  // A moderator never rewrites someone else's words — for others' messages the
+  // moderation calls below are the honest tools.
+  editMessage: (id: string, body: string) =>
+    api
+      .patch<{ message_id: string; body: string; is_edited: boolean }>(`/chat/messages/${id}`, { body })
+      .then((r) => r.data),
+  deleteMessage: (id: string) =>
+    api.delete<{ message_id: string; deleted: boolean }>(`/chat/messages/${id}`).then((r) => r.data),
   // Moderation (Admin/SuperAdmin). Server-authoritative — these mutate the message row.
   flagMessage: (id: string, reason?: string) =>
     api
@@ -2083,7 +2505,14 @@ export const RadioApi = {
   // Uploaded session audio (self-hosted disk; mirrors the video upload) -----
   // Bytes go to our own /media store; returns { url, duration_sec }. The axios
   // instance injects the admin JWT and sets multipart from the FormData body.
-  uploadAudio: (file: File, durationSec?: number): Promise<AudioUploadResult> => {
+  uploadAudio: (
+    file: File,
+    durationSec?: number,
+    // Real per-file transfer progress (bytes sent / total) for the multi-file
+    // upload queue — axios' XHR adapter reports genuine upload progress, which
+    // a plain fetch cannot.
+    onProgress?: (sentBytes: number, totalBytes: number) => void,
+  ): Promise<AudioUploadResult> => {
     const form = new FormData();
     form.append("file", file, file.name);
     if (durationSec != null && Number.isFinite(durationSec)) {
@@ -2091,7 +2520,14 @@ export const RadioApi = {
     }
     // timeout: 0 — audio files run up to 70 MB; the instance-wide 15s timeout
     // would abort any real-world upload mid-flight.
-    return api.post<AudioUploadResult>("/admin/media/audio/upload", form, { timeout: 0 }).then((r) => r.data);
+    return api
+      .post<AudioUploadResult>("/admin/media/audio/upload", form, {
+        timeout: 0,
+        ...(onProgress
+          ? { onUploadProgress: (e: { loaded: number; total?: number }) => onProgress(e.loaded, e.total && e.total > 0 ? e.total : file.size) }
+          : {}),
+      })
+      .then((r) => r.data);
   },
 
   // Broadcast lifecycle (server-authoritative) -----------------------------
@@ -2237,3 +2673,98 @@ async function defaultRefresh(): Promise<string | null> {
   }
 }
 setRefreshHandler(defaultRefresh);
+
+// ---- Broadcast (SuperAdmin only; §5.3 password step-up guards every route) ----
+// The server opens these only for a token carrying a fresh pwd_at. A stale one
+// answers 403 + details.password_required — the cue to ask for the password,
+// POST /auth/confirm-password (re-mints the access token; refresh untouched),
+// and retry. The portal keeps no unlock state of its own beyond the token: the
+// server's 15-minute window is the single source of truth.
+
+export interface BroadcastRow {
+  broadcast_id: string;
+  body: string;
+  msg_type: string;
+  attachment_url?: string | null;
+  audience: "all" | "congregation";
+  recipient_count: number;
+  created_at: string;
+  replied_count: number;
+  seen_count: number;
+}
+
+export interface BroadcastSent {
+  broadcast_id: string;
+  body: string;
+  audience: string;
+  recipient_count: number;
+  created_at: string;
+  sent: number;
+  duplicate: boolean;
+}
+
+export interface BroadcastResponse {
+  message_id: string;
+  conversation_id: string; // the private 1:1 thread — "open" is a navigation
+  body: string;
+  msg_type: string;
+  attachment_url: string | null;
+  created_at: string;
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  from_them: number; // how many messages this member has written in the thread
+}
+
+export interface BroadcastRecipient {
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  delivered_at: string;
+  delivered: boolean; // one blue tick — the copy is in their thread
+  seen: boolean; // two blue ticks — they opened it after it landed
+  seen_at: string | null;
+}
+
+export interface BroadcastDetailData {
+  broadcast_id: string;
+  body: string;
+  msg_type: string;
+  attachment_url: string | null;
+  audience: string;
+  recipient_count: number;
+  created_at: string;
+  responses: BroadcastResponse[];
+  recipients: BroadcastRecipient[];
+  delivered_count: number;
+  seen_count: number;
+}
+
+/** True when a 403 is the step-up cue (details.password_required) rather than a plain scope refusal. */
+export function isPasswordRequired(e: unknown): boolean {
+  const err = e as { response?: { status?: number; data?: { error?: { details?: { password_required?: boolean } } } } };
+  return err?.response?.status === 403 && err.response.data?.error?.details?.password_required === true;
+}
+
+export const BroadcastApi = {
+  /** Prove the password now; the re-minted token opens the broadcast for 15 min. */
+  confirmPassword: (password: string) =>
+    api
+      .post<{ access_token: string; expires_in: number; confirmed_at: number }>("/auth/confirm-password", { password })
+      .then((r) => {
+        setAccessToken(r.data.access_token); // refresh token stays as-is
+        return r.data;
+      }),
+  /** Send to the whole church (audience omitted = ALL — the SuperAdmin default). */
+  send: (body: string, clientMutationId: string) =>
+    api
+      .post<BroadcastSent>("/chat/broadcast", { body, msg_type: "text", client_mutation_id: clientMutationId })
+      .then((r) => r.data),
+  /** The last posts sent (server default 4) + the all-time total. */
+  list: (limit?: number) =>
+    api
+      .get<{ data: BroadcastRow[]; total: number }>("/chat/broadcasts", limit ? { params: { limit } } : undefined)
+      .then((r) => r.data),
+  /** One broadcast whole: the message, every response, and the tick ledger. */
+  detail: (id: string) => api.get<BroadcastDetailData>(`/chat/broadcasts/${id}`).then((r) => r.data),
+};

@@ -217,13 +217,76 @@ describe("identity / auth", () => {
     expect(res.body.access_token).toBeTruthy();
   });
 
-  it("lets staff (Instructor and up) sign into the admin console under scope=admin", async () => {
-    await makePwUser("inst@dev.local", "right-pass-9", "active", "Instructor");
+  it("refuses staff (Instructor) under scope=admin when they hold NO RBAC permission at all (403, clear message)", async () => {
+    // Instructor role alone is not enough post-generalization: no rbac_user_roles
+    // row means an empty effective permission set — the console would be empty.
+    const userId = await makePwUser("inst-bare@dev.local", "right-pass-9", "active", "Instructor");
+    const res = await agent()
+      .post("/v1/auth/login")
+      .send({ email: "inst-bare@dev.local", password: "right-pass-9", scope: "admin" });
+    expect(res.status).toBe(403);
+    expect(res.body.access_token).toBeUndefined();
+    expect(res.body.error.message).toMatch(/doesn't have portal access/i);
+    const { rows } = await testPool().query(
+      "SELECT action FROM audit_log WHERE actor_id = $1 ORDER BY audit_id DESC LIMIT 1",
+      [userId],
+    );
+    expect(rows[0].action).toBe("user.login_denied_no_permissions");
+  });
+
+  it("refuses a freshly-elevated member (is_staff, no role/grant yet) under scope=admin (403)", async () => {
+    const userId = await makePwUser("elevated-bare@dev.local", "right-pass-9", "active", "Student");
+    await testPool().query("UPDATE users SET is_staff = TRUE WHERE user_id = $1", [userId]);
+    const res = await agent()
+      .post("/v1/auth/login")
+      .send({ email: "elevated-bare@dev.local", password: "right-pass-9", scope: "admin" });
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toMatch(/doesn't have portal access/i);
+  });
+
+  it("lets staff (Instructor and up) sign into the admin console under scope=admin once a role is assigned, and returns exactly that role's permission keys", async () => {
+    const userId = await makePwUser("inst@dev.local", "right-pass-9", "active", "Instructor");
+    // 'discipler' is a seeded RBAC role (08_rbac.sql) with a known, non-empty
+    // permission set: dashboard:view, cms:view, videos:view, cells:contribute
+    // (view/create/edit/export), members:contribute (same 4), reflections:view,
+    // events:view, certificates:view, badges:view.
+    await testPool().query(
+      "INSERT INTO rbac_user_roles (user_id, role_key) VALUES ($1, 'discipler')",
+      [userId],
+    );
     const res = await agent()
       .post("/v1/auth/login")
       .send({ email: "inst@dev.local", password: "right-pass-9", scope: "admin" });
     expect(res.status).toBe(200);
     expect(res.body.access_token).toBeTruthy();
+    expect(res.body.permissions).toEqual(
+      expect.arrayContaining(["dashboard:view", "cms:view", "videos:view", "reflections:view", "events:view"]),
+    );
+    expect(res.body.permissions).not.toContain("finance:view");
+    expect(res.body.permissions).not.toContain("users:view");
+  });
+
+  it("SuperAdmin sees the full permission grid on scope=admin login, with no RBAC role assignment needed", async () => {
+    await makePwUser("super@dev.local", "right-pass-9", "active", "SuperAdmin");
+    const res = await agent()
+      .post("/v1/auth/login")
+      .send({ email: "super@dev.local", password: "right-pass-9", scope: "admin" });
+    expect(res.status).toBe(200);
+    expect(res.body.permissions).toEqual(
+      expect.arrayContaining(["dashboard:view", "finance:approve", "users:delete", "rolesAdmin:edit"]),
+    );
+  });
+
+  it("GET /me surfaces the caller's effective permissions (additive to the profile)", async () => {
+    const cong = await createCongregation();
+    const user = await createUser({ congregationId: cong, role: "Instructor" });
+    await testPool().query(
+      "INSERT INTO rbac_user_roles (user_id, role_key) VALUES ($1, 'finance_officer')",
+      [user.user_id],
+    );
+    const me = (await svc().getMe(user.user_id)) as { profile: { permissions: string[] } };
+    expect(me.profile.permissions).toEqual(expect.arrayContaining(["finance:view", "finance:edit"]));
+    expect(me.profile.permissions).not.toContain("users:view");
   });
 
   // ---- Self-service register (POST /auth/register) ----
@@ -287,11 +350,87 @@ describe("identity / auth", () => {
     const res = await svc().requestPasswordReset({ email: "nobody@dev.local" });
     expect(res.sent).toBe(true);
     expect(res.dev_token).toBeUndefined();
+    expect(res.dev_code).toBeUndefined();
   });
 
-  it("emails a reset link containing the token to the account address (and nothing for unknown emails)", async () => {
+  // ---- Code-first reset (short human-typeable code alongside the long token) ----
+  it("issues an 8-char grouped code (e.g. K7F4-P2XN) alongside the long token", async () => {
+    await makePwUser("code-shape@dev.local", "old-pass-1");
+    const forgot = await svc().requestPasswordReset({ email: "code-shape@dev.local" });
+    expect(forgot.dev_code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    // Unambiguous alphabet: no I, O, 0, or 1.
+    expect(forgot.dev_code).not.toMatch(/[IO01]/);
+  });
+
+  it("resets with the short code alone (no token needed), and the code is single-use", async () => {
+    await makePwUser("code-reset@dev.local", "old-pass-1");
+    const forgot = await svc().requestPasswordReset({ email: "code-reset@dev.local" });
+    const code = forgot.dev_code as string;
+    expect(code).toBeTruthy();
+
+    await svc().resetPassword({ token: code, new_password: "brand-new-2" });
+    await expect(
+      svc().loginWithPassword({ email: "code-reset@dev.local", password: "brand-new-2" }),
+    ).resolves.toMatchObject({ token_type: "Bearer" });
+
+    // The code is burned — reusing it fails, and so does the paired long token
+    // (same row; either credential dies with the other).
+    await expect(svc().resetPassword({ token: code, new_password: "again-333" })).rejects.toMatchObject({
+      code: "UNPROCESSABLE",
+    });
+    await expect(
+      svc().resetPassword({ token: forgot.dev_token as string, new_password: "again-333" }),
+    ).rejects.toMatchObject({ code: "UNPROCESSABLE" });
+  });
+
+  it("normalizes the code — lowercase, without the dash, and with extra whitespace all redeem it", async () => {
+    await makePwUser("code-norm@dev.local", "old-pass-1");
+    const forgot = await svc().requestPasswordReset({ email: "code-norm@dev.local" });
+    const code = forgot.dev_code as string; // e.g. "K7F4-P2XN"
+    const messy = `  ${code.toLowerCase().replace("-", "")}  `; // "k7f4p2xn" with padding
+
+    await svc().resetPassword({ token: messy, new_password: "brand-new-2" });
+    await expect(
+      svc().loginWithPassword({ email: "code-norm@dev.local", password: "brand-new-2" }),
+    ).resolves.toMatchObject({ token_type: "Bearer" });
+  });
+
+  it("rejects a wrong code with UNPROCESSABLE, and it still costs a token from the shared /v1/auth rate-limit bucket", async () => {
+    await makePwUser("code-wrong@dev.local", "old-pass-1");
+    await svc().requestPasswordReset({ email: "code-wrong@dev.local" }); // real code left unused
+
+    const api = agent();
+    const first = await api.post("/v1/auth/password/reset").send({ token: "ZZZZ-9999", new_password: "whatever1" });
+    expect(first.status).toBe(422);
+    const remainingAfterFirst = Number(first.headers["x-ratelimit-remaining"]);
+
+    const second = await api.post("/v1/auth/password/reset").send({ token: "ZZZZ-8888", new_password: "whatever1" });
+    expect(second.status).toBe(422);
+    const remainingAfterSecond = Number(second.headers["x-ratelimit-remaining"]);
+
+    // Every attempt — right or wrong — consumes the same IP-keyed auth bucket
+    // (app.ts mounts it on the /v1/auth prefix ahead of the route handler), so
+    // a wrong-code guesser can't dodge the limiter that also guards login.
+    expect(remainingAfterSecond).toBeLessThan(remainingAfterFirst);
+  });
+
+  it("still accepts a previously-issued long token for its TTL (in-flight compat: old links keep working)", async () => {
+    const uid = await makePwUser("compat@dev.local", "old-pass-1");
+    const old = await issueRefreshToken(testPool(), uid, env);
+    const forgot = await svc().requestPasswordReset({ email: "compat@dev.local" });
+    const longToken = forgot.dev_token as string;
+    expect(longToken).toHaveLength(64); // sha256-hex-length raw token, unchanged shape
+
+    await svc().resetPassword({ token: longToken, new_password: "brand-new-2" });
+    await expect(
+      svc().loginWithPassword({ email: "compat@dev.local", password: "brand-new-2" }),
+    ).resolves.toMatchObject({ token_type: "Bearer" });
+    await expect(rotateRefreshToken(testPool(), old.token, env)).rejects.toThrow();
+  });
+
+  it("emails a MEMBER a code-only reset email — no backend link (they can't sign in to the portal)", async () => {
     const cong = await createCongregation();
-    const u = await createUser({ congregationId: cong, email: "mailme@dev.local" });
+    const u = await createUser({ congregationId: cong, email: "mailme@dev.local" }); // role defaults to Student (member)
     const argon2 = (await import("argon2")).default;
     await testPool().query("UPDATE users SET password_hash=$2 WHERE user_id=$1", [
       u.user_id,
@@ -305,10 +444,33 @@ describe("identity / auth", () => {
     expect(res.sent).toBe(true);
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toBe("mailme@dev.local");
-    expect(sent[0]!.text).toContain("/reset-password?token=");
-    expect(sent[0]!.text).toContain(res.dev_token as string); // link carries the real token
+    // The code is present and prominent (subject + body); the reset LINK is NOT.
+    expect(sent[0]!.text).toContain(res.dev_code as string);
+    expect(sent[0]!.subject).toContain(res.dev_code as string);
+    expect(sent[0]!.text).not.toContain("/reset-password?token="); // no backend link for members
+    expect(sent[0]!.html).not.toContain("/reset-password?token=");
 
     await s.requestPasswordReset({ email: "ghost@dev.local" }); // unknown → no email
     expect(sent).toHaveLength(1);
+  });
+
+  it("emails a STAFF user the code AND the web reset link (they reset in the portal)", async () => {
+    const cong = await createCongregation();
+    const u = await createUser({ congregationId: cong, email: "staff@dev.local", role: "Admin" });
+    const argon2 = (await import("argon2")).default;
+    await testPool().query("UPDATE users SET password_hash=$2 WHERE user_id=$1", [
+      u.user_id,
+      await argon2.hash("pw-123456", { type: argon2.argon2id }),
+    ]);
+    const sent: EmailMessage[] = [];
+    const fakeMailer: EmailProvider = { send: (m) => { sent.push(m); return Promise.resolve(); } };
+    const s = new IdentityService(testPool(), env, fakeMailer);
+
+    const res = await s.requestPasswordReset({ email: "staff@dev.local" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.text).toContain(res.dev_code as string); // code still primary
+    expect(sent[0]!.text).toContain("/reset-password?token="); // staff keep the link
+    expect(sent[0]!.text).toContain(res.dev_token as string);
+    expect(sent[0]!.text).toContain(`&code=${encodeURIComponent(res.dev_code as string)}`);
   });
 });

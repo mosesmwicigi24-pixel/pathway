@@ -6,7 +6,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
-import { authenticate, requirePermission } from "../../http/auth.js";
+import { authenticate, requirePermission, PERM_MODULES, CAPABILITIES } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { many, one, maybeOne, tx, audit } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
@@ -14,14 +14,10 @@ import { hashPassword } from "../identity/passwords.js";
 
 export const systemRouter: Router = Router();
 
-// Fixed RBAC dimensions — mirrored in the web client (systemData). The matrix is
+// Fixed RBAC dimensions — mirrored in the web client (systemData) and imported
+// from http/auth.ts, the canonical home (also used by the scope=admin login
+// gate + the `permissions` array on /auth/login and /me). The matrix is
 // module × capability; only granted cells are stored.
-const PERM_MODULES = [
-  "dashboard", "levels", "cms", "quiz", "videos", "cells", "members",
-  "reflections", "events", "finance", "certificates", "badges",
-  "users", "rolesAdmin", "countries", "languages", "congregations",
-] as const;
-const CAPABILITIES = ["view", "create", "edit", "delete", "approve", "export"] as const;
 
 const RoleInput = z.object({
   name: z.string().min(1).max(120),
@@ -299,7 +295,7 @@ export function registerSystem(ctx: AppContext): Router {
   r.put("/admin/roles/:key", auth, perm("rolesAdmin", "edit"), handler(async (req, res) => {
     const key = String(req.params.key);
     const input = parseBody(RoleInput.partial().extend({ status: z.enum(["active", "inactive"]).optional() }), req.body);
-    const cols: Record<string, unknown> = { name: input.name, description: input.description, status: input.status };
+    const cols: Record<string, unknown> = { name: input.name, role_type: input.role_type, description: input.description, status: input.status };
     const keys = Object.keys(cols).filter((k) => cols[k] !== undefined);
     const row = await tx(db, async (c) => {
       if (!await maybeOne(c, `SELECT 1 FROM rbac_roles WHERE role_key = $1`, [key])) {

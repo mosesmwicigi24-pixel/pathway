@@ -260,12 +260,14 @@ export class AdminCurriculumService {
     });
   }
 
+  // ONE editor per entity (docs/CURRICULUM_ARCHITECTURE.md §2.5): the level
+  // pass mark + exam settings belong to updateLevelExam ONLY — updateLevel no
+  // longer accepts required_exam_pass_mark (the two-endpoint clobber is gone).
   static readonly UpdateLevel = z
     .object({
       title: z.string().min(1).max(255).optional(),
       theme: z.string().nullable().optional(),
       description: z.string().max(2000).nullable().optional(),
-      required_exam_pass_mark: z.number().min(0).max(100).optional(),
       duration: z.string().max(40).nullable().optional(),
       status: z.enum(["published", "draft", "in_review"]).optional(),
       locked: z.boolean().optional(),

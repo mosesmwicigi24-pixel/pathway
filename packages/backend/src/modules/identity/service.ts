@@ -4,9 +4,12 @@
 import type { Pool } from "pg";
 import { randomBytes, createHash } from "node:crypto";
 import { z } from "zod";
+import type { UserRole } from "@nuru/shared";
 import type { Env } from "../../config/env.js";
 import { ApiError } from "../../http/errors.js";
+import { effectivePermissions, permissionKeys } from "../../http/auth.js";
 import { many, maybeOne, one, tx, recordChange, audit } from "../../db/db.js";
+import { background } from "../../db/background.js";
 import {
   signAccessToken,
   issueRefreshToken,
@@ -14,6 +17,8 @@ import {
   revokeFamily,
   signMfaChallenge,
   verifyMfaChallenge,
+  generateResetCode,
+  normalizeResetCode,
   type AccessClaims,
 } from "./tokens.js";
 import type { OAuthProfile } from "./oauth.js";
@@ -22,12 +27,19 @@ import { hashPassword, verifyPassword, passwordNeedsRehash } from "./passwords.j
 import { renderPasswordReset } from "./email-templates.js";
 import { sealSecret, openSecret } from "./secretbox.js";
 import { buildEmailProvider, type EmailProvider } from "./email.js";
+import { normalizePhone } from "../../lib/phone.js";
 
 export interface SessionTokens {
   access_token: string;
   refresh_token: string;
   token_type: "Bearer";
   expires_in: number;
+  /** Present only for a scope="admin" login/passkey-verify: the caller's
+   *  granted permission keys ("module:capability"), or the full set for
+   *  SuperAdmin/Admin. The member app never sends scope, so this is absent
+   *  there. Also mirrored on GET /me so it's available after MFA completion
+   *  or a session restore, without re-deriving it client-side. */
+  permissions?: string[];
 }
 
 /** Returned by password login when the account has 2FA on: the caller must
@@ -75,12 +87,14 @@ export class IdentityService {
     private readonly emailer: EmailProvider = buildEmailProvider(env),
   ) {}
 
-  private async issueSession(user: UserAuthRow, deviceId?: string | null): Promise<SessionTokens> {
+  /** Mint a session (access + refresh). The single issuance path shared by every
+   *  login flavor — OAuth, password, MFA completion, dev login, and passkey
+   *  (WebAuthnService) — so there is never parallel token logic. */
+  async issueSession(user: UserAuthRow, deviceId?: string | null): Promise<SessionTokens> {
     // True login telemetry (leadership analytics): every minted session is a
-    // front-door entry. Fire-and-forget — a logging hiccup never blocks login.
-    void this.pool
-      .query(`INSERT INTO auth_events (user_id, kind) VALUES ($1, 'login')`, [user.user_id])
-      .catch(() => {});
+    // front-door entry. Fire-and-forget — a logging hiccup never blocks login —
+    // but tracked, so shutdown and the test harness can drain it (background.ts).
+    background(this.pool.query(`INSERT INTO auth_events (user_id, kind) VALUES ($1, 'login')`, [user.user_id]));
     const access = signAccessToken(this.env, {
       sub: user.user_id,
       role: user.role,
@@ -189,6 +203,67 @@ export class IdentityService {
   static readonly MAX_FAILED_LOGINS = 5;
   static readonly LOCKOUT_MINUTES = 15;
 
+  static readonly ConfirmPassword = z.object({ password: z.string().min(1).max(200) });
+
+  /**
+   * Step-up: prove you are the account owner, right now (§5.3).
+   *
+   * Re-mints the caller's OWN access token with pwd_at = now; requirePasswordStepUp
+   * then admits it for a short window. Nothing else about the token changes — same
+   * subject, same role, same congregation, and any existing MFA stamp is carried
+   * across so confirming a password never quietly downgrades a stronger session.
+   *
+   * A valid session is not the same claim as "the owner is holding the phone".
+   * This is what stands between an unlocked, logged-in handset on a desk and
+   * sixty members' private answers to a broadcast.
+   *
+   * Failures count toward the SAME lockout as login — otherwise this endpoint
+   * would be a soft place to guess a password that the front door refuses.
+   */
+  async confirmPassword(
+    userId: string,
+    input: z.infer<typeof IdentityService.ConfirmPassword>,
+    /** The MFA stamp on the token being replaced — carried across verbatim so
+     *  confirming a password never quietly downgrades a stronger session. */
+    carry?: { mfa?: boolean; mfaAt?: number },
+  ): Promise<{ access_token: string; expires_in: number; confirmed_at: number }> {
+    const row = await maybeOne<{
+      user_id: string; role: UserRole; congregation_id: string | null;
+      password_hash: string | null; account_status: string;
+      failed_login_count: number; locked_until: Date | null;
+    }>(
+      this.pool,
+      `SELECT user_id, role, congregation_id, password_hash, account_status, failed_login_count, locked_until
+         FROM users WHERE user_id = $1 AND deleted_at IS NULL`,
+      [userId],
+    );
+    if (!row || !row.password_hash) throw new ApiError("AUTH_REQUIRED", "Password confirmation unavailable");
+    if (row.account_status === "suspended") throw new ApiError("FORBIDDEN_SCOPE", "This account is suspended");
+    if (row.locked_until && row.locked_until.getTime() > Date.now()) {
+      throw new ApiError("RATE_LIMITED", "Too many failed attempts. Try again later.");
+    }
+    if (!(await verifyPassword(row.password_hash, input.password))) {
+      const next = (row.failed_login_count ?? 0) + 1;
+      const lock = next >= IdentityService.MAX_FAILED_LOGINS;
+      await this.pool.query(
+        `UPDATE users SET failed_login_count = $2, locked_until = $3 WHERE user_id = $1`,
+        [row.user_id, lock ? 0 : next, lock ? new Date(Date.now() + IdentityService.LOCKOUT_MINUTES * 60_000) : null],
+      );
+      throw new ApiError("AUTH_REQUIRED", "That password is not right");
+    }
+    await this.pool.query(`UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE user_id = $1`, [row.user_id]);
+    const confirmedAt = Math.floor(Date.now() / 1000);
+    const access = signAccessToken(this.env, {
+      sub: row.user_id,
+      role: row.role,
+      cong: row.congregation_id ?? "",
+      pwd_at: confirmedAt,
+      ...(carry?.mfa === true ? { mfa: true } : {}),
+      ...(typeof carry?.mfaAt === "number" ? { mfa_at: carry.mfaAt } : {}),
+    });
+    return { access_token: access, expires_in: this.env.JWT_ACCESS_TTL, confirmed_at: confirmedAt };
+  }
+
   async loginWithPassword(input: z.infer<typeof IdentityService.LoginSchema>): Promise<LoginResult> {
     const row = await maybeOne<
       UserAuthRow & {
@@ -251,15 +326,36 @@ export class IdentityService {
     // reveals which emails are staff. The member app omits scope, so members still
     // sign into the app normally. Server-authoritative — a client can't bypass it
     // (§1.1, §5.4).
-    if (input.scope === "admin" && !IdentityService.STAFF_ROLES.has(row.role) && !row.is_staff) {
-      await audit(this.pool, row.user_id, "user.login_denied_scope", "users", row.user_id, {
-        scope: "admin",
-        role: row.role,
-      });
-      throw new ApiError(
-        "FORBIDDEN_SCOPE",
-        "This portal is for staff accounts. Members should sign in with the Nuru Pathway app.",
-      );
+    let grantedPermissions: string[] | undefined;
+    if (input.scope === "admin") {
+      if (!IdentityService.STAFF_ROLES.has(row.role) && !row.is_staff) {
+        await audit(this.pool, row.user_id, "user.login_denied_scope", "users", row.user_id, {
+          scope: "admin",
+          role: row.role,
+        });
+        throw new ApiError(
+          "FORBIDDEN_SCOPE",
+          "This portal is for staff accounts. Members should sign in with the Nuru Pathway app.",
+        );
+      }
+      // Generalized gate: staff role or elevation alone isn't enough — an
+      // Instructor with no RBAC role assigned, or a freshly-elevated member
+      // (is_staff=TRUE, not yet granted a role or a direct permission), has an
+      // EMPTY effective permission set and would land in a console with every
+      // sidebar item hidden and every request 403ing. Refuse at the front door
+      // instead, with a message that points at the actual fix.
+      const perms = await effectivePermissions(this.pool, row.user_id, row.role);
+      if (perms.length === 0) {
+        await audit(this.pool, row.user_id, "user.login_denied_no_permissions", "users", row.user_id, {
+          scope: "admin",
+          role: row.role,
+        });
+        throw new ApiError(
+          "FORBIDDEN_SCOPE",
+          "This account doesn't have portal access. Ask your administrator.",
+        );
+      }
+      grantedPermissions = permissionKeys(perms);
     }
 
     // 2FA gate: with a second factor enrolled, the password alone is not enough.
@@ -270,7 +366,8 @@ export class IdentityService {
       return { mfa_required: true, mfa_token: signMfaChallenge(this.env, row.user_id) };
     }
 
-    return this.issueSession({ user_id: row.user_id, role: row.role, congregation_id: row.congregation_id });
+    const session = await this.issueSession({ user_id: row.user_id, role: row.role, congregation_id: row.congregation_id });
+    return grantedPermissions ? { ...session, permissions: grantedPermissions } : session;
   }
 
   /**
@@ -386,6 +483,30 @@ export class IdentityService {
         `INSERT INTO notification_preferences (user_id) VALUES ($1) ON CONFLICT DO NOTHING`,
         [created.user_id],
       );
+      // Registering IS joining the pathway. Until 2026-08-14 it was not: the
+      // only code that created an enrollment was POST /v1/me/onboarding, and
+      // `SELECT count(*) FROM audit_log WHERE action='user.onboarded'` returned
+      // 0 in production — no client has ever called it. Every enrollment that
+      // exists was minted by a human in the portal via enrollment.start_set.
+      //
+      // So a member who downloaded the app and signed up got an account and no
+      // pathway, silently, and waited for an admin who was never told they were
+      // waiting. Twenty-eight of them, the longest for 42 days (migration 193
+      // is the backfill). An account with no enrollment is not a state this
+      // product has any meaning for, so it must not be reachable.
+      //
+      // Level 1 / active is the ordinary entry point; a leader can still set a
+      // different start level afterwards through the portal, which writes
+      // start_level / start_module_sequence and moves current_level with it.
+      // Same transaction as the user row: either a member exists with a pathway,
+      // or they do not exist.
+      const enrollment = await one<{ enrollment_id: string }>(
+        c,
+        `INSERT INTO enrollments (user_id, current_level, state) VALUES ($1, 1, 'active')
+         RETURNING enrollment_id`,
+        [created.user_id],
+      );
+      await recordChange(c, "enrollments", enrollment.enrollment_id, created.user_id, "upsert");
       await audit(c, created.user_id, "user.registered", "users", created.user_id, { self_signup: true });
       return created;
     });
@@ -398,33 +519,46 @@ export class IdentityService {
    * Request a password-reset link (Figma "Reset password"). Always reports success
    * to avoid account enumeration; only accounts that actually have a password get a
    * token. We persist the SHA-256 of a single-use 30-minute token (never the raw
-   * value). With no email provider wired, non-production returns the raw token so
-   * the flow is testable end-to-end; production would deliver it by email instead.
+   * value) — plus the SHA-256 of a short human-typeable CODE (e.g. "K7F4-P2XN")
+   * redeeming the same row, so a member on a phone can key eight characters
+   * into the app instead of pasting a 64-char hex string. With no email
+   * provider wired, non-production returns both raw credentials so the flow is
+   * testable end-to-end; production would deliver them by email instead.
    */
   async requestPasswordReset(
     input: z.infer<typeof IdentityService.ForgotPasswordSchema>,
-  ): Promise<{ sent: true; dev_token?: string }> {
-    const row = await maybeOne<{ user_id: string; password_hash: string | null; full_name: string | null }>(
+  ): Promise<{ sent: true; dev_token?: string; dev_code?: string }> {
+    const row = await maybeOne<{ user_id: string; password_hash: string | null; full_name: string | null; role: string; is_staff: boolean }>(
       this.pool,
-      `SELECT user_id, password_hash, full_name FROM users WHERE email = $1 AND deleted_at IS NULL`,
+      `SELECT user_id, password_hash, full_name, role, is_staff FROM users WHERE email = $1 AND deleted_at IS NULL`,
       [input.email],
     );
     if (!row || !row.password_hash) return { sent: true };
+    // Staff (portal users) reset on the web, so they get the reset LINK; members
+    // never sign in to the portal, so they get a code-only email (no link to a
+    // backend they can't use) and enter the code in the Nuru Place app.
+    const isStaff = IdentityService.STAFF_ROLES.has(row.role) || row.is_staff;
     const raw = randomBytes(32).toString("hex");
     const tokenHash = createHash("sha256").update(raw).digest("hex");
+    const code = generateResetCode();
+    const codeHash = createHash("sha256").update(normalizeResetCode(code) as string).digest("hex");
     const expires = new Date(Date.now() + 30 * 60 * 1000);
     await this.pool.query(
-      `INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
-      [row.user_id, tokenHash, expires],
+      `INSERT INTO password_resets (user_id, token_hash, code_hash, expires_at) VALUES ($1, $2, $3, $4)`,
+      [row.user_id, tokenHash, codeHash, expires],
     );
     await audit(this.pool, row.user_id, "user.password_reset_requested", "users", row.user_id, {});
 
-    // Email the link to the account address. Best-effort: a delivery failure must
-    // not change the (no-enumeration) response, so we never surface it.
-    const link = `${this.env.APP_PUBLIC_URL}/reset-password?token=${raw}`;
+    // Email the code (primary) + link to the account address. The link carries
+    // the code too (query string) so the reset page can show it big and
+    // copyable for pasting into the mobile app. Best-effort: a delivery
+    // failure must not change the (no-enumeration) response, so we never
+    // surface it.
     const firstName = row.full_name?.trim().split(/\s+/)[0];
     const email = renderPasswordReset({
-      link,
+      code,
+      // Link only for staff; members get a code-only email.
+      ...(isStaff ? { link: `${this.env.APP_PUBLIC_URL}/reset-password?token=${raw}&code=${encodeURIComponent(code)}` } : {}),
       minutes: 30,
       ...(firstName ? { name: firstName } : {}),
     });
@@ -433,32 +567,43 @@ export class IdentityService {
     } catch {
       /* best-effort delivery */
     }
-    return this.env.NODE_ENV === "production" ? { sent: true } : { sent: true, dev_token: raw };
+    return this.env.NODE_ENV === "production" ? { sent: true } : { sent: true, dev_token: raw, dev_code: code };
   }
 
+  // `token` doubles as the credential field for BOTH the long link token and
+  // the short code (kept as one field so the mobile apps' existing "paste the
+  // token from your email" input works unchanged with either). min(6) admits
+  // the shortest code shape (8 chars, no dash); resetPassword tells them apart
+  // by trying both hashes.
   static readonly ResetPasswordSchema = z
-    .object({ token: z.string().min(16).max(200), new_password: z.string().min(8).max(200) })
+    .object({ token: z.string().min(6).max(200), new_password: z.string().min(8).max(200) })
     .strict();
 
   /**
-   * Consume a reset token and set a new password. The token must be unused and
-   * unexpired; it is burned on use. All refresh-token families are revoked so any
-   * session opened with the old (possibly compromised) credential dies.
+   * Consume a reset token OR reset code and set a new password. Whichever
+   * credential was presented must be unused and unexpired; it is burned on
+   * use (both the token and the code on that row die together, so a member
+   * can't reuse the other form of the same request either). All
+   * refresh-token families are revoked so any session opened with the old
+   * (possibly compromised) credential dies.
    */
   async resetPassword(
     input: z.infer<typeof IdentityService.ResetPasswordSchema>,
   ): Promise<{ reset: true }> {
     const tokenHash = createHash("sha256").update(input.token).digest("hex");
+    const normalizedCode = normalizeResetCode(input.token);
+    const codeHash = normalizedCode ? createHash("sha256").update(normalizedCode).digest("hex") : null;
     const newHash = await hashPassword(input.new_password);
     await tx(this.pool, async (c) => {
       const reset = await maybeOne<{ reset_id: string; user_id: string }>(
         c,
         `SELECT reset_id, user_id FROM password_resets
-          WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+          WHERE (token_hash = $1 OR (code_hash IS NOT NULL AND code_hash = $2))
+            AND used_at IS NULL AND expires_at > now()
           FOR UPDATE`,
-        [tokenHash],
+        [tokenHash, codeHash],
       );
-      if (!reset) throw new ApiError("UNPROCESSABLE", "This reset link is invalid or has expired");
+      if (!reset) throw new ApiError("UNPROCESSABLE", "This reset code or link is invalid or has expired");
       await c.query(
         `UPDATE users SET password_hash = $2, failed_login_count = 0, locked_until = NULL, updated_at = now() WHERE user_id = $1`,
         [reset.user_id, newHash],
@@ -570,7 +715,7 @@ export class IdentityService {
   }
 
   async getMe(userId: string): Promise<unknown> {
-    const profile = await one(
+    const profile = await one<{ user_id: string; role: string } & Record<string, unknown>>(
       this.pool,
       `SELECT u.user_id, u.email, u.full_name, u.phone_number, u.date_of_birth, u.year_of_salvation,
               u.is_baptized, u.cell_group_id, u.congregation_id, u.role, u.timezone, u.locale, u.is_minor,
@@ -587,7 +732,15 @@ export class IdentityService {
       `SELECT enrollment_id, current_level, state, started_at FROM enrollments WHERE user_id = $1`,
       [userId],
     );
-    return { profile, enrollment };
+    // Additive: the caller's granted permission keys ("module:capability"), or
+    // the full set for SuperAdmin/Admin. Present for every profile (member app
+    // included) — a Student not elevated to the console simply gets an empty
+    // array, since effectivePermissions() returns nothing for a role with no
+    // RBAC assignment. Lets the web/iPad shells show only the sidebar items a
+    // user can actually use, even after a session restore or MFA completion
+    // that skipped the login response.
+    const perms = await effectivePermissions(this.pool, profile.user_id, profile.role);
+    return { profile: { ...profile, permissions: permissionKeys(perms) }, enrollment };
   }
 
   /** The caller's own recent portal actions (Profile ▸ My Activity), from the audit log. */
@@ -642,7 +795,26 @@ export class IdentityService {
   static readonly UpdateMeSchema = z
     .object({
       full_name: z.string().min(1).max(255).optional(),
-      phone_number: z.string().min(3).max(32).optional(),
+      // Editable, per the owner's ruling of 2026-08-14: the assigned identifier
+      // is user_id, and everything else about a member may change. This field
+      // was previously withheld as "the login identity" — but a login
+      // credential the member cannot correct is a trap, not a safeguard. People
+      // mistype their address at signup, lose access to an old mailbox, or
+      // simply move on from one.
+      //
+      // Normalised the same way the login path reads it (trim + lowercase), so
+      // a member who types "Moses@Gmail.com " can still sign in afterwards.
+      // Order matters: .email() would run BEFORE .transform(), so "  Moses@Gmail.com "
+      // was rejected as malformed before it could be trimmed — the member gets a
+      // 400 for a stray space. Normalise first, then validate what will actually
+      // be stored.
+      email: z
+        .string()
+        .max(254)
+        .transform((v) => v.trim().toLowerCase())
+        .pipe(z.string().email())
+        .optional(),
+      phone_number: z.string().min(3).max(32).transform((v) => normalizePhone(v) ?? v).optional(),
       cell_group_id: z.string().uuid().nullable().optional(),
       timezone: z.string().max(64).optional(),
       locale: z.string().max(12).optional(),
@@ -655,7 +827,6 @@ export class IdentityService {
       row_version: z.number().int().positive(),
     })
     .strict(); // mass-assignment guard (§5.8): role/congregation_id are not writable
-    // email is intentionally not writable here — it is the login identity (§5.8).
 
   /** Update mutable profile fields with an optimistic-concurrency version check. */
   async updateMe(userId: string, input: z.infer<typeof IdentityService.UpdateMeSchema>): Promise<unknown> {
@@ -663,7 +834,29 @@ export class IdentityService {
       const sets: string[] = [];
       const params: unknown[] = [];
       let i = 1;
-      for (const field of ["full_name", "phone_number", "cell_group_id", "timezone", "locale", "gender", "city", "country_code", "date_of_birth", "socials", "avatar_url"] as const) {
+      // Changing the address someone signs in with is a security event, not a
+      // profile tweak, so it is checked and recorded rather than just written.
+      if (input.email !== undefined) {
+        const taken = await maybeOne<{ user_id: string }>(
+          c,
+          `SELECT user_id FROM users WHERE email = $1 AND deleted_at IS NULL AND user_id <> $2`,
+          [input.email, userId],
+        );
+        // Migration 190 made the unique index partial on live rows, so a
+        // retired account never blocks an address — but a live one must, and
+        // with a message rather than a raw constraint violation.
+        if (taken) throw new ApiError("CONFLICT", "That email is already in use by another account");
+      }
+      const previousEmail =
+        input.email === undefined
+          ? null
+          : (await maybeOne<{ email: string | null }>(
+              c,
+              `SELECT email FROM users WHERE user_id = $1 AND deleted_at IS NULL`,
+              [userId],
+            ))?.email ?? null;
+
+      for (const field of ["full_name", "email", "phone_number", "cell_group_id", "timezone", "locale", "gender", "city", "country_code", "date_of_birth", "socials", "avatar_url"] as const) {
         if (field in input && input[field] !== undefined) {
           sets.push(`${field} = $${i++}`);
           params.push(field === "socials" ? JSON.stringify(input[field]) : input[field]);
@@ -690,6 +883,14 @@ export class IdentityService {
         });
       }
       await recordChange(c, "users", userId, userId, "upsert");
+      if (input.email !== undefined && previousEmail !== input.email) {
+        // Whoever holds the account can now change how it is reached. If that
+        // was not the member, the trail is the only way anyone finds out.
+        await audit(c, userId, "user.email_changed", "users", userId, {
+          from: previousEmail,
+          to: input.email,
+        });
+      }
       return updated;
     });
   }
@@ -740,7 +941,7 @@ export class IdentityService {
   static readonly OnboardingSchema = z
     .object({
       date_of_birth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      phone_number: z.string().min(3).max(32),
+      phone_number: z.string().min(3).max(32).transform((v) => normalizePhone(v) ?? v),
       cell_group_id: z.string().uuid(),
       year_of_salvation: z.number().int().min(1900).max(2100).optional(),
       is_baptized: z.boolean().default(false),
@@ -807,10 +1008,10 @@ export class IdentityService {
     userId: string,
     input: {
       platform: string;
-      app_version?: string | undefined;
-      model?: string | undefined;
-      push_token?: string | undefined;
-      network?: string | undefined;
+      app_version?: string | null | undefined;
+      model?: string | null | undefined;
+      push_token?: string | null | undefined;
+      network?: string | null | undefined;
     },
   ): Promise<{ device_id: string }> {
     return tx(this.pool, async (c) => {

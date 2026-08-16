@@ -1,15 +1,19 @@
 // Sessions + Audio library panels — the studio's playlist/upload bench, moved
 // out of RadioStudio.tsx so ONE implementation serves both the Uploads &
 // Sessions page (/uploads-sessions, their home) and any studio surface that
-// needs them. Everything is REAL (API-backed): track CRUD + upload, session
-// playlists (add/remove/reorder/loop via PATCH, incl. the loop-airtime
-// dialog), attach session audio, and the client-side live preview with Media
+// needs them. Everything is REAL (API-backed): track CRUD + a multi-file
+// upload queue (sequential, real XHR progress, retry/dismiss), checkbox
+// multi-select with bulk add-to-session/delete over the current kind filter,
+// session playlists (add/remove/reorder via arrows OR HTML5 drag with a gold
+// insertion line — both persist through the same PUT order call — /loop via
+// PATCH, incl. the loop-airtime dialog), attach session audio, the deep-link
+// focus flash (?open=<programId>), and the client-side live preview with Media
 // Session lock-screen metadata. Cross-page freshness rides the same
 // `rs:programs-changed` / `rs:playlist-changed` window events as before.
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
-  ArrowDown, ArrowUp, Disc3, ListMusic, Loader2, Music, Pencil, Play, Plus,
-  Repeat, Repeat1, Square, Upload, X,
+  ArrowDown, ArrowUp, Check, Disc3, GripVertical, ListMusic, Loader2, Music,
+  Pencil, Play, Plus, Repeat, Repeat1, RotateCcw, Square, Trash2, Upload, X,
 } from "lucide-react";
 import {
   RadioApi,
@@ -22,7 +26,7 @@ import {
   type CreateRadioTrackBody,
 } from "../../api/client";
 import {
-  PANEL, PANEL_BORDER, GOLD, RED, GREEN, TEXT, DIM, DIMMER, MONO, SERIF,
+  PANEL, PANEL_BORDER, GOLD, GOLD_DEEP, RED, GREEN, TEXT, DIM, DIMMER, MONO, SERIF,
   AUDIO_ACCEPT, validAudio, probeAudioDuration, baseName, apiErrMessage,
   fmtClock, fmtBytes, playlistRuntime, fmtAirtime, trackMatchesNowPlaying,
   KIND_META, TRACK_KINDS, LOOP_MODES, LOOP_LABEL,
@@ -30,15 +34,54 @@ import {
   Panel, SectionHead, optStyle, hiddenInput,
 } from "./studioKit";
 
+// ── Multi-file upload queue (native parity) ──
+// Selecting N files enqueues visible job rows above the library list. Valid
+// files upload SEQUENTIALLY with real transfer progress (axios' XHR
+// onUploadProgress — a plain fetch cannot report upload bytes); invalid files
+// fail the client pre-check instantly (110 MB cap, MP3/WAV/AAC/ALAC) and
+// appear as error rows with no transfer. Done rows auto-clear after ~4s;
+// failed transfers offer Retry + dismiss (pre-check failures dismiss only —
+// re-sending the same file could never succeed).
+const UPLOAD_MAX_BYTES = 110 * 1024 * 1024;
+function precheckUpload(file: File): string | null {
+  if (!/\.(mp3|wav|m4a|aac|alac)$/i.test(file.name)) return "Only MP3, WAV, AAC or ALAC (.m4a) audio is allowed";
+  if (file.size > UPLOAD_MAX_BYTES) return "Over the 110 MB limit";
+  return null;
+}
+
+interface UploadJob {
+  id: string;
+  file: File;
+  name: string;
+  size: number; // total bytes — the XHR-reported total wins once known
+  sent: number; // bytes actually on the wire
+  kind: RadioTrackKind;
+  status: "queued" | "uploading" | "done" | "error";
+  error: string | null;
+  canRetry: boolean; // false when the client pre-check failed (no transfer to retry)
+}
+
+// Library list filter — "All" plus the three track kinds; multi-select and
+// select-all operate over the CURRENT filter only.
+const LIBRARY_FILTERS: (RadioTrackKind | "all")[] = ["all", ...TRACK_KINDS];
+
 // ── Audio library panel — reusable track catalog + upload, Figma-styled ──
 export function AudioLibraryPanel(): ReactElement {
   const [tracks, setTracks] = useState<RadioTrack[] | null>(null);
   const [uploadKind, setUploadKind] = useState<RadioTrackKind>("music");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
   const [sessions, setSessions] = useState<RadioProgram[]>([]);
   const [note, setNote] = useState<string | null>(null);
+
+  // Multi-select over the current kind filter.
+  const [kindFilter, setKindFilter] = useState<RadioTrackKind | "all">("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Upload queue + the single sequential worker's in-flight guard.
+  const [jobs, setJobs] = useState<UploadJob[]>([]);
+  const activeJobRef = useRef<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -50,6 +93,11 @@ export function AudioLibraryPanel(): ReactElement {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // Silent refresh (no loading flash) so the list updates as each upload lands.
+  const refreshTracks = useCallback(() => {
+    RadioApi.tracks().then((list) => setTracks(list)).catch(() => {});
+  }, []);
+
   const loadSessions = useCallback(() => {
     RadioApi.programs().then(setSessions).catch(() => setSessions([]));
   }, []);
@@ -60,30 +108,69 @@ export function AudioLibraryPanel(): ReactElement {
     return () => window.removeEventListener("rs:programs-changed", h);
   }, [loadSessions]);
 
-  const upload = useCallback(async (file: File) => {
-    const invalid = validAudio(file);
-    if (invalid) { setErr(invalid); return; }
-    setUploading(true);
-    setErr(null);
+  // Enqueue every picked file; pre-check failures become instant error rows.
+  const enqueue = useCallback((files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const added: UploadJob[] = Array.from(files).map((f) => {
+      const invalid = precheckUpload(f);
+      return {
+        id: crypto.randomUUID(),
+        file: f,
+        name: f.name,
+        size: f.size,
+        sent: 0,
+        kind: uploadKind,
+        status: invalid ? ("error" as const) : ("queued" as const),
+        error: invalid,
+        canRetry: !invalid,
+      };
+    });
+    setJobs((js) => [...js, ...added]);
+  }, [uploadKind]);
+
+  // One job: probe duration → upload with progress → register the track.
+  const runJob = useCallback(async (job: UploadJob) => {
+    setJobs((js) => js.map((j) => (j.id === job.id ? { ...j, status: "uploading" as const, sent: 0, error: null } : j)));
     try {
-      const durationSec = await probeAudioDuration(file);
-      const res = await RadioApi.uploadAudio(file, durationSec);
-      const body: CreateRadioTrackBody = { title: baseName(file.name), kind: uploadKind, audio_url: res.url, size_bytes: file.size };
+      const durationSec = await probeAudioDuration(job.file);
+      const res = await RadioApi.uploadAudio(job.file, durationSec, (sent, total) => {
+        setJobs((js) => js.map((j) => (j.id === job.id ? { ...j, sent, size: total > 0 ? total : j.size } : j)));
+      });
+      const body: CreateRadioTrackBody = { title: baseName(job.name), kind: job.kind, audio_url: res.url, size_bytes: job.file.size };
       const d = res.duration_sec ?? durationSec;
       if (d != null) body.duration_sec = d;
       await RadioApi.createTrack(body);
-      load();
-    } catch {
-      setErr("Upload failed. Please try again.");
-    } finally {
-      setUploading(false);
+      setJobs((js) => js.map((j) => (j.id === job.id ? { ...j, status: "done" as const, sent: j.size } : j)));
+      refreshTracks();
+      window.setTimeout(() => setJobs((js) => js.filter((j) => j.id !== job.id)), 4000);
+    } catch (e) {
+      setJobs((js) => js.map((j) => (j.id === job.id ? { ...j, status: "error" as const, error: apiErrMessage(e, "Upload failed.") } : j)));
     }
-  }, [uploadKind, load]);
+  }, [refreshTracks]);
+
+  // Sequential worker: whenever no job is in flight, start the next queued one.
+  // The ref guard (not just state) keeps StrictMode's doubled effects and
+  // mid-upload jobs-array churn from ever double-starting a transfer.
+  useEffect(() => {
+    if (activeJobRef.current) return;
+    const next = jobs.find((j) => j.status === "queued");
+    if (!next) return;
+    activeJobRef.current = next.id;
+    void runJob(next).finally(() => { activeJobRef.current = null; });
+  }, [jobs, runJob]);
+
+  const retryJob = useCallback((id: string) => {
+    setJobs((js) => js.map((j) => (j.id === id && j.status === "error" && j.canRetry ? { ...j, status: "queued" as const, sent: 0, error: null } : j)));
+  }, []);
+  const dismissJob = useCallback((id: string) => {
+    setJobs((js) => js.filter((j) => j.id !== id));
+  }, []);
 
   const remove = useCallback(async (id: string) => {
     try {
       await RadioApi.deleteTrack(id);
       setTracks((ts) => (ts ? ts.filter((t) => t.id !== id) : ts));
+      setSelected((sel) => { if (!sel.has(id)) return sel; const n = new Set(sel); n.delete(id); return n; });
     } catch {
       setErr("Could not delete the track.");
     }
@@ -102,28 +189,176 @@ export function AudioLibraryPanel(): ReactElement {
     }
   }, [sessions]);
 
+  // ── Bulk actions over the selection (sequential — same calls as the
+  // single-row controls, so server behavior is identical) ──
+  const bulkAdd = useCallback(async (programId: string) => {
+    const ids = Array.from(selected);
+    if (ids.length === 0 || bulkBusy) return;
+    setBulkBusy(true);
+    setNote(null);
+    setErr(null);
+    try {
+      for (const trackId of ids) await RadioApi.addToPlaylist(programId, trackId);
+      const s = sessions.find((p) => p.id === programId);
+      setNote(`Added ${ids.length} track${ids.length === 1 ? "" : "s"} to ${s?.title ?? "session"}.`);
+      setSelected(new Set());
+      setTimeout(() => setNote((n) => (n && n.startsWith("Added") ? null : n)), 2600);
+    } catch {
+      setErr("Could not add every selected track to that session.");
+    } finally {
+      // Fan out either way — partial adds may already have landed.
+      window.dispatchEvent(new CustomEvent("rs:playlist-changed", { detail: { programId } }));
+      setBulkBusy(false);
+    }
+  }, [selected, sessions, bulkBusy]);
+
+  const bulkDelete = useCallback(async () => {
+    const ids = Array.from(selected);
+    if (ids.length === 0 || bulkBusy) return;
+    if (!window.confirm(`Delete ${ids.length} track${ids.length === 1 ? "" : "s"} from the library? This cannot be undone.`)) return;
+    setBulkBusy(true);
+    setErr(null);
+    try {
+      for (const id of ids) {
+        await RadioApi.deleteTrack(id);
+        setTracks((ts) => (ts ? ts.filter((t) => t.id !== id) : ts));
+      }
+    } catch {
+      setErr("Could not delete every selected track.");
+      refreshTracks(); // reconcile — some deletes may have landed
+    } finally {
+      setSelected(new Set());
+      setBulkBusy(false);
+    }
+  }, [selected, bulkBusy, refreshTracks]);
+
   const count = tracks?.length ?? 0;
+  const visible = (tracks ?? []).filter((t) => kindFilter === "all" || t.kind === kindFilter);
+  const allSelected = visible.length > 0 && visible.every((t) => selected.has(t.id));
+  const someSelected = visible.some((t) => selected.has(t.id));
+
+  const toggleAll = (): void => {
+    setSelected((sel) => {
+      if (visible.length === 0) return sel;
+      const n = new Set(sel);
+      if (visible.every((t) => sel.has(t.id))) visible.forEach((t) => n.delete(t.id));
+      else visible.forEach((t) => n.add(t.id));
+      return n;
+    });
+  };
+  const toggleOne = (id: string): void => {
+    setSelected((sel) => { const n = new Set(sel); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  };
 
   return (
     <Panel>
-      <SectionHead icon={Music} title="Audio library" hint={loading ? "Loading…" : `${count} track${count === 1 ? "" : "s"}`} />
+      <SectionHead icon={Music} title="Audio library" hint={loading ? "Loading…" : kindFilter === "all" ? `${count} track${count === 1 ? "" : "s"}` : `${visible.length} of ${count} tracks`} />
 
-      {/* Upload-kind picker + dashed upload — exactly the make's row */}
+      {/* Upload-kind picker + dashed multi-upload — exactly the make's row */}
       <div className="flex gap-2 mb-3 flex-wrap">
         <div className="flex gap-1 rounded-lg p-1" style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${PANEL_BORDER}` }}>
           {TRACK_KINDS.map((k) => (
             <button key={k} onClick={() => setUploadKind(k)} className="rs-btn rounded-md px-2.5 py-1" style={{ fontSize: 10.5, fontWeight: 700, background: uploadKind === k ? KIND_META[k].color : "transparent", color: uploadKind === k ? "#0A1120" : DIM }}>{KIND_META[k].label}</button>
           ))}
         </div>
-        <label className="rs-btn flex items-center justify-center gap-2 rounded-lg px-3 cursor-pointer" style={{ flex: 1, minWidth: 150, height: 34, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px dashed ${GOLD}66`, fontSize: 12, fontWeight: 700, opacity: uploading ? 0.6 : 1 }}>
-          {uploading ? <Loader2 size={14} className="rs-spin" /> : <Upload size={14} />}
-          {uploading ? "Uploading…" : `Upload ${KIND_META[uploadKind].label.toLowerCase()}`}
-          <input type="file" accept={AUDIO_ACCEPT} multiple={false} disabled={uploading} hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void upload(f); }} />
+        <label className="rs-btn flex items-center justify-center gap-2 rounded-lg px-3 cursor-pointer" style={{ flex: 1, minWidth: 150, height: 34, background: "rgba(230,198,110,0.12)", color: GOLD, border: `1px dashed ${GOLD}66`, fontSize: 12, fontWeight: 700 }}>
+          <Upload size={14} />
+          {`Upload ${KIND_META[uploadKind].label.toLowerCase()}`}
+          <input type="file" accept={AUDIO_ACCEPT} multiple hidden onChange={(e) => { enqueue(e.target.files); e.target.value = ""; }} />
         </label>
       </div>
 
+      {/* Upload queue — one visible job row per file, above the library list */}
+      {jobs.length > 0 && (
+        <div className="flex flex-col gap-1.5 mb-3">
+          {jobs.map((j) => {
+            const pct = j.size > 0 ? Math.min(100, Math.round((j.sent / j.size) * 100)) : 0;
+            const isErr = j.status === "error";
+            const isDone = j.status === "done";
+            return (
+              <div key={j.id} className="rs-reveal rounded-xl px-3 py-2" style={{ background: isErr ? "rgba(239,68,68,0.08)" : isDone ? "rgba(34,197,94,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${isErr ? RED + "44" : isDone ? GREEN + "44" : PANEL_BORDER}` }}>
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center justify-center rounded-md shrink-0" style={{ width: 22, height: 22, background: isErr ? `${RED}22` : isDone ? `${GREEN}22` : "rgba(230,198,110,0.14)", color: isErr ? "#FCA5A5" : isDone ? "#7BE3A3" : GOLD }}>
+                    {isDone ? <Check size={12} /> : isErr ? <X size={12} /> : j.status === "uploading" ? <Loader2 size={12} className="rs-spin" /> : <Upload size={12} />}
+                  </span>
+                  <span className="truncate" style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: 600 }}>{j.name}</span>
+                  <span className="rs-tnum shrink-0" style={{ fontFamily: MONO, fontSize: 10, color: isDone ? "#7BE3A3" : isErr ? "#FCA5A5" : DIM }}>
+                    {isDone ? "Uploaded" : isErr ? (fmtBytes(j.file.size) ?? "") : j.status === "uploading" ? `${pct}% · ${fmtBytes(j.sent) ?? "0 B"} of ${fmtBytes(j.size) ?? "?"}` : `Waiting · ${fmtBytes(j.size) ?? ""}`}
+                  </span>
+                  {isErr && j.canRetry && (
+                    <button onClick={() => retryJob(j.id)} className="rs-btn flex items-center gap-1 rounded-md px-2 shrink-0" style={{ height: 22, background: "rgba(230,198,110,0.14)", color: GOLD, border: `1px solid ${GOLD}44`, fontSize: 10, fontWeight: 700 }}>
+                      <RotateCcw size={10} /> Retry
+                    </button>
+                  )}
+                  {isErr && (
+                    <button onClick={() => dismissJob(j.id)} title="Dismiss" className="rs-btn flex items-center justify-center rounded-md shrink-0" style={{ width: 22, height: 22, background: "rgba(255,255,255,0.06)", color: DIM }}>
+                      <X size={11} />
+                    </button>
+                  )}
+                </div>
+                {(j.status === "uploading" || j.status === "queued") && (
+                  <div className="rounded-full" style={{ height: 4, marginTop: 7, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
+                    <div className="rounded-full" style={{ height: "100%", width: `${pct}%`, background: `linear-gradient(90deg, ${GOLD_DEEP}, ${GOLD})`, transition: "width .2s ease" }} />
+                  </div>
+                )}
+                {isErr && j.error && <div style={{ fontSize: 10.5, color: "#FCA5A5", marginTop: 5 }}>{j.error}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {err && <div style={{ fontSize: 11, color: "#FCA5A5", marginBottom: 8 }}>{err}</div>}
       {note && <div style={{ fontSize: 11, color: GREEN, marginBottom: 8 }}>{note}</div>}
+
+      {/* Select-all (tri-state, over the current filter) + kind filter chips */}
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <label className="flex items-center gap-1.5 shrink-0" style={{ fontSize: 10.5, color: DIM, fontWeight: 700, cursor: visible.length === 0 ? "default" : "pointer" }}>
+          <input
+            type="checkbox"
+            checked={allSelected}
+            ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
+            onChange={toggleAll}
+            disabled={visible.length === 0}
+            style={{ accentColor: GOLD, width: 13, height: 13, cursor: "inherit" }}
+          />
+          All
+        </label>
+        <div className="flex gap-1 rounded-lg p-0.5" style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${PANEL_BORDER}` }}>
+          {LIBRARY_FILTERS.map((k) => (
+            <button key={k} onClick={() => { setKindFilter(k); setSelected(new Set()); }} className="rs-btn rounded-md px-2 py-0.5" style={{ fontSize: 10, fontWeight: 700, background: kindFilter === k ? "rgba(230,198,110,0.16)" : "transparent", color: kindFilter === k ? GOLD : DIM }}>
+              {k === "all" ? "All" : KIND_META[k].label}
+            </button>
+          ))}
+        </div>
+        {selected.size > 0 && <span className="ml-auto" style={{ fontSize: 10.5, color: GOLD, fontWeight: 700 }}>{selected.size} selected</span>}
+      </div>
+
+      {/* Bulk bar — appears whenever ≥1 row is checked */}
+      {selected.size > 0 && (
+        <div className="rs-reveal flex items-center gap-2 mb-2 flex-wrap rounded-xl px-2.5 py-2" style={{ background: "rgba(230,198,110,0.08)", border: `1px solid ${GOLD}33` }}>
+          <span className="shrink-0" style={{ fontSize: 11, fontWeight: 800, color: GOLD }}>{selected.size} selected</span>
+          {sessions.length > 0 && (
+            <select
+              value=""
+              disabled={bulkBusy}
+              onChange={(e) => { const v = e.target.value; if (v) void bulkAdd(v); }}
+              title="Add the selection to a session"
+              className="rs-btn rounded-lg"
+              style={{ height: 28, background: "rgba(255,255,255,0.05)", border: `1px solid ${GOLD}44`, color: GOLD, fontSize: 11, fontWeight: 700, padding: "0 6px", opacity: bulkBusy ? 0.6 : 1 }}
+            >
+              <option value="" style={optStyle}>Add {selected.size} to session ▾</option>
+              {sessions.map((s) => <option key={s.id} value={s.id} style={optStyle}>{s.title}</option>)}
+            </select>
+          )}
+          <button onClick={() => void bulkDelete()} disabled={bulkBusy} className="rs-btn flex items-center gap-1 rounded-lg px-2.5 shrink-0" style={{ height: 28, background: "rgba(239,68,68,0.14)", color: "#FCA5A5", border: `1px solid ${RED}44`, fontSize: 11, fontWeight: 700, opacity: bulkBusy ? 0.6 : 1 }}>
+            {bulkBusy ? <Loader2 size={12} className="rs-spin" /> : <Trash2 size={12} />} Delete {selected.size}
+          </button>
+          <button onClick={() => setSelected(new Set())} disabled={bulkBusy} title="Clear selection" className="rs-btn ml-auto flex items-center justify-center rounded-md shrink-0" style={{ width: 24, height: 24, background: "rgba(255,255,255,0.06)", color: DIM }}>
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* Track rows */}
       <div className="flex flex-col gap-2" style={{ maxHeight: 240, overflowY: "auto" }}>
@@ -133,13 +368,24 @@ export function AudioLibraryPanel(): ReactElement {
           </div>
         ) : count === 0 ? (
           <div style={{ fontSize: 12, color: DIMMER, padding: "10px 0", textAlign: "center" }}>No tracks yet — upload one above.</div>
+        ) : visible.length === 0 ? (
+          <div style={{ fontSize: 12, color: DIMMER, padding: "10px 0", textAlign: "center" }}>No {kindFilter === "all" ? "" : `${KIND_META[kindFilter as RadioTrackKind].label.toLowerCase()} `}tracks in this filter.</div>
         ) : (
-          tracks?.map((t) => {
+          visible.map((t) => {
             const meta = KIND_META[t.kind];
             const dur = fmtClock(t.duration_sec);
             const size = fmtBytes(t.size_bytes);
+            const isSel = selected.has(t.id);
             return (
-              <div key={t.id} className="flex items-center gap-3 rounded-xl px-3 py-2.5" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${PANEL_BORDER}` }}>
+              <div key={t.id} className="flex items-center gap-3 rounded-xl px-3 py-2.5" style={{ background: isSel ? "rgba(230,198,110,0.07)" : "rgba(255,255,255,0.03)", border: `1px solid ${isSel ? GOLD + "44" : PANEL_BORDER}` }}>
+                <input
+                  type="checkbox"
+                  checked={isSel}
+                  onChange={() => toggleOne(t.id)}
+                  title="Select track"
+                  className="shrink-0"
+                  style={{ accentColor: GOLD, width: 13, height: 13, cursor: "pointer" }}
+                />
                 <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 32, height: 32, background: `${meta.color}22`, color: meta.color }}><Music size={15} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="truncate" style={{ fontSize: 12, fontWeight: 600 }}>{t.title}</div>
@@ -177,11 +423,14 @@ export function AudioLibraryPanel(): ReactElement {
 // REAL broadcast: for the session that IS the live program, the playlist row
 // whose track fuzzily matches the icy now-playing metadata gets a gold ON AIR
 // mark.
-export function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: {
+export function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying, focusProgramId = null }: {
   onPreview: (title: string | null) => void;
   onEdit: (p: RadioProgram) => void;
   liveProgramId: string | null;
   nowPlaying: string | null;
+  // Deep-link target (/uploads-sessions?open=<programId>) — the panel scrolls
+  // this session's card into view once and flashes a gold ring on it.
+  focusProgramId?: string | null;
 }): ReactElement {
   const [sessions, setSessions] = useState<RadioProgram[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -191,6 +440,27 @@ export function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: 
   const [playlists, setPlaylists] = useState<Record<string, RadioPlaylistItem[]>>({});
   const [library, setLibrary] = useState<RadioTrack[]>([]);
   const [attachingId, setAttachingId] = useState<string | null>(null);
+
+  // HTML5 drag-to-reorder (native parity; the ↑/↓ arrows stay). `drag` is the
+  // row being dragged; `dropGap` is the insertion gap (0..n) under the pointer
+  // within the SAME session — cross-session drops are ignored.
+  const [drag, setDrag] = useState<{ programId: string; from: number } | null>(null);
+  const [dropGap, setDropGap] = useState<number | null>(null);
+
+  // Deep-link focus: scroll + gold-ring flash, consumed once per target id.
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const consumedFocusRef = useRef<string | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focusProgramId || consumedFocusRef.current === focusProgramId || !sessions) return;
+    const el = cardRefs.current[focusProgramId];
+    if (!el) return; // that session isn't rendered (deleted or still loading)
+    consumedFocusRef.current = focusProgramId;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setFlashId(focusProgramId);
+    const t = window.setTimeout(() => setFlashId((f) => (f === focusProgramId ? null : f)), 2400);
+    return () => window.clearTimeout(t);
+  }, [focusProgramId, sessions]);
 
   // Client-side live preview.
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -463,6 +733,9 @@ export function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: 
 
   return (
     <Panel>
+      {/* deep-link focus flash — a gold ring that fades out on the target card */}
+      <style>{`@keyframes rsFocusRing { 0% { box-shadow: 0 0 0 3px rgba(230,198,110,0.95); } 60% { box-shadow: 0 0 0 3px rgba(230,198,110,0.5); } 100% { box-shadow: 0 0 0 3px rgba(230,198,110,0); } }`}</style>
+
       {/* hidden preview element */}
       <audio
         ref={audioRef}
@@ -520,7 +793,12 @@ export function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: 
             const loopOn = s.loop_mode !== "none";
             const runtime = playlistRuntime(items);
             return (
-              <div key={s.id} className="rounded-xl" style={{ background: active ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${active ? RED + "44" : PANEL_BORDER}`, padding: 12 }}>
+              <div
+                key={s.id}
+                ref={(el) => { cardRefs.current[s.id] = el; }}
+                className="rounded-xl"
+                style={{ background: active ? "rgba(239,68,68,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${active ? RED + "44" : PANEL_BORDER}`, padding: 12, ...(flashId === s.id ? { animation: "rsFocusRing 2.2s ease forwards" } : {}) }}
+              >
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <span className="flex items-center justify-center rounded-lg shrink-0" style={{ width: 28, height: 28, background: active ? RED : "rgba(230,198,110,0.14)", color: active ? "#fff" : GOLD }}>
                     {active ? <Disc3 size={14} className="rs-live-dot" /> : <ListMusic size={14} />}
@@ -573,8 +851,42 @@ export function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: 
                     const meta = KIND_META[it.track.kind];
                     const nowIdx = previewProgram === s.id && previewIndex === idx;
                     const onAir = idx === onAirIdx;
+                    const draggingRow = drag?.programId === s.id && drag.from === idx;
+                    const gapAbove = drag?.programId === s.id && dropGap === idx;
                     return (
-                      <div key={it.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5" style={{ background: nowIdx ? "rgba(239,68,68,0.12)" : onAir ? "rgba(230,198,110,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${nowIdx ? RED + "44" : onAir ? GOLD + "55" : "transparent"}` }}>
+                      <div
+                        key={it.id}
+                        draggable
+                        onDragStart={(e) => {
+                          setDrag({ programId: s.id, from: idx });
+                          setDropGap(null);
+                          e.dataTransfer.effectAllowed = "move";
+                          try { e.dataTransfer.setData("text/plain", it.id); } catch { /* older engines */ }
+                        }}
+                        onDragEnd={() => { setDrag(null); setDropGap(null); }}
+                        onDragOver={(e) => {
+                          if (!drag || drag.programId !== s.id) return;
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          const r = e.currentTarget.getBoundingClientRect();
+                          const gap = e.clientY < r.top + r.height / 2 ? idx : idx + 1;
+                          setDropGap((g) => (g === gap ? g : gap));
+                        }}
+                        onDrop={(e) => {
+                          if (!drag || drag.programId !== s.id || dropGap == null) return;
+                          e.preventDefault();
+                          const from = drag.from;
+                          // Gap index (0..n) → destination index after the dragged row is removed.
+                          const to = dropGap > from ? dropGap - 1 : dropGap;
+                          setDrag(null);
+                          setDropGap(null);
+                          // Persists through the SAME reorder path as the ↑/↓ arrows.
+                          if (to !== from) void reorder(s.id, items, from, to);
+                        }}
+                        className="flex items-center gap-2 rounded-lg px-2 py-1.5"
+                        style={{ background: nowIdx ? "rgba(239,68,68,0.12)" : onAir ? "rgba(230,198,110,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${nowIdx ? RED + "44" : onAir ? GOLD + "55" : "transparent"}`, opacity: draggingRow ? 0.35 : 1, cursor: "grab", ...(gapAbove ? { boxShadow: `0 -2px 0 0 ${GOLD}` } : {}) }}
+                      >
+                        <GripVertical size={12} className="shrink-0" style={{ color: DIMMER }} />
                         <span className="rs-tnum flex items-center justify-center rounded shrink-0" style={{ width: 18, height: 18, background: "rgba(255,255,255,0.08)", fontSize: 10, fontWeight: 700, color: nowIdx ? "#FCA5A5" : onAir ? GOLD : DIM }}>{idx + 1}</span>
                         <span className="rounded-full shrink-0" style={{ width: 6, height: 6, background: meta.color }} />
                         <span className="truncate" style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: nowIdx || onAir ? 700 : 500 }}>{it.track.title}</span>
@@ -591,6 +903,10 @@ export function SessionsPanel({ onPreview, onEdit, liveProgramId, nowPlaying }: 
                       </div>
                     );
                   })}
+                  {/* gold insertion line when dropping below the last row */}
+                  {drag?.programId === s.id && dropGap === items.length && items.length > 0 && (
+                    <div aria-hidden style={{ height: 2, background: GOLD, borderRadius: 1 }} />
+                  )}
                 </div>
 
                 {/* append next piece */}

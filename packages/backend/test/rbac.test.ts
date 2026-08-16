@@ -36,7 +36,8 @@ describe("RBAC roles & permission matrix", () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(11);
     const sa = res.body.data.find((r: { role_key: string }) => r.role_key === "super_admin");
-    expect(sa.permissions).toHaveLength(16 * 6 + 1); // full grid + members:proximity (parity gap #4)
+    // full grid + members:proximity (parity gap #4) + live:go/live:manage (Nuru Live L1)
+    expect(sa.permissions).toHaveLength(16 * 6 + 1 + 2);
     expect(sa.is_system).toBe(true);
     const member = res.body.data.find((r: { role_key: string }) => r.role_key === "member");
     expect(member.permissions).toHaveLength(0);
@@ -78,6 +79,18 @@ describe("RBAC roles & permission matrix", () => {
     const after = await agent().get("/v1/admin/roles").set(auth(adminTok));
     const cc2 = after.body.data.find((r: { role_key: string }) => r.role_key === "cell_coordinator");
     expect(cc2.permissions).toHaveLength(2);
+  });
+
+  it("edits a role's name, type and description via PUT /admin/roles/:key", async () => {
+    await agent().post("/v1/admin/roles").set(auth(adminTok))
+      .send({ name: "Media Desk", role_type: "staff", description: "Runs the studio." });
+    const upd = await agent().put("/v1/admin/roles/media_desk").set(auth(adminTok))
+      .send({ name: "Media Desk Lead", role_type: "field", description: "Leads the studio desk." });
+    expect(upd.status).toBe(200);
+    expect(upd.body.name).toBe("Media Desk Lead");
+    expect(upd.body.role_type).toBe("field");
+    expect(upd.body.description).toBe("Leads the studio desk.");
+    expect(upd.body.role_key).toBe("media_desk"); // renaming never re-keys
   });
 
   it("rejects duplicate role names", async () => {

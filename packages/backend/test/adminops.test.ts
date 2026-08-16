@@ -43,6 +43,8 @@ describe("dashboard reports", () => {
     expect(res.body.total_members).toBe(1); // only the Student counts
     expect(res.body.members_at_risk).toBe(1);
     expect(res.body.cohorts_running).toBe(1);
+    expect(res.body.new_members_14d).toBe(1); // the Student joined during this run
+    expect(res.body.new_members_prev_14d).toBe(0);
     expect(typeof res.body.avg_engagement).toBe("number");
   });
 

@@ -25,7 +25,9 @@ export function registerProgress(ctx: AppContext): Router {
         z.object({
           client_mutation_id: z.string().uuid().nullable().optional(),
           completed_at: z.string().optional(),
-          reflection_text: z.string().min(1).optional(),
+          // nullish, not optional: Android's kotlinx Json (encodeDefaults=true +
+          // explicitNulls default) sends "reflection_text": null when unset.
+          reflection_text: z.string().min(1).nullish(),
         }),
         req.body ?? {},
       );
@@ -34,7 +36,7 @@ export function registerProgress(ctx: AppContext): Router {
         req.params.id ?? "",
         body.client_mutation_id ?? null,
         body.completed_at,
-        body.reflection_text,
+        body.reflection_text ?? undefined,
       );
       res.status(200).json(result);
     }),

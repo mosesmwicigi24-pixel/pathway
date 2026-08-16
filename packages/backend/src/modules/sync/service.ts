@@ -23,6 +23,7 @@ import { CalendarService } from "../calendar/service.js";
 import { GrowthService } from "../growth/service.js";
 import { CommunityService } from "../community/service.js";
 import { ChatService } from "../chat/service.js";
+import { ThoughtsService } from "../thoughts/service.js";
 
 interface DomainSpec {
   table: string;
@@ -59,6 +60,8 @@ const PULL_DOMAINS: Record<string, DomainSpec> = {
   prayer_entries: { table: "prayer_entries", idCol: "entry_id", scope: "user" },
   saved_verses: { table: "saved_verses", idCol: "saved_verse_id", scope: "user" },
   gift_assessments: { table: "gift_assessments", idCol: "assessment_id", scope: "user" },
+  // Selah — My Thoughts (Prayer Room tab 3): private, no leader/admin read path.
+  member_thoughts: { table: "member_thoughts", idCol: "thought_id", scope: "user" },
   // B8 community — cell-visible; moderation metadata stays server-side.
   discussion_threads: {
     table: "discussion_threads",
@@ -77,7 +80,7 @@ const PULL_DOMAINS: Record<string, DomainSpec> = {
 const PAGE = 1000;
 
 export interface PullRequest {
-  device_id?: string | undefined;
+  device_id?: string | null | undefined;
   cursors?: Record<string, number> | undefined;
 }
 
@@ -89,7 +92,7 @@ export interface MutationResult {
 }
 
 export interface PushRequest {
-  device_id?: string | undefined;
+  device_id?: string | null | undefined;
   mutations: Array<{
     mutation_id: string;
     seq: number;
@@ -109,6 +112,7 @@ export class SyncService {
   private readonly growth: GrowthService;
   private readonly community: CommunityService;
   private readonly chat: ChatService;
+  private readonly thoughts: ThoughtsService;
 
   constructor(private readonly pool: Pool) {
     this.progress = new ProgressService(pool);
@@ -121,6 +125,7 @@ export class SyncService {
     this.growth = new GrowthService(pool);
     this.community = new CommunityService(pool);
     this.chat = new ChatService(pool);
+    this.thoughts = new ThoughtsService(pool);
   }
 
   /** Delta pull: changed rows + tombstones + new cursors since the client's cursors. */
@@ -295,6 +300,19 @@ export class SyncService {
       case "saved_verses:delete": {
         const r = await this.growth.deleteVerse(userId, String(p.saved_verse_id ?? ""));
         return !r.deleted;
+      }
+      case "member_thoughts:upsert": {
+        // Selah — My Thoughts (private journal write). LWW on updated_at;
+        // idempotent on mutation id, exactly like the prayer journal.
+        const r = await this.thoughts.upsert(
+          userId,
+          parseBody(ThoughtsService.ThoughtUpsert, { ...p, client_mutation_id: m.mutation_id }),
+        );
+        return r.duplicate;
+      }
+      case "member_thoughts:delete": {
+        const r = await this.thoughts.delete(userId, String(p.thought_id ?? ""));
+        return !r.deleted; // already gone ⇒ duplicate replay
       }
       case "discussion_threads:create": {
         // Cohort post queued offline (B8). Idempotent on the mutation id.

@@ -7,10 +7,11 @@
 // "Check your inbox" confirmation. In production the gateway issues the session.
 import { useEffect, useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
-import { Eye, EyeOff, Sparkles, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Sparkles, Loader2, Fingerprint } from "lucide-react";
 import { useAppDispatch, useAppSelector } from "../../store/hooks";
-import { login, completeMfa, cancelMfa } from "../../store/authSlice";
+import { login, completeMfa, cancelMfa, passkeyLogin } from "../../store/authSlice";
 import { PortalApi } from "../../api/client";
+import { passkeySupported } from "../../lib/passkeys";
 
 type Mode = "signin" | "forgot";
 
@@ -32,6 +33,9 @@ export function Login(): ReactElement {
   const [localError, setLocalError] = useState("");
   const [resetSent, setResetSent] = useState(false);
   const [sending, setSending] = useState(false);
+  // Passkey sign-in is offered only where the browser can actually run the
+  // ceremony (Touch ID / Face ID / Windows Hello); checked once per mount.
+  const [canPasskey] = useState(() => passkeySupported());
 
   useEffect(() => { if (accessToken) navigate("/", { replace: true }); }, [accessToken, navigate]);
 
@@ -59,6 +63,13 @@ export function Login(): ReactElement {
     if (mode === "forgot") { void handleForgot(); return; }
     if (!canSignIn) { setLocalError("Enter a valid email and password to continue."); return; }
     void dispatch(login({ email: email.trim(), password }));
+  };
+
+  const handlePasskey = (): void => {
+    setLocalError("");
+    // The server needs the email to look up that account's passkeys.
+    if (!isValidEmail) { setLocalError("Enter your email above, then use your passkey."); return; }
+    void dispatch(passkeyLogin({ email: email.trim() }));
   };
 
   const shownError = localError || (mode !== "forgot" ? error : "") || "";
@@ -167,6 +178,23 @@ export function Login(): ReactElement {
                   {busy && <Loader2 size={14} className="animate-spin" />}
                   {submitLabel}
                 </button>
+
+                {/* Passkey sign-in — secondary to the password form; only on
+                    WebAuthn-capable browsers. Cancelling the ceremony resets
+                    quietly (the thunk rejects with "" and no error is shown). */}
+                {mode === "signin" && canPasskey && (
+                  <>
+                    <div className="flex items-center gap-3" style={{ margin: "14px 0 12px" }}>
+                      <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--muted-foreground)", letterSpacing: "0.08em", textTransform: "uppercase" }}>or</span>
+                      <span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+                    </div>
+                    <button type="button" onClick={handlePasskey} disabled={busy} className="w-full flex items-center justify-center gap-2 rounded-lg transition-all hover:brightness-95" style={{ height: 42, background: "var(--input-background)", border: "1.5px solid var(--border)", color: "var(--nuru-navy)", fontSize: 13, fontWeight: 700, cursor: busy ? "not-allowed" : "pointer" }}>
+                      <Fingerprint size={15} style={{ color: "var(--nuru-gold)" }} />
+                      Sign in with passkey
+                    </button>
+                  </>
+                )}
 
                 {mode === "forgot" && (
                   <p style={{ fontSize: 12, color: "var(--muted-foreground)", textAlign: "center", marginTop: 12 }}>

@@ -5,8 +5,8 @@
 # A host-level nginx (not the prod Caddy service) owns 80/443 and terminates TLS,
 # so we publish the API on 127.0.0.1:8090 for nginx to proxy, and DON'T start
 # Caddy. The extra environment passthrough wires Brevo SMTP (password reset),
-# Nuru AI (Groq/Gemini), Cloudinary uploads, and the public app URL — all read
-# from the VPS-only .env (§5.10), never committed.
+# Nuru AI (Claude primary; Groq/Gemini fallback), Cloudinary uploads, and the
+# public app URL — all read from the VPS-only .env (§5.10), never committed.
 services:
   api:
     ports:
@@ -22,7 +22,20 @@ services:
       # FCM push (§D-M9): the Firebase Admin service-account JSON, read-only.
       # Path matches FCM_SERVICE_ACCOUNT in the shared backend-env anchor.
       - /opt/pathway/secrets/fcm-service-account.json:/run/secrets/fcm.json:ro
+      # Nuru Live recordings: MediaMTX writes fMP4s here on the host; the
+      # registrar (inline at /end here, sweep backstop in worker) matches files
+      # to streams by time-window and mints recording_url. Without this mount
+      # the registrar was silently dead (INCIDENT 2026-07-31: every ended
+      # stream had recording_url NULL while the files sat on disk).
+      - /opt/pathway/mediamtx/recordings:/opt/pathway/mediamtx/recordings:ro
     environment:
+      # Nuru Live CDN (L1.5 / L1.5b). MUST live here, not only in .env — compose
+      # only passes what's in an environment block into the container (a scp of
+      # this file on 2026-07-31 dropped LIVE_CDN_BASE and silently disabled the
+      # R2 fan-out until it was caught). LIVE_CDN_PER_STREAM scopes church HLS
+      # objects by stream_id (flicker fix, docs/LIVE_CDN_PERSTREAM.md).
+      LIVE_CDN_BASE: ${LIVE_CDN_BASE:-}
+      LIVE_CDN_PER_STREAM: ${LIVE_CDN_PER_STREAM:-false}
       MEDIA_STORAGE_DIR: ${MEDIA_STORAGE_DIR:-/data/media}
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://pathway.nuruplace.org/media}
       # Live radio via self-hosted Icecast (source-driven). Values from the VPS-only
@@ -45,6 +58,14 @@ services:
       SMTP_TLS_SERVERNAME: ${SMTP_TLS_SERVERNAME}
       SMTP_USER: ${SMTP_USER}
       SMTP_PASS: ${SMTP_PASS}
+      # Claude is the primary provider (buildAiProvider prefers ANTHROPIC_API_KEY
+      # when present). Groq/Gemini stay wired as fallbacks so a missing or
+      # rate-limited Claude key degrades to a real model rather than to the
+      # offline canned responder.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      ANTHROPIC_MODEL_FAST: ${ANTHROPIC_MODEL_FAST:-claude-haiku-4-5-20251001}
+      ANTHROPIC_MODEL_DEEP: ${ANTHROPIC_MODEL_DEEP:-claude-opus-5}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -66,5 +87,33 @@ services:
   # read-only service-account file here; FCM_SERVICE_ACCOUNT (shared anchor) points
   # at it. All other env comes from the base *backend-env anchor in prod.yml.
   worker:
+    # PRODUCTION BUG FOUND 2026-08-01: the worker had NO AI provider env at all,
+    # so buildAiProvider() fell through to FakeAiProvider — the Sunday Letter and
+    # the nightly story narrative were canned offline text, not model output, and
+    # nothing surfaced that because the fallback is deliberately silent. The
+    # worker is the process that RUNS those jobs, so it needs the keys too.
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      ANTHROPIC_MODEL_FAST: ${ANTHROPIC_MODEL_FAST:-claude-haiku-4-5-20251001}
+      ANTHROPIC_MODEL_DEEP: ${ANTHROPIC_MODEL_DEEP:-claude-opus-5}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # The WORKER is the process that dispatches notifications, so it — not the
+      # api — is what actually needs SMTP. Without these, giving receipts scheduled
+      # on channel:"email" cannot be delivered. (Same class of gap as the AI keys
+      # above: this compose file gave `api` a full environment and the worker
+      # almost none, so every worker-side integration silently no-opped.)
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SECURE: ${SMTP_SECURE}
+      SMTP_TLS_SERVERNAME: ${SMTP_TLS_SERVERNAME}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      EMAIL_FROM: ${EMAIL_FROM}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL}
     volumes:
       - /opt/pathway/secrets/fcm-service-account.json:/run/secrets/fcm.json:ro
+      # rw: the sweep registers recordings AND (follow-up) unlinks soft-deleted ones.
+      - /opt/pathway/mediamtx/recordings:/opt/pathway/mediamtx/recordings

@@ -17,7 +17,15 @@ function mountedPaths(app: any): Set<string> {
   const walk = (stack: any[], prefix: string): void => {
     for (const layer of stack) {
       if (layer.route) {
-        out.add(toOpenApi(prefix + layer.route.path));
+        // Express accepts an ARRAY of paths for one handler — we use that to
+        // keep a deprecated alias mounted beside its canonical path. `route.path`
+        // is then the array itself, and naively concatenating it yields one
+        // comma-joined pseudo-path that matches nothing in the spec, so both the
+        // real paths read as undocumented AND both documented paths read as
+        // unimplemented. Each entry is its own route and is checked as one.
+        for (const p of Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path]) {
+          out.add(toOpenApi(prefix + String(p)));
+        }
       } else if (layer.name === "router" && layer.handle?.stack) {
         const m = /^\^\\\/((?:[^\\]|\\.)*?)\\\/\?/.exec(layer.regexp?.source ?? "");
         const mount = m ? "/" + m[1].replace(/\\(.)/g, "$1") : "";

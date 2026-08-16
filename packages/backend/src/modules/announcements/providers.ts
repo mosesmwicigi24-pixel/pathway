@@ -3,6 +3,10 @@
 // services are faked in tests — no network, no secrets). A real deployment
 // binds Twilio/Africa's Talking (SMS) and the WhatsApp Business API here by
 // env-named credentials; the contract is identical.
+//
+// EVENTS_ARCHITECTURE §5 (channel honesty): NO provider is bound by default —
+// AnnouncementService records suppressed(no_provider) for sms/whatsapp until a
+// real provider is wired. FakeMessageProvider exists ONLY for tests to inject.
 
 export interface OutboundMessage {
   to: string; // E.164 phone number

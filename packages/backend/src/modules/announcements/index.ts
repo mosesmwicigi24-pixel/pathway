@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
+import { buildEmailProvider } from "../identity/email.js";
 import { AnnouncementService } from "./service.js";
 
 const IdParam = z.object({ id: z.string().uuid() });
@@ -13,15 +14,25 @@ const IdParam = z.object({ id: z.string().uuid() });
 export const announcementsRouter: Router = Router();
 
 export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService): Router {
-  const service = svc ?? new AnnouncementService(ctx.db.primary);
+  // EVENTS_ARCHITECTURE §5: the email channel rides the real SMTP EmailProvider
+  // (same infra as password reset; logging fallback when SMTP env is absent so
+  // dev/tests run offline). SMS/WhatsApp deliberately have NO provider bound —
+  // their deliveries record suppressed(no_provider), never a fabricated send.
+  const service = svc ?? new AnnouncementService(ctx.db.primary, { email: buildEmailProvider(ctx.env, ctx.log) });
   const auth = authenticate(ctx.env);
   const adminOnly = [auth, requireRole("Admin")] as const;
+  // Admin reads/writes are scoped to the caller's congregation (§5 multi-tenant
+  // fix; legacy NULL-congregation rows stay visible). SuperAdmin sees all.
+  const scopeOf = (req: Parameters<typeof requirePrincipal>[0]): string | undefined => {
+    const p = requirePrincipal(req);
+    return p.role === "SuperAdmin" ? undefined : p.congregationId;
+  };
   const r = announcementsRouter;
 
   // ---- Admin ----
   r.get("/admin/announcements", ...adminOnly, handler(async (req, res) => {
     const q = parseBody(AnnouncementService.List, req.query);
-    res.json(await service.list(q));
+    res.json(await service.list(q, scopeOf(req)));
   }));
 
   r.post("/admin/announcements", ...adminOnly, handler(async (req, res) => {
@@ -31,7 +42,7 @@ export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService
 
   r.get("/admin/announcements/:id", ...adminOnly, handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
-    res.json(await service.get(id));
+    res.json(await service.get(id, scopeOf(req)));
   }));
 
   r.put("/admin/announcements/:id", ...adminOnly, handler(async (req, res) => {
@@ -54,6 +65,20 @@ export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService
   r.delete("/admin/announcements/:id", ...adminOnly, handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
     res.json(await service.remove(requirePrincipal(req).userId, id));
+  }));
+
+  // §5 lifecycle: duplicate (also "resend" / "use as template"), archive, restore.
+  r.post("/admin/announcements/:id/duplicate", ...adminOnly, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.status(201).json(await service.duplicate(requirePrincipal(req).userId, id));
+  }));
+  r.post("/admin/announcements/:id/archive", ...adminOnly, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await service.setArchived(requirePrincipal(req).userId, id, true));
+  }));
+  r.post("/admin/announcements/:id/restore", ...adminOnly, handler(async (req, res) => {
+    const { id } = parseBody(IdParam, req.params);
+    res.json(await service.setArchived(requirePrincipal(req).userId, id, false));
   }));
 
   // Feature / unfeature on the mobile homepage (single featured).
@@ -82,9 +107,10 @@ export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService
     res.json(await service.myAnnouncements(requirePrincipal(req).userId));
   }));
 
-  // The single homepage-featured announcement for the mobile Home screen.
-  r.get("/home/featured-announcement", auth, handler(async (_req, res) => {
-    res.json({ data: await service.featured() });
+  // The single homepage-featured announcement for the mobile Home screen —
+  // per-congregation (§8); wire shape unchanged.
+  r.get("/home/featured-announcement", auth, handler(async (req, res) => {
+    res.json({ data: await service.featured(requirePrincipal(req).congregationId) });
   }));
 
   r.get("/announcements/:id", auth, handler(async (req, res) => {

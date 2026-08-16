@@ -5,6 +5,7 @@ import "dotenv/config";
 import { pino } from "pino";
 import { loadEnv } from "./config/env.js";
 import { createPools, closePools } from "./db/pool.js";
+import { drainBackgroundWork } from "./db/background.js";
 import { createApp } from "./http/app.js";
 import { buildRedis } from "./redis.js";
 import { attachMicBridge } from "./modules/radio/micbridge.js";
@@ -25,10 +26,15 @@ function main(): void {
   const shutdown = (signal: string): void => {
     log.info({ signal }, "shutting down");
     server.close(() => {
-      void closePools(db).then(() => {
-        if (redis) redis.disconnect();
-        process.exit(0);
-      });
+      // Let tracked fire-and-forget writes (login + AI-usage telemetry) finish
+      // before the pools close, so a deploy restart doesn't drop them midway.
+      void drainBackgroundWork()
+        .catch((err: unknown) => log.warn({ err }, "background work did not drain"))
+        .then(() => closePools(db))
+        .then(() => {
+          if (redis) redis.disconnect();
+          process.exit(0);
+        });
     });
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));

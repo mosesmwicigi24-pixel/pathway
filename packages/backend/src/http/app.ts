@@ -36,6 +36,7 @@ import { registerOnboarding } from "../modules/onboarding/index.js";
 import { registerGamification } from "../modules/gamification/index.js";
 import { registerAnnouncements } from "../modules/announcements/index.js";
 import { registerGrowth } from "../modules/growth/index.js";
+import { registerThoughts } from "../modules/thoughts/index.js";
 import { registerCommunity } from "../modules/community/index.js";
 import { registerGrowthContent } from "../modules/growth-content/index.js";
 import { registerScores } from "../modules/scores/index.js";
@@ -50,6 +51,9 @@ import { registerProximity } from "../modules/proximity/index.js";
 import { registerActivity } from "../modules/activity/index.js";
 import { registerRadio } from "../modules/radio/index.js";
 import { registerDiscipleship } from "../modules/discipleship/index.js";
+import { registerPastoral } from "../modules/pastoral/index.js";
+import { registerReadingSocial, registerReadingSocialJoin } from "../modules/reading-social/index.js";
+import { registerLive, registerLiveShare } from "../modules/live/index.js";
 import { registerAttendance } from "../modules/attendance/index.js";
 
 export function createApp(ctx: AppContext): Express {
@@ -173,6 +177,7 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerAdminOps(ctx));
   v1.use(registerAnnouncements(ctx));
   v1.use(registerGrowth(ctx));
+  v1.use(registerThoughts(ctx));
   v1.use(registerCommunity(ctx));
   v1.use(registerChat(ctx));
   v1.use(registerAssistant(ctx));
@@ -185,8 +190,21 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerEncouragements(ctx));
   v1.use(registerRadio(ctx));
   v1.use(registerDiscipleship(ctx));
+  v1.use(registerPastoral(ctx));
+  v1.use(registerReadingSocial(ctx));
+  v1.use(registerLive(ctx));
   v1.use(registerAttendance(ctx));
   app.use("/v1", v1);
+
+  // Public deep-link landing page (spec §6) — deliberately at the domain
+  // root, NOT under /v1, so it can double as the Universal Link/App Link
+  // target once that native infra lands (docs/READING_SOCIAL_PLAN.md §5).
+  app.use(registerReadingSocialJoin(ctx));
+
+  // Public broadcast share page (docs/LIVE_SHARE.md) — same placement as the
+  // reading-social join page above and for the same reason: /w/{token} must
+  // answer at the bare domain root, not under /v1.
+  app.use(registerLiveShare(ctx));
 
   // Terminal error handler — always emits the §3.2 envelope.
   app.use(

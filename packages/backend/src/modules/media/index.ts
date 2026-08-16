@@ -13,6 +13,7 @@ import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ApiError } from "../../http/errors.js";
 import { MediaService } from "./service.js";
 import { VideoService } from "./video.js";
+import { MediaPlacementService } from "./placements.js";
 import { buildVideoPipeline } from "./pipeline.js";
 import { buildObjectStore } from "../certificates/objectStore.js";
 import { maybeOne } from "../../db/db.js";
@@ -22,6 +23,7 @@ export const mediaRouter: Router = Router();
 export function registerMedia(ctx: AppContext): Router {
   const media = new MediaService(ctx.env.CLOUDINARY_URL);
   const video = new VideoService(ctx.db.primary, media, buildVideoPipeline(ctx.env));
+  const placements = new MediaPlacementService(ctx.db.primary);
   const auth = authenticate(ctx.env);
   const perm = requirePermission(ctx.db.replica); // RBAC: videos module (Video Library, §5.4)
   const r = mediaRouter;
@@ -470,6 +472,34 @@ export function registerMedia(ctx: AppContext): Router {
     handler(async (req, res) => {
       const input = parseBody(VideoService.RegisterExternal, req.body ?? {});
       res.status(201).json(await video.registerExternal(requirePrincipal(req).userId, input));
+    }),
+  );
+
+  // --- Curriculum media placements (§2.2 — one asset, many modules) ---
+  // Placements are authoritative; each change maintains the modules.media_asset_id
+  // mirror so every member read stays byte-identical.
+  r.get(
+    "/admin/modules/:id/media",
+    auth, perm("videos", "view"),
+    handler(async (req, res) => {
+      res.json({ data: await placements.listForModule(req.params.id ?? "") });
+    }),
+  );
+
+  r.post(
+    "/admin/media/:id/placements",
+    auth, perm("videos", "update"),
+    handler(async (req, res) => {
+      const input = parseBody(MediaPlacementService.Create, req.body ?? {});
+      res.status(201).json(await placements.place(requirePrincipal(req).userId, req.params.id ?? "", input));
+    }),
+  );
+
+  r.delete(
+    "/admin/media/placements/:placementId",
+    auth, perm("videos", "update"),
+    handler(async (req, res) => {
+      res.json(await placements.remove(requirePrincipal(req).userId, req.params.placementId ?? ""));
     }),
   );
 

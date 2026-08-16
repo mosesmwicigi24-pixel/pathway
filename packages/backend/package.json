@@ -22,10 +22,12 @@
     "seed:curriculum": "node scripts/seed-curriculum.mjs",
     "seed:dev-disciples": "node scripts/seed-dev-disciples.mjs",
     "seed:mobile-demo": "node scripts/seed-mobile-demo.mjs",
-    "seed:home-demo": "node scripts/seed-home-demo.mjs"
+    "seed:home-demo": "node scripts/seed-home-demo.mjs",
+    "seed:teaching-quotes": "tsx scripts/seed-teaching-quotes.ts"
   },
   "dependencies": {
     "@nuru/shared": "workspace:*",
+    "@simplewebauthn/server": "^13.1.1",
     "argon2": "^0.40.3",
     "chrono-node": "^2.9.1",
     "dotenv": "^16.4.5",

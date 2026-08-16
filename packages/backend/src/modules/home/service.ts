@@ -9,7 +9,8 @@ import type { Pool } from "pg";
 import { one, maybeOne, tx } from "../../db/db.js";
 import { ScoresService, type ScoreBreakdown } from "../scores/service.js";
 import type { AiProvider } from "../assistant/provider.js";
-import { pickVerse, THEME_REASON, type VerseTheme } from "./verses.js";
+import { pickVerse, pickEncouragement, THEME_REASON, type Encouragement, type VerseArt, type VerseTheme } from "./verses.js";
+import { bandOf, pickBandArt } from "../intelligence/liturgy.js";
 
 const TZ = "Africa/Nairobi";
 
@@ -50,6 +51,8 @@ export interface TailoredVerse {
   reason: string; // a warm "why this verse is for you" line
   mood?: string; // the season Nuru sensed (title-cased library theme), when mood-driven
   text?: string; // the verse text itself, when we hold it (the mood library)
+  art?: VerseArt; // the day's tableau photograph (band-matched, deterministic per day)
+  encouragement: Encouragement; // a short word alongside the verse (historic voices + Pastor Moses)
 }
 
 export class HomeService {
@@ -163,6 +166,7 @@ export class HomeService {
    * verse and *why it's for them*, never the words (§1.1).
    */
   async verseForToday(userId: string): Promise<TailoredVerse> {
+    const day = await one<{ d: string }>(this.pool, `SELECT (now() AT TIME ZONE $1)::date::text AS d`, [TZ]);
     const cached = await maybeOne<{ reference: string; version: string; theme: string; reason: string; verse_text: string | null; mood: string | null }>(
       this.pool,
       `SELECT reference, version, theme, reason, verse_text, mood FROM home_verses
@@ -177,10 +181,10 @@ export class HomeService {
         reason: cached.reason,
         ...(cached.mood ? { mood: cached.mood } : {}),
         ...(cached.verse_text ? { text: cached.verse_text } : {}),
+        art: pickBandArt("verse", bandOf(), day.d),
+        encouragement: pickEncouragement(cached.theme, day.d),
       };
     }
-
-    const day = await one<{ d: string }>(this.pool, `SELECT (now() AT TIME ZONE $1)::date::text AS d`, [TZ]);
     const u = await maybeOne<{ full_name: string }>(this.pool, `SELECT full_name FROM users WHERE user_id = $1`, [userId]);
     const firstName = (u?.full_name ?? "friend").trim().split(/\s+/)[0] || "friend";
     const recent = (
@@ -205,7 +209,16 @@ export class HomeService {
            ON CONFLICT (user_id, day_date) DO NOTHING`,
           [userId, TZ, pick.reference, mood.theme, reason, pick.version, pick.verse_text, mood.label],
         );
-        return { reference: pick.reference, version: pick.version, theme: mood.theme, reason, mood: mood.label, text: pick.verse_text };
+        return {
+          reference: pick.reference,
+          version: pick.version,
+          theme: mood.theme,
+          reason,
+          mood: mood.label,
+          text: pick.verse_text,
+          art: pickBandArt("verse", bandOf(), day.d),
+          encouragement: pickEncouragement(mood.theme, day.d),
+        };
       }
     }
 
@@ -219,7 +232,7 @@ export class HomeService {
        ON CONFLICT (user_id, day_date) DO NOTHING`,
       [userId, TZ, reference, theme, reason],
     );
-    return { reference, version: "WEB", theme, reason };
+    return { reference, version: "WEB", theme, reason, art: pickBandArt("verse", bandOf(), day.d), encouragement: pickEncouragement(theme, day.d) };
   }
 
   /**

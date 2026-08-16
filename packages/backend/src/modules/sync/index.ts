@@ -10,13 +10,15 @@ import { SyncService } from "./service.js";
 
 export const syncRouter: Router = Router();
 
+// device_id is nullish, not optional: Android's kotlinx Json (encodeDefaults=true
+// + explicitNulls default) sends "device_id": null when the client has none yet.
 const PullSchema = z.object({
-  device_id: z.string().uuid().optional(),
+  device_id: z.string().uuid().nullish(),
   cursors: z.record(z.string(), z.number().int().nonnegative()).optional(),
 });
 
 const PushSchema = z.object({
-  device_id: z.string().uuid().optional(),
+  device_id: z.string().uuid().nullish(),
   mutations: z
     .array(
       z.object({

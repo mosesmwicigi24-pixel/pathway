@@ -1,10 +1,13 @@
 // Public password-reset landing page — the target of the emailed reset link
-// (https://pathway.nuruplace.org/reset-password?token=…). Reads the token from
-// the URL, lets the user set a new password (POST /v1/auth/password/reset), and
-// routes back to sign-in. No auth required.
+// (https://pathway.nuruplace.org/reset-password?token=…&code=…). Reads the
+// token (and, when the link came from the code-first flow, the short code)
+// from the URL. When a code is present it's shown big and copyable — "copy
+// this code, paste it in your mobile app" — with the set-new-password form
+// (POST /v1/auth/password/reset) underneath for anyone who'd rather finish
+// right here on the web. No auth required.
 import { useState, type ReactElement } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Eye, EyeOff, Loader2, ShieldCheck, CheckCircle2 } from "lucide-react";
+import { Eye, EyeOff, Loader2, ShieldCheck, CheckCircle2, Copy, Check } from "lucide-react";
 import { PortalApi } from "../../api/client";
 import { errorMessage } from "../../util/error";
 
@@ -15,7 +18,9 @@ export function ResetPassword(): ReactElement {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const token = params.get("token") ?? "";
+  const code = params.get("code") ?? "";
 
+  const [copied, setCopied] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -23,19 +28,30 @@ export function ResetPassword(): ReactElement {
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
 
-  const canSubmit = token.length > 0 && password.length >= 8 && password === confirm;
+  const copyCode = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard API unavailable (e.g. insecure context) — the code is still selectable */
+    }
+  };
+
+  const canSubmit = (token.length > 0 || code.length > 0) && password.length >= 8 && password === confirm;
 
   const submit = async (): Promise<void> => {
     setError("");
-    if (!token) { setError("This reset link is missing its token. Request a new one from the sign-in page."); return; }
+    const credential = token || code;
+    if (!credential) { setError("This reset link is missing its code. Request a new one from the sign-in page."); return; }
     if (password.length < 8) { setError("Password must be at least 8 characters."); return; }
     if (password !== confirm) { setError("Passwords don’t match."); return; }
     setBusy(true);
     try {
-      await PortalApi.resetPassword(token, password);
+      await PortalApi.resetPassword(credential, password);
       setDone(true);
     } catch (e) {
-      setError(errorMessage(e, "This reset link is invalid or has expired. Request a new one."));
+      setError(errorMessage(e, "This reset code or link is invalid or has expired. Request a new one."));
     } finally {
       setBusy(false);
     }
@@ -57,8 +73,33 @@ export function ResetPassword(): ReactElement {
               <>
                 <div className="flex items-center gap-2" style={{ marginBottom: 16 }}>
                   <ShieldCheck size={18} style={{ color: "var(--nuru-gold)" }} />
-                  <h1 style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--nuru-navy)", lineHeight: 1.1 }}>Set a new password</h1>
+                  <h1 style={{ fontFamily: "var(--font-display)", fontSize: 22, color: "var(--nuru-navy)", lineHeight: 1.1 }}>{code ? "Your reset code" : "Set a new password"}</h1>
                 </div>
+
+                {code && (
+                  <div style={{ marginBottom: 20, borderRadius: 14, border: "1.5px solid var(--nuru-gold)", background: "var(--input-background)", padding: "18px 16px", textAlign: "center" }}>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted-foreground)", marginBottom: 8 }}>
+                      Copy this code
+                    </div>
+                    <div
+                      style={{ fontFamily: "'Courier New', Courier, monospace", fontSize: 27, fontWeight: 700, letterSpacing: 3, color: "var(--nuru-navy)", marginBottom: 12, wordBreak: "break-all", userSelect: "all" }}
+                    >
+                      {code}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void copyCode()}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg transition-all"
+                      style={{ height: 34, padding: "0 16px", background: copied ? "var(--nuru-gold)" : "transparent", border: "1.5px solid var(--nuru-gold)", color: copied ? "#fff" : "var(--nuru-navy)", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
+                    >
+                      {copied ? <Check size={13} /> : <Copy size={13} />}
+                      {copied ? "Copied" : "Copy code"}
+                    </button>
+                    <p style={{ fontSize: 11.5, color: "var(--muted-foreground)", marginTop: 10, lineHeight: 1.45 }}>
+                      Paste this code into the Nuru Place app on your phone — or set your new password right here below.
+                    </p>
+                  </div>
+                )}
 
                 <div style={{ marginBottom: 12 }}>
                   <label style={labelStyle}>New password</label>
