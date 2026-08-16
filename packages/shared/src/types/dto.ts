@@ -333,3 +333,128 @@ export interface MixerLiveStatus {
   connected: boolean;
   gains?: Record<string, number>;
 }
+
+// --- Church service attendance (§3.3) ---
+// Distinct from event attendance: church services are the weekly cadence the
+// attendance streak is measured in, and a check-in registers the member's
+// contact details alongside the time they attended.
+
+/** One church service — the cadence slot members scan into. */
+export interface ChurchService {
+  service_id: UUID;
+  title: string;
+  service_date: ISODate;
+  starts_at: ISODateTime;
+  ends_at: ISODateTime | null;
+  checkin_opens_at: ISODateTime | null;
+  checkin_closes_at: ISODateTime | null;
+  qr_enabled: boolean;
+  /** False for an optional gathering that must not count as a miss against a streak. */
+  counts_for_streak: boolean;
+  /** Whether a member could scan into it right now. */
+  checkin_open: boolean;
+  /** Whether the calling member is already checked in. */
+  attended: boolean;
+  attended_at: ISODateTime | null;
+}
+
+/** POST /services — create a cadence slot (Instructor+). */
+export interface ChurchServiceCreateBody {
+  title: string;
+  service_date: ISODate;
+  starts_at: ISODateTime;
+  ends_at?: ISODateTime | null;
+  /** null = open as soon as it exists. */
+  checkin_opens_at?: ISODateTime | null;
+  /** null = never closes. */
+  checkin_closes_at?: ISODateTime | null;
+  qr_enabled?: boolean;
+  counts_for_streak?: boolean;
+}
+
+/**
+ * POST /services/{id}/attendance — the scan plus contact registration. Contact
+ * fields are optional: the server falls back to the member's profile for
+ * anything omitted, so a check-in never fails for want of a known field.
+ */
+export interface ServiceCheckInBody {
+  /** Client-minted; makes an offline replay a no-op (§3.6). */
+  client_scan_id: UUID;
+  /** The HMAC carried in the scanned QR payload. */
+  scan_token: string;
+  full_name?: string;
+  phone_number?: string;
+  email?: string | null;
+  /** When the member actually arrived; clamped to server time if the clock runs fast. */
+  attended_at?: ISODateTime;
+}
+
+/**
+ * Attendance measured in SERVICES, not days. The window is anchored at the
+ * member's first-ever check-in, so services held before they joined are not
+ * counted against them.
+ */
+export interface AttendanceStreak {
+  /** Consecutive services attended, counting back from the most recent. */
+  current_streak: number;
+  longest_streak: number;
+  total_attended: number;
+  /** "Failures" — eligible services missed since the first check-in. */
+  total_missed: number;
+  /**
+   * "Breaks" — times a run of attendance was interrupted. Counted once per
+   * interruption, so two consecutive misses are one break and two failures.
+   */
+  breaks: number;
+  /** Consecutive services missed right now; 0 while the streak is alive. */
+  current_miss_run: number;
+  last_attended_at: ISODateTime | null;
+  last_service_date: ISODate | null;
+  status: AttendanceStreakStatus;
+}
+
+/** new = never attended; active = attended the latest service; at_risk = missed one; broken = missed two or more. */
+export type AttendanceStreakStatus = "new" | "active" | "at_risk" | "broken";
+
+/** POST /services/{id}/attendance → the recorded (or replayed) check-in. */
+export interface ServiceCheckInResult {
+  attendance_id: UUID;
+  duplicate: boolean;
+  service_id: UUID;
+  service_title: string;
+  attended_at: ISODateTime;
+  full_name: string;
+  phone_number: string;
+  email: string | null;
+  streak: AttendanceStreak;
+}
+
+/** GET /me/attendance — one service in the member's history, attended or missed. */
+export interface AttendanceHistoryEntry {
+  service_id: UUID;
+  title: string;
+  service_date: ISODate;
+  starts_at: ISODateTime;
+  attended: boolean;
+  attended_at: ISODateTime | null;
+}
+
+/** GET /services/{id}/attendance — one attendee with the details they registered. */
+export interface ServiceRosterEntry {
+  attendance_id: UUID;
+  user_id: UUID;
+  full_name: string;
+  phone_number: string;
+  email: string | null;
+  attended_at: ISODateTime;
+  method: "qr" | "manual";
+  note: string | null;
+}
+
+/** GET /services/{id}/qr — the string to render as the QR on the sanctuary screen. */
+export interface ServiceQrPayload {
+  service_id: UUID;
+  title: string;
+  /** Format: `nuru-service:<service_id>:<token>`. */
+  payload: string;
+}

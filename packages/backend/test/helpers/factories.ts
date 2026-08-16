@@ -238,3 +238,43 @@ export async function addTypedQuestion(opts: {
   );
   return rows[0]!.question_id;
 }
+
+/**
+ * A church service (the cadence slot members scan into). `startsAt` defaults to
+ * an hour ago so the service already counts toward the streak walk.
+ */
+export async function createChurchService(
+  congregationId: string,
+  opts: {
+    title?: string;
+    serviceDate?: string;
+    startsAt?: string;
+    qrSecret?: string;
+    qrEnabled?: boolean;
+    countsForStreak?: boolean;
+    checkinOpensAt?: string | null;
+    checkinClosesAt?: string | null;
+  } = {},
+): Promise<{ service_id: string; qr_secret: string }> {
+  const startsAt = opts.startsAt ?? new Date(Date.now() - 3_600_000).toISOString();
+  const qrSecret = opts.qrSecret ?? "service-secret-123";
+  const { rows } = await testPool().query<{ service_id: string }>(
+    `INSERT INTO church_services
+       (congregation_id, title, service_date, starts_at, qr_secret, qr_enabled,
+        counts_for_streak, checkin_opens_at, checkin_closes_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     RETURNING service_id`,
+    [
+      congregationId,
+      opts.title ?? "Sunday Service",
+      opts.serviceDate ?? startsAt.slice(0, 10),
+      startsAt,
+      qrSecret,
+      opts.qrEnabled ?? true,
+      opts.countsForStreak ?? true,
+      opts.checkinOpensAt ?? null,
+      opts.checkinClosesAt ?? null,
+    ],
+  );
+  return { service_id: rows[0]!.service_id, qr_secret: qrSecret };
+}
