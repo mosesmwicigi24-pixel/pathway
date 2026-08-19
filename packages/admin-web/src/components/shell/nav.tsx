@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
   TrendingUp, MessageSquare, MessagesSquare, Video, Star, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
-  Radio, SlidersVertical, ListMusic, UserCheck, UserRoundCheck, HeartHandshake, HeartPulse, Megaphone,
+  Radio, SlidersVertical, ListMusic, UserCheck, UserRoundCheck, HeartHandshake, HeartPulse, Megaphone, QrCode,
   type LucideIcon,
 } from "lucide-react";
 
@@ -72,6 +72,7 @@ export const navGroups: NavGroup[] = [
       // requireRole("Instructor") coarse gate — no RBAC permission. Visible.
       { path: "/discipleship-hub", label: "Discipleship Hub", icon: HeartHandshake },
       { path: "/members", label: "Members", icon: Users, permission: "members:view" },
+      { path: "/services", label: "Church Services", icon: QrCode, permission: "members:view" },
       // Attendance follow-up: who came, who didn't, who to call. Same
       // "members:view" gate as the roll — it is the same people, seen
       // through attendance rather than through the register.
@@ -156,6 +157,7 @@ export const pageTitles: Record<string, string> = {
   "/dashboard": "Dashboard",
   "/cell-engagement": "Cell Engagement",
   "/members": "Members",
+  "/services": "Church Services",
   "/follow-up": "Attendance Follow-up",
   "/member-profile": "Member Profile",
   "/profile": "My Profile",

@@ -2869,3 +2869,59 @@ export const FollowUpApi = {
     return data;
   },
 };
+
+// ── Church services: create the cadence slot, and get its QR ────────────────
+// The QR payload is Instructor+ only — handing it to a member would let them
+// check in without being in the room.
+
+export interface ChurchService {
+  service_id: string;
+  title: string;
+  service_date: string;
+  starts_at: string;
+  ends_at: string | null;
+  checkin_opens_at: string | null;
+  checkin_closes_at: string | null;
+  qr_enabled: boolean;
+  counts_for_streak: boolean;
+  /** Whether a member could scan into it right now. */
+  checkin_open: boolean;
+  attended: boolean;
+  attended_at: string | null;
+}
+
+export interface ChurchServiceCreateBody {
+  title: string;
+  service_date: string;
+  starts_at: string;
+  ends_at?: string | null;
+  checkin_opens_at?: string | null;
+  checkin_closes_at?: string | null;
+  qr_enabled?: boolean;
+  counts_for_streak?: boolean;
+}
+
+/** GET /services/{id}/qr — the string to render as the QR on the sanctuary screen. */
+export interface ServiceQrPayload {
+  service_id: string;
+  title: string;
+  /** Format: `nuru-service:<service_id>:<token>`. */
+  payload: string;
+}
+
+export const ServicesApi = {
+  /** Recent AND upcoming services — this is the management list, so a service
+   *  created for next Sunday is visible the moment it exists. */
+  async list(limit = 50): Promise<ChurchService[]> {
+    const { data } = await api.get<{ data: ChurchService[] }>("/services", { params: { limit } });
+    return data.data;
+  },
+  async create(body: ChurchServiceCreateBody): Promise<ChurchService> {
+    const { data } = await api.post<ChurchService>("/services", body);
+    return data;
+  },
+  async qr(serviceId: string): Promise<ServiceQrPayload> {
+    const { data } = await api.get<ServiceQrPayload>(`/services/${serviceId}/qr`);
+    return data;
+  },
+};

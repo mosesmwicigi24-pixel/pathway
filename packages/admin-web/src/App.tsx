@@ -20,6 +20,7 @@ import { CellEngagement } from "./components/pages/CellEngagement";
 import { CellDetail } from "./components/pages/CellDetail";
 import { Members } from "./components/pages/Members";
 import { FollowUp } from "./components/pages/FollowUp";
+import { Services } from "./components/pages/Services";
 import { ReflectionQueue } from "./components/pages/ReflectionQueue";
 import { LevelReviews } from "./components/pages/LevelReviews";
 import { DiscipleshipHub } from "./components/pages/DiscipleshipHub";
@@ -102,6 +103,7 @@ const router = createBrowserRouter([
       { path: "cell-engagement", element: <Guarded><CellEngagement /></Guarded> },
       { path: "cell-engagement/:cellId", element: <Guarded><CellDetail /></Guarded> },
       { path: "members", element: <Guarded><Members /></Guarded> },
+      { path: "services", element: <Guarded><Services /></Guarded> },
       { path: "follow-up", element: <Guarded><FollowUp /></Guarded> },
       { path: "member-profile", element: <Guarded><MemberProfile /></Guarded> },
       { path: "profile", element: <Profile /> },
