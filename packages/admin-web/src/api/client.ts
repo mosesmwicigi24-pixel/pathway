@@ -2768,3 +2768,160 @@ export const BroadcastApi = {
   /** One broadcast whole: the message, every response, and the tick ledger. */
   detail: (id: string) => api.get<BroadcastDetailData>(`/chat/broadcasts/${id}`).then((r) => r.data),
 };
+
+// ── Follow-up: the administration side of church attendance (§3.3) ──────────
+// Check-in answers "was this member here?"; follow-up answers "who wasn't, and
+// who do we call?". Read-only and congregation-scoped; Instructor+ on the wire.
+
+export interface FollowUpMember {
+  user_id: string;
+  full_name: string;
+  phone_number: string | null;
+  email: string | null;
+  /** Details as registered at the most recent scan; may differ from the profile. */
+  registered_name: string | null;
+  registered_phone: string | null;
+  registered_email: string | null;
+  last_attended_at: string | null;
+  last_service_title: string | null;
+  attended_this_year: number;
+  missed_this_year: number;
+  /** Event check-ins this year — counted beside services, never part of the streak. */
+  events_attended_this_year: number;
+  current_streak: number;
+  longest_streak: number;
+  current_miss_run: number;
+  breaks: number;
+  status: "new" | "active" | "at_risk" | "broken";
+  never_attended: boolean;
+}
+
+export interface ServiceScanLogEntry {
+  attendance_id: string;
+  user_id: string;
+  full_name: string;
+  phone_number: string;
+  email: string | null;
+  attended_at: string;
+  method: string;
+  service_id: string;
+  service_title: string;
+  service_date: string;
+}
+
+export interface ServiceAttendanceSummary {
+  service_id: string;
+  title: string;
+  service_date: string;
+  starts_at: string;
+  counts_for_streak: boolean;
+  expected: number;
+  attended: number;
+  absent: number;
+  attendance_rate: number | null;
+}
+
+export interface Absentee {
+  user_id: string;
+  full_name: string;
+  phone_number: string | null;
+  email: string | null;
+  last_attended_at: string | null;
+  current_miss_run: number;
+  streak_lost: number;
+  never_attended: boolean;
+}
+
+export interface AttendanceYearOverview {
+  year: number;
+  services_held: number;
+  sundays_held: number;
+  members: number;
+  members_attended: number;
+  members_never_attended: number;
+  members_at_risk: number;
+  members_broken: number;
+  total_check_ins: number;
+  total_event_check_ins: number;
+}
+
+export const FollowUpApi = {
+  async overview(year?: number): Promise<AttendanceYearOverview> {
+    const { data } = await api.get<AttendanceYearOverview>("/admin/follow-up/overview", { params: { year } });
+    return data;
+  },
+  async members(q: { year?: number; status?: string; limit?: number } = {}): Promise<FollowUpMember[]> {
+    const { data } = await api.get<{ data: FollowUpMember[] }>("/admin/follow-up/members", { params: q });
+    return data.data;
+  },
+  async scans(q: { service_id?: string; limit?: number } = {}): Promise<ServiceScanLogEntry[]> {
+    const { data } = await api.get<{ data: ServiceScanLogEntry[] }>("/admin/follow-up/scans", { params: q });
+    return data.data;
+  },
+  async services(year?: number): Promise<ServiceAttendanceSummary[]> {
+    const { data } = await api.get<{ data: ServiceAttendanceSummary[] }>("/admin/follow-up/services", { params: { year } });
+    return data.data;
+  },
+  async absentees(serviceId: string): Promise<{ service: ServiceAttendanceSummary; absentees: Absentee[] }> {
+    const { data } = await api.get<{ service: ServiceAttendanceSummary; absentees: Absentee[] }>(
+      `/admin/follow-up/services/${serviceId}/absentees`,
+    );
+    return data;
+  },
+};
+
+// ── Church services: create the cadence slot, and get its QR ────────────────
+// The QR payload is Instructor+ only — handing it to a member would let them
+// check in without being in the room.
+
+export interface ChurchService {
+  service_id: string;
+  title: string;
+  service_date: string;
+  starts_at: string;
+  ends_at: string | null;
+  checkin_opens_at: string | null;
+  checkin_closes_at: string | null;
+  qr_enabled: boolean;
+  counts_for_streak: boolean;
+  /** Whether a member could scan into it right now. */
+  checkin_open: boolean;
+  attended: boolean;
+  attended_at: string | null;
+}
+
+export interface ChurchServiceCreateBody {
+  title: string;
+  service_date: string;
+  starts_at: string;
+  ends_at?: string | null;
+  checkin_opens_at?: string | null;
+  checkin_closes_at?: string | null;
+  qr_enabled?: boolean;
+  counts_for_streak?: boolean;
+}
+
+/** GET /services/{id}/qr — the string to render as the QR on the sanctuary screen. */
+export interface ServiceQrPayload {
+  service_id: string;
+  title: string;
+  /** Format: `nuru-service:<service_id>:<token>`. */
+  payload: string;
+}
+
+export const ServicesApi = {
+  /** Recent AND upcoming services — this is the management list, so a service
+   *  created for next Sunday is visible the moment it exists. */
+  async list(limit = 50): Promise<ChurchService[]> {
+    const { data } = await api.get<{ data: ChurchService[] }>("/services", { params: { limit } });
+    return data.data;
+  },
+  async create(body: ChurchServiceCreateBody): Promise<ChurchService> {
+    const { data } = await api.post<ChurchService>("/services", body);
+    return data;
+  },
+  async qr(serviceId: string): Promise<ServiceQrPayload> {
+    const { data } = await api.get<ServiceQrPayload>(`/services/${serviceId}/qr`);
+    return data;
+  },
+};

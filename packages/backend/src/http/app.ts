@@ -54,6 +54,7 @@ import { registerDiscipleship } from "../modules/discipleship/index.js";
 import { registerPastoral } from "../modules/pastoral/index.js";
 import { registerReadingSocial, registerReadingSocialJoin } from "../modules/reading-social/index.js";
 import { registerLive, registerLiveShare } from "../modules/live/index.js";
+import { registerAttendance } from "../modules/attendance/index.js";
 
 export function createApp(ctx: AppContext): Express {
   const app = express();
@@ -192,6 +193,7 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerPastoral(ctx));
   v1.use(registerReadingSocial(ctx));
   v1.use(registerLive(ctx));
+  v1.use(registerAttendance(ctx));
   app.use("/v1", v1);
 
   // Public deep-link landing page (spec §6) — deliberately at the domain

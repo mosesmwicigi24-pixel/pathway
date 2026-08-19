@@ -17,6 +17,7 @@ tags:
   - name: auth
   - name: curriculum
   - name: progress
+  - name: attendance
   - name: assessment
   - name: portal
   - name: giving
@@ -1703,6 +1704,261 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/Unprocessable" }
+
+  # --- Church service attendance (§3.3) ---
+  # Distinct from /events/{id}/attendance above: church services are the weekly
+  # cadence the attendance streak is measured in, and a service check-in
+  # registers the member's contact details alongside the time they attended.
+  /services:
+    get:
+      tags: [attendance]
+      summary: Recent and upcoming church services for the caller's congregation.
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: Services, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/ChurchService" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [attendance]
+      summary: Create a church service (the cadence slot members scan into). Instructor+.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChurchServiceCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChurchService" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { description: A service with that title already exists on that date }
+  /services/open:
+    get:
+      tags: [attendance]
+      summary: Services open for check-in right now, soonest first.
+      responses:
+        "200":
+          description: Open services
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/ChurchService" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /services/{id}/qr:
+    get:
+      tags: [attendance]
+      summary: The QR payload to display on the sanctuary screen. Instructor+ (never member-visible).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Scannable payload — "nuru-service:<service_id>:<token>"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [service_id, title, payload]
+                properties:
+                  service_id: { type: string, format: uuid }
+                  title: { type: string }
+                  payload: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /services/{id}/attendance:
+    post:
+      tags: [attendance]
+      summary: >-
+        Register attendance at a church service by QR scan. Records the member's
+        name, phone, email and the time they attended. Idempotent on
+        client_scan_id and on (member, service) — a re-scan returns 200 with
+        duplicate=true rather than an error.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServiceCheckInRequest" }
+      responses:
+        "200":
+          description: Already checked in — the original record, unchanged
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceCheckInResult" }
+        "201":
+          description: Attendance registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceCheckInResult" }
+        "400": { description: Invalid or expired scan token }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    get:
+      tags: [attendance]
+      summary: Attendance roster with the contact details each member registered. Instructor+.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Roster, earliest arrival first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/ServiceRosterEntry" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /me/attendance/streak:
+    get:
+      tags: [attendance]
+      summary: The caller's church attendance streak — current run, longest, breaks and failures.
+      responses:
+        "200":
+          description: Streak summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttendanceStreak" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/attendance:
+    get:
+      tags: [attendance]
+      summary: >-
+        The caller's service-by-service history since their first check-in,
+        newest first. Missed services appear with attended=false — this is what
+        makes a "failure" legible to the member.
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 30 } }
+      responses:
+        "200":
+          description: Attendance history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/AttendanceHistoryEntry" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # --- Follow-up: the administration side of attendance (§3.3) ---
+  # Read-only, congregation-scoped, Instructor+. Check-in answers "was this
+  # member here?"; follow-up answers "who wasn't, and who do we call?".
+  /admin/follow-up/overview:
+    get:
+      tags: [attendance]
+      summary: One-screen attendance figure for the year — services held, who is engaged, who is slipping.
+      parameters:
+        - { name: year, in: query, schema: { type: integer, minimum: 2000, maximum: 2999 } }
+      responses:
+        "200":
+          description: Year overview
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttendanceYearOverview" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/follow-up/members:
+    get:
+      tags: [attendance]
+      summary: >-
+        Every member with their attendance standing, longest current absence
+        first — that ordering is the follow-up queue.
+      parameters:
+        - { name: year, in: query, schema: { type: integer, minimum: 2000, maximum: 2999 } }
+        - { name: status, in: query, schema: { type: string, enum: [new, active, at_risk, broken] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 2000, default: 500 } }
+      responses:
+        "200":
+          description: Member standings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/FollowUpMember" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/follow-up/scans:
+    get:
+      tags: [attendance]
+      summary: The raw scan log — every check-in with the details captured at the scan, newest first.
+      parameters:
+        - { name: service_id, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 200 } }
+      responses:
+        "200":
+          description: Scan log
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/ServiceScanLogEntry" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/follow-up/services:
+    get:
+      tags: [attendance]
+      summary: Per-service totals for the year — the end-of-day report for each gathering.
+      parameters:
+        - { name: year, in: query, schema: { type: integer, minimum: 2000, maximum: 2999 } }
+      responses:
+        "200":
+          description: Service summaries, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/ServiceAttendanceSummary" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/follow-up/services/{id}/absentees:
+    get:
+      tags: [attendance]
+      summary: >-
+        Who missed this service, worst first — the call list. Members who never
+        attended are included but flagged, because welcoming and winning back
+        are different conversations.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The service's totals plus the absentees
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [service, absentees]
+                properties:
+                  service: { $ref: "#/components/schemas/ServiceAttendanceSummary" }
+                  absentees: { type: array, items: { $ref: "#/components/schemas/Absentee" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # --- Multiplier / admin portal (§3.3) ---
   /cells/{cell_id}/members:
@@ -6933,6 +7189,214 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    # --- Church service attendance (§3.3) ---
+    ChurchService:
+      type: object
+      description: One church service — the cadence slot members scan into.
+      required: [service_id, title, service_date, starts_at, qr_enabled, counts_for_streak, checkin_open, attended]
+      properties:
+        service_id: { type: string, format: uuid }
+        title: { type: string }
+        service_date: { type: string, format: date }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: [string, "null"], format: date-time }
+        checkin_opens_at: { type: [string, "null"], format: date-time }
+        checkin_closes_at: { type: [string, "null"], format: date-time }
+        qr_enabled: { type: boolean }
+        counts_for_streak:
+          type: boolean
+          description: False for an optional gathering that must not count as a miss against a streak.
+        checkin_open: { type: boolean, description: Whether a member could scan into it right now. }
+        attended: { type: boolean, description: Whether the calling member is already checked in. }
+        attended_at: { type: [string, "null"], format: date-time }
+    ChurchServiceCreate:
+      type: object
+      required: [title, service_date, starts_at]
+      properties:
+        title: { type: string, maxLength: 255 }
+        service_date: { type: string, format: date }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: [string, "null"], format: date-time }
+        checkin_opens_at: { type: [string, "null"], format: date-time, description: "null = open as soon as it exists" }
+        checkin_closes_at: { type: [string, "null"], format: date-time, description: "null = never closes" }
+        qr_enabled: { type: boolean, default: true }
+        counts_for_streak: { type: boolean, default: true }
+    ServiceCheckInRequest:
+      type: object
+      description: >-
+        The scan plus the member's contact registration. Contact fields are
+        optional on the wire — the server falls back to the member's profile for
+        anything omitted, so a check-in never fails for want of a known field.
+      required: [client_scan_id, scan_token]
+      properties:
+        client_scan_id:
+          type: string
+          format: uuid
+          description: Client-minted; makes an offline replay a no-op (§3.6).
+        scan_token: { type: string, description: The HMAC carried in the scanned QR payload. }
+        full_name: { type: string, maxLength: 255 }
+        phone_number: { type: string, maxLength: 32 }
+        email: { type: [string, "null"], format: email, maxLength: 255 }
+        attended_at:
+          type: string
+          format: date-time
+          description: >-
+            When the member actually arrived, set by the offline queue on replay.
+            Clamped to server time if the client clock runs fast.
+    ServiceCheckInResult:
+      type: object
+      required: [attendance_id, duplicate, service_id, service_title, attended_at, full_name, phone_number, streak]
+      properties:
+        attendance_id: { type: string, format: uuid }
+        duplicate: { type: boolean }
+        service_id: { type: string, format: uuid }
+        service_title: { type: string }
+        attended_at: { type: string, format: date-time }
+        full_name: { type: string }
+        phone_number: { type: string }
+        email: { type: [string, "null"] }
+        streak: { $ref: "#/components/schemas/AttendanceStreak" }
+    AttendanceStreak:
+      type: object
+      description: >-
+        Attendance measured in SERVICES, not days. The window is anchored at the
+        member's first-ever check-in, so services held before they joined are not
+        counted against them.
+      required:
+        [current_streak, longest_streak, total_attended, total_missed, breaks, current_miss_run, status]
+      properties:
+        current_streak: { type: integer, description: "Consecutive services attended, counting back from the most recent." }
+        longest_streak: { type: integer }
+        total_attended: { type: integer }
+        total_missed: { type: integer, description: '"Failures" — eligible services missed since the first check-in.' }
+        breaks:
+          type: integer
+          description: >-
+            "Breaks" — times a run of attendance was interrupted. Counted once per
+            interruption, so two consecutive misses are one break and two failures.
+        current_miss_run: { type: integer, description: Consecutive services missed right now; 0 while the streak is alive. }
+        last_attended_at: { type: [string, "null"], format: date-time }
+        last_service_date: { type: [string, "null"], format: date }
+        status:
+          type: string
+          enum: [new, active, at_risk, broken]
+          description: new = never attended; active = attended the latest service; at_risk = missed one; broken = missed two or more.
+    AttendanceHistoryEntry:
+      type: object
+      required: [service_id, title, service_date, starts_at, attended]
+      properties:
+        service_id: { type: string, format: uuid }
+        title: { type: string }
+        service_date: { type: string, format: date }
+        starts_at: { type: string, format: date-time }
+        attended: { type: boolean }
+        attended_at: { type: [string, "null"], format: date-time }
+    FollowUpMember:
+      type: object
+      description: One member's standing in the congregation's attendance record.
+      required:
+        [user_id, full_name, attended_this_year, missed_this_year, events_attended_this_year,
+         current_streak, longest_streak, current_miss_run, breaks, status, never_attended]
+      properties:
+        user_id: { type: string, format: uuid }
+        full_name: { type: string }
+        phone_number: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        registered_name:
+          type: [string, "null"]
+          description: Name as registered at their most recent scan, which may differ from the profile.
+        registered_phone: { type: [string, "null"] }
+        registered_email: { type: [string, "null"] }
+        last_attended_at: { type: [string, "null"], format: date-time }
+        last_service_title: { type: [string, "null"] }
+        attended_this_year: { type: integer }
+        missed_this_year: { type: integer }
+        events_attended_this_year:
+          type: integer
+          description: Event check-ins this year — counted beside services, never part of the streak.
+        current_streak: { type: integer }
+        longest_streak: { type: integer }
+        current_miss_run:
+          type: integer
+          description: Consecutive services missed right now — the number that triggers follow-up.
+        breaks: { type: integer }
+        status: { type: string, enum: [new, active, at_risk, broken] }
+        never_attended: { type: boolean }
+    ServiceScanLogEntry:
+      type: object
+      description: One check-in, with everything captured at the moment of the scan.
+      required: [attendance_id, user_id, full_name, phone_number, attended_at, method, service_id, service_title, service_date]
+      properties:
+        attendance_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        full_name: { type: string }
+        phone_number: { type: string }
+        email: { type: [string, "null"] }
+        attended_at: { type: string, format: date-time }
+        method: { type: string, enum: [qr, manual] }
+        service_id: { type: string, format: uuid }
+        service_title: { type: string }
+        service_date: { type: string, format: date }
+    ServiceAttendanceSummary:
+      type: object
+      description: Congregation totals for one service — the end-of-day number.
+      required: [service_id, title, service_date, starts_at, counts_for_streak, expected, attended, absent]
+      properties:
+        service_id: { type: string, format: uuid }
+        title: { type: string }
+        service_date: { type: string, format: date }
+        starts_at: { type: string, format: date-time }
+        counts_for_streak: { type: boolean }
+        expected: { type: integer, description: Members on the roll at the time of the report. }
+        attended: { type: integer }
+        absent: { type: integer }
+        attendance_rate:
+          type: [number, "null"]
+          description: attended / expected in 0..1, or null when nobody is on the roll.
+    Absentee:
+      type: object
+      description: A member who missed a specific service — one line of the call list.
+      required: [user_id, full_name, current_miss_run, streak_lost, never_attended]
+      properties:
+        user_id: { type: string, format: uuid }
+        full_name: { type: string }
+        phone_number: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        last_attended_at: { type: [string, "null"], format: date-time }
+        current_miss_run: { type: integer }
+        streak_lost: { type: integer, description: How long they had been coming before they stopped. }
+        never_attended: { type: boolean }
+    AttendanceYearOverview:
+      type: object
+      required:
+        [year, services_held, sundays_held, members, members_attended, members_never_attended,
+         members_at_risk, members_broken, total_check_ins, total_event_check_ins]
+      properties:
+        year: { type: integer }
+        services_held: { type: integer, description: Streak-eligible services held so far this year. }
+        sundays_held:
+          type: integer
+          description: Of those services, the ones falling on a Sunday.
+        members: { type: integer }
+        members_attended: { type: integer }
+        members_never_attended: { type: integer }
+        members_at_risk: { type: integer }
+        members_broken: { type: integer }
+        total_check_ins: { type: integer }
+        total_event_check_ins: { type: integer }
+    ServiceRosterEntry:
+      type: object
+      description: One attendee with the contact details they registered at the scan.
+      required: [attendance_id, user_id, full_name, phone_number, attended_at, method]
+      properties:
+        attendance_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        full_name: { type: string }
+        phone_number: { type: string }
+        email: { type: [string, "null"] }
+        attended_at: { type: string, format: date-time }
+        method: { type: string, enum: [qr, manual] }
+        note: { type: [string, "null"] }
     Permission:
       type: object
       description: A single RBAC (module × capability) cell. 16 fixed modules × 6 capabilities.
