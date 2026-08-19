@@ -7,11 +7,15 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ChurchAttendanceService, checkInSchema, createServiceSchema } from "./service.js";
+import { FollowUpService } from "./follow-up.js";
 
 export const attendanceRouter: Router = Router();
 
 export function registerAttendance(ctx: AppContext): Router {
   const svc = new ChurchAttendanceService(ctx.db.primary);
+  // Reporting reads only; point it at the replica so a Sunday-morning report
+  // never competes with the check-in writes happening at the same moment.
+  const followUp = new FollowUpService(ctx.db.replica);
   const auth = authenticate(ctx.env);
   const leaderPlus = [auth, requireRole("Instructor")] as const;
   const r = attendanceRouter;
@@ -100,5 +104,76 @@ export function registerAttendance(ctx: AppContext): Router {
     }),
   );
 
+  // --- Follow-up (administration) ---
+  // Who came, who didn't, and who to call. Leader+ only: this is the whole
+  // congregation's contact list, not a member's own record.
+
+  /** Every member with their attendance standing, longest absence first. */
+  r.get(
+    "/admin/follow-up/members",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      const p = requirePrincipal(req);
+      res.json({
+        data: await followUp.members(p, yearParam(req.query.year), {
+          status: typeof req.query.status === "string" ? req.query.status : undefined,
+          limit: numParam(req.query.limit),
+        }),
+      });
+    }),
+  );
+
+  /** The raw scan log — every check-in with the details captured at the scan. */
+  r.get(
+    "/admin/follow-up/scans",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      res.json({
+        data: await followUp.scanLog(requirePrincipal(req), {
+          serviceId: typeof req.query.service_id === "string" ? req.query.service_id : undefined,
+          limit: numParam(req.query.limit),
+        }),
+      });
+    }),
+  );
+
+  /** Per-service totals — the end-of-day report for each gathering. */
+  r.get(
+    "/admin/follow-up/services",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      res.json({ data: await followUp.serviceSummaries(requirePrincipal(req), yearParam(req.query.year)) });
+    }),
+  );
+
+  /** Who missed this service — the call list. */
+  r.get(
+    "/admin/follow-up/services/:id/absentees",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      res.json(await followUp.absentees(requirePrincipal(req), req.params.id ?? ""));
+    }),
+  );
+
+  /** The one-screen year figure. */
+  r.get(
+    "/admin/follow-up/overview",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      res.json(await followUp.yearOverview(requirePrincipal(req), yearParam(req.query.year)));
+    }),
+  );
+
   return r;
+}
+
+/** Query year, defaulting to the current one; anything unparseable falls back. */
+function yearParam(raw: unknown): number {
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 2000 && n <= 2999 ? n : new Date().getUTCFullYear();
+}
+
+function numParam(raw: unknown): number | undefined {
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
 }

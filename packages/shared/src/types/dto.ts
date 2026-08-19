@@ -458,3 +458,97 @@ export interface ServiceQrPayload {
   /** Format: `nuru-service:<service_id>:<token>`. */
   payload: string;
 }
+
+// --- Follow-up: the administration side of attendance (§3.3) ---
+// Check-in answers "was this member here?"; follow-up answers "who wasn't, and
+// who do we call?". All read-only, congregation-scoped, Instructor+.
+
+/** One member's standing in the congregation's attendance record. */
+export interface FollowUpMember {
+  user_id: UUID;
+  full_name: string;
+  phone_number: string | null;
+  email: string | null;
+  /** Details as registered at their most recent scan; may differ from the profile. */
+  registered_name: string | null;
+  registered_phone: string | null;
+  registered_email: string | null;
+  last_attended_at: ISODateTime | null;
+  last_service_title: string | null;
+  attended_this_year: number;
+  missed_this_year: number;
+  /** Event check-ins this year — counted beside services, never part of the streak. */
+  events_attended_this_year: number;
+  current_streak: number;
+  longest_streak: number;
+  /** Consecutive services missed right now — the number that triggers follow-up. */
+  current_miss_run: number;
+  breaks: number;
+  status: AttendanceStreakStatus;
+  never_attended: boolean;
+}
+
+/** One check-in, with everything captured at the moment of the scan. */
+export interface ServiceScanLogEntry {
+  attendance_id: UUID;
+  user_id: UUID;
+  full_name: string;
+  phone_number: string;
+  email: string | null;
+  attended_at: ISODateTime;
+  method: "qr" | "manual";
+  service_id: UUID;
+  service_title: string;
+  service_date: ISODate;
+}
+
+/** Congregation totals for one service — the end-of-day number. */
+export interface ServiceAttendanceSummary {
+  service_id: UUID;
+  title: string;
+  service_date: ISODate;
+  starts_at: ISODateTime;
+  counts_for_streak: boolean;
+  /** Members on the roll at the time of the report. */
+  expected: number;
+  attended: number;
+  absent: number;
+  /** attended / expected in 0..1, or null when nobody is on the roll. */
+  attendance_rate: number | null;
+}
+
+/** A member who missed a specific service — one line of the call list. */
+export interface Absentee {
+  user_id: UUID;
+  full_name: string;
+  phone_number: string | null;
+  email: string | null;
+  last_attended_at: ISODateTime | null;
+  current_miss_run: number;
+  /** How long they had been coming before they stopped. */
+  streak_lost: number;
+  never_attended: boolean;
+}
+
+/** GET /admin/follow-up/services/{id}/absentees */
+export interface AbsenteeReport {
+  service: ServiceAttendanceSummary;
+  absentees: Absentee[];
+}
+
+/** GET /admin/follow-up/overview — the one-screen year figure. */
+export interface AttendanceYearOverview {
+  year: number;
+  /** Streak-eligible services held so far this year. */
+  services_held: number;
+  /** Of those services, the ones falling on a Sunday. */
+  sundays_held: number;
+  members: number;
+  members_attended: number;
+  members_never_attended: number;
+  members_at_risk: number;
+  members_broken: number;
+  total_check_ins: number;
+  /** Event check-ins this year — counted, but never part of the streak. */
+  total_event_check_ins: number;
+}

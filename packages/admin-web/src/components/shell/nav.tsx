@@ -4,7 +4,8 @@ import {
   LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
   TrendingUp, MessageSquare, MessagesSquare, Video, Star, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
-  Radio, SlidersVertical, ListMusic, UserCheck, HeartHandshake, HeartPulse, Megaphone, type LucideIcon,
+  Radio, SlidersVertical, ListMusic, UserCheck, UserRoundCheck, HeartHandshake, HeartPulse, Megaphone,
+  type LucideIcon,
 } from "lucide-react";
 
 export interface NavItem {
@@ -71,6 +72,10 @@ export const navGroups: NavGroup[] = [
       // requireRole("Instructor") coarse gate — no RBAC permission. Visible.
       { path: "/discipleship-hub", label: "Discipleship Hub", icon: HeartHandshake },
       { path: "/members", label: "Members", icon: Users, permission: "members:view" },
+      // Attendance follow-up: who came, who didn't, who to call. Same
+      // "members:view" gate as the roll — it is the same people, seen
+      // through attendance rather than through the register.
+      { path: "/follow-up", label: "Follow-up", icon: UserRoundCheck, permission: "members:view" },
       // Reflection Queue / Level reviews / Events are still requireRole(Instructor)
       // coarse gates (not yet migrated to fine RBAC) — no sensible permission
       // key to hide them on. Visible; the server keeps its own gate.
@@ -151,6 +156,7 @@ export const pageTitles: Record<string, string> = {
   "/dashboard": "Dashboard",
   "/cell-engagement": "Cell Engagement",
   "/members": "Members",
+  "/follow-up": "Attendance Follow-up",
   "/member-profile": "Member Profile",
   "/profile": "My Profile",
   "/notifications": "Notifications",
