@@ -67,6 +67,13 @@ export const PERM_MODULES = [
   "dashboard", "levels", "cms", "quiz", "videos", "cells", "members",
   "reflections", "events", "finance", "certificates", "badges",
   "users", "rolesAdmin", "countries", "languages", "congregations", "live",
+  // followUp: migration 198. Forgetting a new module HERE is how the Follow-up
+  // section shipped invisible to the SuperAdmin on 2026-08-20: the DB grants
+  // were right, the endpoints bridged SuperAdmin past every check, but /me
+  // builds the SuperAdmin/Admin permission array from THIS list — and the
+  // sidebars trust /me. A module that exists only in rbac_role_permissions is
+  // a module the top role cannot see.
+  "followUp",
 ] as const;
 // `go`/`manage` are Nuru Live's (module `live`) capability pair — broadcast
 // start vs. end-anyone's-stream oversight (docs/LIVE_STREAMING.md). They ride

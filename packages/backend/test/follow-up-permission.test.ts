@@ -113,3 +113,34 @@ describe("the endpoints enforce it", () => {
     expect(write.status).toBe(403);
   });
 });
+
+describe("what /me surfaces — the array the sidebars actually trust", () => {
+  it("gives the SuperAdmin followUp:view on their profile", async () => {
+    const cong = await createCongregation();
+    const admin = await createUser({ congregationId: cong, role: "SuperAdmin", email: "sa@dev.local" });
+
+    const res = await agent()
+      .get("/v1/me")
+      .set("Authorization", bearer({ sub: admin.user_id, role: "SuperAdmin", cong }));
+
+    // The gap that shipped the section invisible to the owner: endpoints bridge
+    // SuperAdmin past every permission check, but the SIDEBAR filters on this
+    // array, which is built from the hardcoded PERM_MODULES grid — not from
+    // rbac_role_permissions. A module granted only in the database is a module
+    // the top role cannot see. This test fails the moment someone adds a module
+    // by migration and forgets the grid.
+    expect(res.body.profile.permissions).toContain("followUp:view");
+    expect(res.body.profile.permissions).toContain("followUp:edit");
+  });
+
+  it("gives a follow_up_team holder the same keys through the DB path", async () => {
+    const cong = await createCongregation();
+    const u = await createUser({ congregationId: cong, role: "Instructor", email: "teamme@dev.local" });
+    await grant(u.user_id, "follow_up_team");
+
+    const res = await agent()
+      .get("/v1/me")
+      .set("Authorization", bearer({ sub: u.user_id, role: "Instructor", cong }));
+    expect(res.body.profile.permissions).toContain("followUp:view");
+  });
+});
