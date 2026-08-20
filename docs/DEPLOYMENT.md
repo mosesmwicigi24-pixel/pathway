@@ -38,15 +38,37 @@ you are deploying (Actions → CI → that run → Artifacts), then extract it o
 the directory Caddy serves.
 
 ```bash
+PORTAL_ROOT=/var/www/pathway-portal          # nginx, not Caddy: see below
+
 unzip -o portal-<sha>.zip -d /tmp/portal-new
-rsync -a --delete /tmp/portal-new/ "$PORTAL_ROOT"/
+cp -a "$PORTAL_ROOT" /root/portal-backup-$(date +%s)
+rm -rf "$PORTAL_ROOT"/assets                 # hashed names: stale ones accumulate forever
+cp -a /tmp/portal-new/. "$PORTAL_ROOT"/
+chown -R 501:staff "$PORTAL_ROOT"
 ```
 
-> **`$PORTAL_ROOT` is the one thing this document cannot tell you.** The
-> `Caddyfile` is mounted into the container from the box and is not in this
-> repo, so the static root is only visible on the server. Read it out of the
-> Caddyfile once and record it here — until then this step is guesswork, which
-> is exactly what a runbook exists to eliminate.
+> **`$PORTAL_ROOT` is `/var/www/pathway-portal`**, and it is served by **nginx**,
+> not Caddy — `root /var/www/pathway-portal;` in
+> `/etc/nginx/sites-enabled/pathway.nuruplace.org`. Recorded 2026-08-17; this
+> paragraph previously said the value could not be known from the repo.
+
+> **DO NOT `rsync --delete` INTO THIS DIRECTORY.** It holds two pages that are
+> NOT in the CI bundle and never will be:
+>
+> ```
+> privacy.html          → the privacy policy URL on the Play listing
+> delete-account.html   → the account-deletion URL Play requires
+> ```
+>
+> Both currently serve 200. `rsync -a --delete`, which this runbook used to
+> prescribe, removes them — and the first anyone would learn of it is a Play
+> policy warning, or a member following a deletion link into a 404. The copy
+> above overwrites what the bundle contains and leaves everything else alone.
+>
+> `assets/` is cleared deliberately, and only `assets/`: Vite emits
+> content-hashed filenames, so without that the directory grows a new copy of
+> the app every deploy and never sheds one. Nothing outside `assets/` is ever
+> removed.
 
 ---
 
