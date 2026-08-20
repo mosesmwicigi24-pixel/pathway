@@ -2845,7 +2845,35 @@ export interface AttendanceYearOverview {
   total_event_check_ins: number;
 }
 
+
+/** A human follow-up step that has come due — the call list (backend #429). */
+export interface FollowUpDueStep {
+  event_id: string;
+  run_id: string;
+  step_id: string;
+  user_id: string;
+  full_name: string;
+  phone_number: string | null;
+  action: string;
+  due_at: string;
+  cadence_name: string;
+  service_title: string | null;
+  days_overdue: number;
+}
+
+/** What a leader records after doing it. */
+export type FollowUpOutcome = "reached" | "no_answer" | "wrong_number" | "skipped";
+
 export const FollowUpApi = {
+  /** Human steps that have come due, oldest first. */
+  async due(limit = 100): Promise<FollowUpDueStep[]> {
+    const { data } = await api.get<{ data: FollowUpDueStep[] }>("/admin/follow-up/due", { params: { limit } });
+    return data.data;
+  },
+  /** Record that the contact was made, and what came of it. */
+  async recordContact(eventId: string, outcome: FollowUpOutcome, note?: string): Promise<void> {
+    await api.post(`/admin/follow-up/due/${eventId}`, { outcome, ...(note ? { note } : {}) });
+  },
   async overview(year?: number): Promise<AttendanceYearOverview> {
     const { data } = await api.get<AttendanceYearOverview>("/admin/follow-up/overview", { params: { year } });
     return data;

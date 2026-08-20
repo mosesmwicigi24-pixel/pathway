@@ -102,9 +102,40 @@ describe("church service attendance", () => {
   it("nudges engagement + gamification and logs the activity event", async () => {
     await svc().checkIn(member, serviceId, { client_scan_id: SCAN, scan_token: token });
     const ob = await testPool().query("SELECT topic FROM outbox ORDER BY topic");
-    expect(ob.rows.map((r) => r.topic)).toEqual(["engagement.recompute", "gamification.evaluate"]);
+    // follow_up.arm joins the set because this is the member's FIRST service
+    // attendance, which is what arms the first-visit cadence. Enqueued rather
+    // than run inline so a follow-up rhythm can never fail somebody's check-in.
+    expect(ob.rows.map((r) => r.topic)).toEqual([
+      "engagement.recompute",
+      "follow_up.arm",
+      "gamification.evaluate",
+    ]);
     const ie = await testPool().query("SELECT count(*)::int n FROM interaction_events WHERE kind='check_in'");
     expect(ie.rows[0].n).toBe(1);
+  });
+
+  it("arms the first-visit cadence once, not every Sunday", async () => {
+    await svc().checkIn(member, serviceId, { client_scan_id: SCAN, scan_token: token });
+    const afterFirst = await testPool().query(
+      `SELECT count(*)::int AS n FROM outbox WHERE topic = 'follow_up.arm'`,
+    );
+    expect(afterFirst.rows[0].n).toBe(1);
+
+    // A second, different service. Coming back is not a first visit, and a
+    // member who attends every week must not be welcomed every week.
+    const second = await createChurchService(cong, {
+      title: "Midweek",
+      startsAt: new Date(Date.now() - 86_400_000).toISOString(),
+    });
+    await svc().checkIn(member, second.service_id, {
+      client_scan_id: "33333333-3333-3333-3333-333333333333",
+      scan_token: serviceScanToken(second.qr_secret, second.service_id),
+    });
+
+    const afterSecond = await testPool().query(
+      `SELECT count(*)::int AS n FROM outbox WHERE topic = 'follow_up.arm'`,
+    );
+    expect(afterSecond.rows[0].n).toBe(1);
   });
 
   it("is idempotent on a replayed scan id", async () => {
