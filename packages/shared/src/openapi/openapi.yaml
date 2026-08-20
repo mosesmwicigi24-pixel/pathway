@@ -1918,6 +1918,81 @@ paths:
               schema: { $ref: "#/components/schemas/AttendanceYearOverview" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/follow-up/cadences:
+    get:
+      tags: [attendance]
+      summary: >-
+        Requires followUp:view. The congregation's cadences with their steps and
+        how many runs are currently open. Empty until somebody defines one —
+        migration 199 seeds the Follow-Up department's two rules ("First-time
+        guest": push day 0 + welcome call day 1; "Absent two Sundays": push day 0
+        + check-in call day 2, threshold 2 consecutive misses).
+      responses:
+        "200":
+          description: "{ data: [{ cadence_id, name, trigger, trigger_threshold, is_active, open_runs, steps: [{ step_id, offset_days, kind, channel, action, message, sequence }] }] }"
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [attendance]
+      summary: >-
+        Requires followUp:edit. Create a cadence with its steps in one
+        transaction. Automated steps must name a channel (push|email — no SMS
+        provider is bound); human steps must not. A misconfigured step is a named
+        400, not a constraint violation surfacing as a 500. 409 on a duplicate
+        name within the congregation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, trigger, steps]
+              properties:
+                name: { type: string, maxLength: 120 }
+                trigger: { type: string, enum: [first_visit, missed_services, joined_online] }
+                trigger_threshold: { type: integer, minimum: 1, maximum: 52 }
+                steps:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items:
+                    type: object
+                    required: [offset_days, kind, action]
+                    properties:
+                      offset_days: { type: integer, minimum: 0, maximum: 365 }
+                      kind: { type: string, enum: [automated, human] }
+                      channel: { type: string, enum: [push, email] }
+                      action: { type: string, maxLength: 120 }
+                      message: { type: string, maxLength: 1000 }
+      responses:
+        "201": { description: "{ cadence_id }" }
+        "400": { description: A step was misconfigured }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { description: A cadence with that name already exists }
+  /admin/follow-up/cadences/{id}:
+    patch:
+      tags: [attendance]
+      summary: >-
+        Requires followUp:edit. Switch a cadence on or off. Off stops NEW runs
+        from arming; runs already in flight finish naturally — turning a rhythm
+        off must not silently abandon the people already inside it.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_active]
+              properties:
+                is_active: { type: boolean }
+      responses:
+        "204": { description: Updated }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: No such cadence in this congregation }
   /admin/follow-up/due:
     get:
       tags: [attendance]

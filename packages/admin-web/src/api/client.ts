@@ -2864,7 +2864,44 @@ export interface FollowUpDueStep {
 /** What a leader records after doing it. */
 export type FollowUpOutcome = "reached" | "no_answer" | "wrong_number" | "skipped";
 
+
+/** A cadence definition with its steps (backend #429 / cadence management). */
+export interface CadenceStepDef {
+  step_id?: string;
+  offset_days: number;
+  kind: "automated" | "human";
+  channel?: "push" | "email" | null;
+  action: string;
+  message?: string | null;
+  sequence?: number;
+}
+export interface Cadence {
+  cadence_id: string;
+  name: string;
+  trigger: "first_visit" | "missed_services" | "joined_online";
+  trigger_threshold: number;
+  is_active: boolean;
+  open_runs: number;
+  steps: CadenceStepDef[];
+}
+
 export const FollowUpApi = {
+  /** The congregation's cadences, steps and open-run counts. */
+  async cadences(): Promise<Cadence[]> {
+    const { data } = await api.get<{ data: Cadence[] }>("/admin/follow-up/cadences");
+    return data.data;
+  },
+  /** Create a cadence with its steps. */
+  async createCadence(input: {
+    name: string; trigger: Cadence["trigger"]; trigger_threshold?: number; steps: CadenceStepDef[];
+  }): Promise<{ cadence_id: string }> {
+    const { data } = await api.post<{ cadence_id: string }>("/admin/follow-up/cadences", input);
+    return data;
+  },
+  /** Switch a cadence on or off. Off stops NEW runs; runs in flight finish. */
+  async setCadenceActive(cadenceId: string, active: boolean): Promise<void> {
+    await api.patch(`/admin/follow-up/cadences/${cadenceId}`, { is_active: active });
+  },
   /** Human steps that have come due, oldest first. */
   async due(limit = 100): Promise<FollowUpDueStep[]> {
     const { data } = await api.get<{ data: FollowUpDueStep[] }>("/admin/follow-up/due", { params: { limit } });

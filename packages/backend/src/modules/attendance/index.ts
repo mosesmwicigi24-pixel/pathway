@@ -9,7 +9,8 @@ import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ChurchAttendanceService, checkInSchema, createServiceSchema } from "./service.js";
 import { FollowUpService } from "./follow-up.js";
 import { ServiceJoinService, joinByScanSchema } from "./join.js";
-import { CadenceService, recordContactSchema } from "./cadence.js";
+import { CadenceService, recordContactSchema, createCadenceSchema } from "./cadence.js";
+import { z } from "zod";
 
 export const attendanceRouter: Router = Router();
 
@@ -141,6 +142,37 @@ export function registerAttendance(ctx: AppContext): Router {
   // --- Follow-up (administration) ---
   // Who came, who didn't, and who to call. Leader+ only: this is the whole
   // congregation's contact list, not a member's own record.
+
+  /** The congregation's cadences, steps and open-run counts. */
+  r.get(
+    "/admin/follow-up/cadences",
+    ...followUpView,
+    handler(async (req, res) => {
+      res.json({ data: await cadence.listCadences(requirePrincipal(req).congregationId) });
+    }),
+  );
+
+  /** Create a cadence with its steps. */
+  r.post(
+    "/admin/follow-up/cadences",
+    ...followUpEdit,
+    handler(async (req, res) => {
+      const p = requirePrincipal(req);
+      const body = parseBody(createCadenceSchema, req.body ?? {});
+      res.status(201).json(await cadence.createCadence(p.congregationId, p.userId, body));
+    }),
+  );
+
+  /** Switch a cadence on or off. Off stops NEW runs; runs in flight finish. */
+  r.patch(
+    "/admin/follow-up/cadences/:id",
+    ...followUpEdit,
+    handler(async (req, res) => {
+      const body = parseBody(z.object({ is_active: z.boolean() }).strict(), req.body ?? {});
+      await cadence.setActive(requirePrincipal(req).congregationId, req.params.id ?? "", body.is_active);
+      res.status(204).end();
+    }),
+  );
 
   /**
    * The leader's due list: human cadence steps that have come due. Automated
