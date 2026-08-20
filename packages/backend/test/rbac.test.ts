@@ -31,13 +31,16 @@ afterAll(async () => {
 });
 
 describe("RBAC roles & permission matrix", () => {
-  it("lists the 11 seeded roles with their matrices (Admin bridge)", async () => {
+  it("lists the 12 seeded roles with their matrices (Admin bridge)", async () => {
+    // 12th role: follow_up_team (migration 198) — holds followUp and nothing
+    // else, so the call list can be handed to people who never touch the roll.
     const res = await agent().get("/v1/admin/roles").set(auth(adminTok));
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(11);
+    expect(res.body.data).toHaveLength(12);
     const sa = res.body.data.find((r: { role_key: string }) => r.role_key === "super_admin");
-    // full grid + members:proximity (parity gap #4) + live:go/live:manage (Nuru Live L1)
-    expect(sa.permissions).toHaveLength(16 * 6 + 1 + 2);
+    // full grid (now 17 modules with followUp) + members:proximity (parity gap
+    // #4) + live:go/live:manage (Nuru Live L1)
+    expect(sa.permissions).toHaveLength(17 * 6 + 1 + 2);
     expect(sa.is_system).toBe(true);
     const member = res.body.data.find((r: { role_key: string }) => r.role_key === "member");
     expect(member.permissions).toHaveLength(0);
@@ -190,5 +193,15 @@ describe("RBAC enforcement on migrated endpoints (matrix governs, not just the b
       const res = await agent().get(path).set(auth(adminTok));
       expect(res.status, `Admin should still reach ${path}`).toBe(200);
     }
+  });
+});
+
+describe("follow_up_team (migration 198)", () => {
+  it("appears in the roles list holding exactly the followUp module", async () => {
+    const res = await agent().get("/v1/admin/roles").set(auth(adminTok));
+    const fut = res.body.data.find((r: { role_key: string }) => r.role_key === "follow_up_team");
+    expect(fut).toBeDefined();
+    const modules = new Set(fut.permissions.map((p: { module_id: string }) => p.module_id));
+    expect([...modules]).toEqual(["followUp"]);
   });
 });
