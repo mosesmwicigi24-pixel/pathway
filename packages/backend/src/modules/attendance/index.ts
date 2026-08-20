@@ -8,6 +8,7 @@ import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ChurchAttendanceService, checkInSchema, createServiceSchema } from "./service.js";
 import { FollowUpService } from "./follow-up.js";
+import { ServiceJoinService, joinByScanSchema } from "./join.js";
 
 export const attendanceRouter: Router = Router();
 
@@ -19,6 +20,29 @@ export function registerAttendance(ctx: AppContext): Router {
   const auth = authenticate(ctx.env);
   const leaderPlus = [auth, requireRole("Instructor")] as const;
   const r = attendanceRouter;
+  const joinSvc = new ServiceJoinService(ctx.db.primary);
+
+  // --- Public: joining by scan ---
+
+  /**
+   * The ONE unauthenticated route in this module, and it is that way because a
+   * visitor holding up their phone at the door has no account yet — requiring
+   * one would defeat the entire feature.
+   *
+   * It is not open registration. The scan token must match, and the service's
+   * check-in window must be OPEN, so a photographed code stops working when the
+   * service ends. Joins are also rate-limited per service and each one records
+   * the service it came through. See join.ts for why those three, and the
+   * trade the owner made knowingly.
+   */
+  r.post(
+    "/join/service/:id",
+    handler(async (req, res) => {
+      const body = parseBody(joinByScanSchema, req.body ?? {});
+      const result = await joinSvc.joinByScan(req.params.id ?? "", body);
+      res.status(201).json(result);
+    }),
+  );
 
   // --- Member ---
 

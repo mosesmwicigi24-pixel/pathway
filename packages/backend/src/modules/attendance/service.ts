@@ -33,17 +33,57 @@ export function serviceScanToken(qrSecret: string, serviceId: string): string {
 }
 
 /**
- * The full string printed into the QR: `nuru-service:<service_id>:<token>`.
- * Carrying the id inside the code is what lets a member scan without first
- * picking a service from a list — the one scan is the whole interaction.
+ * The string printed into the QR — now a URL, and that change is the whole
+ * reason scan-to-join can exist.
+ *
+ * #427 encoded `nuru-service:<id>:<token>`. A member with the app could scan it
+ * from inside the app, but a VISITOR pointing their phone's own camera at the
+ * projected code saw a line of plain text and nothing happened. A code that only
+ * works for people who already have the app cannot be how people join.
+ *
+ * As an https:// link it opens the app when installed (deep link) and the join
+ * page when not — one code on the screen serves the member checking in and the
+ * newcomer signing up.
+ *
+ * Carrying the id inside the code is still what makes it one interaction: the
+ * scanner never has to pick a service from a list.
  */
-export function serviceQrPayload(serviceId: string, qrSecret: string): string {
-  return `${QR_PREFIX}:${serviceId}:${serviceScanToken(qrSecret, serviceId)}`;
+export function serviceQrPayload(serviceId: string, qrSecret: string, publicBaseUrl?: string): string {
+  const token = serviceScanToken(qrSecret, serviceId);
+  const base = (publicBaseUrl ?? "").replace(/\/+$/, "");
+  // Without a configured base we fall back to the legacy form rather than
+  // printing a broken URL — a code that silently points nowhere is worse than
+  // one that only the app understands.
+  return base ? `${base}/j/${serviceId}/${token}` : `${QR_PREFIX}:${serviceId}:${token}`;
 }
 
-/** Parse a scanned payload. Returns null for anything that isn't one of ours. */
+/**
+ * Parse a scanned payload. Returns null for anything that isn't one of ours.
+ *
+ * Accepts BOTH forms on purpose. The app builds already in members' hands scan
+ * the legacy `nuru-service:` string, and they keep working — a schema change
+ * should not quietly break the phones people are holding.
+ */
 export function parseServiceQrPayload(raw: string): { service_id: string; scan_token: string } | null {
-  const parts = raw.trim().split(":");
+  const text = raw.trim();
+
+  // URL form: <base>/j/<service_id>/<token>
+  if (/^https?:\/\//i.test(text)) {
+    try {
+      const path = new URL(text).pathname.split("/").filter(Boolean);
+      const j = path.indexOf("j");
+      if (j === -1 || path.length < j + 3) return null;
+      const serviceId = path[j + 1];
+      const token = path[j + 2];
+      if (!serviceId || !token) return null;
+      return { service_id: serviceId, scan_token: token };
+    } catch {
+      return null;
+    }
+  }
+
+  // Legacy form: nuru-service:<service_id>:<token>
+  const parts = text.split(":");
   if (parts.length !== 3 || parts[0] !== QR_PREFIX) return null;
   const [, serviceId, token] = parts;
   if (!serviceId || !token) return null;

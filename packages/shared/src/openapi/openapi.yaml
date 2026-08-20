@@ -1743,6 +1743,47 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "409": { description: A service with that title already exists on that date }
+  /join/service/{id}:
+    post:
+      tags: [attendance]
+      summary: >-
+        PUBLIC (no auth). Join by scanning a service's QR: creates the member,
+        their Level 1 enrollment and their attendance for that service in one
+        transaction, and records which service they came through. Deliberately
+        unauthenticated — a visitor at the door has no account yet — but NOT open
+        registration: the scan token must match AND the service's check-in window
+        must be open, so a photographed code stops working when the service ends.
+        Rate-limited per service. 409 if the email already belongs to a live
+        account (sign in instead). A bad token and an unknown service id return
+        an identical error, so the endpoint cannot be used to discover which
+        services exist.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: The service whose QR was scanned; carried inside the code itself.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scan_token, full_name, phone_number, email, password]
+              properties:
+                scan_token:   { type: string }
+                full_name:    { type: string, maxLength: 255 }
+                phone_number: { type: string, description: Normalised to E.164 server-side (migration 195) }
+                email:        { type: string, format: email, description: Trimmed and lowercased server-side }
+                password:     { type: string, minLength: 8 }
+      responses:
+        "201":
+          description: "{ user_id, congregation_id, service_id, attendance_recorded }"
+        "400": { description: "Invalid scan token, or a service that is not open to joining" }
+        "409": { description: An account with this email already exists }
+        "422": { description: "Joining has not opened, or has closed, for this service" }
+        "429": { description: Too many joins against this service }
   /services/open:
     get:
       tags: [attendance]
