@@ -62,6 +62,15 @@ export interface JoinResult {
   attendance_recorded: boolean;
 }
 
+/** What the standing poster URL resolves to at the moment it is scanned. */
+export type StandingCodeResolution =
+  | {
+      congregation: string;
+      open: true;
+      service: { service_id: string; title: string; starts_at: string; scan_token: string };
+    }
+  | { congregation: string; open: false; next: { title: string; starts_at: string } | null };
+
 function tokensMatch(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
@@ -178,6 +187,75 @@ export class ServiceJoinService {
         attendance_recorded: attendance !== null,
       };
     });
+  }
+
+  /**
+   * The standing poster resolves here (migration 200): /jc/<join_code> → the
+   * congregation's service whose check-in window is open RIGHT NOW, with its
+   * scan token. Same poster every week; the resolution is what moves.
+   *
+   * Handing out the scan token from an unauthenticated GET is the deliberate
+   * concession the standing code makes — the owner chose a printable poster
+   * over in-room-only proof (2026-08-21). Outside a window this returns no
+   * token at all, so a photographed poster is inert six days out of seven,
+   * and everything a leaked token enables is still rate-limited and recorded.
+   *
+   * When two windows overlap, the most recently opened wins: the 8am overflow
+   * service's code should not swallow scans meant for the 11am main one.
+   */
+  async resolveStandingCode(code: string): Promise<StandingCodeResolution> {
+    // Same silence for "no such code" and malformed input: this endpoint must
+    // not confirm which codes exist to someone enumerating.
+    if (code.length < 16 || code.length > 200) {
+      throw new ApiError("VALIDATION_FAILED", "That code is not valid");
+    }
+    const cong = await maybeOne<{ congregation_id: string; name: string }>(
+      this.pool,
+      `SELECT congregation_id, name FROM congregations WHERE join_code = $1`,
+      [code],
+    );
+    if (!cong) throw new ApiError("VALIDATION_FAILED", "That code is not valid");
+
+    const open = await maybeOne<{
+      service_id: string;
+      title: string;
+      starts_at: string;
+      qr_secret: string;
+    }>(
+      this.pool,
+      `SELECT service_id, title, starts_at, qr_secret
+         FROM church_services
+        WHERE congregation_id = $1
+          AND qr_enabled = TRUE
+          AND (checkin_opens_at IS NULL OR checkin_opens_at <= now())
+          AND (checkin_closes_at IS NULL OR checkin_closes_at >= now())
+        ORDER BY checkin_opens_at DESC NULLS LAST
+        LIMIT 1`,
+      [cong.congregation_id],
+    );
+    if (open) {
+      return {
+        congregation: cong.name,
+        open: true,
+        service: {
+          service_id: open.service_id,
+          title: open.title,
+          starts_at: open.starts_at,
+          scan_token: serviceScanToken(open.qr_secret, open.service_id),
+        },
+      };
+    }
+
+    // Closed. Tell the visitor when to come back — a service schedule is the
+    // one thing a church wants strangers to know.
+    const next = await maybeOne<{ title: string; starts_at: string }>(
+      this.pool,
+      `SELECT title, starts_at FROM church_services
+        WHERE congregation_id = $1 AND qr_enabled = TRUE AND starts_at > now()
+        ORDER BY starts_at ASC LIMIT 1`,
+      [cong.congregation_id],
+    );
+    return { congregation: cong.name, open: false, next };
   }
 
   /**
