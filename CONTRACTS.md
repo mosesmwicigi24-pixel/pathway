@@ -33,6 +33,7 @@
 | Certificates | /admin/certificates (+:id/revoke) | ✅ | ✅ | + public `/verify/:code` |
 | Badges | /admin/badges (+:code, reactivate); /admin/members/:id/badges/:code/revoke | ✅ | ✅ | |
 | System | /admin/{users,roles(:key/permissions),congregations,countries,languages} | ✅ | ✅ | Reference data + RBAC |
+| Website | /admin/enquiries (+:id/ack) | ✅ | ☐ | Gated on the `website` RBAC module, not a role tier. Intake is S2S `/webhooks/website-contact` (HMAC). iPad pending. |
 | Community mod | /admin/community/threads/:id; /admin/community/comments/:id/hide | ✅ | ❌ | Web only |
 
 ## Chat & moderation — mixed

@@ -5,6 +5,7 @@ import {
   TrendingUp, MessageSquare, MessagesSquare, Video, Star, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
   Radio, SlidersVertical, ListMusic, UserCheck, UserRoundCheck, HeartHandshake, HeartPulse, Megaphone, QrCode,
+  Inbox,
   type LucideIcon,
 } from "lucide-react";
 
@@ -109,6 +110,17 @@ export const navGroups: NavGroup[] = [
     ],
   },
   {
+    // nuruplace.org is administered from here, not from a second CMS with its
+    // own logins. Everything the public site shows lives under this one group,
+    // and the `website` RBAC module gates all of it — so the person who runs
+    // the site gets exactly the site, and not the membership roster or the
+    // finance ledger (migration 198).
+    label: "Website",
+    items: [
+      { path: "/website/enquiries", label: "Enquiries", icon: Inbox, permission: "website:view" },
+    ],
+  },
+  {
     label: "Settings",
     items: [
       { path: "/users", label: "Users", icon: UserCog, permission: "users:view" },
@@ -159,6 +171,7 @@ export const pageTitles: Record<string, string> = {
   "/members": "Members",
   "/services": "Church Services",
   "/follow-up": "Attendance Follow-up",
+  "/website/enquiries": "Website Enquiries",
   "/member-profile": "Member Profile",
   "/profile": "My Profile",
   "/notifications": "Notifications",

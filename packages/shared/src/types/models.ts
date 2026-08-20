@@ -253,3 +253,63 @@ export interface OutboxRecord {
   available_at: ISODateTime;
   created_at: ISODateTime;
 }
+
+// --- Website enquiries (nuruplace.org -> pastoral triage) ---
+
+/**
+ * Someone outside the church reaching in through the website.
+ *
+ * Deliberately not a member model: there is no user_id, no congregation
+ * membership, no level and no history. Inventing a shadow user for every
+ * stranger who fills a form would pollute the roster, the scoring and the
+ * hard-lock invariant, so an enquiry stands on its own until a pastor decides
+ * it should become a person.
+ */
+export type WebsiteEnquiryKind = "connection_card" | "message" | "prayer";
+export type WebsiteEnquiryStatus = "new" | "acknowledged" | "closed";
+
+export interface WebsiteEnquiry {
+  enquiry_id: UUID;
+  congregation_id: UUID | null;
+  kind: WebsiteEnquiryKind;
+  full_name: string;
+  /** Free text as typed, not E.164 — rejecting a malformed number would lose
+   *  the message, which is the outcome this feature exists to prevent. */
+  phone_number: string | null;
+  email: string | null;
+  message: string;
+  /** The language they wrote in, so the reply matches. */
+  locale: string;
+  wants_prayer: boolean;
+  planning_visit: boolean;
+  source: string;
+  status: WebsiteEnquiryStatus;
+  /** When they pressed send, per the sender. */
+  submitted_at: ISODateTime;
+  /** When we received it — different after a retry following an outage. */
+  received_at: ISODateTime;
+  acknowledged_by: UUID | null;
+  acknowledged_at: ISODateTime | null;
+  note: string | null;
+}
+
+/**
+ * The wire format nuruplace.org actually POSTs.
+ *
+ * Hyphenated `kind` and camelCase keys are the website's public payload. It is
+ * a deployed client; renaming its fields to match our columns would break it
+ * for no gain, so the backend maps instead.
+ */
+export interface WebsiteContactSubmission {
+  kind: "connection-card" | "message" | "prayer";
+  name: string;
+  phone?: string;
+  email?: string;
+  message: string;
+  locale: string;
+  wantsPrayer?: boolean;
+  planningVisit?: boolean;
+  submittedAt: ISODateTime;
+  /** Sender-derived idempotency key; a repeat is acknowledged, not stored twice. */
+  dedupeKey?: string;
+}

@@ -2845,6 +2845,38 @@ export interface AttendanceYearOverview {
   total_event_check_ins: number;
 }
 
+/** One enquiry from nuruplace.org, as a pastor sees it in the triage queue. */
+export interface WebsiteEnquiry {
+  enquiry_id: string;
+  kind: "connection_card" | "message" | "prayer";
+  full_name: string;
+  phone_number: string | null;
+  email: string | null;
+  message: string;
+  /** The language they wrote in, so the reply can match. */
+  locale: string;
+  wants_prayer: boolean;
+  planning_visit: boolean;
+  source: string;
+  status: "new" | "acknowledged" | "closed";
+  submitted_at: string;
+  received_at: string;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
+  note: string | null;
+}
+
+export const WebsiteApi = {
+  async enquiries(q: { status?: string; limit?: number } = {}): Promise<WebsiteEnquiry[]> {
+    const { data } = await api.get<WebsiteEnquiry[]>("/admin/enquiries", { params: q });
+    return data;
+  },
+  async acknowledge(id: string, body: { status?: "acknowledged" | "closed"; note?: string } = {}): Promise<WebsiteEnquiry> {
+    const { data } = await api.post<WebsiteEnquiry>(`/admin/enquiries/${id}/ack`, body);
+    return data;
+  },
+};
+
 export const FollowUpApi = {
   async overview(year?: number): Promise<AttendanceYearOverview> {
     const { data } = await api.get<AttendanceYearOverview>("/admin/follow-up/overview", { params: { year } });

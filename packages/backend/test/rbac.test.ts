@@ -31,13 +31,17 @@ afterAll(async () => {
 });
 
 describe("RBAC roles & permission matrix", () => {
-  it("lists the 11 seeded roles with their matrices (Admin bridge)", async () => {
+  it("lists the 12 seeded roles with their matrices (Admin bridge)", async () => {
     const res = await agent().get("/v1/admin/roles").set(auth(adminTok));
     expect(res.status).toBe(200);
-    expect(res.body.data).toHaveLength(11);
+    // 12th is `website` — runs nuruplace.org from the portal without members,
+    // finance or curriculum (seeds/08_rbac.sql).
+    expect(res.body.data).toHaveLength(12);
     const sa = res.body.data.find((r: { role_key: string }) => r.role_key === "super_admin");
-    // full grid + members:proximity (parity gap #4) + live:go/live:manage (Nuru Live L1)
-    expect(sa.permissions).toHaveLength(16 * 6 + 1 + 2);
+    // full grid + members:proximity (parity gap #4) + live:go/live:manage (Nuru Live L1).
+    // 17 modules now: the website module joined the explicit super_admin list,
+    // which is enumerated rather than derived and would otherwise have missed it.
+    expect(sa.permissions).toHaveLength(17 * 6 + 1 + 2);
     expect(sa.is_system).toBe(true);
     const member = res.body.data.find((r: { role_key: string }) => r.role_key === "member");
     expect(member.permissions).toHaveLength(0);

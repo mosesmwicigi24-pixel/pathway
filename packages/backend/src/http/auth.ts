@@ -67,6 +67,10 @@ export const PERM_MODULES = [
   "dashboard", "levels", "cms", "quiz", "videos", "cells", "members",
   "reflections", "events", "finance", "certificates", "badges",
   "users", "rolesAdmin", "countries", "languages", "congregations", "live",
+  // The public website (nuruplace.org). Its own module so a communications
+  // volunteer can be given the site WITHOUT members, finance or curriculum —
+  // which is the whole reason the portal is the admin point for it.
+  "website",
 ] as const;
 // `go`/`manage` are Nuru Live's (module `live`) capability pair — broadcast
 // start vs. end-anyone's-stream oversight (docs/LIVE_STREAMING.md). They ride

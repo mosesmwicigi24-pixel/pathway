@@ -20,6 +20,7 @@ import { CellEngagement } from "./components/pages/CellEngagement";
 import { CellDetail } from "./components/pages/CellDetail";
 import { Members } from "./components/pages/Members";
 import { FollowUp } from "./components/pages/FollowUp";
+import { WebsiteEnquiries } from "./components/pages/WebsiteEnquiries";
 import { Services } from "./components/pages/Services";
 import { ReflectionQueue } from "./components/pages/ReflectionQueue";
 import { LevelReviews } from "./components/pages/LevelReviews";
@@ -105,6 +106,7 @@ const router = createBrowserRouter([
       { path: "members", element: <Guarded><Members /></Guarded> },
       { path: "services", element: <Guarded><Services /></Guarded> },
       { path: "follow-up", element: <Guarded><FollowUp /></Guarded> },
+      { path: "website/enquiries", element: <Guarded><WebsiteEnquiries /></Guarded> },
       { path: "member-profile", element: <Guarded><MemberProfile /></Guarded> },
       { path: "profile", element: <Profile /> },
       { path: "notifications", element: <Guarded><Notifications /></Guarded> },

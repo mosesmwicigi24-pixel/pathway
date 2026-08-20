@@ -15,7 +15,11 @@ INSERT INTO rbac_roles (role_key, name, role_type, description, is_system) VALUE
   ('finance_officer',    'Finance Officer',         'staff',  'Manages giving, expenses and financial reports only.', TRUE),
   ('discipler',          'Discipler (Cell Leader)', 'field',  'Leads a cell — disciples members, marks attendance and tracks engagement.', TRUE),
   ('mentor',             'Mentor',                  'field',  'One-to-one accompaniment of assigned disciples; views their progress and reflections.', TRUE),
-  ('member',             'Member (Disciple)',       'field',  'A disciple on the pathway; owns their lessons, quizzes, reflections and certificates.', TRUE)
+  ('member',             'Member (Disciple)',       'field',  'A disciple on the pathway; owns their lessons, quizzes, reflections and certificates.', TRUE),
+  -- Runs nuruplace.org from the portal. Deliberately narrow: without this role
+  -- the only way to let someone edit the church website was to make them an
+  -- administrator of members, finance and curriculum too.
+  ('website',            'Website',                 'staff',  'Runs nuruplace.org from the portal: enquiries from the contact form, and the announcements, events and media the public site shows. No access to members, finance or curriculum.', TRUE)
 ON CONFLICT (role_key) DO UPDATE
   SET name = EXCLUDED.name, role_type = EXCLUDED.role_type,
       description = EXCLUDED.description, is_system = EXCLUDED.is_system;
@@ -27,7 +31,7 @@ SELECT 'super_admin', m.module_id, c.capability
   FROM (VALUES
     ('dashboard'),('levels'),('cms'),('quiz'),('videos'),('cells'),('members'),
     ('reflections'),('events'),('finance'),('certificates'),('badges'),
-    ('users'),('rolesAdmin'),('countries'),('languages')
+    ('users'),('rolesAdmin'),('countries'),('languages'),('website')
   ) AS m(module_id)
   CROSS JOIN (VALUES ('view'),('create'),('edit'),('delete'),('approve'),('export')) AS c(capability)
 ON CONFLICT DO NOTHING;
@@ -42,6 +46,9 @@ SELECT p.role_key, p.module_id, lc.capability
     ('full','view'),('full','create'),('full','edit'),('full','delete'),('full','approve'),('full','export')
   ) AS lc(level, capability)
   JOIN (VALUES
+    -- website: full on its own module, absent from every other — that narrowness
+    -- IS the feature, so it must not quietly acquire rows here later.
+    ('website','website','full'),
     -- system_admin
     ('system_admin','dashboard','read'),
     ('system_admin','users','full'),('system_admin','rolesAdmin','full'),

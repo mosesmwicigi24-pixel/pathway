@@ -30,6 +30,7 @@ const PERM_MODULES: PermModule[] = [
   { id: "countries", label: "Countries", group: "System" },
   { id: "languages", label: "Languages", group: "System" },
   { id: "congregations", label: "Congregations", group: "System" },
+  { id: "website", label: "Website (nuruplace.org)", group: "Website" },
 ];
 const CAPABILITIES: { key: Capability; label: string }[] = [
   { key: "view", label: "View" }, { key: "create", label: "Create" }, { key: "edit", label: "Edit" },

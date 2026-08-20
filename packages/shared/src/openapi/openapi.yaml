@@ -5948,6 +5948,68 @@ paths:
         - { name: provider, in: path, required: true, schema: { type: string, enum: [mpesa, airtel] } }
       responses:
         "200": { description: Acknowledged }
+  /webhooks/website-contact:
+    post:
+      tags: [system]
+      summary: nuruplace.org connection card / contact / prayer intake; HMAC-verified + idempotent.
+      description: >
+        Server-to-server only. No session: authenticity is the
+        `x-nuruplace-signature` header (`t=<unix>,v1=<hmac-sha256 of "t.body">`),
+        the same trust model as the Stripe and mobile-money receivers. A stale
+        timestamp is rejected so a captured request cannot be replayed. Repeats
+        carrying a `dedupeKey` already seen are acknowledged without creating a
+        second enquiry, so a website retry never makes a pastor answer twice.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebsiteContactSubmission" }
+      responses:
+        "200": { description: Acknowledged }
+        "400": { description: Malformed payload }
+        "401": { description: "Missing, stale or invalid signature" }
+  /admin/enquiries:
+    get:
+      tags: [system]
+      summary: Pastor+. Website enquiries awaiting reply, newest first.
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [new, acknowledged, closed] } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/WebsiteEnquiry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/enquiries/{id}/ack:
+    post:
+      tags: [system]
+      summary: Pastor+. Mark an enquiry acknowledged (or closed) and record who picked it up.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [acknowledged, closed] }
+                note: { type: string, maxLength: 4000 }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebsiteEnquiry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: No such enquiry }
   /sync/pull:
     post:
       tags: [system]
@@ -7189,6 +7251,51 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    # --- Website enquiries (nuruplace.org -> pastoral triage) ---
+    WebsiteContactSubmission:
+      type: object
+      description: >
+        What nuruplace.org POSTs. Field names are the website's wire format and
+        are deliberately left as-is (hyphenated `kind`, camelCase keys): the
+        site is a deployed client, and renaming its payload to match our column
+        names would break it for no gain. The backend maps to storage.
+      required: [kind, name, message, locale, submittedAt]
+      properties:
+        kind: { type: string, enum: [connection-card, message, prayer] }
+        name: { type: string, maxLength: 120 }
+        phone: { type: string, maxLength: 64 }
+        email: { type: string, maxLength: 255 }
+        message: { type: string, maxLength: 4000 }
+        locale: { type: string, enum: [en, sw] }
+        wantsPrayer: { type: boolean }
+        planningVisit: { type: boolean }
+        submittedAt: { type: string, format: date-time }
+        dedupeKey:
+          type: string
+          maxLength: 64
+          description: Sender-derived idempotency key; a repeat is acknowledged, not stored twice.
+    WebsiteEnquiry:
+      type: object
+      description: One enquiry as a pastor sees it in the triage queue.
+      required: [enquiry_id, kind, full_name, message, locale, status, submitted_at, received_at]
+      properties:
+        enquiry_id: { type: string, format: uuid }
+        kind: { type: string, enum: [connection_card, message, prayer] }
+        full_name: { type: string }
+        phone_number: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        message: { type: string }
+        locale: { type: string }
+        wants_prayer: { type: boolean }
+        planning_visit: { type: boolean }
+        source: { type: string }
+        status: { type: string, enum: [new, acknowledged, closed] }
+        submitted_at: { type: string, format: date-time }
+        received_at: { type: string, format: date-time }
+        acknowledged_by: { type: [string, "null"], format: uuid }
+        acknowledged_at: { type: [string, "null"], format: date-time }
+        note: { type: [string, "null"] }
+
     # --- Church service attendance (§3.3) ---
     ChurchService:
       type: object

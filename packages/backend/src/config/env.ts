@@ -35,6 +35,10 @@ const EnvSchema = z.object({
 
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  // Shared with nuruplace.org, which signs every contact-form POST with it.
+  // Unset means the intake refuses everything: an unauthenticated write into
+  // the pastoral inbox is worse than a form that tells visitors to telephone.
+  WEBSITE_CONTACT_WEBHOOK_SECRET: z.string().optional(),
   MPESA_CALLBACK_SECRET: z.string().optional(),
   AIRTEL_CALLBACK_SECRET: z.string().optional(),
   // --- M-Pesa Daraja (Lipa na M-Pesa Online / STK push). Secrets by name only,
