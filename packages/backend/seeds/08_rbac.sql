@@ -15,7 +15,11 @@ INSERT INTO rbac_roles (role_key, name, role_type, description, is_system) VALUE
   ('finance_officer',    'Finance Officer',         'staff',  'Manages giving, expenses and financial reports only.', TRUE),
   ('discipler',          'Discipler (Cell Leader)', 'field',  'Leads a cell — disciples members, marks attendance and tracks engagement.', TRUE),
   ('mentor',             'Mentor',                  'field',  'One-to-one accompaniment of assigned disciples; views their progress and reflections.', TRUE),
-  ('member',             'Member (Disciple)',       'field',  'A disciple on the pathway; owns their lessons, quizzes, reflections and certificates.', TRUE)
+  ('member',             'Member (Disciple)',       'field',  'A disciple on the pathway; owns their lessons, quizzes, reflections and certificates.', TRUE),
+  -- Follow-up is its own job (migration 198): a list of names, phone numbers and
+  -- what was said on the last call. Holds followUp and nothing else, so it is
+  -- safe to give to whoever actually rings round on a Monday.
+  ('follow_up_team',     'Follow-up Team',          'field',  'Works the follow-up call list: who visited, who has stopped coming, and what was said. Sees the Follow-up section and nothing else.', FALSE)
 ON CONFLICT (role_key) DO UPDATE
   SET name = EXCLUDED.name, role_type = EXCLUDED.role_type,
       description = EXCLUDED.description, is_system = EXCLUDED.is_system;
@@ -27,7 +31,7 @@ SELECT 'super_admin', m.module_id, c.capability
   FROM (VALUES
     ('dashboard'),('levels'),('cms'),('quiz'),('videos'),('cells'),('members'),
     ('reflections'),('events'),('finance'),('certificates'),('badges'),
-    ('users'),('rolesAdmin'),('countries'),('languages')
+    ('users'),('rolesAdmin'),('countries'),('languages'),('followUp')
   ) AS m(module_id)
   CROSS JOIN (VALUES ('view'),('create'),('edit'),('delete'),('approve'),('export')) AS c(capability)
 ON CONFLICT DO NOTHING;
@@ -113,4 +117,21 @@ SELECT role_key, 'live', cap
     OR (role_key = 'national_director')
     OR (role_key = 'events_coordinator' AND cap = 'go')
     OR (role_key = 'discipler' AND cap = 'go')
+ON CONFLICT DO NOTHING;
+
+-- ── Follow-up (migration 198) ──
+-- view reads the register and the call list; edit closes a step with an outcome.
+-- Separate verbs because a leader compiling reports is not necessarily the
+-- person who should be marking calls as made.
+INSERT INTO rbac_role_permissions (role_key, module_id, capability)
+SELECT g.role_key, 'followUp', g.capability
+  FROM (VALUES
+    ('follow_up_team',    'view'), ('follow_up_team',    'edit'),
+    ('system_admin',      'view'), ('system_admin',      'edit'),
+    ('national_director', 'view'), ('national_director', 'edit'),
+    ('regional_coach',    'view'), ('regional_coach',    'edit'),
+    ('pastoral_reviewer', 'view'), ('pastoral_reviewer', 'edit'),
+    ('discipler',         'view'), ('discipler',         'edit')
+  ) AS g(role_key, capability)
+  JOIN rbac_roles r ON r.role_key = g.role_key
 ON CONFLICT DO NOTHING;

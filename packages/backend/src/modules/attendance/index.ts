@@ -4,7 +4,7 @@
 // gatherings and one-off events — stays in the progress module.
 import { Router } from "express";
 import type { AppContext } from "../../http/context.js";
-import { authenticate, requireRole } from "../../http/auth.js";
+import { authenticate, requireRole, requirePermission} from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ChurchAttendanceService, checkInSchema, createServiceSchema } from "./service.js";
 import { FollowUpService } from "./follow-up.js";
@@ -20,6 +20,14 @@ export function registerAttendance(ctx: AppContext): Router {
   const followUp = new FollowUpService(ctx.db.replica);
   const auth = authenticate(ctx.env);
   const leaderPlus = [auth, requireRole("Instructor")] as const;
+  // Follow-up is its own job, so it is its own permission (migration 198).
+  // Reading the register and working the call list are separate from
+  // administering members: the people who ring round on a Monday are often not
+  // the people who edit the roll, and a `follow_up_team` role holds followUp
+  // and nothing else — which is what makes it safe to hand out widely.
+  const perm = requirePermission(ctx.db.replica);
+  const followUpView = [auth, perm("followUp", "view")] as const;
+  const followUpEdit = [auth, perm("followUp", "edit")] as const;
   const r = attendanceRouter;
   const joinSvc = new ServiceJoinService(ctx.db.primary);
   const cadence = new CadenceService(ctx.db.primary, undefined, ctx.log);
@@ -141,7 +149,7 @@ export function registerAttendance(ctx: AppContext): Router {
    */
   r.get(
     "/admin/follow-up/due",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       const p = requirePrincipal(req);
       const limit = Number(req.query.limit ?? 100);
@@ -156,7 +164,7 @@ export function registerAttendance(ctx: AppContext): Router {
    */
   r.post(
     "/admin/follow-up/due/:eventId",
-    ...leaderPlus,
+    ...followUpEdit,
     handler(async (req, res) => {
       const body = parseBody(recordContactSchema, req.body ?? {});
       await cadence.recordContact(
@@ -172,7 +180,7 @@ export function registerAttendance(ctx: AppContext): Router {
   /** Every member with their attendance standing, longest absence first. */
   r.get(
     "/admin/follow-up/members",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       const p = requirePrincipal(req);
       res.json({
@@ -187,7 +195,7 @@ export function registerAttendance(ctx: AppContext): Router {
   /** The raw scan log — every check-in with the details captured at the scan. */
   r.get(
     "/admin/follow-up/scans",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       res.json({
         data: await followUp.scanLog(requirePrincipal(req), {
@@ -201,7 +209,7 @@ export function registerAttendance(ctx: AppContext): Router {
   /** Per-service totals — the end-of-day report for each gathering. */
   r.get(
     "/admin/follow-up/services",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       res.json({ data: await followUp.serviceSummaries(requirePrincipal(req), yearParam(req.query.year)) });
     }),
@@ -210,7 +218,7 @@ export function registerAttendance(ctx: AppContext): Router {
   /** Who missed this service — the call list. */
   r.get(
     "/admin/follow-up/services/:id/absentees",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       res.json(await followUp.absentees(requirePrincipal(req), req.params.id ?? ""));
     }),
@@ -219,7 +227,7 @@ export function registerAttendance(ctx: AppContext): Router {
   /** The one-screen year figure. */
   r.get(
     "/admin/follow-up/overview",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       res.json(await followUp.yearOverview(requirePrincipal(req), yearParam(req.query.year)));
     }),

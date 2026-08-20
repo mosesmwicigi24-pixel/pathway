@@ -4,8 +4,26 @@ import { describe, it, expect } from "vitest";
 import { navGroups, titleFor } from "../src/components/shell/nav";
 
 describe("portal nav model", () => {
-  it("has the seven sidebar groups in order", () => {
-    expect(navGroups.map((g) => g.label)).toEqual(["Portal", "Curriculum", "Media", "Operations", "Communication", "System", "Settings"]);
+  it("has the eight sidebar groups in order", () => {
+    // Follow-up became its own group on 2026-08-17 (owner ruling), sitting
+    // between Operations and Communication. It was previously two rows inside
+    // Operations gated on members:view.
+    expect(navGroups.map((g) => g.label)).toEqual([
+      "Portal", "Curriculum", "Media", "Operations", "Follow-up", "Communication", "System", "Settings",
+    ]);
+  });
+
+  it("gates the Follow-up group on its own module, not on members:view", () => {
+    const followUp = navGroups.find((g) => g.label === "Follow-up");
+    expect(followUp?.items.map((i) => i.path)).toEqual(["/services", "/follow-up"]);
+    // The whole point of migration 198: reading the member roll and working the
+    // call list are different jobs, often done by different people.
+    expect(followUp?.items.every((i) => i.permission === "followUp:view")).toBe(true);
+  });
+
+  it("no longer carries Services or Follow-up inside Operations", () => {
+    const ops = navGroups.find((g) => g.label === "Operations");
+    expect(ops?.items.some((i) => i.path === "/services" || i.path === "/follow-up")).toBe(false);
   });
 
   it("exposes the Media section (Video Library, Radio Studio, Audio Mixer, Uploads & Sessions)", () => {

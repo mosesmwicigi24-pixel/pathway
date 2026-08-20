@@ -1922,11 +1922,16 @@ paths:
     get:
       tags: [attendance]
       summary: >-
-        Leader+. Human cadence steps that have come due — the follow-up call
-        list, oldest first, with how many days overdue each is. Automated steps
-        never appear: those are dispatched by the worker, and mixing them would
-        make this something to scroll past rather than work through. Scoped to
-        the caller's congregation (5.4).
+        Requires followUp:view. Human cadence steps that have come due — the
+        follow-up call list, oldest first, with how many days overdue each is.
+        Automated steps never appear: those are dispatched by the worker, and
+        mixing them would make this something to scroll past rather than work
+        through. Scoped to the caller's congregation (5.4).
+
+        Gated on its own `followUp` module (migration 198), NOT on members:view.
+        Reading the member roll and working the call list are different jobs,
+        often done by different people; a `follow_up_team` role holds followUp
+        and nothing else.
       parameters:
         - name: limit
           in: query
@@ -1939,8 +1944,10 @@ paths:
     post:
       tags: [attendance]
       summary: >-
-        Leader+. Record that a human follow-up step was carried out, and what
-        came of it. The outcome is required — "no answer" and "reached" are
+        Requires followUp:edit — deliberately a separate capability from
+        followUp:view, because a leader compiling reports is not necessarily the
+        person who should be marking calls as made. Record that a human
+        follow-up step was carried out, and what came of it. The outcome is required — "no answer" and "reached" are
         different pastoral facts, and a register that collapses them cannot say
         who still needs reaching. Recording a step twice is a 404, so two
         leaders working the same list cannot both claim one call.
