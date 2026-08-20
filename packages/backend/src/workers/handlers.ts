@@ -13,6 +13,7 @@ import { buildVideoPipeline } from "../modules/media/pipeline.js";
 import { CalendarService } from "../modules/calendar/service.js";
 import { GamificationService } from "../modules/gamification/service.js";
 import type { OutboxHandler } from "./outbox.js";
+import { CadenceService } from "../modules/attendance/cadence.js";
 
 export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler> {
   // Cert PDFs render to the shared object store (disk under MEDIA_STORAGE_DIR by
@@ -25,6 +26,7 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   );
   const engagement = new EngagementService(ctx.db.primary);
   const notifications = new NotificationService(ctx.db.primary);
+  const cadence = new CadenceService(ctx.db.primary, notifications, ctx.log);
   const video = new VideoService(ctx.db.primary, new MediaService(ctx.env.CLOUDINARY_URL), buildVideoPipeline(ctx.env));
 
   const handlers = new Map<string, OutboxHandler>();
@@ -60,6 +62,16 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   // writer); issue the level credential.
   handlers.set("certificate.issue", async (p) => {
     await certs.issue(String(p.user_id), p.level_number == null ? null : Number(p.level_number));
+  });
+
+  // A member's first-ever service attendance arms the first-visit cadence.
+  // Enqueued from inside the check-in transaction rather than run there, so a
+  // follow-up rhythm can never fail somebody's check-in — the scan at the door
+  // matters more than the sequence that follows it.
+  handlers.set("follow_up.arm", async (p) => {
+    await cadence.arm(String(p.congregation_id), String(p.user_id), p.trigger as never, {
+      serviceId: p.service_id == null ? null : String(p.service_id),
+    });
   });
 
   // High-signal events trigger a single-member engagement refresh (§1.8).

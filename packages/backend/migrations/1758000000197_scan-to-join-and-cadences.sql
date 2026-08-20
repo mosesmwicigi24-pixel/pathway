@@ -65,7 +65,14 @@ CREATE TABLE IF NOT EXISTS follow_up_cadence_steps (
   -- leader to do the thing and record it. The owner wanted both in one rhythm.
   kind         TEXT NOT NULL CHECK (kind IN ('automated', 'human')),
   -- automated: which channel. human: what the leader is being asked to do.
-  channel      TEXT CHECK (channel IN ('push', 'sms', 'email')),
+  --
+  -- push and email ONLY, deliberately. The backend has no SMS provider bound —
+  -- announcements/providers.ts carries a NullProvider that records
+  -- suppressed(no_provider) — so allowing 'sms' here would let a pastor build a
+  -- rhythm on a step that silently never sends. That is the same
+  -- half-configured row this table's other CHECK exists to prevent. Widen this
+  -- list the day a provider is wired, not before.
+  channel      TEXT CHECK (channel IN ('push', 'email')),
   action       VARCHAR(120) NOT NULL,
   message      TEXT,
   sequence     INT NOT NULL,

@@ -274,6 +274,33 @@ export class ChurchAttendanceService {
       await enqueueOutbox(c, "engagement.recompute", { user_id: principal.userId });
       await enqueueOutbox(c, "gamification.evaluate", { user_id: principal.userId });
       await recordActivityEvent(c, principal.userId, "check_in");
+
+      // Attending is the answer to being chased. Any open follow-up run for this
+      // member closes here — a "we have missed you" sequence that keeps firing
+      // after someone walks back through the door is worse than no sequence, and
+      // it is the failure a congregation notices first.
+      await c.query(
+        `UPDATE follow_up_runs SET closed_at = now(), closed_reason = 'returned'
+          WHERE user_id = $1 AND closed_at IS NULL`,
+        [principal.userId],
+      );
+
+      // A first-ever attendance arms the first-visit cadence. Counted inside the
+      // same transaction as the row that makes it true, so "first" cannot be
+      // decided from a stale read.
+      const attendanceCount = await one<{ n: number }>(
+        c,
+        `SELECT count(*)::int AS n FROM service_attendance WHERE user_id = $1`,
+        [principal.userId],
+      );
+      if (attendanceCount.n === 1) {
+        await enqueueOutbox(c, "follow_up.arm", {
+          user_id: principal.userId,
+          congregation_id: principal.congregationId,
+          trigger: "first_visit",
+          service_id: serviceId,
+        });
+      }
       await audit(c, principal.userId, "service_attendance.checked_in", "church_services", serviceId, {
         method: "qr",
       });

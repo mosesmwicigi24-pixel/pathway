@@ -9,6 +9,7 @@ import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ChurchAttendanceService, checkInSchema, createServiceSchema } from "./service.js";
 import { FollowUpService } from "./follow-up.js";
 import { ServiceJoinService, joinByScanSchema } from "./join.js";
+import { CadenceService, recordContactSchema } from "./cadence.js";
 
 export const attendanceRouter: Router = Router();
 
@@ -21,6 +22,7 @@ export function registerAttendance(ctx: AppContext): Router {
   const leaderPlus = [auth, requireRole("Instructor")] as const;
   const r = attendanceRouter;
   const joinSvc = new ServiceJoinService(ctx.db.primary);
+  const cadence = new CadenceService(ctx.db.primary, undefined, ctx.log);
 
   // --- Public: joining by scan ---
 
@@ -131,6 +133,41 @@ export function registerAttendance(ctx: AppContext): Router {
   // --- Follow-up (administration) ---
   // Who came, who didn't, and who to call. Leader+ only: this is the whole
   // congregation's contact list, not a member's own record.
+
+  /**
+   * The leader's due list: human cadence steps that have come due. Automated
+   * steps never appear here — they are the worker's job, and mixing them would
+   * make this something to scroll past rather than work through.
+   */
+  r.get(
+    "/admin/follow-up/due",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      const p = requirePrincipal(req);
+      const limit = Number(req.query.limit ?? 100);
+      res.json({ data: await cadence.dueForLeaders(p.congregationId, Number.isFinite(limit) ? limit : 100) });
+    }),
+  );
+
+  /**
+   * A leader records that they made the contact, and what came of it. The
+   * outcome is required: a register that only stores "done" cannot tell anyone
+   * who still needs reaching.
+   */
+  r.post(
+    "/admin/follow-up/due/:eventId",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      const body = parseBody(recordContactSchema, req.body ?? {});
+      await cadence.recordContact(
+        req.params.eventId ?? "",
+        requirePrincipal(req).userId,
+        body.outcome,
+        body.note,
+      );
+      res.status(204).end();
+    }),
+  );
 
   /** Every member with their attendance standing, longest absence first. */
   r.get(

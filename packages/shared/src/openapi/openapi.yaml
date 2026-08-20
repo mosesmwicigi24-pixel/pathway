@@ -1918,6 +1918,51 @@ paths:
               schema: { $ref: "#/components/schemas/AttendanceYearOverview" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/follow-up/due:
+    get:
+      tags: [attendance]
+      summary: >-
+        Leader+. Human cadence steps that have come due — the follow-up call
+        list, oldest first, with how many days overdue each is. Automated steps
+        never appear: those are dispatched by the worker, and mixing them would
+        make this something to scroll past rather than work through. Scoped to
+        the caller's congregation (5.4).
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+      responses:
+        "200":
+          description: "{ data: [{ event_id, run_id, step_id, user_id, full_name, phone_number, action, due_at, cadence_name, service_title, days_overdue }] }"
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/follow-up/due/{eventId}:
+    post:
+      tags: [attendance]
+      summary: >-
+        Leader+. Record that a human follow-up step was carried out, and what
+        came of it. The outcome is required — "no answer" and "reached" are
+        different pastoral facts, and a register that collapses them cannot say
+        who still needs reaching. Recording a step twice is a 404, so two
+        leaders working the same list cannot both claim one call.
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              properties:
+                outcome: { type: string, enum: [reached, no_answer, wrong_number, skipped] }
+                note:    { type: string, maxLength: 1000 }
+      responses:
+        "204": { description: Recorded }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: "That step is not open, or does not exist" }
   /admin/follow-up/members:
     get:
       tags: [attendance]
