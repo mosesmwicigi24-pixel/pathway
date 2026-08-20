@@ -22,7 +22,9 @@ import {
   FollowUpApi,
   type Absentee,
   type AttendanceYearOverview,
+  type FollowUpDueStep,
   type FollowUpMember,
+  type FollowUpOutcome,
   type ServiceAttendanceSummary,
   type ServiceScanLogEntry,
 } from "../../api/client";
@@ -51,12 +53,12 @@ const STATUS: Record<FollowUpMember["status"], { label: string; color: string; b
   new: { label: "Never attended", color: "#475569", bg: "#f1f5f9" },
 };
 
-type Tab = "members" | "scans" | "services" | "absent";
+type Tab = "due" | "members" | "scans" | "services" | "absent";
 
 export function FollowUp(): ReactElement {
   const thisYear = new Date().getFullYear();
   const [year, setYear] = useState(thisYear);
-  const [tab, setTab] = useState<Tab>("members");
+  const [tab, setTab] = useState<Tab>("due");
 
   const [overview, setOverview] = useState<AttendanceYearOverview | null>(null);
   const [members, setMembers] = useState<FollowUpMember[] | null>(null);
@@ -67,18 +69,21 @@ export function FollowUp(): ReactElement {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [dueSteps, setDueSteps] = useState<FollowUpDueStep[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [o, m, sc, sv] = await Promise.all([
+      const [due, o, m, sc, sv] = await Promise.all([
+        FollowUpApi.due(200),
         FollowUpApi.overview(year),
         FollowUpApi.members({ year }),
         FollowUpApi.scans({ limit: 200 }),
         FollowUpApi.services(year),
       ]);
+      setDueSteps(due);
       setOverview(o);
       setMembers(m);
       setScans(sc);
@@ -173,6 +178,7 @@ export function FollowUp(): ReactElement {
 
       <nav style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {([
+          ["due", "To call", (dueSteps ?? []).length],
           ["members", "Members", (members ?? []).length],
           ["absent", "Absent", absent?.absentees.length ?? 0],
           ["scans", "Scan log", (scans ?? []).length],
@@ -192,6 +198,13 @@ export function FollowUp(): ReactElement {
           </button>
         ))}
       </nav>
+
+      {tab === "due" && (
+        <DueTab
+          rows={dueSteps ?? []}
+          onRecorded={() => void load()}
+        />
+      )}
 
       {tab === "members" && (
         <MembersTab
@@ -605,3 +618,136 @@ function CsvButton<T>({ rows, filename, columns }: {
 
 const shortDate = (iso: string): string => iso.slice(0, 10);
 const shortTime = (iso: string): string => iso.slice(11, 16);
+
+/**
+ * The call list: human cadence steps that have come due.
+ *
+ * This tab exists because the register was answering "who is missing" and
+ * leaving "so who is ringing them, and did anyone?" to memory. Every row is one
+ * person and one action, and closing it demands an OUTCOME — "no answer" and
+ * "reached" are different pastoral facts, and a list that only records "done"
+ * cannot say who still needs reaching.
+ *
+ * Ordered oldest-first and never paginated away: a name that scrolls off the
+ * bottom is a person nobody calls.
+ */
+function DueTab(props: { rows: FollowUpDueStep[]; onRecorded: () => void }): ReactElement {
+  const { rows, onRecorded } = props;
+  const [busy, setBusy] = useState<string | null>(null);
+  const [noteFor, setNoteFor] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  const [failed, setFailed] = useState<string | null>(null);
+
+  async function record(eventId: string, outcome: FollowUpOutcome): Promise<void> {
+    setBusy(eventId);
+    setFailed(null);
+    try {
+      await FollowUpApi.recordContact(eventId, outcome, note.trim() || undefined);
+      setNoteFor(null);
+      setNote("");
+      onRecorded();
+    } catch (e) {
+      // Surfaced, not swallowed: a leader who thinks they logged a call and
+      // did not is worse off than one who knows it failed.
+      setFailed(e instanceof Error ? e.message : "Could not record that.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div style={{ padding: 32, textAlign: "center", color: MUTED, background: "#fff", borderRadius: 12, boxShadow: SHADOW }}>
+        <PhoneCall size={20} style={{ opacity: 0.4 }} />
+        <p style={{ margin: "10px 0 0", fontSize: 14 }}>No one is waiting to be called.</p>
+        <p style={{ margin: "4px 0 0", fontSize: 12.5 }}>
+          Steps appear here when a cadence reaches a day that asks for a person, not a message.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      {failed && (
+        <div style={{ padding: "10px 12px", borderRadius: 8, background: "#fef2f2", color: RED, fontSize: 13 }}>{failed}</div>
+      )}
+      {rows.map((r) => {
+        const overdue = r.days_overdue > 0;
+        return (
+          <div
+            key={r.event_id}
+            style={{
+              background: "#fff", borderRadius: 12, boxShadow: SHADOW, padding: 14,
+              // Overdue is a coloured edge rather than a red row: the list is
+              // read every day, and a wall of red stops meaning anything.
+              borderLeft: `3px solid ${overdue ? (r.days_overdue > 6 ? RED : AMBER) : GREEN}`,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: NAVY_INK }}>{r.full_name}</div>
+                <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>
+                  {r.action} · {r.cadence_name}
+                  {r.service_title ? ` · after ${r.service_title}` : ""}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                {r.phone_number ? (
+                  // The number is the point of the row. A tel: link means one
+                  // tap on a phone and one click on a desk.
+                  <a href={`tel:${r.phone_number}`} style={{ fontSize: 14, color: NAVY, fontWeight: 600, textDecoration: "none" }}>
+                    {r.phone_number}
+                  </a>
+                ) : (
+                  <span style={{ fontSize: 12.5, color: RED }}>No phone number on file</span>
+                )}
+                <div style={{ fontSize: 11.5, color: overdue ? (r.days_overdue > 6 ? RED : AMBER) : MUTED, marginTop: 2 }}>
+                  {overdue ? `${r.days_overdue} day${r.days_overdue === 1 ? "" : "s"} overdue` : "Due today"}
+                </div>
+              </div>
+            </div>
+
+            {noteFor === r.event_id && (
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="What was said? (optional)"
+                style={{
+                  width: "100%", marginTop: 10, padding: "8px 10px", fontSize: 13,
+                  border: "1px solid var(--border)", borderRadius: 8,
+                }}
+              />
+            )}
+
+            <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+              {([
+                ["reached", "Reached", GREEN],
+                ["no_answer", "No answer", AMBER],
+                ["wrong_number", "Wrong number", RED],
+                ["skipped", "Skip", MUTED],
+              ] as const).map(([outcome, label, colour]) => (
+                <button
+                  key={outcome}
+                  disabled={busy === r.event_id}
+                  onClick={() => {
+                    if (noteFor !== r.event_id) { setNoteFor(r.event_id); setNote(""); }
+                    void record(r.event_id, outcome);
+                  }}
+                  style={{
+                    padding: "6px 12px", fontSize: 12.5, fontWeight: 600, borderRadius: 999,
+                    border: `1px solid ${colour}`, background: "#fff", color: colour,
+                    cursor: busy === r.event_id ? "wait" : "pointer",
+                    opacity: busy === r.event_id ? 0.5 : 1,
+                  }}
+                >
+                  {busy === r.event_id ? <Loader2 size={12} /> : label}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
