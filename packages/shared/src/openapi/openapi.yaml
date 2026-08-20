@@ -1743,6 +1743,33 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "409": { description: A service with that title already exists on that date }
+  /join/congregation/{code}:
+    get:
+      tags: [attendance]
+      summary: >-
+        PUBLIC (no auth). Resolve a congregation's STANDING join code — the
+        printed poster QR (migration 200) — to whichever of its services has an
+        open check-in window right now. The poster never changes; this endpoint
+        is what makes the same code mean this Sunday's service this Sunday and
+        next Sunday's service next Sunday. While a window is open it returns
+        that service's scan_token (the owner's accepted trade for a printable
+        code); outside every window it returns open:false and the next upcoming
+        service, and no token exists to leak. Unknown and malformed codes get
+        one identical refusal, so the endpoint confirms nothing to enumeration.
+      security: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 200 }
+          description: The opaque code carried in the poster URL (/jc/{code}).
+      responses:
+        "200":
+          description: >-
+            Open: { congregation, open: true, service: { service_id, title,
+            starts_at, scan_token } }. Closed: { congregation, open: false,
+            next: { title, starts_at } | null }.
+        "400": { description: That code is not valid (unknown or malformed — deliberately indistinguishable) }
   /join/service/{id}:
     post:
       tags: [attendance]

@@ -26,6 +26,7 @@ import { LevelReviews } from "./components/pages/LevelReviews";
 import { DiscipleshipHub } from "./components/pages/DiscipleshipHub";
 import { Chat } from "./components/pages/Chat";
 import { Broadcast } from "./components/pages/Broadcast";
+import { JoinService } from "./components/pages/JoinService";
 import { EventsHub } from "./components/events/EventsHub";
 import { SeriesCommandCenter } from "./components/events/SeriesCommandCenter";
 import { Finance } from "./components/pages/Finance";
@@ -79,6 +80,9 @@ const router = createBrowserRouter([
   { path: "/login", element: <Login /> },
   { path: "/reset-password", element: <ResetPassword /> },
   { path: "/preview/:moduleId", element: <ModulePreview /> },
+  // Public: the printed standing QR lands here (see JoinService.tsx). No auth,
+  // no shell — the person holding the phone may have walked in ten seconds ago.
+  { path: "/jc/:code", element: <JoinService /> },
   {
     path: "/",
     element: <Layout />,

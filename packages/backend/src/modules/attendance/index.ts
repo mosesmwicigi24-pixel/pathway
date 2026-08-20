@@ -36,9 +36,22 @@ export function registerAttendance(ctx: AppContext): Router {
   // --- Public: joining by scan ---
 
   /**
-   * The ONE unauthenticated route in this module, and it is that way because a
-   * visitor holding up their phone at the door has no account yet — requiring
-   * one would defeat the entire feature.
+   * The printed poster's first hop (migration 200): a stable /jc/<code> URL
+   * resolves to whichever service has an open check-in window at scan time.
+   * Unauthenticated by necessity — the person scanning may not have an account
+   * yet — and uniform in its refusals, so it confirms nothing to enumeration.
+   */
+  r.get(
+    "/join/congregation/:code",
+    handler(async (req, res) => {
+      res.json(await joinSvc.resolveStandingCode(req.params.code ?? ""));
+    }),
+  );
+
+  /**
+   * One of only two unauthenticated routes in this module, and it is that way
+   * because a visitor holding up their phone at the door has no account yet —
+   * requiring one would defeat the entire feature.
    *
    * It is not open registration. The scan token must match, and the service's
    * check-in window must be OPEN, so a photographed code stops working when the
