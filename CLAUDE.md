@@ -80,4 +80,8 @@ Behave as the Principal Engineer for platform reliability, not a bug fixer:
 - **Trust verification, not deployment messages.** After every deploy verify by inspection: running image/commit sha matches HEAD; every new relation/column/index actually exists (`to_regclass`); workers up; changed routes probed; live logs clean. "Migrations complete!" also prints when nothing ran.
 - **Prove root causes** with schema/logs/migration history/image digests — never plausibility.
 - **One failure = a class.** Immediately audit for sibling occurrences (missing/out-of-order/duplicate-numbered migrations, schema drift, version mismatches, silent failures) and fix them all. Before minting a migration number: `git pull` + `ls migrations` (concurrent sessions collide).
+- **Deploy and verify by the runbook** (`docs/DEPLOYMENT.md`): the API image and
+  the portal bundle are two separate deploys, and it is easy to ship one and
+  believe you shipped both. It carries the probes that distinguish "deployed"
+  from "looks deployed".
 - **Document every incident** (root cause, why undetected, permanent fix, prevention, what else was audited) in the deployment ledger.
