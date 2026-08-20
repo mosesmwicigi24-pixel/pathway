@@ -140,6 +140,19 @@ function main(): void {
     // tighter loop would only add load without reaching anyone sooner. Human
     // steps are deliberately untouched: they are a leader's due list, and no
     // timer completes a phone call.
+    // Absence is the absence of an event, so somebody has to go looking for it:
+    // daily, arm the missed_services cadences for members whose consecutive
+    // misses have reached the threshold. Idempotent — arm() refuses while a run
+    // is open, and returning closes runs — so re-running never double-chases.
+    cron.schedule(
+      "20 3 * * *",
+      safe("follow-up absentee sweep", async () => {
+        const cadence = new CadenceService(db.primary, new NotificationService(db.primary), log);
+        const { armed } = await cadence.armAbsentees();
+        if (armed > 0) log.info({ armed }, "absentee cadences armed");
+      }),
+    ),
+
     cron.schedule(
       "10 * * * *",
       safe("follow-up cadence advance", async () => {

@@ -23,6 +23,8 @@ import {
   type Absentee,
   type AttendanceYearOverview,
   type FollowUpDueStep,
+  type Cadence,
+  type CadenceStepDef,
   type FollowUpMember,
   type FollowUpOutcome,
   type ServiceAttendanceSummary,
@@ -53,7 +55,7 @@ const STATUS: Record<FollowUpMember["status"], { label: string; color: string; b
   new: { label: "Never attended", color: "#475569", bg: "#f1f5f9" },
 };
 
-type Tab = "due" | "members" | "scans" | "services" | "absent";
+type Tab = "due" | "members" | "scans" | "services" | "absent" | "cadences";
 
 export function FollowUp(): ReactElement {
   const thisYear = new Date().getFullYear();
@@ -70,20 +72,23 @@ export function FollowUp(): ReactElement {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [dueSteps, setDueSteps] = useState<FollowUpDueStep[] | null>(null);
+  const [cadences, setCadences] = useState<Cadence[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [due, o, m, sc, sv] = await Promise.all([
+      const [due, cad, o, m, sc, sv] = await Promise.all([
         FollowUpApi.due(200),
+        FollowUpApi.cadences(),
         FollowUpApi.overview(year),
         FollowUpApi.members({ year }),
         FollowUpApi.scans({ limit: 200 }),
         FollowUpApi.services(year),
       ]);
       setDueSteps(due);
+      setCadences(cad);
       setOverview(o);
       setMembers(m);
       setScans(sc);
@@ -183,6 +188,7 @@ export function FollowUp(): ReactElement {
           ["absent", "Absent", absent?.absentees.length ?? 0],
           ["scans", "Scan log", (scans ?? []).length],
           ["services", "Services", (services ?? []).length],
+          ["cadences", "Cadences", (cadences ?? []).length],
         ] as const).map(([key, label, count]) => (
           <button
             key={key}
@@ -204,6 +210,10 @@ export function FollowUp(): ReactElement {
           rows={dueSteps ?? []}
           onRecorded={() => void load()}
         />
+      )}
+
+      {tab === "cadences" && (
+        <CadencesTab rows={cadences ?? []} onChanged={() => void load()} />
       )}
 
       {tab === "members" && (
@@ -748,6 +758,213 @@ function DueTab(props: { rows: FollowUpDueStep[]; onRecorded: () => void }): Rea
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Cadence management: the rhythms behind the call list.
+ *
+ * A cadence is a named sequence — some steps the system sends, some a leader
+ * performs. Without one, nothing ever reaches "To call"; migration 199 seeds
+ * the department's two rules, and this tab is where they are seen, adjusted,
+ * and new ones defined. Switching one off stops NEW runs only — the people
+ * already inside a rhythm are never silently abandoned.
+ */
+function CadencesTab(props: { rows: Cadence[]; onChanged: () => void }): ReactElement {
+  const { rows, onChanged } = props;
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const TRIGGER_LABEL: Record<Cadence["trigger"], string> = {
+    first_visit: "First visit",
+    missed_services: "Consecutive absences",
+    joined_online: "Joined online",
+  };
+
+  async function toggle(c: Cadence): Promise<void> {
+    setBusy(c.cadence_id);
+    setError(null);
+    try {
+      await FollowUpApi.setCadenceActive(c.cadence_id, !c.is_active);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not update the cadence.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      {error && (
+        <div style={{ padding: "10px 12px", borderRadius: 8, background: "#fef2f2", color: RED, fontSize: 13 }}>{error}</div>
+      )}
+      {rows.map((c) => (
+        <div key={c.cadence_id} style={{ background: "#fff", borderRadius: 12, boxShadow: SHADOW, padding: 14, opacity: c.is_active ? 1 : 0.55 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: NAVY_INK }}>{c.name}</div>
+              <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>
+                {TRIGGER_LABEL[c.trigger]}
+                {c.trigger === "missed_services" ? ` · after ${c.trigger_threshold} in a row` : ""}
+                {` · ${c.open_runs} running now`}
+              </div>
+            </div>
+            <button
+              disabled={busy === c.cadence_id}
+              onClick={() => void toggle(c)}
+              style={{
+                padding: "6px 14px", fontSize: 12.5, fontWeight: 600, borderRadius: 999, cursor: "pointer",
+                border: `1px solid ${c.is_active ? AMBER : GREEN}`, background: "#fff",
+                color: c.is_active ? AMBER : GREEN, alignSelf: "flex-start",
+              }}
+            >
+              {c.is_active ? "Switch off" : "Switch on"}
+            </button>
+          </div>
+          <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
+            {c.steps.map((st) => (
+              <div key={st.step_id ?? st.sequence} style={{ display: "flex", gap: 8, fontSize: 12.5, color: NAVY_INK, alignItems: "baseline" }}>
+                <span style={{ color: MUTED, minWidth: 52 }}>Day {st.offset_days}</span>
+                <span style={{
+                  fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase",
+                  color: st.kind === "human" ? NAVY : GOLD,
+                }}>
+                  {st.kind === "human" ? "Leader" : st.channel}
+                </span>
+                <span>{st.action}</span>
+                {st.message && <span style={{ color: MUTED, fontStyle: "italic" }}>— “{st.message}”</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      {creating ? (
+        <NewCadenceForm
+          onDone={() => { setCreating(false); onChanged(); }}
+          onCancel={() => setCreating(false)}
+        />
+      ) : (
+        <button
+          onClick={() => setCreating(true)}
+          style={{
+            padding: "10px 14px", fontSize: 13, fontWeight: 600, borderRadius: 12, cursor: "pointer",
+            border: `1px dashed ${NAVY}`, background: "transparent", color: NAVY,
+          }}
+        >
+          + New cadence
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Minimal creation form: name, trigger, threshold, and up to a handful of steps. */
+function NewCadenceForm(props: { onDone: () => void; onCancel: () => void }): ReactElement {
+  const { onDone, onCancel } = props;
+  const [name, setName] = useState("");
+  const [trigger, setTrigger] = useState<Cadence["trigger"]>("first_visit");
+  const [threshold, setThreshold] = useState(2);
+  const [steps, setSteps] = useState<CadenceStepDef[]>([
+    { offset_days: 0, kind: "human", action: "Phone call" },
+  ]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function setStep(i: number, patch: Partial<CadenceStepDef>): void {
+    setSteps((prev) => prev.map((s, j) => {
+      if (j !== i) return s;
+      const next = { ...s, ...patch };
+      // The kind decides whether a channel belongs — flipping kind fixes the
+      // channel rather than letting the server bounce a half-configured step.
+      if (next.kind === "human") delete next.channel;
+      if (next.kind === "automated" && !next.channel) next.channel = "push";
+      return next;
+    }));
+  }
+
+  async function save(): Promise<void> {
+    setSaving(true);
+    setError(null);
+    try {
+      await FollowUpApi.createCadence({
+        name: name.trim(),
+        trigger,
+        // exactOptionalPropertyTypes: spread the key only when it exists rather
+        // than passing an explicit undefined.
+        ...(trigger === "missed_services" ? { trigger_threshold: threshold } : {}),
+        steps,
+      });
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create the cadence.");
+      setSaving(false);
+    }
+  }
+
+  const input = { padding: "8px 10px", fontSize: 13, border: "1px solid var(--border)", borderRadius: 8 } as const;
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, boxShadow: SHADOW, padding: 14, display: "grid", gap: 10 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: NAVY_INK }}>New cadence</div>
+      {error && <div style={{ padding: "8px 10px", borderRadius: 8, background: "#fef2f2", color: RED, fontSize: 12.5 }}>{error}</div>}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. New believer)" style={{ ...input, flex: 1, minWidth: 180 }} />
+        <select value={trigger} onChange={(e) => setTrigger(e.target.value as Cadence["trigger"])} style={input}>
+          <option value="first_visit">On first visit</option>
+          <option value="missed_services">After consecutive absences</option>
+          <option value="joined_online">On joining online</option>
+        </select>
+        {trigger === "missed_services" && (
+          <input type="number" min={1} max={52} value={threshold}
+            onChange={(e) => setThreshold(Number(e.target.value) || 1)}
+            style={{ ...input, width: 70 }} title="How many in a row" />
+        )}
+      </div>
+      {steps.map((s, i) => (
+        <div key={i} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: MUTED }}>Day</span>
+          <input type="number" min={0} max={365} value={s.offset_days}
+            onChange={(e) => setStep(i, { offset_days: Number(e.target.value) || 0 })}
+            style={{ ...input, width: 64 }} />
+          <select value={s.kind} onChange={(e) => setStep(i, { kind: e.target.value as CadenceStepDef["kind"] })} style={input}>
+            <option value="human">Leader does</option>
+            <option value="automated">System sends</option>
+          </select>
+          {s.kind === "automated" && (
+            <select value={s.channel ?? "push"} onChange={(e) => setStep(i, { channel: e.target.value as "push" | "email" })} style={input}>
+              <option value="push">Push</option>
+              <option value="email">Email</option>
+            </select>
+          )}
+          <input value={s.action} onChange={(e) => setStep(i, { action: e.target.value })}
+            placeholder={s.kind === "human" ? "e.g. Phone call" : "e.g. Welcome message"}
+            style={{ ...input, flex: 1, minWidth: 140 }} />
+          {s.kind === "automated" && (
+            <input value={s.message ?? ""} onChange={(e) => setStep(i, { message: e.target.value })}
+              placeholder="Message text" style={{ ...input, flex: 2, minWidth: 180 }} />
+          )}
+          {steps.length > 1 && (
+            <button onClick={() => setSteps((prev) => prev.filter((_, j) => j !== i))}
+              style={{ border: "none", background: "transparent", color: RED, cursor: "pointer", fontSize: 16 }}
+              title="Remove step">×</button>
+          )}
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={() => setSteps((p) => [...p, { offset_days: (p[p.length - 1]?.offset_days ?? 0) + 1, kind: "human", action: "" }])}
+          style={{ padding: "6px 12px", fontSize: 12.5, borderRadius: 8, border: `1px solid var(--border)`, background: "#fff", color: NAVY_INK, cursor: "pointer" }}>
+          + Step
+        </button>
+        <div style={{ flex: 1 }} />
+        <button onClick={onCancel} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 8, border: "1px solid var(--border)", background: "#fff", color: MUTED, cursor: "pointer" }}>Cancel</button>
+        <button disabled={saving || !name.trim() || steps.some((s) => !s.action.trim())} onClick={() => void save()}
+          style={{ padding: "6px 14px", fontSize: 12.5, fontWeight: 600, borderRadius: 8, border: "none", background: NAVY, color: "#fff", cursor: "pointer", opacity: saving || !name.trim() ? 0.6 : 1 }}>
+          {saving ? "Saving…" : "Create cadence"}
+        </button>
+      </div>
     </div>
   );
 }
