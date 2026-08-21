@@ -8,7 +8,8 @@ import { authenticate, requireRole, requirePermission} from "../../http/auth.js"
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ChurchAttendanceService, checkInSchema, createServiceSchema } from "./service.js";
 import { FollowUpService } from "./follow-up.js";
-import { ServiceJoinService, joinByScanSchema } from "./join.js";
+import { ServiceJoinService, joinByScanSchema, returnByScanSchema } from "./join.js";
+import { signCheckinContinuity, verifyCheckinContinuity } from "../identity/tokens.js";
 import { CadenceService, recordContactSchema, createCadenceSchema } from "./cadence.js";
 import { z } from "zod";
 
@@ -64,7 +65,38 @@ export function registerAttendance(ctx: AppContext): Router {
     handler(async (req, res) => {
       const body = parseBody(joinByScanSchema, req.body ?? {});
       const result = await joinSvc.joinByScan(req.params.id ?? "", body);
-      res.status(201).json(result);
+      // The phone that just joined becomes a remembered phone: next Sunday the
+      // poster page needs one tap, not a form (see returnByScan below).
+      res.status(201).json({
+        ...result,
+        full_name: body.full_name,
+        continuity_token: signCheckinContinuity(ctx.env, result.user_id),
+      });
+    }),
+  );
+
+  /**
+   * The returning phone's one-tap check-in. The continuity token answers WHO
+   * (this device belongs to member X — nothing more), the scan token answers
+   * WHERE, and checkIn() enforces everything else unchanged: the open window,
+   * the congregation scope, idempotent replays. No password on a Sunday
+   * morning; no ability beyond marking yourself present.
+   */
+  r.post(
+    "/join/service/:id/return",
+    handler(async (req, res) => {
+      const body = parseBody(returnByScanSchema, req.body ?? {});
+      const userId = verifyCheckinContinuity(ctx.env, body.continuity_token);
+      const { principal, fullName } = await joinSvc.principalForReturn(userId);
+      const result = await svc.checkIn(principal, req.params.id ?? "", {
+        client_scan_id: body.client_scan_id,
+        scan_token: body.scan_token,
+      });
+      res.status(result.duplicate ? 200 : 201).json({
+        ...result,
+        full_name: fullName,
+        continuity_token: signCheckinContinuity(ctx.env, userId),
+      });
     }),
   );
 
@@ -98,8 +130,14 @@ export function registerAttendance(ctx: AppContext): Router {
     auth,
     handler(async (req, res) => {
       const body = parseBody(checkInSchema, req.body ?? {});
-      const result = await svc.checkIn(requirePrincipal(req), req.params.id ?? "", body);
-      res.status(result.duplicate ? 200 : 201).json(result);
+      const principal = requirePrincipal(req);
+      const result = await svc.checkIn(principal, req.params.id ?? "", body);
+      // Additive: lets the standing-poster page remember a member who signed in
+      // once, so every later Sunday is one tap. Apps ignore the extra field.
+      res.status(result.duplicate ? 200 : 201).json({
+        ...result,
+        continuity_token: signCheckinContinuity(ctx.env, principal.userId),
+      });
     }),
   );
 

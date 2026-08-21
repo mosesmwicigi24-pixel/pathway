@@ -1806,11 +1806,52 @@ paths:
                 password:     { type: string, minLength: 8 }
       responses:
         "201":
-          description: "{ user_id, congregation_id, service_id, attendance_recorded }"
+          description: >-
+            { user_id, congregation_id, service_id, attendance_recorded,
+            full_name, continuity_token }. The continuity token is long-lived,
+            single-purpose (attendance-only — see /join/service/{id}/return)
+            and lets the standing-poster page make every later Sunday one tap.
         "400": { description: "Invalid scan token, or a service that is not open to joining" }
         "409": { description: An account with this email already exists }
         "422": { description: "Joining has not opened, or has closed, for this service" }
         "429": { description: Too many joins against this service }
+  /join/service/{id}/return:
+    post:
+      tags: [attendance]
+      summary: >-
+        PUBLIC (no auth header). The returning phone's one-tap check-in from the
+        standing poster. The continuity_token (minted at first join, at a signed-
+        in web check-in, or by this endpoint) answers WHO — it is purpose-tagged,
+        attendance-only, and refused outright as a session token. The scan_token
+        answers WHERE. Every check-in safeguard runs unchanged: the open window,
+        congregation scope, qr_enabled, idempotent client_scan_id replays.
+        Responds with a fresh continuity_token so the device never ages out.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [continuity_token, scan_token, client_scan_id]
+              properties:
+                continuity_token: { type: string }
+                scan_token: { type: string }
+                client_scan_id: { type: string, format: uuid }
+      responses:
+        "201":
+          description: "Checked in: { …check-in result, full_name, continuity_token }"
+        "200":
+          description: Already checked in for this service (duplicate replay)
+        "400": { description: Invalid scan token }
+        "401": { description: "Continuity token invalid/expired — sign in once to mint a fresh one" }
+        "403": { description: That service belongs to another congregation }
+        "422": { description: Check-in is not open for this service }
   /services/open:
     get:
       tags: [attendance]
@@ -1854,7 +1895,9 @@ paths:
         Register attendance at a church service by QR scan. Records the member's
         name, phone, email and the time they attended. Idempotent on
         client_scan_id and on (member, service) — a re-scan returns 200 with
-        duplicate=true rather than an error.
+        duplicate=true rather than an error. The response additionally carries
+        continuity_token (attendance-only, for the standing-poster web page's
+        one-tap return path — see /join/service/{id}/return); apps may ignore it.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:

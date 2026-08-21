@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser, createChurchService } from "./helpers/factories.js";
 import { agent, bearer } from "./helpers/app.js";
+import { serviceScanToken } from "../src/modules/attendance/service.js";
 
 beforeEach(async () => {
   await resetDb();
@@ -164,12 +165,142 @@ describe("outside a window the poster is inert", () => {
   });
 });
 
+describe("a remembered phone: scan → Enter → counted, no password", () => {
+  it("joining hands back a continuity token that checks the SAME person into a DIFFERENT day's service", async () => {
+    const cong = await createCongregation();
+    const sundayOne = await createChurchService(cong, {
+      title: "First Sunday",
+      checkinOpensAt: hourAgo(),
+      checkinClosesAt: inAnHour(),
+    });
+
+    // Sunday one: the details step, once, ever.
+    const joined = await agent().post(`/v1/join/service/${sundayOne.service_id}`).send({
+      scan_token: serviceScanToken(sundayOne.qr_secret, sundayOne.service_id),
+      full_name: "Wanjiku Otieno",
+      phone_number: "0722000333",
+      email: "wanjiku@dev.local",
+      password: "a-long-enough-password",
+    });
+    expect(joined.status).toBe(201);
+    expect(joined.body.continuity_token).toBeTruthy();
+    expect(joined.body.full_name).toBe("Wanjiku Otieno");
+
+    // Sunday two: a different service, and the poster resolves to it. One tap.
+    const sundayTwo = await createChurchService(cong, {
+      title: "Second Sunday",
+      qrSecret: "second-secret",
+      checkinOpensAt: hourAgo(),
+      checkinClosesAt: inAnHour(),
+    });
+    const returned = await agent().post(`/v1/join/service/${sundayTwo.service_id}/return`).send({
+      continuity_token: joined.body.continuity_token,
+      scan_token: serviceScanToken("second-secret", sundayTwo.service_id),
+      client_scan_id: "6b1a2f34-0000-4000-8000-000000000002",
+    });
+    expect(returned.status).toBe(201);
+    expect(returned.body.full_name).toBe("Wanjiku Otieno");
+    expect(returned.body.continuity_token).toBeTruthy();
+
+    // Her details — the ones Follow-up needs — landed on the second day's
+    // record from her PROFILE, not from a form.
+    const { rows } = await testPool().query(
+      `SELECT full_name, phone_number, email, attended_at IS NOT NULL AS stamped
+         FROM service_attendance WHERE service_id = $1`,
+      [sundayTwo.service_id],
+    );
+    expect(rows).toEqual([
+      { full_name: "Wanjiku Otieno", phone_number: "+254722000333", email: "wanjiku@dev.local", stamped: true },
+    ]);
+  });
+
+  it("a second tap the same morning is a duplicate, not a second row", async () => {
+    const cong = await createCongregation();
+    const svcRow = await createChurchService(cong, {
+      checkinOpensAt: hourAgo(),
+      checkinClosesAt: inAnHour(),
+    });
+    const joined = await agent().post(`/v1/join/service/${svcRow.service_id}`).send({
+      scan_token: serviceScanToken(svcRow.qr_secret, svcRow.service_id),
+      full_name: "Double Tap",
+      phone_number: "0722000444",
+      email: "double@dev.local",
+      password: "a-long-enough-password",
+    });
+    const again = await agent().post(`/v1/join/service/${svcRow.service_id}/return`).send({
+      continuity_token: joined.body.continuity_token,
+      scan_token: serviceScanToken(svcRow.qr_secret, svcRow.service_id),
+      client_scan_id: "6b1a2f34-0000-4000-8000-000000000003",
+    });
+    expect(again.status).toBe(200);
+    expect(again.body.duplicate).toBe(true);
+    const { rows } = await testPool().query(
+      `SELECT count(*)::int AS n FROM service_attendance WHERE service_id = $1`,
+      [svcRow.service_id],
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("the token is attendance-only in scope and window-bound in time", async () => {
+    const cong = await createCongregation();
+    const open = await createChurchService(cong, {
+      checkinOpensAt: hourAgo(),
+      checkinClosesAt: inAnHour(),
+    });
+    const joined = await agent().post(`/v1/join/service/${open.service_id}`).send({
+      scan_token: serviceScanToken(open.qr_secret, open.service_id),
+      full_name: "Scope Check",
+      phone_number: "0722000555",
+      email: "scope@dev.local",
+      password: "a-long-enough-password",
+    });
+    const token = joined.body.continuity_token as string;
+
+    // Not an access token: the authed surface refuses it outright.
+    const asBearer = await agent().get(`/v1/me/attendance`).set("Authorization", `Bearer ${token}`);
+    expect(asBearer.status).toBe(401);
+
+    // And it cannot beat the window: a closed service refuses the return scan.
+    const closed = await createChurchService(cong, {
+      title: "Closed Service",
+      qrSecret: "closed-secret",
+      checkinOpensAt: new Date(Date.now() - 7_200_000).toISOString(),
+      checkinClosesAt: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    const late = await agent().post(`/v1/join/service/${closed.service_id}/return`).send({
+      continuity_token: token,
+      scan_token: serviceScanToken("closed-secret", closed.service_id),
+      client_scan_id: "6b1a2f34-0000-4000-8000-000000000004",
+    });
+    expect(late.status).toBe(422);
+  });
+
+  it("garbage and forged continuity tokens get one uniform refusal", async () => {
+    const cong = await createCongregation();
+    const svcRow = await createChurchService(cong, {
+      checkinOpensAt: hourAgo(),
+      checkinClosesAt: inAnHour(),
+    });
+    const res = await agent().post(`/v1/join/service/${svcRow.service_id}/return`).send({
+      continuity_token: "a".repeat(64),
+      scan_token: serviceScanToken(svcRow.qr_secret, svcRow.service_id),
+      client_scan_id: "6b1a2f34-0000-4000-8000-000000000005",
+    });
+    expect(res.status).toBe(401);
+    expect(res.body.error.message).toBe("This device needs a fresh sign-in");
+  });
+});
+
 describe("the code confirms nothing to enumeration", () => {
   it("unknown and malformed codes get the same refusal", async () => {
     const unknown = await agent().get(`/v1/join/congregation/${"0".repeat(64)}`);
     const short = await agent().get(`/v1/join/congregation/nope`);
     expect(unknown.status).toBe(400);
     expect(short.status).toBe(400);
-    expect(unknown.body.message).toBe(short.body.message);
+    // The real field this time. The first version of this assertion compared
+    // body.message — a field that does not exist — and passed on
+    // undefined === undefined. An assertion that cannot fail is not a test.
+    expect(unknown.body.error.message).toBe("That code is not valid");
+    expect(short.body.error.message).toBe("That code is not valid");
   });
 });
