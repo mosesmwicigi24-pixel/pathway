@@ -27,6 +27,7 @@ import { hashPassword } from "../identity/passwords.js";
 import { normalizePhone } from "../../lib/phone.js";
 import { serviceScanToken } from "./service.js";
 import { timingSafeEqual } from "node:crypto";
+import type { Principal } from "../../http/http.js";
 
 /** Joins allowed against a single service inside the window. */
 const MAX_JOINS_PER_SERVICE = 300;
@@ -54,6 +55,15 @@ export const joinByScanSchema = z
   .strict();
 
 export type JoinByScanInput = z.infer<typeof joinByScanSchema>;
+
+/** A returning phone: the continuity token says who, the scan token says where. */
+export const returnByScanSchema = z
+  .object({
+    continuity_token: z.string().min(16).max(2000),
+    scan_token: z.string().min(16).max(200),
+    client_scan_id: z.string().uuid(),
+  })
+  .strict();
 
 export interface JoinResult {
   user_id: string;
@@ -256,6 +266,29 @@ export class ServiceJoinService {
       [cong.congregation_id],
     );
     return { congregation: cong.name, open: false, next };
+  }
+
+  /**
+   * Turn a verified continuity token's user into a Principal for checkIn().
+   * Everything checkIn enforces (window, scan token, congregation, idempotent
+   * replay) applies unchanged; this only answers "who is this phone".
+   * One refusal message for gone and deleted alike — the fix is the same
+   * either way: sign in once and the page mints a fresh token.
+   */
+  async principalForReturn(userId: string): Promise<{ principal: Principal; fullName: string }> {
+    const row = await maybeOne<{ role: Principal["role"]; congregation_id: string | null; full_name: string }>(
+      this.pool,
+      `SELECT role, congregation_id, full_name FROM users
+        WHERE user_id = $1 AND deleted_at IS NULL`,
+      [userId],
+    );
+    if (!row || !row.congregation_id) {
+      throw new ApiError("AUTH_REQUIRED", "This device needs a fresh sign-in");
+    }
+    return {
+      principal: { userId, role: row.role, congregationId: row.congregation_id },
+      fullName: row.full_name,
+    };
   }
 
   /**

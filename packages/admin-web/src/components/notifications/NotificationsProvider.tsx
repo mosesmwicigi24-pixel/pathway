@@ -6,6 +6,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useMemo, type ReactElement, type ReactNode } from "react";
 import { CheckCircle2, Info, AlertTriangle, ShieldCheck, type LucideIcon } from "lucide-react";
 import { AdminApi, type NotificationFeedItem } from "../../api/client";
+import { useAppSelector } from "../../store/hooks";
 
 export type NotifCategory = "success" | "info" | "warning" | "security";
 
@@ -41,10 +42,17 @@ const NotificationsContext = createContext<NotificationsContextValue | null>(nul
 
 export function NotificationsProvider({ children }: { children: ReactNode }): ReactElement {
   const [feed, setFeed] = useState<NotificationFeedItem[]>([]);
+  const accessToken = useAppSelector((s) => s.auth.accessToken);
 
   const refresh = useCallback(() => {
-    AdminApi.notifications().then(setFeed).catch(() => { /* unauthenticated / offline */ });
-  }, []);
+    // No session, no poll. This provider wraps the WHOLE router, including
+    // public pages (/jc — the standing-poster join page, 2026-08-21): an
+    // unauthenticated fetch here 401s, and the API client's dead-session
+    // handler then bounced a first-time GUEST to the staff login. The catch
+    // below never saw it — the redirect fires in the response interceptor.
+    if (!accessToken) { setFeed([]); return; }
+    AdminApi.notifications().then(setFeed).catch(() => { /* offline */ });
+  }, [accessToken]);
   useEffect(() => { refresh(); }, [refresh]);
 
   const notifications = useMemo<AppNotification[]>(() =>
