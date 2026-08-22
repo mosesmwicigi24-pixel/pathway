@@ -19,7 +19,11 @@ INSERT INTO rbac_roles (role_key, name, role_type, description, is_system) VALUE
   -- Follow-up is its own job (migration 198): a list of names, phone numbers and
   -- what was said on the last call. Holds followUp and nothing else, so it is
   -- safe to give to whoever actually rings round on a Monday.
-  ('follow_up_team',     'Follow-up Team',          'field',  'Works the follow-up call list: who visited, who has stopped coming, and what was said. Sees the Follow-up section and nothing else.', FALSE)
+  ('follow_up_team',     'Follow-up Team',          'field',  'Works the follow-up call list: who visited, who has stopped coming, and what was said. Sees the Follow-up section and nothing else.', FALSE),
+  -- Runs nuruplace.org from the portal. Same principle as follow_up_team:
+  -- without it the only way to let someone edit the church website was to make
+  -- them an administrator of members, finance and curriculum too.
+  ('website',            'Website',                 'staff',  'Runs nuruplace.org from the portal: enquiries from the contact form, and the announcements, events and media the public site shows. No access to members, finance or curriculum.', TRUE)
 ON CONFLICT (role_key) DO UPDATE
   SET name = EXCLUDED.name, role_type = EXCLUDED.role_type,
       description = EXCLUDED.description, is_system = EXCLUDED.is_system;
@@ -31,7 +35,7 @@ SELECT 'super_admin', m.module_id, c.capability
   FROM (VALUES
     ('dashboard'),('levels'),('cms'),('quiz'),('videos'),('cells'),('members'),
     ('reflections'),('events'),('finance'),('certificates'),('badges'),
-    ('users'),('rolesAdmin'),('countries'),('languages'),('followUp')
+    ('users'),('rolesAdmin'),('countries'),('languages'),('followUp'),('website')
   ) AS m(module_id)
   CROSS JOIN (VALUES ('view'),('create'),('edit'),('delete'),('approve'),('export')) AS c(capability)
 ON CONFLICT DO NOTHING;
@@ -46,6 +50,9 @@ SELECT p.role_key, p.module_id, lc.capability
     ('full','view'),('full','create'),('full','edit'),('full','delete'),('full','approve'),('full','export')
   ) AS lc(level, capability)
   JOIN (VALUES
+    -- website: full on its own module, absent from every other — that narrowness
+    -- IS the feature, so it must not quietly acquire rows here later.
+    ('website','website','full'),
     -- system_admin
     ('system_admin','dashboard','read'),
     ('system_admin','users','full'),('system_admin','rolesAdmin','full'),

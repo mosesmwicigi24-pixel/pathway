@@ -51,6 +51,7 @@ import { registerEncouragements } from "../modules/encouragements/index.js";
 import { registerProximity } from "../modules/proximity/index.js";
 import { registerActivity } from "../modules/activity/index.js";
 import { registerRadio } from "../modules/radio/index.js";
+import { registerEnquiries } from "../modules/enquiries/index.js";
 import { registerDiscipleship } from "../modules/discipleship/index.js";
 import { registerPastoral } from "../modules/pastoral/index.js";
 import { registerReadingSocial, registerReadingSocialJoin } from "../modules/reading-social/index.js";
@@ -196,6 +197,7 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerSystem(ctx));
   v1.use(registerEncouragements(ctx));
   v1.use(registerRadio(ctx));
+  v1.use(registerEnquiries(ctx));
   v1.use(registerDiscipleship(ctx));
   v1.use(registerPastoral(ctx));
   v1.use(registerReadingSocial(ctx));
