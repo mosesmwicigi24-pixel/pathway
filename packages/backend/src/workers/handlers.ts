@@ -2,7 +2,7 @@
 // at-least-once redelivery is safe. New asynchronous side effects (notifications,
 // media renders) register here as their modules land.
 import type { AppContext } from "../http/context.js";
-import { maybeOne } from "../db/db.js";
+import { maybeOne, one } from "../db/db.js";
 import { CertificateService } from "../modules/certificates/service.js";
 import { buildObjectStore } from "../modules/certificates/objectStore.js";
 import { EngagementService } from "../modules/engagement/service.js";
@@ -15,7 +15,8 @@ import { GamificationService } from "../modules/gamification/service.js";
 import type { OutboxHandler } from "./outbox.js";
 import { CadenceService } from "../modules/attendance/cadence.js";
 import { buildSmsProvider } from "../modules/announcements/africastalking.js";
-import { renderGivingReceiptSms } from "./dispatch.js";
+import { composeReceiptSms } from "./receipt-ai.js";
+import { buildAiProvider } from "../modules/assistant/provider.js";
 
 export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler> {
   // Cert PDFs render to the shared object store (disk under MEDIA_STORAGE_DIR by
@@ -34,6 +35,12 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   // the notifications system structurally cannot send: a receipt to a giver who
   // has no account (see sendMemberlessReceipt below).
   const sms = ctx.smsProvider ?? buildSmsProvider(ctx.env, ctx.log);
+  // Claude writes the receipt copy when a key is configured (owner ask,
+  // 2026-08-22: unique per giver, history-aware, occasionally encouraging).
+  // The offline FakeAiProvider is treated as absent so a keyless deployment
+  // uses the template without drafting-and-rejecting on every gift.
+  const aiBuilt = ctx.aiProvider ?? buildAiProvider(ctx.env);
+  const ai = aiBuilt.name === "fake" ? undefined : aiBuilt;
 
   const handlers = new Map<string, OutboxHandler>();
 
@@ -243,11 +250,36 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
       [userId],
     );
     if (sms && contact?.phone_number) {
+      // The app giver gets the same Claude-written thank-you as the website
+      // giver. Composed HERE, not at dispatch: the notification worker stays a
+      // dumb sender, and the validated body rides in the payload it already
+      // stores. sms_body is re-validated at dispatch before it is trusted.
+      const history = await one<{ prior: number; first_at: string | null }>(
+        ctx.db.primary,
+        `SELECT count(*)::int AS prior, min(settled_at)::text AS first_at
+           FROM transactions
+          WHERE user_id = $1 AND status = 'succeeded' AND transaction_id <> $2`,
+        [userId, transactionId],
+      );
+      const composed = await composeReceiptSms(
+        ai,
+        {
+          giver_name: who?.full_name ?? null,
+          amount: `${txn.currency} ${(Number(txn.amount_minor) / 100).toFixed(2)}`,
+          fund: txn.fund ?? "General Fund",
+          receipt_code: txn.receipt_code,
+          prior_gifts: history.prior,
+          months_giving: monthsSince(history.first_at),
+          seed: seedFrom(transactionId),
+        },
+        ctx.log,
+      );
       await ctx.db.primary.query(
         `INSERT INTO notifications (user_id, channel, template, payload, status, scheduled_for)
          VALUES ($1, 'sms', 'giving_receipt', $2, 'scheduled', now())`,
-        [userId, JSON.stringify(receiptPayload)],
+        [userId, JSON.stringify({ ...receiptPayload, sms_body: composed.body })],
       );
+      ctx.log.info({ source: composed.source, user_id: userId }, "member giving receipt composed");
     }
   });
 
@@ -301,18 +333,33 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
     if (!gift || gift.status !== "succeeded" || !gift.giver_phone) return;
     if (gift.receipt_sms_at) return; // already thanked — a redelivery must not text twice
 
-    // The SAME renderer the member receipt uses — this used to be a second,
-    // hand-built copy of the message, and it still carried the em dash after
-    // the template was fixed. One character outside GSM-7 demotes the whole
-    // text to UCS-2 and bills it as two segments; a second copy of the copy is
-    // how a fixed bug keeps shipping.
-    const body = renderGivingReceiptSms({
-      amount_minor: Number(gift.amount_minor),
-      currency: gift.currency,
-      fund: gift.fund ?? "the church",
-      receipt_code: gift.receipt_code,
-      member_name: gift.giver_name,
-    });
+    // A stranger's history is keyed by the phone that paid — their prior gifts
+    // are what let a third gift be NOTICED rather than mail-merged.
+    const history = await one<{ prior: number; first_at: string | null }>(
+      ctx.db.primary,
+      `SELECT count(*)::int AS prior, min(settled_at)::text AS first_at
+         FROM transactions
+        WHERE giver_phone = $1 AND source = 'website' AND status = 'succeeded'
+          AND transaction_id <> $2`,
+      [gift.giver_phone, transactionId],
+    );
+    // Claude drafts, code verifies, the template catches everything else —
+    // renderGivingReceiptSms stays the single fallback shared with the member
+    // path (the second-hand-built-copy em dash is how a fixed bug re-shipped).
+    const { body, source } = await composeReceiptSms(
+      ai,
+      {
+        giver_name: gift.giver_name,
+        amount: `${gift.currency} ${(Number(gift.amount_minor) / 100).toFixed(2)}`,
+        fund: gift.fund ?? "the church",
+        receipt_code: gift.receipt_code,
+        prior_gifts: history.prior,
+        months_giving: monthsSince(history.first_at),
+        seed: seedFrom(transactionId),
+      },
+      ctx.log,
+    );
+    ctx.log.info({ source, transaction_id: transactionId }, "website giving receipt composed");
 
     try {
       const { ref } = await sms.send({ to: gift.giver_phone, title: "Thank you", body });
@@ -331,4 +378,16 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   }
 
   return handlers;
+}
+
+/** Whole months between an ISO instant and now; null when there is no instant. */
+function monthsSince(iso: string | null): number | null {
+  if (!iso) return null;
+  const ms = Date.now() - new Date(iso).getTime();
+  return ms > 0 ? Math.floor(ms / (30 * 24 * 3600 * 1000)) : 0;
+}
+
+/** Stable small seed from a UUID, so a retried compose varies like the original. */
+function seedFrom(id: string): number {
+  return parseInt(id.replace(/-/g, "").slice(0, 6), 16) % 1000;
 }
