@@ -174,7 +174,7 @@ export function registerAttendance(ctx: AppContext): Router {
     }),
   );
 
-  // --- Weekly schedules (migration 201): the rhythm behind the standing QR ---
+  // --- Weekly schedules (migration 203): the rhythm behind the standing QR ---
 
   /** The congregation's declared weekly rhythm. */
   r.get(

@@ -1,4 +1,4 @@
--- Migration 201 · Weekly service schedules: the poster must never point at nothing
+-- Migration 203 · Weekly service schedules: the poster must never point at nothing
 -- ============================================================================
 -- The standing join QR (migration 200) resolves per-day to an OPEN service —
 -- which means it resolves to nothing if nobody remembered to create this

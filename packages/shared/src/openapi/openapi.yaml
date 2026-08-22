@@ -1856,7 +1856,7 @@ paths:
     get:
       tags: [attendance]
       summary: >-
-        The congregation's declared weekly rhythm (migration 201) — the
+        The congregation's declared weekly rhythm (migration 203) — the
         schedules the worker materializes into concrete services a week ahead,
         so the standing join QR always has a service to resolve to.
         Leader+ (Instructor and above).

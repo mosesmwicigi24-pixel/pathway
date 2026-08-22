@@ -1,4 +1,4 @@
-// Weekly service schedules (migration 201): rhythm → rows, so the standing
+// Weekly service schedules (migration 203): rhythm → rows, so the standing
 // QR poster never points at a Sunday nobody remembered to create.
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
