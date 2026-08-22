@@ -2409,6 +2409,103 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
 
   # --- Giving, products & certificates (§3.3) ---
+  /giving/funds:
+    get:
+      tags: [giving]
+      summary: Funds a visitor may give to, and which payment providers are wired. Public — no session.
+      description: >
+        Backs the Give page on nuruplace.org, which anyone can load. Carries fund
+        codes and display names only — no balances and no totals — plus the
+        amount bounds and which providers actually work, so the page can render
+        an honest "not available yet" instead of a button that fails after the
+        visitor has typed their number.
+      security: []
+      responses:
+        "200":
+          description: Funds and enabled providers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  funds:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string }
+                        name: { type: string }
+                  currency: { type: string, example: KES }
+                  min_minor: { type: integer, example: 1000 }
+                  max_minor: { type: integer, example: 15000000 }
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string, enum: [mpesa, airtel] }
+                        label: { type: string }
+                        enabled: { type: boolean }
+  /webhooks/website-giving:
+    post:
+      tags: [giving]
+      summary: A gift from nuruplace.org by someone with no account (migration 202). HMAC-signed, rate limited.
+      description: >
+        The visitor's browser posts to the website; the website signs the payload
+        and forwards it here. We send an M-Pesa STK push to the number given and
+        write a memberless `processing` transaction (`source='website'`, no
+        `user_id`). Settlement happens where it always has — on the verified
+        mobile-money callback — so a website gift is an ordinary line in the same
+        double-entry ledger.
+
+        Authenticity is `x-nuruplace-signature: t=<unix>,v1=<hex sha256>` over
+        `${timestamp}.${rawBody}`, the same scheme as the Stripe receiver. With
+        no secret configured the endpoint refuses everything (503) rather than
+        accepting unsigned requests: an open endpoint that initiates STK pushes
+        makes a stranger's phone ring on demand.
+
+        Rate limited per destination phone number (3, then 1 per 10 minutes),
+        per originating IP, and across the website relay as a whole. Buckets are
+        spent only after the signature verifies, so forged traffic cannot be used
+        to lock a genuine giver out of their own allowance.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fund, amount_minor, phone_number, idempotency_key]
+              properties:
+                fund: { type: string, example: offering }
+                amount_minor: { type: integer, minimum: 1000, maximum: 15000000 }
+                currency: { type: string, enum: [KES], default: KES }
+                method: { type: string, enum: [mpesa, airtel], default: mpesa }
+                phone_number: { type: string, example: "+254722000111" }
+                giver_name: { type: string, maxLength: 120 }
+                giver_email: { type: string, maxLength: 255 }
+                idempotency_key: { type: string, minLength: 8, maxLength: 255 }
+                client_ip:
+                  type: string
+                  description: The visitor's IP as the website saw it; advisory, used for rate limiting.
+      responses:
+        "201":
+          description: STK push sent; the giver confirms on their phone
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transaction_id: { type: string, format: uuid }
+                  provider: { type: string, enum: [mpesa, airtel] }
+                  provider_ref: { type: string }
+                  status: { type: string, example: processing }
+                  idempotency_key: { type: string }
+                  reused: { type: boolean }
+        "400": { description: "VALIDATION_FAILED — unknown fund, amount out of bounds, or a currency the website cannot settle." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { description: "RATE_LIMITED — too many pushes to this number, from this address, or through the relay. Retry-After is set for the per-number bucket." }
+        "503": { $ref: "#/components/responses/UpstreamUnavailable" }
   /giving/intents:
     post:
       tags: [giving]

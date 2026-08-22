@@ -10,7 +10,7 @@ import { z } from "zod";
 import { maybeOne, one, many, tx, audit, enqueueOutbox } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import type { PaymentGateway } from "./gateway.js";
-import type { MobileMoneyKey, MobileMoneyProviders } from "./providers.js";
+import { sanitizeAccountReference, type MobileMoneyKey, type MobileMoneyProviders } from "./providers.js";
 import type { PayPalGateway } from "./paypal.js";
 import { renderStatementPdf, renderReceiptPdf } from "./statementPdf.js";
 
@@ -179,6 +179,172 @@ export class FinancialService {
     };
   }
 
+  // ==========================================================================
+  // Website giving (migration 202) — a gift from someone with no account.
+  // ==========================================================================
+
+  /**
+   * What nuruplace.org may send. Deliberately narrower than `GivingIntent`:
+   *
+   *  - **Mobile money only.** A card or PayPal gift from an anonymous visitor
+   *    needs a hosted checkout page and a return URL to land on, which is a
+   *    separate piece of work with its own PCI surface. M-Pesa needs neither:
+   *    the visitor types their number, their phone asks them to confirm, and
+   *    nothing sensitive crosses our servers.
+   *  - **Bounded amount.** An open endpoint that will initiate any figure is a
+   *    typo away from a KES 5,000,000 prompt, and Safaricom caps a single STK
+   *    push at 150,000 anyway. Rejecting here gives a readable error instead of
+   *    a Daraja rejection the visitor cannot act on.
+   *  - **Phone required, not optional.** For a member it defaults to the number
+   *    on their profile. A stranger has no profile, and `transactions_
+   *    attributable` (migration 202) will not accept a row with neither.
+   */
+  static readonly WebsiteGift = z.object({
+    fund: z.string().min(2).max(40),
+    amount_minor: z.number().int().positive(),
+    currency: z.string().length(3).default("KES"),
+    method: z.enum(["mpesa", "airtel"]).default("mpesa"),
+    phone_number: z.string().min(7).max(32),
+    giver_name: z
+      .string()
+      .trim()
+      .max(120)
+      .optional()
+      .transform((v) => (v && v.length > 0 ? v : undefined)),
+    giver_email: z
+      .string()
+      .trim()
+      .max(255)
+      .optional()
+      .transform((v) => (v && v.length > 0 ? v : undefined)),
+    idempotency_key: z.string().min(8).max(255),
+    /** The visitor's IP as the website saw it — our peer is always the website
+     *  server, so without this every visitor shares one bucket. Advisory: the
+     *  website could lie, which is why the per-phone bucket is the real guard. */
+    client_ip: z.string().max(64).optional(),
+  });
+
+  /** M-Pesa's per-transaction ceiling. Anything above it is refused by Safaricom. */
+  static readonly WEBSITE_MAX_MINOR = 150_000_00;
+  /** Below this a "gift" is somebody testing whether the endpoint rings phones. */
+  static readonly WEBSITE_MIN_MINOR = 10_00;
+
+  /**
+   * Create a memberless giving intent from the church website.
+   *
+   * Same shape as `createGivingIntent` and deliberately the same settlement
+   * path — the mobile-money callback finds this row by `provider_ref` and posts
+   * the identical double entry, so a website gift is a normal line in the
+   * ledger rather than a parallel system the treasurer has to reconcile twice.
+   *
+   * What it does NOT do is create a user. See the migration header.
+   */
+  async createWebsiteGivingIntent(
+    input: z.infer<typeof FinancialService.WebsiteGift>,
+  ): Promise<Record<string, unknown>> {
+    const currency = input.currency.toUpperCase();
+    if (currency !== "KES") {
+      throw new ApiError("VALIDATION_FAILED", "Website giving settles in KES");
+    }
+    if (input.amount_minor > FinancialService.WEBSITE_MAX_MINOR) {
+      throw new ApiError("VALIDATION_FAILED", "That amount is above the M-Pesa limit for one payment");
+    }
+    if (input.amount_minor < FinancialService.WEBSITE_MIN_MINOR) {
+      throw new ApiError("VALIDATION_FAILED", "That amount is below the smallest gift the website accepts");
+    }
+
+    // Idempotent, and scoped to website rows. `idempotency_key` is globally
+    // unique, so looking it up without the `source` filter would hand a website
+    // caller back a MEMBER's transaction id whenever the keys happened to
+    // collide — a small leak, but a leak of exactly the thing this endpoint has
+    // no business seeing.
+    const existing = await maybeOne<{ transaction_id: string; status: string }>(
+      this.pool,
+      `SELECT transaction_id, status FROM transactions
+        WHERE idempotency_key = $1 AND source = 'website'`,
+      [input.idempotency_key],
+    );
+    if (existing) {
+      return {
+        transaction_id: existing.transaction_id,
+        status: existing.status,
+        idempotency_key: input.idempotency_key,
+        reused: true,
+      };
+    }
+
+    const fund = await maybeOne<{ fund_id: string }>(
+      this.pool,
+      `SELECT fund_id FROM funds WHERE code = $1 AND is_active`,
+      [input.fund],
+    );
+    if (!fund) throw new ApiError("VALIDATION_FAILED", "Unknown or inactive fund");
+
+    // The reference that shows on the church's M-Pesa statement. A giver's name
+    // is far more useful there than "GENERAL", and it is what makes an
+    // anonymous gift reconcilable at all — but it goes through the same
+    // sanitizer as named giving, because Daraja accepts 12 alphanumerics.
+    const reference = sanitizeAccountReference(input.giver_name) ?? "WEBSITE";
+
+    const charge = await this.provider(input.method).initiate({
+      amountMinor: input.amount_minor,
+      currency,
+      phoneNumber: input.phone_number,
+      metadata: { source: "website", fund: input.fund, reference },
+    });
+
+    const txn = await one<{ transaction_id: string; status: string }>(
+      this.pool,
+      `INSERT INTO transactions
+         (user_id, fund_id, amount_minor, currency, status, provider, provider_ref,
+          idempotency_key, account_name, source, giver_name, giver_phone, giver_email)
+       VALUES (NULL, $1, $2, $3, 'processing', $4, $5, $6, $7, 'website', $8, $9, $10)
+       RETURNING transaction_id, status`,
+      [
+        fund.fund_id,
+        input.amount_minor,
+        currency,
+        input.method,
+        charge.ref,
+        input.idempotency_key,
+        input.giver_name ?? null,
+        input.giver_name ?? null,
+        input.phone_number,
+        input.giver_email ?? null,
+      ],
+    );
+
+    // actor null: nobody signed in did this. The metadata carries who it was as
+    // far as we know them, which is a phone number and possibly a name.
+    await audit(this.pool, null, "giving.website_intent_created", "transactions", txn.transaction_id, {
+      amount_minor: input.amount_minor,
+      currency,
+      fund: input.fund,
+      method: input.method,
+      giver_phone: input.phone_number,
+      giver_name: input.giver_name ?? null,
+    });
+
+    return {
+      transaction_id: txn.transaction_id,
+      provider: input.method,
+      provider_ref: charge.ref, // STK push sent — the giver confirms on their phone
+      status: txn.status,
+      idempotency_key: input.idempotency_key,
+      reused: false,
+    };
+  }
+
+  /** Active funds a visitor may give to. Public — no auth, so it carries the
+   *  code and the display name and nothing else about the church's finances. */
+  async publicFunds(): Promise<{ code: string; name: string }[]> {
+    const rows = await many<Record<string, unknown>>(
+      this.pool,
+      `SELECT code, name FROM funds WHERE is_active ORDER BY name`,
+    );
+    return rows.map((r) => ({ code: String(r.code), name: String(r.name) }));
+  }
+
   /** Capture a PayPal order the member approved; settle the ledger on COMPLETED
    *  (§5.6 — money moves only here). Idempotent: an already-settled order is a no-op. */
   async capturePayPal(userId: string, orderId: string): Promise<{ status: string }> {
@@ -280,7 +446,8 @@ export class FinancialService {
 
     const txn = await maybeOne<{
       transaction_id: string;
-      user_id: string;
+      // Nullable since migration 202 — a website gift belongs to no member.
+      user_id: string | null;
       amount_minor: string;
       currency: string;
       status: string;
@@ -314,6 +481,14 @@ export class FinancialService {
         [txn.user_id, productId, txn.transaction_id],
       );
     }
+    // `user_id` is null for a website gift (migration 202). The receipt handler
+    // treats a null user as a malformed payload and no-ops, which is correct but
+    // worth saying out loud: a stranger who gives through nuruplace.org gets
+    // M-Pesa's own confirmation SMS with the transaction code, and nothing from
+    // us. A church-branded receipt to `giver_email` needs a delivery path that
+    // is not `notifications` — every row there is keyed to a user_id — so it is
+    // deliberately out of scope here rather than half-built. The gift itself is
+    // in the ledger and on the website report either way.
     await enqueueOutbox(c, "giving.receipt", { transaction_id: txn.transaction_id, user_id: txn.user_id });
   }
 

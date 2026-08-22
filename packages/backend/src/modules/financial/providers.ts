@@ -93,7 +93,7 @@ export function sanitizeAccountReference(raw: string | undefined | null): string
 }
 
 /** E.164 / local → Daraja MSISDN (2547XXXXXXXX, no plus). */
-function toMsisdn(phone: string): string {
+export function toMsisdn(phone: string): string {
   let d = phone.replace(/\D/g, "");
   if (d.startsWith("0")) d = `254${d.slice(1)}`;
   else if (d.length === 9 && d.startsWith("7")) d = `254${d}`;
