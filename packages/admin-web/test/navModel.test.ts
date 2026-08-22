@@ -4,13 +4,27 @@ import { describe, it, expect } from "vitest";
 import { navGroups, titleFor } from "../src/components/shell/nav";
 
 describe("portal nav model", () => {
-  it("has the eight sidebar groups in order", () => {
+  it("has the nine sidebar groups in order", () => {
     // Follow-up became its own group on 2026-08-17 (owner ruling), sitting
     // between Operations and Communication. It was previously two rows inside
     // Operations gated on members:view.
+    //
+    // Website joined on 2026-08-22, before Settings: the portal is now the
+    // administration point for nuruplace.org, and the whole group is gated on
+    // the `website` module so running the site does not require Admin over
+    // members, finance and curriculum.
     expect(navGroups.map((g) => g.label)).toEqual([
-      "Portal", "Curriculum", "Media", "Operations", "Follow-up", "Communication", "System", "Settings",
+      "Portal", "Curriculum", "Media", "Operations", "Follow-up", "Communication", "System",
+      "Website", "Settings",
     ]);
+  });
+
+  it("gates the Website group on its own module, so the site can be run without the roll", () => {
+    const website = navGroups.find((g) => g.label === "Website");
+    expect(website?.items.map((i) => i.path)).toEqual(["/website/enquiries"]);
+    // Same principle as Follow-up: editing the church website and reading the
+    // membership roster are different jobs, usually done by different people.
+    expect(website?.items.every((i) => i.permission === "website:view")).toBe(true);
   });
 
   it("gates the Follow-up group on its own module, not on members:view", () => {

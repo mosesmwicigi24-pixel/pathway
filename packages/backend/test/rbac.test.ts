@@ -31,7 +31,7 @@ afterAll(async () => {
 });
 
 describe("RBAC roles & permission matrix", () => {
-  it("lists the 12 seeded roles with their matrices (Admin bridge)", async () => {
+  it("lists the 13 seeded roles with their matrices (Admin bridge)", async () => {
     // 13 roles now. Two landed independently: follow_up_team (#433, holds
     // followUp and nothing else so the call list can go to people who never
     // touch the roll) and website (runs nuruplace.org from the portal without
@@ -44,7 +44,7 @@ describe("RBAC roles & permission matrix", () => {
     // Live L1). 18 modules: followUp and website both joined the super_admin
     // list, which is enumerated by hand rather than derived — #432 is what
     // happens when a module is missing from it.
-    expect(sa.permissions).toHaveLength(17 * 6 + 1 + 2);
+    expect(sa.permissions).toHaveLength(18 * 6 + 1 + 2);
     expect(sa.is_system).toBe(true);
     const member = res.body.data.find((r: { role_key: string }) => r.role_key === "member");
     expect(member.permissions).toHaveLength(0);
