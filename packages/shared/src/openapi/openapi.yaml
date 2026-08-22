@@ -4611,6 +4611,31 @@ paths:
         "200": { description: Restored }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/announcements/channels:
+    get:
+      tags: [announcements]
+      summary: >-
+        Admin. Which channels this deployment can actually deliver on, with a
+        note per channel. Availability is a property of the deployment (whether
+        Africa's Talking is configured), not of the client, so the composer asks
+        rather than hardcoding it.
+      responses:
+        "200": { description: "Per channel: key, available, note" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/announcements/{id}/reach:
+    get:
+      tags: [announcements]
+      summary: >-
+        Admin. How many people this announcement would actually reach per
+        channel — the cost figure shown before an SMS send. Read-only: asking
+        never creates a delivery. Counts who is reachable (a member with no
+        phone costs nothing and receives nothing), not the audience size.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "total, sms, email, sms_unreachable" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /admin/announcements/{id}/send:
     post:
       tags: [announcements]
@@ -4618,8 +4643,9 @@ paths:
         Admin. Send now — fans out per recipient×channel (idempotent),
         congregation-scoped audience. Channel honesty: push rides notifications
         (quiet hours/caps), email rides the SMTP EmailProvider (delivered = SMTP
-        accepted), sms/whatsapp record suppressed(no_provider) until a provider
-        exists, banner is delivered in-app.
+        accepted), sms rides Africa's Talking when configured and otherwise
+        records suppressed(no_provider), whatsapp has no provider at all and
+        always records suppressed(no_provider), banner is delivered in-app.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:

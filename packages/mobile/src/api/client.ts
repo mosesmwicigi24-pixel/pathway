@@ -33,6 +33,7 @@ import type {
   GiftQuestionSet,
   MyAnnouncement,
   NotificationRow,
+  NotificationPreferences,
   ScripturePassage,
   MyGifts,
   MyRsvp,
@@ -596,6 +597,21 @@ export const NuruApi = {
   },
   async markNotificationsRead(ids?: string[]): Promise<{ marked: number }> {
     const { data } = await api.post<{ marked: number }>("/me/notifications/read", ids?.length ? { ids } : {});
+    return data;
+  },
+  /**
+   * The three channel toggles on the profile screen.
+   *
+   * These were local component state until now: flipping SMS set a boolean that
+   * died with the screen, so a member who turned texts on was never recorded as
+   * having done so. The endpoint has existed the whole time.
+   */
+  async notificationPreferences(): Promise<NotificationPreferences> {
+    const { data } = await api.get<NotificationPreferences>("/me/notification-preferences");
+    return data;
+  },
+  async saveNotificationPreferences(input: NotificationPreferences): Promise<NotificationPreferences> {
+    const { data } = await api.put<NotificationPreferences>("/me/notification-preferences", input);
     return data;
   },
   async myAnnouncements(): Promise<MyAnnouncement[]> {

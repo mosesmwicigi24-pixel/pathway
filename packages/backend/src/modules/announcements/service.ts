@@ -576,6 +576,37 @@ export class AnnouncementService {
 
   // ---- internals ----
 
+  /**
+   * How many people would this actually reach, per channel, if sent now?
+   *
+   * The audience size is NOT the answer. A member with no phone number costs
+   * nothing and receives nothing, so counting them in the SMS figure would
+   * over-state the bill and under-state the surprise when some people are
+   * missed. This counts who can genuinely be reached on each channel.
+   *
+   * Exists because SMS is the first channel here that costs the church real
+   * money per message: an announcement sent to "everyone" is a decision worth
+   * seeing a number for before you make it, not after.
+   */
+  async reach(id: string): Promise<{ total: number; sms: number; email: number; sms_unreachable: number }> {
+    const ann = await maybeOne<AnnouncementRow>(
+      this.pool,
+      `SELECT ${SELECT_COLS} FROM announcements WHERE announcement_id = $1`,
+      [id],
+    );
+    if (!ann) throw new ApiError("NOT_FOUND", "Announcement not found");
+    const recipients = await this.audienceRecipients(this.pool, ann);
+    const sms = recipients.filter((r) => Boolean(r.phone_number)).length;
+    return {
+      total: recipients.length,
+      sms,
+      email: recipients.filter((r) => Boolean(r.email)).length,
+      // Named rather than left to subtraction: "12 of these people have no
+      // number on file" is the sentence an admin needs before pressing send.
+      sms_unreachable: recipients.length - sms,
+    };
+  }
+
   private async audienceRecipients(
     c: Pool | PoolClient,
     ann: AnnouncementRow,

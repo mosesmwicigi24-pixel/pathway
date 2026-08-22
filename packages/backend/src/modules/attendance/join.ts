@@ -22,7 +22,7 @@
 import { z } from "zod";
 import type pg from "pg";
 import { ApiError } from "../../http/errors.js";
-import { one, maybeOne, tx, recordChange, audit } from "../../db/db.js";
+import { one, maybeOne, tx, recordChange, audit, enqueueOutbox } from "../../db/db.js";
 import { hashPassword } from "../identity/passwords.js";
 import { normalizePhone } from "../../lib/phone.js";
 import { serviceScanToken } from "./service.js";
@@ -182,6 +182,19 @@ export class ServiceJoinService {
          RETURNING attendance_id`,
         [serviceId, user.user_id, input.full_name, input.phone_number, input.email],
       );
+
+      // Welcome them by text. This is the path where the invitation half of the
+      // copy earns its place: somebody who joined by pointing a phone camera at
+      // the projected code did it in a browser and does not have the app.
+      // Only when the attendance row was actually written — a duplicate is not
+      // a new arrival.
+      if (attendance) {
+        await enqueueOutbox(c, "attendance.welcome", {
+          user_id: user.user_id,
+          service_id: serviceId,
+          congregation_id: svc!.congregation_id,
+        });
+      }
 
       await recordChange(c, "users", user.user_id, user.user_id, "upsert");
       await recordChange(c, "enrollments", enrollment.enrollment_id, user.user_id, "upsert");

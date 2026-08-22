@@ -84,6 +84,80 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
     await engagement.recomputeOne(String(p.user_id));
   });
 
+  /**
+   * Welcome by text whoever just walked in and checked in.
+   *
+   * TRANSACTIONAL, so — like the giving receipt — it is not gated on the opt-in
+   * `sms_enabled` preference: it acknowledges something the person did seconds
+   * ago at the door, which is not the broadcast traffic that preference exists
+   * to govern. The row is written directly for that reason.
+   *
+   * Whether the copy mentions the app is decided HERE rather than in the copy,
+   * because it is a fact about the person's devices and needs a query. An
+   * active push token is the honest signal: it means a build of the app is
+   * installed and signed in as them. Absent one, the check-in came through the
+   * web join page and the invitation is the useful half of the message.
+   */
+  handlers.set("attendance.welcome", async (p) => {
+    const userId = String(p.user_id ?? "");
+    if (!userId) return;
+    if (!sms) return; // nothing bound to send with — see the warning in sendMemberlessReceipt
+
+    const who = await maybeOne<{
+      full_name: string;
+      phone_number: string | null;
+      congregation: string | null;
+      has_app: boolean;
+    }>(
+      ctx.db.primary,
+      `SELECT u.full_name,
+              u.phone_number,
+              c.name AS congregation,
+              EXISTS (
+                SELECT 1 FROM push_tokens pt
+                 WHERE pt.user_id = u.user_id AND pt.is_active = TRUE
+              ) AS has_app
+         FROM users u
+         LEFT JOIN congregations c ON c.congregation_id = u.congregation_id
+        WHERE u.user_id = $1 AND u.deleted_at IS NULL`,
+      [userId],
+    );
+    // No number on file means no way to welcome them, and no row to leave
+    // looking like a delivery failure.
+    if (!who?.phone_number) return;
+
+    // One welcome a day, whatever the outbox does. Two things make this matter
+    // and neither is hypothetical: the outbox is at-least-once so a redelivery
+    // would text somebody twice, and a Sunday with an 8am and an 11am service
+    // is two genuine check-ins for anyone who serves at both. Being welcomed to
+    // church twice before lunch reads as a broken system, and it is billed as
+    // two.
+    const already = await maybeOne<{ notification_id: string }>(
+      ctx.db.primary,
+      `SELECT notification_id FROM notifications
+        WHERE user_id = $1 AND channel = 'sms' AND template = 'check_in_welcome'
+          AND scheduled_for > now() - interval '20 hours'
+        LIMIT 1`,
+      [userId],
+    );
+    if (already) return;
+
+    await ctx.db.primary.query(
+      `INSERT INTO notifications (user_id, channel, template, payload, status, scheduled_for)
+       VALUES ($1, 'sms', 'check_in_welcome', $2, 'scheduled', now())`,
+      [
+        userId,
+        JSON.stringify({
+          member_name: who.full_name,
+          congregation: who.congregation,
+          has_app: who.has_app,
+          app_url: ctx.env.APP_PUBLIC_URL,
+          service_id: p.service_id == null ? null : String(p.service_id),
+        }),
+      ],
+    );
+  });
+
   // Member-facing nudges (§1.5), quiet-hours + daily-cap aware.
   handlers.set("notification.level_completed", async (p) => {
     await notifications.schedule({
@@ -138,21 +212,42 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
       [userId],
     );
 
-    await notifications.schedule({
-      userId,
-      channel: "email",
-      template: "giving_receipt",
-      payload: {
+    const receiptPayload = {
         transaction_id: transactionId,
         amount_minor: Number(txn.amount_minor), // integer minor units — never a float
         currency: txn.currency,
         fund: txn.fund ?? "General Fund",
         member_name: who?.full_name ?? null,
         congregation: who?.congregation ?? "Nuru Place Church",
-        date: txn.settled_at ?? txn.created_at,
-        receipt_code: txn.receipt_code,
-      },
-    });
+      date: txn.settled_at ?? txn.created_at,
+      receipt_code: txn.receipt_code,
+    };
+
+    await notifications.schedule({ userId, channel: "email", template: "giving_receipt", payload: receiptPayload });
+
+    // …and a text, to the number that paid.
+    //
+    // TRANSACTIONAL, so it is not gated on the opt-in sms_enabled preference:
+    // this acknowledges something the member just did, exactly as a payment
+    // provider sends a receipt whatever your marketing preferences say. That
+    // preference governs BROADCAST sms — announcements and nudges.
+    //
+    // schedule() would consult it, so the row is written directly, and only
+    // when there is a number to send to and a provider bound to send it. A
+    // member with no phone on file gets the email and nothing else, rather than
+    // a row that fails at dispatch and reads like a delivery problem.
+    const contact = await maybeOne<{ phone_number: string | null }>(
+      ctx.db.primary,
+      `SELECT phone_number FROM users WHERE user_id = $1`,
+      [userId],
+    );
+    if (sms && contact?.phone_number) {
+      await ctx.db.primary.query(
+        `INSERT INTO notifications (user_id, channel, template, payload, status, scheduled_for)
+         VALUES ($1, 'sms', 'giving_receipt', $2, 'scheduled', now())`,
+        [userId, JSON.stringify(receiptPayload)],
+      );
+    }
   });
 
   /**

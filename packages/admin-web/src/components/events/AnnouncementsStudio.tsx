@@ -61,13 +61,174 @@ import {
 /* Channel honesty (§5)                                                */
 /* ------------------------------------------------------------------ */
 
-const CHANNEL_DEFS: Array<{ key: AnnouncementChannel; label: string; icon: ReactNode; available: boolean; note?: string }> = [
-  { key: "push", label: "App push", icon: <Smartphone size={14} />, available: true },
-  { key: "email", label: "Email", icon: <Mail size={14} />, available: true },
-  { key: "banner", label: "In-app banner", icon: <Mic2 size={14} />, available: true },
-  { key: "sms", label: "SMS", icon: <Phone size={14} />, available: false, note: "awaiting provider" },
-  { key: "whatsapp", label: "WhatsApp", icon: <MessageSquare size={14} />, available: false, note: "awaiting provider" },
+/**
+ * Labels and icons only. Whether a channel can actually DELIVER is a property
+ * of the deployment, not of this file — `available` used to be hardcoded here,
+ * so SMS read "awaiting provider" and would have kept saying so after Africa's
+ * Talking was wired. The API answers that question now; see useChannels below.
+ */
+const CHANNEL_DEFS: Array<{ key: AnnouncementChannel; label: string; icon: ReactNode }> = [
+  { key: "push", label: "App push", icon: <Smartphone size={14} /> },
+  { key: "email", label: "Email", icon: <Mail size={14} /> },
+  { key: "banner", label: "In-app banner", icon: <Mic2 size={14} /> },
+  { key: "sms", label: "SMS", icon: <Phone size={14} /> },
+  { key: "whatsapp", label: "WhatsApp", icon: <MessageSquare size={14} /> },
 ];
+
+/** What the deployment says it can send on, keyed by channel. */
+export type ChannelAvailability = Record<string, { available: boolean; note?: string }>;
+
+/**
+ * Ask the API which channels can deliver.
+ *
+ * Falls back to "only the three that never needed a provider" if the call
+ * fails — an optimistic default would offer SMS on a deployment that cannot
+ * send it, and every delivery would be silently suppressed.
+ */
+function useChannels(): ChannelAvailability {
+  const [state, setState] = useState<ChannelAvailability>({
+    push: { available: true },
+    email: { available: true },
+    banner: { available: true },
+    sms: { available: false, note: "checking…" },
+    whatsapp: { available: false, note: "checking…" },
+  });
+  useEffect(() => {
+    let alive = true;
+    void AnnouncementsApi.channels()
+      .then((rows) => {
+        if (!alive) return;
+        const next: ChannelAvailability = {};
+        for (const c of rows) next[c.key] = { available: c.available, ...(c.note ? { note: c.note } : {}) };
+        setState(next);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setState((s) => ({
+          ...s,
+          sms: { available: false, note: "could not check" },
+          whatsapp: { available: false, note: "could not check" },
+        }));
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return state;
+}
+
+/* ------------------------------------------------------------------ */
+/* Cost guard — the number you see before you spend the church's money  */
+/* ------------------------------------------------------------------ */
+
+type Reach = { total: number; sms: number; email: number; sms_unreachable: number };
+
+/** Does sending this announcement cost anything? Only SMS does, today. */
+function costsMoney(channels: string[]): boolean {
+  return channels.includes("sms");
+}
+
+/**
+ * Confirm an SMS send by showing how many texts it will actually produce.
+ *
+ * Push, email and banners are free and reversible-ish; a text is neither. The
+ * figure that matters is not the audience size — a member with no number on
+ * file costs nothing and receives nothing — so this asks the API for the count
+ * of people who can genuinely be reached, and refuses to guess.
+ */
+function SmsSendConfirm({
+  id,
+  channels,
+  onCancel,
+  onConfirm,
+}: {
+  id: string;
+  channels: string[];
+  onCancel: () => void;
+  onConfirm: () => void;
+}): ReactElement {
+  const [reach, setReach] = useState<Reach | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void AnnouncementsApi.reach(id)
+      .then((r) => alive && setReach(r))
+      .catch(() => alive && setFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [id]);
+
+  const free = channels.filter((c) => c !== "sms");
+  const loading = !reach && !failed;
+
+  return (
+    <Modal onClose={onCancel} width={460}>
+      <div className="px-6 py-5" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--nuru-gold)", letterSpacing: 0.5, textTransform: "uppercase" }}>
+          This send costs money
+        </div>
+        <h2 style={{ fontFamily: "var(--font-display)", fontSize: 20, color: "var(--foreground)" }}>Send by SMS?</h2>
+      </div>
+      <div className="px-6 py-5 flex flex-col gap-4">
+        {loading ? (
+          <Skeleton height={72} />
+        ) : failed ? (
+          // The count is a read-only query; if it fails we say so rather than
+          // showing a made-up number, and rather than blocking a legitimate
+          // send behind a hiccup in a figure that is only advisory.
+          <div className="rounded-xl p-4" style={{ background: "#FEF3C7", color: "#92400E", fontSize: 13, lineHeight: 1.5 }}>
+            Could not check how many people this would text. Sending will still work — you just
+            will not see the number first.
+          </div>
+        ) : (
+          <>
+            <div className="rounded-xl p-4 text-center" style={{ background: "var(--secondary)" }}>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 34, fontWeight: 700, color: "var(--foreground)", lineHeight: 1.1 }}>
+                {reach!.sms}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted-foreground)", fontWeight: 600 }}>
+                {reach!.sms === 1 ? "text message" : "text messages"} will be sent
+              </div>
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", lineHeight: 1.6 }}>
+              This announcement is addressed to <strong style={{ color: "var(--foreground)" }}>{reach!.total}</strong>{" "}
+              {reach!.total === 1 ? "person" : "people"}.
+              {reach!.sms_unreachable > 0 ? (
+                <>
+                  {" "}
+                  <strong style={{ color: "var(--foreground)" }}>{reach!.sms_unreachable}</strong> of them{" "}
+                  {reach!.sms_unreachable === 1 ? "has" : "have"} no phone number on file and will not be texted.
+                </>
+              ) : null}
+              {free.length > 0 ? <> The {free.join(", ")} {free.length === 1 ? "channel" : "channels"} cost nothing.</> : null}
+            </div>
+            {reach!.sms === 0 ? (
+              <div className="rounded-xl p-3" style={{ background: "#FEE2E2", color: "#B91C1C", fontSize: 12.5, lineHeight: 1.5 }}>
+                Nobody in this audience has a phone number on file, so no text would be sent.
+              </div>
+            ) : null}
+          </>
+        )}
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} className="rounded-lg px-3 py-2" style={{ background: "var(--secondary)", color: "var(--foreground)", border: "1px solid var(--border)", fontSize: 12, fontWeight: 600 }}>
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-2"
+            style={{ background: "var(--nuru-navy)", color: "#fff", border: "none", fontSize: 12, fontWeight: 600, opacity: loading ? 0.5 : 1 }}
+          >
+            <Send size={12} />
+            {reach ? `Send ${reach.sms} ${reach.sms === 1 ? "text" : "texts"}` : "Send anyway"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /* Studio (list + tabs + drawer + composer)                            */
@@ -88,6 +249,7 @@ export function AnnouncementsStudio({
 }): ReactElement {
   const [tab, setTab] = useState<StudioTab>("all");
   const [rows, setRows] = useState<AnnouncementRow[] | null>(null);
+  const channelAvailability = useChannels();
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [editing, setEditing] = useState<AnnouncementRow | null>(null);
@@ -163,11 +325,11 @@ export function AnnouncementsStudio({
                 </div>
                 <div className="flex flex-wrap gap-1 mb-2">
                   {a.channels.map((c) => {
-                    const def = CHANNEL_DEFS.find((d) => d.key === c);
+                    const live = channelAvailability[c]?.available !== false;
                     return (
-                      <span key={c} className="rounded-md px-2 py-0.5" style={{ background: "var(--secondary)", fontSize: 10, color: def?.available === false ? "var(--muted-foreground)" : "var(--foreground)", fontWeight: 600 }}>
+                      <span key={c} className="rounded-md px-2 py-0.5" style={{ background: "var(--secondary)", fontSize: 10, color: live ? "var(--foreground)" : "var(--muted-foreground)", fontWeight: 600 }}>
                         {c}
-                        {def?.available === false ? " ·  no provider" : ""}
+                        {live ? "" : " ·  no provider"}
                       </span>
                     );
                   })}
@@ -253,6 +415,8 @@ export function AnnouncementDrawer({
 }): ReactElement {
   const [detail, setDetail] = useState<(AnnouncementRow & { stats: AnnouncementStats[] }) | null>(null);
   const [busy, setBusy] = useState(false);
+  /** A send that is waiting on the cost confirmation. */
+  const [pendingSend, setPendingSend] = useState<null | { run: () => Promise<void> }>(null);
   useEffect(() => {
     void AnnouncementsApi.get(row.announcement_id).then(setDetail).catch(() => setDetail(null));
   }, [row.announcement_id]);
@@ -270,6 +434,22 @@ export function AnnouncementDrawer({
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * Send, but show the bill first when there is one.
+   *
+   * Free channels go straight through — an extra dialog in front of a push
+   * teaches admins to click past dialogs, which is exactly what you do not want
+   * in front of the one that costs money.
+   */
+  function guardedSend(fn: () => Promise<unknown>, msg: string, fallback: string): void {
+    const go = (): Promise<void> => run(fn, msg, fallback);
+    if (!costsMoney(a.channels)) {
+      void go();
+      return;
+    }
+    setPendingSend({ run: go });
   }
 
   const btn = (bg: string, fg: string, border = "none"): Record<string, string | number> => ({
@@ -334,7 +514,7 @@ export function AnnouncementDrawer({
 
         <div className="flex flex-wrap gap-2 mt-5">
           {!archived && (a.status === "draft" || a.status === "scheduled") && (
-            <button onClick={() => void run(() => AnnouncementsApi.send(id), "Announcement sent.", "Could not send announcement.")} disabled={busy} className="flex items-center gap-1.5 rounded-lg px-3 py-2" style={btn("var(--nuru-navy)", "#fff")}>
+            <button onClick={() => guardedSend(() => AnnouncementsApi.send(id), "Announcement sent.", "Could not send announcement.")} disabled={busy} className="flex items-center gap-1.5 rounded-lg px-3 py-2" style={btn("var(--nuru-navy)", "#fff")}>
               <Send size={12} /> Send now
             </button>
           )}
@@ -354,7 +534,7 @@ export function AnnouncementDrawer({
           {a.status === "sent" && !archived && (
             <button
               onClick={() =>
-                void run(
+                guardedSend(
                   async () => {
                     const dup = await AnnouncementsApi.duplicate(id);
                     await AnnouncementsApi.send(dup.announcement_id);
@@ -392,6 +572,18 @@ export function AnnouncementDrawer({
           </button>
         </div>
       </div>
+      {pendingSend ? (
+        <SmsSendConfirm
+          id={id}
+          channels={a.channels}
+          onCancel={() => setPendingSend(null)}
+          onConfirm={() => {
+            const go = pendingSend.run;
+            setPendingSend(null);
+            void go();
+          }}
+        />
+      ) : null}
     </Drawer>
   );
 }
@@ -459,6 +651,7 @@ export function AnnouncementComposer({
   const [featured, setFeatured] = useState(editing?.is_featured ?? false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const channelAvailability = useChannels();
 
   useEffect(() => {
     void AdminApi.engagementReport().then((r) => setCells(r.cells)).catch(() => setCells([]));
@@ -589,11 +782,17 @@ export function AnnouncementComposer({
         <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
           {CHANNEL_DEFS.map((c) => {
             const on = channels.has(c.key);
+            const meta = channelAvailability[c.key];
+            const available = meta?.available ?? false;
             return (
               <button
                 key={c.key}
-                disabled={!c.available}
-                title={c.available ? undefined : "No SMS/WhatsApp provider is connected yet — deliveries would be suppressed."}
+                disabled={!available}
+                title={
+                  available
+                    ? meta?.note
+                    : `${meta?.note ?? "No provider connected"} — deliveries on this channel would be suppressed.`
+                }
                 onClick={() =>
                   setChannels((prev) => {
                     const next = new Set(prev);
@@ -605,18 +804,20 @@ export function AnnouncementComposer({
                 className="rounded-xl py-3 flex flex-col items-center gap-1"
                 style={{
                   background: on ? "var(--nuru-navy)" : "var(--input-background)",
-                  color: on ? "#fff" : c.available ? "var(--foreground)" : "var(--muted-foreground)",
+                  color: on ? "#fff" : available ? "var(--foreground)" : "var(--muted-foreground)",
                   border: "1px solid",
                   borderColor: on ? "var(--nuru-navy)" : "var(--border)",
                   fontSize: 11,
                   fontWeight: 600,
-                  opacity: c.available ? 1 : 0.55,
-                  cursor: c.available ? "pointer" : "not-allowed",
+                  opacity: available ? 1 : 0.55,
+                  cursor: available ? "pointer" : "not-allowed",
                 }}
               >
                 {c.icon}
                 {c.label}
-                {!c.available ? <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3 }}>{c.note}</span> : null}
+                {!available && meta?.note ? (
+                  <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3 }}>{meta.note}</span>
+                ) : null}
               </button>
             );
           })}

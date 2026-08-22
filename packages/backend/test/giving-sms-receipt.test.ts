@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { pino } from "pino";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { testEnv } from "./helpers/app.js";
+import { createCongregation, createUser } from "./helpers/factories.js";
 import { buildOutboxHandlers } from "../src/workers/handlers.js";
 import { FakeMessageProvider } from "../src/modules/announcements/providers.js";
 import { AfricasTalkingSmsProvider, buildSmsProvider } from "../src/modules/announcements/africastalking.js";
@@ -240,5 +241,76 @@ describe("Africa's Talking — binding", () => {
     } as Env) as AfricasTalkingSmsProvider;
     expect(JSON.stringify(p)).toContain("https://api.africastalking.com");
     expect(JSON.stringify(p)).not.toContain("sandbox");
+  });
+});
+
+describe("giving receipt — the member's thank-you", () => {
+  /** A settled MEMBER gift: source defaults to 'app' and user_id is set. */
+  async function memberGift(phone: string | null): Promise<string> {
+    const p = testPool();
+    const cong = await createCongregation();
+    const u = await createUser({ congregationId: cong, email: `giver${Math.random().toString(36).slice(2)}@dev.local` });
+    await p.query(`UPDATE users SET phone_number = $2 WHERE user_id = $1`, [u.user_id, phone]);
+    await p.query(`INSERT INTO funds (code,name,is_active) VALUES ('tithe','Tithe',TRUE) ON CONFLICT (code) DO NOTHING`);
+    await p.query(
+      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref,
+                                 idempotency_key, receipt_code, settled_at)
+       SELECT $1, fund_id, 50000, 'KES', 'succeeded', 'mpesa', $2, $2, 'SJ99XYZ', now() FROM funds WHERE code='tithe'`,
+      [u.user_id, `mref-${Math.random().toString(36).slice(2)}`],
+    );
+    return u.user_id as string;
+  }
+
+  const rowsFor = async (userId: string, channel: string) =>
+    (await testPool().query(`SELECT template, payload FROM notifications WHERE user_id = $1 AND channel = $2`, [
+      userId,
+      channel,
+    ])).rows;
+
+  it("gets BOTH the email receipt and a text to the number that paid", async () => {
+    const sms = new FakeMessageProvider("sms");
+    const userId = await memberGift("+254733111222");
+    const txn = (await testPool().query(`SELECT transaction_id FROM transactions WHERE user_id = $1`, [userId])).rows[0];
+    await buildOutboxHandlers(ctxWith(sms)).get("giving.receipt")!({ transaction_id: txn.transaction_id, user_id: userId });
+
+    expect(await rowsFor(userId, "email")).toHaveLength(1);
+    const smsRows = await rowsFor(userId, "sms");
+    expect(smsRows).toHaveLength(1);
+    expect(smsRows[0].template).toBe("giving_receipt");
+    expect(Number(smsRows[0].payload.amount_minor)).toBe(50000);
+  });
+
+  it("is transactional — it does NOT wait for the opt-in broadcast preference", async () => {
+    // sms_enabled governs announcements and nudges. A receipt acknowledges
+    // something the member just did, exactly as a payment provider sends one
+    // whatever your marketing preferences say.
+    const sms = new FakeMessageProvider("sms");
+    const userId = await memberGift("+254733111222");
+    await testPool().query(
+      `INSERT INTO notification_preferences (user_id, sms_enabled) VALUES ($1, FALSE)`,
+      [userId],
+    );
+    const txn = (await testPool().query(`SELECT transaction_id FROM transactions WHERE user_id = $1`, [userId])).rows[0];
+    await buildOutboxHandlers(ctxWith(sms)).get("giving.receipt")!({ transaction_id: txn.transaction_id, user_id: userId });
+    expect(await rowsFor(userId, "sms")).toHaveLength(1);
+  });
+
+  it("a member with no phone on file gets the email and no dead SMS row", async () => {
+    // Scheduling one anyway would fail at dispatch and read like a delivery
+    // problem, when the truth is simply that we have no number for them.
+    const sms = new FakeMessageProvider("sms");
+    const userId = await memberGift(null);
+    const txn = (await testPool().query(`SELECT transaction_id FROM transactions WHERE user_id = $1`, [userId])).rows[0];
+    await buildOutboxHandlers(ctxWith(sms)).get("giving.receipt")!({ transaction_id: txn.transaction_id, user_id: userId });
+    expect(await rowsFor(userId, "email")).toHaveLength(1);
+    expect(await rowsFor(userId, "sms")).toHaveLength(0);
+  });
+
+  it("with no SMS provider bound, the email still goes and no SMS row is written", async () => {
+    const userId = await memberGift("+254733111222");
+    const txn = (await testPool().query(`SELECT transaction_id FROM transactions WHERE user_id = $1`, [userId])).rows[0];
+    await buildOutboxHandlers(ctxWith(undefined)).get("giving.receipt")!({ transaction_id: txn.transaction_id, user_id: userId });
+    expect(await rowsFor(userId, "email")).toHaveLength(1);
+    expect(await rowsFor(userId, "sms")).toHaveLength(0);
   });
 });
