@@ -105,7 +105,16 @@ describe("church service attendance", () => {
     // follow_up.arm joins the set because this is the member's FIRST service
     // attendance, which is what arms the first-visit cadence. Enqueued rather
     // than run inline so a follow-up rhythm can never fail somebody's check-in.
+    //
+    // attendance.welcome is the SMS at the door, enqueued for the same reason:
+    // a provider outage must not roll back an attendance that genuinely
+    // happened. Unlike follow_up.arm it fires on EVERY check-in, not only the
+    // first — the once-a-day guard lives in the handler (see
+    // checkin-welcome-sms.test.ts), because a second scan of the same code is
+    // already a no-op here, while an 8am and an 11am service are two real
+    // arrivals that must not become two texts.
     expect(ob.rows.map((r) => r.topic)).toEqual([
+      "attendance.welcome",
       "engagement.recompute",
       "follow_up.arm",
       "gamification.evaluate",
