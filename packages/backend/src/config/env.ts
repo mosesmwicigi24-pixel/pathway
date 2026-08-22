@@ -62,6 +62,17 @@ const EnvSchema = z.object({
   // unsigned endpoint that initiates STK pushes is a way to make a stranger's
   // phone ring on demand, so it fails closed rather than open. ---
   WEBSITE_GIVING_WEBHOOK_SECRET: z.string().optional(),
+  // --- Africa's Talking SMS. Its first job is the giving receipt a stranger
+  // cannot otherwise get: every `notifications` row is keyed to a user_id, and
+  // someone who gives through the website has no account, so a text to the
+  // number that paid is the only acknowledgement the church can send them.
+  // Unset → no provider is bound, and an unsendable message is recorded as
+  // suppressed rather than reported as sent. AFRICASTALKING_ENV picks the host;
+  // sandbox is a different domain, not a flag, and delivers to nobody. ---
+  AFRICASTALKING_API_KEY: z.string().optional(),
+  AFRICASTALKING_USERNAME: z.string().optional(),
+  AFRICASTALKING_SENDER_ID: z.string().optional(), // the registered shortcode
+  AFRICASTALKING_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
 
   YOUVERSION_APP_KEY: z.string().optional(),
   YOUVERSION_LANGUAGE_RANGES: z.string().default("en"),
