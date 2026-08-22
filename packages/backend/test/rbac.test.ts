@@ -32,15 +32,18 @@ afterAll(async () => {
 
 describe("RBAC roles & permission matrix", () => {
   it("lists the 12 seeded roles with their matrices (Admin bridge)", async () => {
+    // 13 roles now. Two landed independently: follow_up_team (#433, holds
+    // followUp and nothing else so the call list can go to people who never
+    // touch the roll) and website (runs nuruplace.org from the portal without
+    // members, finance or curriculum). Same principle, arrived separately.
     const res = await agent().get("/v1/admin/roles").set(auth(adminTok));
     expect(res.status).toBe(200);
-    // 12th is `website` — runs nuruplace.org from the portal without members,
-    // finance or curriculum (seeds/08_rbac.sql).
-    expect(res.body.data).toHaveLength(12);
+    expect(res.body.data).toHaveLength(13);
     const sa = res.body.data.find((r: { role_key: string }) => r.role_key === "super_admin");
-    // full grid + members:proximity (parity gap #4) + live:go/live:manage (Nuru Live L1).
-    // 17 modules now: the website module joined the explicit super_admin list,
-    // which is enumerated rather than derived and would otherwise have missed it.
+    // full grid + members:proximity (parity gap #4) + live:go/live:manage (Nuru
+    // Live L1). 18 modules: followUp and website both joined the super_admin
+    // list, which is enumerated by hand rather than derived — #432 is what
+    // happens when a module is missing from it.
     expect(sa.permissions).toHaveLength(17 * 6 + 1 + 2);
     expect(sa.is_system).toBe(true);
     const member = res.body.data.find((r: { role_key: string }) => r.role_key === "member");
@@ -194,5 +197,15 @@ describe("RBAC enforcement on migrated endpoints (matrix governs, not just the b
       const res = await agent().get(path).set(auth(adminTok));
       expect(res.status, `Admin should still reach ${path}`).toBe(200);
     }
+  });
+});
+
+describe("follow_up_team (migration 198)", () => {
+  it("appears in the roles list holding exactly the followUp module", async () => {
+    const res = await agent().get("/v1/admin/roles").set(auth(adminTok));
+    const fut = res.body.data.find((r: { role_key: string }) => r.role_key === "follow_up_team");
+    expect(fut).toBeDefined();
+    const modules = new Set(fut.permissions.map((p: { module_id: string }) => p.module_id));
+    expect([...modules]).toEqual(["followUp"]);
   });
 });

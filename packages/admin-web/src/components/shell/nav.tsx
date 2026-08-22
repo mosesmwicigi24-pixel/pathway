@@ -73,11 +73,6 @@ export const navGroups: NavGroup[] = [
       // requireRole("Instructor") coarse gate — no RBAC permission. Visible.
       { path: "/discipleship-hub", label: "Discipleship Hub", icon: HeartHandshake },
       { path: "/members", label: "Members", icon: Users, permission: "members:view" },
-      { path: "/services", label: "Church Services", icon: QrCode, permission: "members:view" },
-      // Attendance follow-up: who came, who didn't, who to call. Same
-      // "members:view" gate as the roll — it is the same people, seen
-      // through attendance rather than through the register.
-      { path: "/follow-up", label: "Follow-up", icon: UserRoundCheck, permission: "members:view" },
       // Reflection Queue / Level reviews / Events are still requireRole(Instructor)
       // coarse gates (not yet migrated to fine RBAC) — no sensible permission
       // key to hide them on. Visible; the server keeps its own gate.
@@ -87,6 +82,20 @@ export const navGroups: NavGroup[] = [
       { path: "/finance", label: "Finance", icon: Wallet, permission: "finance:view" },
       { path: "/certificates", label: "Certificates", icon: Award, permission: "certificates:view" },
       { path: "/badges", label: "Badges", icon: Star, permission: "badges:view" },
+    ],
+  },
+  {
+    // Follow-up is its own section, not a row inside Operations (owner ruling,
+    // 2026-08-17). It is a distinct pastoral job — a list of names, phone
+    // numbers, missed services and what was said on the last call — and it is
+    // gated on its own `followUp` module (migration 198) rather than on
+    // members:view. The people who ring round on a Monday are often not the
+    // people who administer the roll, and a follow_up_team role grants this
+    // section and nothing else.
+    label: "Follow-up",
+    items: [
+      { path: "/services", label: "Church Services", icon: QrCode, permission: "followUp:view" },
+      { path: "/follow-up", label: "To call", icon: UserRoundCheck, permission: "followUp:view" },
     ],
   },
   {

@@ -56,9 +56,53 @@ export function verifyMfaChallenge(env: Env, token: string): string {
   }
 }
 
+/**
+ * Long-lived, single-purpose "this phone belongs to member X" token for the
+ * standing-poster page (owner's ask, 2026-08-21: scan → one tap → counted).
+ * It grants ONLY the ability to record the holder's OWN attendance at a
+ * service whose check-in window is open — every other safeguard (window,
+ * scan token, congregation scope, idempotency) still runs in checkIn().
+ * Purpose-tagged so it can never be replayed as an access token; ~13 months
+ * so an every-Sunday scanner never sees it expire, and each check-in hands
+ * back a fresh one anyway.
+ */
+export function signCheckinContinuity(env: Env, userId: string): string {
+  return jwt.sign({ sub: userId, purpose: "checkin_continuity" }, env.JWT_SIGNING_KEY, {
+    algorithm: "HS256",
+    expiresIn: 400 * 86_400,
+  });
+}
+
+export function verifyCheckinContinuity(env: Env, token: string): string {
+  try {
+    const decoded = jwt.verify(token, env.JWT_SIGNING_KEY, { algorithms: ["HS256"] }) as {
+      sub?: string;
+      purpose?: string;
+    };
+    if (decoded.purpose !== "checkin_continuity" || !decoded.sub) throw new Error("bad purpose");
+    return decoded.sub;
+  } catch {
+    // One message for expired, forged and mis-purposed: the page reacts to all
+    // three the same way — forget the token and ask the person to sign in once.
+    throw new ApiError("AUTH_REQUIRED", "This device needs a fresh sign-in");
+  }
+}
+
 export function verifyAccessToken(env: Env, token: string): AccessClaims {
   try {
     const decoded = jwt.verify(token, env.JWT_SIGNING_KEY, { algorithms: ["HS256"] });
+    // A valid signature is not enough: every purpose-tagged token in this file
+    // (MFA challenge, check-in continuity) is signed with the same key, and
+    // before this check any of them walked through the front door as a
+    // session. Found 2026-08-21 when the continuity token's own test asked
+    // "is this attendance-only?" and the answer was no. A session token is
+    // one that carries a role and NO purpose tag — anything else is refused,
+    // whoever signed it.
+    if (typeof decoded !== "object" || decoded === null) throw new Error("not an access token");
+    const d = decoded as Record<string, unknown>;
+    if ("purpose" in d || typeof d.sub !== "string" || typeof d.role !== "string") {
+      throw new Error("not an access token");
+    }
     return decoded as AccessClaims;
   } catch (err) {
     const expired = err instanceof jwt.TokenExpiredError;

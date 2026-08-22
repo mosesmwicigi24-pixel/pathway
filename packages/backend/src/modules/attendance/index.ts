@@ -4,10 +4,14 @@
 // gatherings and one-off events — stays in the progress module.
 import { Router } from "express";
 import type { AppContext } from "../../http/context.js";
-import { authenticate, requireRole } from "../../http/auth.js";
+import { authenticate, requireRole, requirePermission} from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { ChurchAttendanceService, checkInSchema, createServiceSchema } from "./service.js";
 import { FollowUpService } from "./follow-up.js";
+import { ServiceJoinService, joinByScanSchema, returnByScanSchema } from "./join.js";
+import { signCheckinContinuity, verifyCheckinContinuity } from "../identity/tokens.js";
+import { CadenceService, recordContactSchema, createCadenceSchema } from "./cadence.js";
+import { z } from "zod";
 
 export const attendanceRouter: Router = Router();
 
@@ -18,7 +22,83 @@ export function registerAttendance(ctx: AppContext): Router {
   const followUp = new FollowUpService(ctx.db.replica);
   const auth = authenticate(ctx.env);
   const leaderPlus = [auth, requireRole("Instructor")] as const;
+  // Follow-up is its own job, so it is its own permission (migration 198).
+  // Reading the register and working the call list are separate from
+  // administering members: the people who ring round on a Monday are often not
+  // the people who edit the roll, and a `follow_up_team` role holds followUp
+  // and nothing else — which is what makes it safe to hand out widely.
+  const perm = requirePermission(ctx.db.replica);
+  const followUpView = [auth, perm("followUp", "view")] as const;
+  const followUpEdit = [auth, perm("followUp", "edit")] as const;
   const r = attendanceRouter;
+  const joinSvc = new ServiceJoinService(ctx.db.primary);
+  const cadence = new CadenceService(ctx.db.primary, undefined, ctx.log);
+
+  // --- Public: joining by scan ---
+
+  /**
+   * The printed poster's first hop (migration 200): a stable /jc/<code> URL
+   * resolves to whichever service has an open check-in window at scan time.
+   * Unauthenticated by necessity — the person scanning may not have an account
+   * yet — and uniform in its refusals, so it confirms nothing to enumeration.
+   */
+  r.get(
+    "/join/congregation/:code",
+    handler(async (req, res) => {
+      res.json(await joinSvc.resolveStandingCode(req.params.code ?? ""));
+    }),
+  );
+
+  /**
+   * One of only two unauthenticated routes in this module, and it is that way
+   * because a visitor holding up their phone at the door has no account yet —
+   * requiring one would defeat the entire feature.
+   *
+   * It is not open registration. The scan token must match, and the service's
+   * check-in window must be OPEN, so a photographed code stops working when the
+   * service ends. Joins are also rate-limited per service and each one records
+   * the service it came through. See join.ts for why those three, and the
+   * trade the owner made knowingly.
+   */
+  r.post(
+    "/join/service/:id",
+    handler(async (req, res) => {
+      const body = parseBody(joinByScanSchema, req.body ?? {});
+      const result = await joinSvc.joinByScan(req.params.id ?? "", body);
+      // The phone that just joined becomes a remembered phone: next Sunday the
+      // poster page needs one tap, not a form (see returnByScan below).
+      res.status(201).json({
+        ...result,
+        full_name: body.full_name,
+        continuity_token: signCheckinContinuity(ctx.env, result.user_id),
+      });
+    }),
+  );
+
+  /**
+   * The returning phone's one-tap check-in. The continuity token answers WHO
+   * (this device belongs to member X — nothing more), the scan token answers
+   * WHERE, and checkIn() enforces everything else unchanged: the open window,
+   * the congregation scope, idempotent replays. No password on a Sunday
+   * morning; no ability beyond marking yourself present.
+   */
+  r.post(
+    "/join/service/:id/return",
+    handler(async (req, res) => {
+      const body = parseBody(returnByScanSchema, req.body ?? {});
+      const userId = verifyCheckinContinuity(ctx.env, body.continuity_token);
+      const { principal, fullName } = await joinSvc.principalForReturn(userId);
+      const result = await svc.checkIn(principal, req.params.id ?? "", {
+        client_scan_id: body.client_scan_id,
+        scan_token: body.scan_token,
+      });
+      res.status(result.duplicate ? 200 : 201).json({
+        ...result,
+        full_name: fullName,
+        continuity_token: signCheckinContinuity(ctx.env, userId),
+      });
+    }),
+  );
 
   // --- Member ---
 
@@ -50,8 +130,14 @@ export function registerAttendance(ctx: AppContext): Router {
     auth,
     handler(async (req, res) => {
       const body = parseBody(checkInSchema, req.body ?? {});
-      const result = await svc.checkIn(requirePrincipal(req), req.params.id ?? "", body);
-      res.status(result.duplicate ? 200 : 201).json(result);
+      const principal = requirePrincipal(req);
+      const result = await svc.checkIn(principal, req.params.id ?? "", body);
+      // Additive: lets the standing-poster page remember a member who signed in
+      // once, so every later Sunday is one tap. Apps ignore the extra field.
+      res.status(result.duplicate ? 200 : 201).json({
+        ...result,
+        continuity_token: signCheckinContinuity(ctx.env, principal.userId),
+      });
     }),
   );
 
@@ -108,10 +194,76 @@ export function registerAttendance(ctx: AppContext): Router {
   // Who came, who didn't, and who to call. Leader+ only: this is the whole
   // congregation's contact list, not a member's own record.
 
+  /** The congregation's cadences, steps and open-run counts. */
+  r.get(
+    "/admin/follow-up/cadences",
+    ...followUpView,
+    handler(async (req, res) => {
+      res.json({ data: await cadence.listCadences(requirePrincipal(req).congregationId) });
+    }),
+  );
+
+  /** Create a cadence with its steps. */
+  r.post(
+    "/admin/follow-up/cadences",
+    ...followUpEdit,
+    handler(async (req, res) => {
+      const p = requirePrincipal(req);
+      const body = parseBody(createCadenceSchema, req.body ?? {});
+      res.status(201).json(await cadence.createCadence(p.congregationId, p.userId, body));
+    }),
+  );
+
+  /** Switch a cadence on or off. Off stops NEW runs; runs in flight finish. */
+  r.patch(
+    "/admin/follow-up/cadences/:id",
+    ...followUpEdit,
+    handler(async (req, res) => {
+      const body = parseBody(z.object({ is_active: z.boolean() }).strict(), req.body ?? {});
+      await cadence.setActive(requirePrincipal(req).congregationId, req.params.id ?? "", body.is_active);
+      res.status(204).end();
+    }),
+  );
+
+  /**
+   * The leader's due list: human cadence steps that have come due. Automated
+   * steps never appear here — they are the worker's job, and mixing them would
+   * make this something to scroll past rather than work through.
+   */
+  r.get(
+    "/admin/follow-up/due",
+    ...followUpView,
+    handler(async (req, res) => {
+      const p = requirePrincipal(req);
+      const limit = Number(req.query.limit ?? 100);
+      res.json({ data: await cadence.dueForLeaders(p.congregationId, Number.isFinite(limit) ? limit : 100) });
+    }),
+  );
+
+  /**
+   * A leader records that they made the contact, and what came of it. The
+   * outcome is required: a register that only stores "done" cannot tell anyone
+   * who still needs reaching.
+   */
+  r.post(
+    "/admin/follow-up/due/:eventId",
+    ...followUpEdit,
+    handler(async (req, res) => {
+      const body = parseBody(recordContactSchema, req.body ?? {});
+      await cadence.recordContact(
+        req.params.eventId ?? "",
+        requirePrincipal(req).userId,
+        body.outcome,
+        body.note,
+      );
+      res.status(204).end();
+    }),
+  );
+
   /** Every member with their attendance standing, longest absence first. */
   r.get(
     "/admin/follow-up/members",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       const p = requirePrincipal(req);
       res.json({
@@ -126,7 +278,7 @@ export function registerAttendance(ctx: AppContext): Router {
   /** The raw scan log — every check-in with the details captured at the scan. */
   r.get(
     "/admin/follow-up/scans",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       res.json({
         data: await followUp.scanLog(requirePrincipal(req), {
@@ -140,7 +292,7 @@ export function registerAttendance(ctx: AppContext): Router {
   /** Per-service totals — the end-of-day report for each gathering. */
   r.get(
     "/admin/follow-up/services",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       res.json({ data: await followUp.serviceSummaries(requirePrincipal(req), yearParam(req.query.year)) });
     }),
@@ -149,7 +301,7 @@ export function registerAttendance(ctx: AppContext): Router {
   /** Who missed this service — the call list. */
   r.get(
     "/admin/follow-up/services/:id/absentees",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       res.json(await followUp.absentees(requirePrincipal(req), req.params.id ?? ""));
     }),
@@ -158,7 +310,7 @@ export function registerAttendance(ctx: AppContext): Router {
   /** The one-screen year figure. */
   r.get(
     "/admin/follow-up/overview",
-    ...leaderPlus,
+    ...followUpView,
     handler(async (req, res) => {
       res.json(await followUp.yearOverview(requirePrincipal(req), yearParam(req.query.year)));
     }),

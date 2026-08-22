@@ -67,9 +67,18 @@ export const PERM_MODULES = [
   "dashboard", "levels", "cms", "quiz", "videos", "cells", "members",
   "reflections", "events", "finance", "certificates", "badges",
   "users", "rolesAdmin", "countries", "languages", "congregations", "live",
+  // followUp: migration 198. Forgetting a new module HERE is how the Follow-up
+  // section shipped invisible to the SuperAdmin on 2026-08-20: the DB grants
+  // were right, the endpoints bridged SuperAdmin past every check, but /me
+  // builds the SuperAdmin/Admin permission array from THIS list — and the
+  // sidebars trust /me. A module that exists only in rbac_role_permissions is
+  // a module the top role cannot see.
+  "followUp",
   // The public website (nuruplace.org). Its own module so a communications
   // volunteer can be given the site WITHOUT members, finance or curriculum —
-  // which is the whole reason the portal is the admin point for it.
+  // which is the whole reason the portal is the admin point for it. Listed
+  // here for the reason above: a module missing from this array is invisible
+  // to SuperAdmin no matter what the database says.
   "website",
 ] as const;
 // `go`/`manage` are Nuru Live's (module `live`) capability pair — broadcast

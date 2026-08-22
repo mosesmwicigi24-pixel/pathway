@@ -95,9 +95,12 @@ api.interceptors.response.use(
       }
       // Reaching here the session is dead: refresh missing, refresh failed, or
       // the refreshed retry ALSO came back 401. Bounce to login (never for the
-      // auth calls themselves, and not when already there — would loop).
+      // auth calls themselves, not when already there — would loop — and never
+      // from a PUBLIC page: /jc is a guest at the church door, and the staff
+      // login screen is the one thing they must never be shown).
       const url = original.url ?? "";
-      if (!url.includes("/auth/") && !window.location.pathname.startsWith("/login")) {
+      const publicPage = window.location.pathname.startsWith("/jc/");
+      if (!url.includes("/auth/") && !window.location.pathname.startsWith("/login") && !publicPage) {
         window.location.assign("/login");
       }
     }
@@ -2845,6 +2848,46 @@ export interface AttendanceYearOverview {
   total_event_check_ins: number;
 }
 
+
+/** A human follow-up step that has come due — the call list (backend #429). */
+export interface FollowUpDueStep {
+  event_id: string;
+  run_id: string;
+  step_id: string;
+  user_id: string;
+  full_name: string;
+  phone_number: string | null;
+  action: string;
+  due_at: string;
+  cadence_name: string;
+  service_title: string | null;
+  days_overdue: number;
+}
+
+/** What a leader records after doing it. */
+export type FollowUpOutcome = "reached" | "no_answer" | "wrong_number" | "skipped";
+
+
+/** A cadence definition with its steps (backend #429 / cadence management). */
+export interface CadenceStepDef {
+  step_id?: string;
+  offset_days: number;
+  kind: "automated" | "human";
+  channel?: "push" | "email" | null;
+  action: string;
+  message?: string | null;
+  sequence?: number;
+}
+export interface Cadence {
+  cadence_id: string;
+  name: string;
+  trigger: "first_visit" | "missed_services" | "joined_online";
+  trigger_threshold: number;
+  is_active: boolean;
+  open_runs: number;
+  steps: CadenceStepDef[];
+}
+
 /** One enquiry from nuruplace.org, as a pastor sees it in the triage queue. */
 export interface WebsiteEnquiry {
   enquiry_id: string;
@@ -2878,6 +2921,31 @@ export const WebsiteApi = {
 };
 
 export const FollowUpApi = {
+  /** The congregation's cadences, steps and open-run counts. */
+  async cadences(): Promise<Cadence[]> {
+    const { data } = await api.get<{ data: Cadence[] }>("/admin/follow-up/cadences");
+    return data.data;
+  },
+  /** Create a cadence with its steps. */
+  async createCadence(input: {
+    name: string; trigger: Cadence["trigger"]; trigger_threshold?: number; steps: CadenceStepDef[];
+  }): Promise<{ cadence_id: string }> {
+    const { data } = await api.post<{ cadence_id: string }>("/admin/follow-up/cadences", input);
+    return data;
+  },
+  /** Switch a cadence on or off. Off stops NEW runs; runs in flight finish. */
+  async setCadenceActive(cadenceId: string, active: boolean): Promise<void> {
+    await api.patch(`/admin/follow-up/cadences/${cadenceId}`, { is_active: active });
+  },
+  /** Human steps that have come due, oldest first. */
+  async due(limit = 100): Promise<FollowUpDueStep[]> {
+    const { data } = await api.get<{ data: FollowUpDueStep[] }>("/admin/follow-up/due", { params: { limit } });
+    return data.data;
+  },
+  /** Record that the contact was made, and what came of it. */
+  async recordContact(eventId: string, outcome: FollowUpOutcome, note?: string): Promise<void> {
+    await api.post(`/admin/follow-up/due/${eventId}`, { outcome, ...(note ? { note } : {}) });
+  },
   async overview(year?: number): Promise<AttendanceYearOverview> {
     const { data } = await api.get<AttendanceYearOverview>("/admin/follow-up/overview", { params: { year } });
     return data;

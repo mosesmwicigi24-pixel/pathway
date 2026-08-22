@@ -36,6 +36,7 @@ import { SignalsService } from "./modules/intelligence/signals.js";
 import { LiturgyService } from "./modules/intelligence/liturgy.js";
 import { CommunityService } from "./modules/intelligence/community.js";
 import { LiveService } from "./modules/live/service.js";
+import { CadenceService } from "./modules/attendance/cadence.js";
 
 function main(): void {
   const env = loadEnv();
@@ -132,6 +133,36 @@ function main(): void {
 
   const tasks = [
     cron.schedule("0 2 * * *", safe("engagement recompute", () => engagement.runRecompute())),
+
+    // Follow-up cadences: dispatch the automated steps that have come due.
+    // Hourly rather than by the minute — these are pastoral touches measured in
+    // days, and the notification service applies quiet hours anyway, so a
+    // tighter loop would only add load without reaching anyone sooner. Human
+    // steps are deliberately untouched: they are a leader's due list, and no
+    // timer completes a phone call.
+    // Absence is the absence of an event, so somebody has to go looking for it:
+    // daily, arm the missed_services cadences for members whose consecutive
+    // misses have reached the threshold. Idempotent — arm() refuses while a run
+    // is open, and returning closes runs — so re-running never double-chases.
+    cron.schedule(
+      "20 3 * * *",
+      safe("follow-up absentee sweep", async () => {
+        const cadence = new CadenceService(db.primary, new NotificationService(db.primary), log);
+        const { armed } = await cadence.armAbsentees();
+        if (armed > 0) log.info({ armed }, "absentee cadences armed");
+      }),
+    ),
+
+    cron.schedule(
+      "10 * * * *",
+      safe("follow-up cadence advance", async () => {
+        const cadence = new CadenceService(db.primary, new NotificationService(db.primary), log);
+        const { dispatched, failed } = await cadence.advance();
+        if (dispatched > 0 || failed > 0) {
+          log.info({ dispatched, failed }, "follow-up cadence steps dispatched");
+        }
+      }),
+    ),
     // §2: nightly reconcile — materialize a rolling [now, now+90d] window for
     // every active series AND refresh/prune drifted materialized rows.
     cron.schedule("30 2 * * *", safe("events reconcile sweep", async () => {

@@ -1,5 +1,5 @@
 // Website enquiries — the church website's connection card, contact form and
-// prayer request, landing where pastors can answer them (migration 197).
+// prayer request, landing where pastors can answer them (migration 201).
 //
 // Trust model: the intake has no session. Authenticity is an HMAC over the raw
 // request body, exactly as the Stripe and mobile-money receivers do it (§3.5).

@@ -1743,6 +1743,115 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "409": { description: A service with that title already exists on that date }
+  /join/congregation/{code}:
+    get:
+      tags: [attendance]
+      summary: >-
+        PUBLIC (no auth). Resolve a congregation's STANDING join code — the
+        printed poster QR (migration 200) — to whichever of its services has an
+        open check-in window right now. The poster never changes; this endpoint
+        is what makes the same code mean this Sunday's service this Sunday and
+        next Sunday's service next Sunday. While a window is open it returns
+        that service's scan_token (the owner's accepted trade for a printable
+        code); outside every window it returns open:false and the next upcoming
+        service, and no token exists to leak. Unknown and malformed codes get
+        one identical refusal, so the endpoint confirms nothing to enumeration.
+      security: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 200 }
+          description: The opaque code carried in the poster URL (/jc/{code}).
+      responses:
+        "200":
+          description: >-
+            Open: { congregation, open: true, service: { service_id, title,
+            starts_at, scan_token } }. Closed: { congregation, open: false,
+            next: { title, starts_at } | null }.
+        "400": { description: That code is not valid (unknown or malformed — deliberately indistinguishable) }
+  /join/service/{id}:
+    post:
+      tags: [attendance]
+      summary: >-
+        PUBLIC (no auth). Join by scanning a service's QR: creates the member,
+        their Level 1 enrollment and their attendance for that service in one
+        transaction, and records which service they came through. Deliberately
+        unauthenticated — a visitor at the door has no account yet — but NOT open
+        registration: the scan token must match AND the service's check-in window
+        must be open, so a photographed code stops working when the service ends.
+        Rate-limited per service. 409 if the email already belongs to a live
+        account (sign in instead). A bad token and an unknown service id return
+        an identical error, so the endpoint cannot be used to discover which
+        services exist.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+          description: The service whose QR was scanned; carried inside the code itself.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scan_token, full_name, phone_number, email, password]
+              properties:
+                scan_token:   { type: string }
+                full_name:    { type: string, maxLength: 255 }
+                phone_number: { type: string, description: Normalised to E.164 server-side (migration 195) }
+                email:        { type: string, format: email, description: Trimmed and lowercased server-side }
+                password:     { type: string, minLength: 8 }
+      responses:
+        "201":
+          description: >-
+            { user_id, congregation_id, service_id, attendance_recorded,
+            full_name, continuity_token }. The continuity token is long-lived,
+            single-purpose (attendance-only — see /join/service/{id}/return)
+            and lets the standing-poster page make every later Sunday one tap.
+        "400": { description: "Invalid scan token, or a service that is not open to joining" }
+        "409": { description: An account with this email already exists }
+        "422": { description: "Joining has not opened, or has closed, for this service" }
+        "429": { description: Too many joins against this service }
+  /join/service/{id}/return:
+    post:
+      tags: [attendance]
+      summary: >-
+        PUBLIC (no auth header). The returning phone's one-tap check-in from the
+        standing poster. The continuity_token (minted at first join, at a signed-
+        in web check-in, or by this endpoint) answers WHO — it is purpose-tagged,
+        attendance-only, and refused outright as a session token. The scan_token
+        answers WHERE. Every check-in safeguard runs unchanged: the open window,
+        congregation scope, qr_enabled, idempotent client_scan_id replays.
+        Responds with a fresh continuity_token so the device never ages out.
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [continuity_token, scan_token, client_scan_id]
+              properties:
+                continuity_token: { type: string }
+                scan_token: { type: string }
+                client_scan_id: { type: string, format: uuid }
+      responses:
+        "201":
+          description: "Checked in: { …check-in result, full_name, continuity_token }"
+        "200":
+          description: Already checked in for this service (duplicate replay)
+        "400": { description: Invalid scan token }
+        "401": { description: "Continuity token invalid/expired — sign in once to mint a fresh one" }
+        "403": { description: That service belongs to another congregation }
+        "422": { description: Check-in is not open for this service }
   /services/open:
     get:
       tags: [attendance]
@@ -1786,7 +1895,9 @@ paths:
         Register attendance at a church service by QR scan. Records the member's
         name, phone, email and the time they attended. Idempotent on
         client_scan_id and on (member, service) — a re-scan returns 200 with
-        duplicate=true rather than an error.
+        duplicate=true rather than an error. The response additionally carries
+        continuity_token (attendance-only, for the standing-poster web page's
+        one-tap return path — see /join/service/{id}/return); apps may ignore it.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -1877,6 +1988,133 @@ paths:
               schema: { $ref: "#/components/schemas/AttendanceYearOverview" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/follow-up/cadences:
+    get:
+      tags: [attendance]
+      summary: >-
+        Requires followUp:view. The congregation's cadences with their steps and
+        how many runs are currently open. Empty until somebody defines one —
+        migration 199 seeds the Follow-Up department's two rules ("First-time
+        guest": push day 0 + welcome call day 1; "Absent two Sundays": push day 0
+        + check-in call day 2, threshold 2 consecutive misses).
+      responses:
+        "200":
+          description: "{ data: [{ cadence_id, name, trigger, trigger_threshold, is_active, open_runs, steps: [{ step_id, offset_days, kind, channel, action, message, sequence }] }] }"
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [attendance]
+      summary: >-
+        Requires followUp:edit. Create a cadence with its steps in one
+        transaction. Automated steps must name a channel (push|email — no SMS
+        provider is bound); human steps must not. A misconfigured step is a named
+        400, not a constraint violation surfacing as a 500. 409 on a duplicate
+        name within the congregation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, trigger, steps]
+              properties:
+                name: { type: string, maxLength: 120 }
+                trigger: { type: string, enum: [first_visit, missed_services, joined_online] }
+                trigger_threshold: { type: integer, minimum: 1, maximum: 52 }
+                steps:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items:
+                    type: object
+                    required: [offset_days, kind, action]
+                    properties:
+                      offset_days: { type: integer, minimum: 0, maximum: 365 }
+                      kind: { type: string, enum: [automated, human] }
+                      channel: { type: string, enum: [push, email] }
+                      action: { type: string, maxLength: 120 }
+                      message: { type: string, maxLength: 1000 }
+      responses:
+        "201": { description: "{ cadence_id }" }
+        "400": { description: A step was misconfigured }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { description: A cadence with that name already exists }
+  /admin/follow-up/cadences/{id}:
+    patch:
+      tags: [attendance]
+      summary: >-
+        Requires followUp:edit. Switch a cadence on or off. Off stops NEW runs
+        from arming; runs already in flight finish naturally — turning a rhythm
+        off must not silently abandon the people already inside it.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_active]
+              properties:
+                is_active: { type: boolean }
+      responses:
+        "204": { description: Updated }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: No such cadence in this congregation }
+  /admin/follow-up/due:
+    get:
+      tags: [attendance]
+      summary: >-
+        Requires followUp:view. Human cadence steps that have come due — the
+        follow-up call list, oldest first, with how many days overdue each is.
+        Automated steps never appear: those are dispatched by the worker, and
+        mixing them would make this something to scroll past rather than work
+        through. Scoped to the caller's congregation (5.4).
+
+        Gated on its own `followUp` module (migration 198), NOT on members:view.
+        Reading the member roll and working the call list are different jobs,
+        often done by different people; a `follow_up_team` role holds followUp
+        and nothing else.
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+      responses:
+        "200":
+          description: "{ data: [{ event_id, run_id, step_id, user_id, full_name, phone_number, action, due_at, cadence_name, service_title, days_overdue }] }"
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/follow-up/due/{eventId}:
+    post:
+      tags: [attendance]
+      summary: >-
+        Requires followUp:edit — deliberately a separate capability from
+        followUp:view, because a leader compiling reports is not necessarily the
+        person who should be marking calls as made. Record that a human
+        follow-up step was carried out, and what came of it. The outcome is required — "no answer" and "reached" are
+        different pastoral facts, and a register that collapses them cannot say
+        who still needs reaching. Recording a step twice is a 404, so two
+        leaders working the same list cannot both claim one call.
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              properties:
+                outcome: { type: string, enum: [reached, no_answer, wrong_number, skipped] }
+                note:    { type: string, maxLength: 1000 }
+      responses:
+        "204": { description: Recorded }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: "That step is not open, or does not exist" }
   /admin/follow-up/members:
     get:
       tags: [attendance]

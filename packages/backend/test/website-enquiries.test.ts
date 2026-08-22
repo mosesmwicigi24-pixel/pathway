@@ -1,4 +1,4 @@
-// Website enquiries (migration 197): nuruplace.org's connection card, contact
+// Website enquiries (migration 201): nuruplace.org's connection card, contact
 // form and prayer request land where pastors can answer them.
 //
 // The intake has no session — authenticity is an HMAC over the raw body, the
@@ -216,7 +216,7 @@ describe("enquiry triage", () => {
 
   it("refuses someone without the website permission", async () => {
     // Enquiries carry strangers' phone numbers and prayer requests. A portal
-    // account is not enough; you need the website module (migration 198).
+    // account is not enough; you need the website module (seeds/08_rbac.sql).
     const res = await app().get("/v1/admin/enquiries").set("Authorization", memberTok);
     expect(res.status).toBe(403);
   });

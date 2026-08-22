@@ -77,3 +77,35 @@ jobs:
 
       - name: Unit + integration tests
         run: pnpm test
+
+      # The portal is a static Vite bundle with no image and no deploy path, so
+      # until now the only way to ship it was to build it on the VPS — the exact
+      # thing docker-compose.prod.yml avoids for the backend, because that box is
+      # CPU-starved and a build there stalls under CPU steal. CI has already
+      # built this bundle above; publishing it means the box only has to
+      # download and extract.
+      #
+      # Gated on a green push to main, so a bundle can never be published from a
+      # run whose tests, migrations or contract lint failed, and PRs don't
+      # litter the run with artifacts nobody deploys.
+      - name: Stamp the portal bundle with its commit
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          test -d packages/admin-web/dist
+          # Deployed-version check for the portal, equivalent to comparing image
+          # digests for the API: after deploying, `curl https://<host>/version.txt`
+          # must print this sha. "Copied the files" is not evidence the browser
+          # is being served them — a stale bundle behind a cache looks identical
+          # to a successful deploy without this.
+          printf '%s\n' "${GITHUB_SHA}" > packages/admin-web/dist/version.txt
+          echo "Stamped ${GITHUB_SHA}"
+
+      - name: Publish the portal bundle
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: portal-${{ github.sha }}
+          path: packages/admin-web/dist
+          retention-days: 30
+          if-no-files-found: error

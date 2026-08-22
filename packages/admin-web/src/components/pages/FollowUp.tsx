@@ -22,7 +22,11 @@ import {
   FollowUpApi,
   type Absentee,
   type AttendanceYearOverview,
+  type FollowUpDueStep,
+  type Cadence,
+  type CadenceStepDef,
   type FollowUpMember,
+  type FollowUpOutcome,
   type ServiceAttendanceSummary,
   type ServiceScanLogEntry,
 } from "../../api/client";
@@ -51,12 +55,12 @@ const STATUS: Record<FollowUpMember["status"], { label: string; color: string; b
   new: { label: "Never attended", color: "#475569", bg: "#f1f5f9" },
 };
 
-type Tab = "members" | "scans" | "services" | "absent";
+type Tab = "due" | "members" | "scans" | "services" | "absent" | "cadences";
 
 export function FollowUp(): ReactElement {
   const thisYear = new Date().getFullYear();
   const [year, setYear] = useState(thisYear);
-  const [tab, setTab] = useState<Tab>("members");
+  const [tab, setTab] = useState<Tab>("due");
 
   const [overview, setOverview] = useState<AttendanceYearOverview | null>(null);
   const [members, setMembers] = useState<FollowUpMember[] | null>(null);
@@ -67,18 +71,24 @@ export function FollowUp(): ReactElement {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [dueSteps, setDueSteps] = useState<FollowUpDueStep[] | null>(null);
+  const [cadences, setCadences] = useState<Cadence[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [o, m, sc, sv] = await Promise.all([
+      const [due, cad, o, m, sc, sv] = await Promise.all([
+        FollowUpApi.due(200),
+        FollowUpApi.cadences(),
         FollowUpApi.overview(year),
         FollowUpApi.members({ year }),
         FollowUpApi.scans({ limit: 200 }),
         FollowUpApi.services(year),
       ]);
+      setDueSteps(due);
+      setCadences(cad);
       setOverview(o);
       setMembers(m);
       setScans(sc);
@@ -173,10 +183,12 @@ export function FollowUp(): ReactElement {
 
       <nav style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {([
+          ["due", "To call", (dueSteps ?? []).length],
           ["members", "Members", (members ?? []).length],
           ["absent", "Absent", absent?.absentees.length ?? 0],
           ["scans", "Scan log", (scans ?? []).length],
           ["services", "Services", (services ?? []).length],
+          ["cadences", "Cadences", (cadences ?? []).length],
         ] as const).map(([key, label, count]) => (
           <button
             key={key}
@@ -192,6 +204,17 @@ export function FollowUp(): ReactElement {
           </button>
         ))}
       </nav>
+
+      {tab === "due" && (
+        <DueTab
+          rows={dueSteps ?? []}
+          onRecorded={() => void load()}
+        />
+      )}
+
+      {tab === "cadences" && (
+        <CadencesTab rows={cadences ?? []} onChanged={() => void load()} />
+      )}
 
       {tab === "members" && (
         <MembersTab
@@ -605,3 +628,343 @@ function CsvButton<T>({ rows, filename, columns }: {
 
 const shortDate = (iso: string): string => iso.slice(0, 10);
 const shortTime = (iso: string): string => iso.slice(11, 16);
+
+/**
+ * The call list: human cadence steps that have come due.
+ *
+ * This tab exists because the register was answering "who is missing" and
+ * leaving "so who is ringing them, and did anyone?" to memory. Every row is one
+ * person and one action, and closing it demands an OUTCOME — "no answer" and
+ * "reached" are different pastoral facts, and a list that only records "done"
+ * cannot say who still needs reaching.
+ *
+ * Ordered oldest-first and never paginated away: a name that scrolls off the
+ * bottom is a person nobody calls.
+ */
+function DueTab(props: { rows: FollowUpDueStep[]; onRecorded: () => void }): ReactElement {
+  const { rows, onRecorded } = props;
+  const [busy, setBusy] = useState<string | null>(null);
+  const [noteFor, setNoteFor] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  const [failed, setFailed] = useState<string | null>(null);
+
+  async function record(eventId: string, outcome: FollowUpOutcome): Promise<void> {
+    setBusy(eventId);
+    setFailed(null);
+    try {
+      await FollowUpApi.recordContact(eventId, outcome, note.trim() || undefined);
+      setNoteFor(null);
+      setNote("");
+      onRecorded();
+    } catch (e) {
+      // Surfaced, not swallowed: a leader who thinks they logged a call and
+      // did not is worse off than one who knows it failed.
+      setFailed(e instanceof Error ? e.message : "Could not record that.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div style={{ padding: 32, textAlign: "center", color: MUTED, background: "#fff", borderRadius: 12, boxShadow: SHADOW }}>
+        <PhoneCall size={20} style={{ opacity: 0.4 }} />
+        <p style={{ margin: "10px 0 0", fontSize: 14 }}>No one is waiting to be called.</p>
+        <p style={{ margin: "4px 0 0", fontSize: 12.5 }}>
+          Steps appear here when a cadence reaches a day that asks for a person, not a message.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      {failed && (
+        <div style={{ padding: "10px 12px", borderRadius: 8, background: "#fef2f2", color: RED, fontSize: 13 }}>{failed}</div>
+      )}
+      {rows.map((r) => {
+        const overdue = r.days_overdue > 0;
+        return (
+          <div
+            key={r.event_id}
+            style={{
+              background: "#fff", borderRadius: 12, boxShadow: SHADOW, padding: 14,
+              // Overdue is a coloured edge rather than a red row: the list is
+              // read every day, and a wall of red stops meaning anything.
+              borderLeft: `3px solid ${overdue ? (r.days_overdue > 6 ? RED : AMBER) : GREEN}`,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: NAVY_INK }}>{r.full_name}</div>
+                <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>
+                  {r.action} · {r.cadence_name}
+                  {r.service_title ? ` · after ${r.service_title}` : ""}
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                {r.phone_number ? (
+                  // The number is the point of the row. A tel: link means one
+                  // tap on a phone and one click on a desk.
+                  <a href={`tel:${r.phone_number}`} style={{ fontSize: 14, color: NAVY, fontWeight: 600, textDecoration: "none" }}>
+                    {r.phone_number}
+                  </a>
+                ) : (
+                  <span style={{ fontSize: 12.5, color: RED }}>No phone number on file</span>
+                )}
+                <div style={{ fontSize: 11.5, color: overdue ? (r.days_overdue > 6 ? RED : AMBER) : MUTED, marginTop: 2 }}>
+                  {overdue ? `${r.days_overdue} day${r.days_overdue === 1 ? "" : "s"} overdue` : "Due today"}
+                </div>
+              </div>
+            </div>
+
+            {noteFor === r.event_id && (
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="What was said? (optional)"
+                style={{
+                  width: "100%", marginTop: 10, padding: "8px 10px", fontSize: 13,
+                  border: "1px solid var(--border)", borderRadius: 8,
+                }}
+              />
+            )}
+
+            <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+              {([
+                ["reached", "Reached", GREEN],
+                ["no_answer", "No answer", AMBER],
+                ["wrong_number", "Wrong number", RED],
+                ["skipped", "Skip", MUTED],
+              ] as const).map(([outcome, label, colour]) => (
+                <button
+                  key={outcome}
+                  disabled={busy === r.event_id}
+                  onClick={() => {
+                    if (noteFor !== r.event_id) { setNoteFor(r.event_id); setNote(""); }
+                    void record(r.event_id, outcome);
+                  }}
+                  style={{
+                    padding: "6px 12px", fontSize: 12.5, fontWeight: 600, borderRadius: 999,
+                    border: `1px solid ${colour}`, background: "#fff", color: colour,
+                    cursor: busy === r.event_id ? "wait" : "pointer",
+                    opacity: busy === r.event_id ? 0.5 : 1,
+                  }}
+                >
+                  {busy === r.event_id ? <Loader2 size={12} /> : label}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Cadence management: the rhythms behind the call list.
+ *
+ * A cadence is a named sequence — some steps the system sends, some a leader
+ * performs. Without one, nothing ever reaches "To call"; migration 199 seeds
+ * the department's two rules, and this tab is where they are seen, adjusted,
+ * and new ones defined. Switching one off stops NEW runs only — the people
+ * already inside a rhythm are never silently abandoned.
+ */
+function CadencesTab(props: { rows: Cadence[]; onChanged: () => void }): ReactElement {
+  const { rows, onChanged } = props;
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const TRIGGER_LABEL: Record<Cadence["trigger"], string> = {
+    first_visit: "First visit",
+    missed_services: "Consecutive absences",
+    joined_online: "Joined online",
+  };
+
+  async function toggle(c: Cadence): Promise<void> {
+    setBusy(c.cadence_id);
+    setError(null);
+    try {
+      await FollowUpApi.setCadenceActive(c.cadence_id, !c.is_active);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not update the cadence.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      {error && (
+        <div style={{ padding: "10px 12px", borderRadius: 8, background: "#fef2f2", color: RED, fontSize: 13 }}>{error}</div>
+      )}
+      {rows.map((c) => (
+        <div key={c.cadence_id} style={{ background: "#fff", borderRadius: 12, boxShadow: SHADOW, padding: 14, opacity: c.is_active ? 1 : 0.55 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: NAVY_INK }}>{c.name}</div>
+              <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>
+                {TRIGGER_LABEL[c.trigger]}
+                {c.trigger === "missed_services" ? ` · after ${c.trigger_threshold} in a row` : ""}
+                {` · ${c.open_runs} running now`}
+              </div>
+            </div>
+            <button
+              disabled={busy === c.cadence_id}
+              onClick={() => void toggle(c)}
+              style={{
+                padding: "6px 14px", fontSize: 12.5, fontWeight: 600, borderRadius: 999, cursor: "pointer",
+                border: `1px solid ${c.is_active ? AMBER : GREEN}`, background: "#fff",
+                color: c.is_active ? AMBER : GREEN, alignSelf: "flex-start",
+              }}
+            >
+              {c.is_active ? "Switch off" : "Switch on"}
+            </button>
+          </div>
+          <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
+            {c.steps.map((st) => (
+              <div key={st.step_id ?? st.sequence} style={{ display: "flex", gap: 8, fontSize: 12.5, color: NAVY_INK, alignItems: "baseline" }}>
+                <span style={{ color: MUTED, minWidth: 52 }}>Day {st.offset_days}</span>
+                <span style={{
+                  fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase",
+                  color: st.kind === "human" ? NAVY : GOLD,
+                }}>
+                  {st.kind === "human" ? "Leader" : st.channel}
+                </span>
+                <span>{st.action}</span>
+                {st.message && <span style={{ color: MUTED, fontStyle: "italic" }}>— “{st.message}”</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      {creating ? (
+        <NewCadenceForm
+          onDone={() => { setCreating(false); onChanged(); }}
+          onCancel={() => setCreating(false)}
+        />
+      ) : (
+        <button
+          onClick={() => setCreating(true)}
+          style={{
+            padding: "10px 14px", fontSize: 13, fontWeight: 600, borderRadius: 12, cursor: "pointer",
+            border: `1px dashed ${NAVY}`, background: "transparent", color: NAVY,
+          }}
+        >
+          + New cadence
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Minimal creation form: name, trigger, threshold, and up to a handful of steps. */
+function NewCadenceForm(props: { onDone: () => void; onCancel: () => void }): ReactElement {
+  const { onDone, onCancel } = props;
+  const [name, setName] = useState("");
+  const [trigger, setTrigger] = useState<Cadence["trigger"]>("first_visit");
+  const [threshold, setThreshold] = useState(2);
+  const [steps, setSteps] = useState<CadenceStepDef[]>([
+    { offset_days: 0, kind: "human", action: "Phone call" },
+  ]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function setStep(i: number, patch: Partial<CadenceStepDef>): void {
+    setSteps((prev) => prev.map((s, j) => {
+      if (j !== i) return s;
+      const next = { ...s, ...patch };
+      // The kind decides whether a channel belongs — flipping kind fixes the
+      // channel rather than letting the server bounce a half-configured step.
+      if (next.kind === "human") delete next.channel;
+      if (next.kind === "automated" && !next.channel) next.channel = "push";
+      return next;
+    }));
+  }
+
+  async function save(): Promise<void> {
+    setSaving(true);
+    setError(null);
+    try {
+      await FollowUpApi.createCadence({
+        name: name.trim(),
+        trigger,
+        // exactOptionalPropertyTypes: spread the key only when it exists rather
+        // than passing an explicit undefined.
+        ...(trigger === "missed_services" ? { trigger_threshold: threshold } : {}),
+        steps,
+      });
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create the cadence.");
+      setSaving(false);
+    }
+  }
+
+  const input = { padding: "8px 10px", fontSize: 13, border: "1px solid var(--border)", borderRadius: 8 } as const;
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, boxShadow: SHADOW, padding: 14, display: "grid", gap: 10 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: NAVY_INK }}>New cadence</div>
+      {error && <div style={{ padding: "8px 10px", borderRadius: 8, background: "#fef2f2", color: RED, fontSize: 12.5 }}>{error}</div>}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. New believer)" style={{ ...input, flex: 1, minWidth: 180 }} />
+        <select value={trigger} onChange={(e) => setTrigger(e.target.value as Cadence["trigger"])} style={input}>
+          <option value="first_visit">On first visit</option>
+          <option value="missed_services">After consecutive absences</option>
+          <option value="joined_online">On joining online</option>
+        </select>
+        {trigger === "missed_services" && (
+          <input type="number" min={1} max={52} value={threshold}
+            onChange={(e) => setThreshold(Number(e.target.value) || 1)}
+            style={{ ...input, width: 70 }} title="How many in a row" />
+        )}
+      </div>
+      {steps.map((s, i) => (
+        <div key={i} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: 12, color: MUTED }}>Day</span>
+          <input type="number" min={0} max={365} value={s.offset_days}
+            onChange={(e) => setStep(i, { offset_days: Number(e.target.value) || 0 })}
+            style={{ ...input, width: 64 }} />
+          <select value={s.kind} onChange={(e) => setStep(i, { kind: e.target.value as CadenceStepDef["kind"] })} style={input}>
+            <option value="human">Leader does</option>
+            <option value="automated">System sends</option>
+          </select>
+          {s.kind === "automated" && (
+            <select value={s.channel ?? "push"} onChange={(e) => setStep(i, { channel: e.target.value as "push" | "email" })} style={input}>
+              <option value="push">Push</option>
+              <option value="email">Email</option>
+            </select>
+          )}
+          <input value={s.action} onChange={(e) => setStep(i, { action: e.target.value })}
+            placeholder={s.kind === "human" ? "e.g. Phone call" : "e.g. Welcome message"}
+            style={{ ...input, flex: 1, minWidth: 140 }} />
+          {s.kind === "automated" && (
+            <input value={s.message ?? ""} onChange={(e) => setStep(i, { message: e.target.value })}
+              placeholder="Message text" style={{ ...input, flex: 2, minWidth: 180 }} />
+          )}
+          {steps.length > 1 && (
+            <button onClick={() => setSteps((prev) => prev.filter((_, j) => j !== i))}
+              style={{ border: "none", background: "transparent", color: RED, cursor: "pointer", fontSize: 16 }}
+              title="Remove step">×</button>
+          )}
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={() => setSteps((p) => [...p, { offset_days: (p[p.length - 1]?.offset_days ?? 0) + 1, kind: "human", action: "" }])}
+          style={{ padding: "6px 12px", fontSize: 12.5, borderRadius: 8, border: `1px solid var(--border)`, background: "#fff", color: NAVY_INK, cursor: "pointer" }}>
+          + Step
+        </button>
+        <div style={{ flex: 1 }} />
+        <button onClick={onCancel} style={{ padding: "6px 14px", fontSize: 12.5, borderRadius: 8, border: "1px solid var(--border)", background: "#fff", color: MUTED, cursor: "pointer" }}>Cancel</button>
+        <button disabled={saving || !name.trim() || steps.some((s) => !s.action.trim())} onClick={() => void save()}
+          style={{ padding: "6px 14px", fontSize: 12.5, fontWeight: 600, borderRadius: 8, border: "none", background: NAVY, color: "#fff", cursor: "pointer", opacity: saving || !name.trim() ? 0.6 : 1 }}>
+          {saving ? "Saving…" : "Create cadence"}
+        </button>
+      </div>
+    </div>
+  );
+}

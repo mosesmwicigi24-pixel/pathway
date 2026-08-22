@@ -30,6 +30,11 @@ const PERM_MODULES: PermModule[] = [
   { id: "countries", label: "Countries", group: "System" },
   { id: "languages", label: "Languages", group: "System" },
   { id: "congregations", label: "Congregations", group: "System" },
+  // Mirrors backend PERM_MODULES (migration 198). The follow_up_team role holds
+  // exactly this module; the matrix must show the row or the role cannot be
+  // audited or edited from here.
+  { id: "followUp", label: "Follow-up (call list & services)", group: "Follow-up" },
+  // Same, for the website role.
   { id: "website", label: "Website (nuruplace.org)", group: "Website" },
 ];
 const CAPABILITIES: { key: Capability; label: string }[] = [
