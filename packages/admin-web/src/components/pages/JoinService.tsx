@@ -2,35 +2,37 @@
 //
 // This is the ONE page in the portal a stranger is meant to reach — someone at
 // the door pointing their phone's camera at a printed QR. The owner's brief
-// (2026-08-21) is precise: no form on arrival. An INVITATION — "welcome to the
-// Sunday service on this date" — one button, ENTER, and confetti when it lands.
-// The details Follow-up needs (name, phone, email, date, time, service, how
-// they came) are captured server-side at the moment of entry, not typed into
-// a bureaucratic screen at the door.
+// (2026-08-21, revised 2026-08-22 after seeing it on his own phone): no form on
+// arrival; a warm invitation on the BRIGHT off-white golden ground the member
+// app lives on (not the navy the first cut used); "You're Welcome Here — where
+// everyone is someone"; one button; confetti (~4 seconds of it). The details
+// Follow-up needs (name, phone, email, date, time, service, how they came) are
+// captured server-side at the moment of entry.
 //
 // How that squares with needing details at all:
 //   * A REMEMBERED phone (localStorage continuity token, minted by the
 //     backend at first entry) goes invitation → Enter → confetti. One tap.
-//     The server fills their details from their own record — "scanned on
-//     another day, it fills the details of that user on that day".
-//   * A NEW phone gets one warm details step after Enter — once, ever, and it
-//     doubles as their account creation. Next Sunday they are one tap.
-//   * Outside a check-in window the poster shows the next service instead of
-//     a button — inert six days a week, same as ever.
+//   * A NEW phone gets one warm details step after Enter — once, ever.
+//   * Outside a check-in window the poster shows the welcome + the next
+//     service, and its button celebrates the intention to come ("I'll be
+//     there") — the door is never a dead end, even on a Tuesday.
 //
 // It talks to the API with RAW fetch, never the portal's client: the client
-// persists staff sessions and bounces 401s to /login. The only thing this page
-// ever stores is the single-purpose continuity token (attendance-only, see
-// tokens.ts) plus a first name for the greeting.
+// persists staff sessions and bounces 401s to /login. The only things this
+// page stores are the attendance-only continuity token and a first name.
 import { useEffect, useRef, useState, type ReactElement, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
-import { Loader2, CalendarDays, UserPlus, LogIn } from "lucide-react";
+import { Loader2, UserPlus, LogIn } from "lucide-react";
 
-const NAVY_INK = "#0b1f33";
+// The member app's paper-and-gold language (same family as privacy.html):
+// bright warm ground, navy ink, gold action.
+const PAPER = "#faf6ec";
+const INK = "#16273f";
 const NAVY = "#1d4e86";
 const GOLD = "#c89b3c";
-const CREAM = "#f5efdf";
-const MUTED = "#94a7bc";
+const GOLD_DEEP = "#a87f2a";
+const MUTED = "#6b7180";
+const LINE = "#e7dfd3";
 
 const API = import.meta.env.VITE_API_BASE ?? "/v1";
 const STORE_KEY = "nuru.checkin";
@@ -51,10 +53,10 @@ function remembered(): Remembered | null {
   }
 }
 function remember(token: string | undefined, fullName: string | undefined): void {
-  // Tolerate an API older than this bundle (the minutes of a rolling deploy,
-  // or a cached bundle ahead of the server): no token simply means this phone
-  // is not remembered yet. The check-in already SUCCEEDED — nothing about the
-  // celebration may depend on the memory working.
+  // Tolerate an API older than this bundle (the minutes of a rolling deploy):
+  // no token simply means this phone is not remembered yet. The check-in
+  // already SUCCEEDED — nothing about the celebration may depend on the
+  // memory working.
   if (!token) return;
   try {
     localStorage.setItem(
@@ -90,10 +92,11 @@ class ApiFail extends Error {
 }
 
 /**
- * Confetti, hand-rolled. ~180 gold/cream/white slips launched from the bottom
- * corners; gravity, drag and spin; the canvas removes itself when the last
- * slip leaves the screen. No dependency — this page loads on a stranger's
- * phone on church wifi, and every kilobyte is somebody's Sunday data bundle.
+ * Confetti, hand-rolled — no dependency; this page loads on a stranger's
+ * phone on church wifi. Two waves ~900ms apart so the celebration holds the
+ * screen for about four seconds, per the owner's brief. Colors chosen for the
+ * BRIGHT ground: navy, both golds and white read on cream; there is no cream
+ * slip because it would vanish into the page.
  */
 function fireConfetti(canvas: HTMLCanvasElement): void {
   const ctx2d = canvas.getContext("2d");
@@ -104,30 +107,36 @@ function fireConfetti(canvas: HTMLCanvasElement): void {
   ctx2d.scale(dpr, dpr);
   const W = canvas.clientWidth;
   const H = canvas.clientHeight;
-  const COLORS = [GOLD, CREAM, "#ffffff", "#e0b95c", NAVY];
+  const COLORS = [GOLD, GOLD_DEEP, NAVY, INK, "#ffffff"];
   interface Slip { x: number; y: number; vx: number; vy: number; w: number; h: number; rot: number; vr: number; color: string }
   const slips: Slip[] = [];
-  for (let i = 0; i < 180; i++) {
-    const fromLeft = i % 2 === 0;
-    slips.push({
-      x: fromLeft ? -10 : W + 10,
-      y: H * (0.55 + Math.random() * 0.4),
-      vx: (fromLeft ? 1 : -1) * (4 + Math.random() * 7),
-      vy: -(9 + Math.random() * 8),
-      w: 5 + Math.random() * 6,
-      h: 8 + Math.random() * 8,
-      rot: Math.random() * Math.PI,
-      vr: (Math.random() - 0.5) * 0.3,
-      color: COLORS[i % COLORS.length]!,
-    });
-  }
+  const launchWave = (count: number): void => {
+    for (let i = 0; i < count; i++) {
+      const fromLeft = i % 2 === 0;
+      slips.push({
+        x: fromLeft ? -10 : W + 10,
+        y: H * (0.55 + Math.random() * 0.4),
+        vx: (fromLeft ? 1 : -1) * (4 + Math.random() * 7),
+        vy: -(9 + Math.random() * 8),
+        w: 5 + Math.random() * 6,
+        h: 8 + Math.random() * 8,
+        rot: Math.random() * Math.PI,
+        vr: (Math.random() - 0.5) * 0.3,
+        color: COLORS[slips.length % COLORS.length]!,
+      });
+    }
+  };
+  launchWave(150);
+  window.setTimeout(() => launchWave(120), 900);
+
+  const start = performance.now();
   let alive = true;
   const step = (): void => {
     if (!alive) return;
     ctx2d.clearRect(0, 0, W, H);
     let visible = 0;
     for (const s of slips) {
-      s.vy += 0.25; // gravity
+      s.vy += 0.22; // gravity, a touch gentle so the flutter lasts
       s.vx *= 0.99; // drag
       s.x += s.vx;
       s.y += s.vy;
@@ -140,7 +149,10 @@ function fireConfetti(canvas: HTMLCanvasElement): void {
       ctx2d.fillRect(-s.w / 2, -s.h / 2, s.w, s.h);
       ctx2d.restore();
     }
-    if (visible > 0) requestAnimationFrame(step);
+    // The second wave is still queued for the first 900ms; after that, stop
+    // when the sky is empty (or at a hard 6s so a stray slip can't pin a rAF).
+    const elapsed = performance.now() - start;
+    if ((visible > 0 || elapsed < 1000) && elapsed < 6000) requestAnimationFrame(step);
     else { alive = false; ctx2d.clearRect(0, 0, W, H); }
   };
   requestAnimationFrame(step);
@@ -148,13 +160,20 @@ function fireConfetti(canvas: HTMLCanvasElement): void {
 
 const inputStyle = {
   width: "100%", padding: "13px 14px", fontSize: 16, borderRadius: 12,
-  border: "1px solid rgba(200,155,60,0.45)", background: "rgba(255,255,255,0.06)",
-  color: "#fff", boxSizing: "border-box", outline: "none",
+  border: `1px solid ${LINE}`, background: "#fff",
+  color: INK, boxSizing: "border-box", outline: "none",
 } as const;
 const labelStyle = {
-  display: "block", fontSize: 11, fontWeight: 700, color: GOLD,
+  display: "block", fontSize: 11, fontWeight: 700, color: GOLD_DEEP,
   margin: "14px 0 6px", letterSpacing: "0.12em", textTransform: "uppercase",
 } as const;
+const goldButton = (busy: boolean) => ({
+  margin: "30px auto 0", width: "100%", maxWidth: 320, padding: "16px 0", borderRadius: 999,
+  border: "none", background: busy ? "#d9c08a" : GOLD, color: INK, fontSize: 17, fontWeight: 800,
+  letterSpacing: "0.04em", cursor: busy ? "default" : "pointer",
+  boxShadow: "0 10px 26px rgba(200,155,60,0.38)",
+} as const);
+const serif = { fontFamily: "Georgia, 'Times New Roman', serif" } as const;
 
 function dateOf(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
@@ -174,6 +193,9 @@ export function JoinService(): ReactElement {
   const [error, setError] = useState("");
   const [greetName, setGreetName] = useState("");
   const [wasNew, setWasNew] = useState(false);
+  // The closed screen's own celebration: "I'll be there" fires the confetti
+  // too — the intention to come is worth cheering.
+  const [pledged, setPledged] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const [fullName, setFullName] = useState("");
@@ -200,6 +222,11 @@ export function JoinService(): ReactElement {
     setGreetName((name ?? "").trim().split(/\s+/)[0] ?? "");
     setWasNew(newHere);
     setStage("celebrate");
+  };
+
+  const pledge = (): void => {
+    setPledged(true);
+    if (canvasRef.current) fireConfetti(canvasRef.current);
   };
 
   /** ENTER: a remembered phone is one tap; a new phone gets the details step. */
@@ -299,14 +326,13 @@ export function JoinService(): ReactElement {
 
   return (
     <div style={{
-      minHeight: "100vh", background: `radial-gradient(120% 90% at 50% 0%, #14304f 0%, ${NAVY_INK} 60%)`,
-      display: "flex", justifyContent: "center", padding: "0 18px",
+      minHeight: "100vh",
+      background: `radial-gradient(120% 90% at 50% 0%, #fffdf7 0%, ${PAPER} 55%, #f2ead6 100%)`,
+      display: "flex", justifyContent: "center", padding: "0 20px",
     }}>
-      {stage === "celebrate" && (
-        <canvas ref={canvasRef} style={{ position: "fixed", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 10 }} />
-      )}
+      <canvas ref={canvasRef} style={{ position: "fixed", inset: 0, width: "100%", height: "100%", pointerEvents: "none", zIndex: 10 }} />
 
-      <div style={{ width: "100%", maxWidth: 440, display: "flex", flexDirection: "column", justifyContent: "center", minHeight: "100vh", padding: "40px 0", textAlign: "center" }}>
+      <div style={{ width: "100%", maxWidth: 460, display: "flex", flexDirection: "column", justifyContent: "center", minHeight: "100vh", padding: "40px 0", textAlign: "center" }}>
 
         {stage === "loading" && <Loader2 size={26} color={GOLD} style={{ margin: "0 auto", animation: "spin 1s linear infinite" }} />}
 
@@ -316,34 +342,47 @@ export function JoinService(): ReactElement {
 
         {stage === "closed" && resolution && !resolution.open && (
           <>
-            <CalendarDays size={30} color={GOLD} style={{ margin: "0 auto 14px" }} />
-            <div style={{ color: GOLD, fontSize: 12, fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase" }}>{congregation}</div>
-            <h1 style={{ color: "#fff", fontSize: 26, fontFamily: "Georgia, 'Times New Roman', serif", fontWeight: 600, margin: "12px 0" }}>
-              You&apos;re always welcome here
+            <div style={{ color: GOLD_DEEP, fontSize: 12, fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase" }}>{congregation}</div>
+            <h1 style={{ ...serif, color: INK, fontSize: 34, fontWeight: 700, margin: "14px 0 2px", lineHeight: 1.15 }}>
+              You&apos;re Welcome Here
             </h1>
-            <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.6, margin: 0 }}>
-              {resolution.next
-                ? <>Join us for <b style={{ color: CREAM }}>{resolution.next.title}</b><br />{dateOf(resolution.next.starts_at)} · {timeOf(resolution.next.starts_at)}.<br />Scan this code again when you arrive.</>
-                : <>Scan this code again when you arrive for a service.</>}
+            <p style={{ ...serif, color: GOLD_DEEP, fontSize: 18, fontStyle: "italic", margin: "0 0 18px" }}>
+              Where everyone is someone!
             </p>
+            <p style={{ color: INK, fontSize: 15.5, lineHeight: 1.7, margin: "0 auto", maxWidth: 400, opacity: 0.9 }}>
+              <b>{congregation}</b> is more than a church — it&apos;s a family of believers who have
+              come together to share the love of God. Our heart is to help you become the person
+              God made you to be. No matter where you are in your journey of faith, you&apos;re
+              invited to discover your purpose and live it out with us.
+            </p>
+            {resolution.next && (
+              <p style={{ color: MUTED, fontSize: 14.5, lineHeight: 1.6, margin: "18px 0 0" }}>
+                Join us for <b style={{ color: INK }}>{resolution.next.title}</b>
+                <br />{dateOf(resolution.next.starts_at)} · {timeOf(resolution.next.starts_at)}
+                <br />Scan this code again when you arrive.
+              </p>
+            )}
+            <button type="button" onClick={pledge} disabled={pledged} style={goldButton(false)}>
+              {pledged ? "See you there ✓" : "I'll be there"}
+            </button>
           </>
         )}
 
         {stage === "invitation" && svc && (
           <>
-            <div style={{ color: GOLD, fontSize: 12, fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase" }}>{congregation}</div>
-            <h1 style={{ color: "#fff", fontSize: 34, fontFamily: "Georgia, 'Times New Roman', serif", fontWeight: 600, margin: "16px 0 6px", lineHeight: 1.2 }}>
-              {remembered()?.first_name ? <>Karibu back,<br />{remembered()!.first_name}</> : <>You are warmly<br />invited</>}
+            <div style={{ color: GOLD_DEEP, fontSize: 12, fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase" }}>{congregation}</div>
+            <h1 style={{ ...serif, color: INK, fontSize: 36, fontWeight: 700, margin: "16px 0 4px", lineHeight: 1.15 }}>
+              {remembered()?.first_name ? <>Karibu back,<br />{remembered()!.first_name}</> : <>You&apos;re Welcome<br />Here</>}
             </h1>
-            <p style={{ color: CREAM, fontSize: 17, margin: "10px 0 4px" }}>{svc.title}</p>
+            {!remembered()?.first_name && (
+              <p style={{ ...serif, color: GOLD_DEEP, fontSize: 17, fontStyle: "italic", margin: "0 0 6px" }}>
+                Where everyone is someone!
+              </p>
+            )}
+            <p style={{ color: INK, fontSize: 17, margin: "12px 0 2px", fontWeight: 600 }}>{svc.title}</p>
             <p style={{ color: MUTED, fontSize: 14, margin: 0 }}>{dateOf(svc.starts_at)} · {timeOf(svc.starts_at)}</p>
-            {error && <p style={{ color: "#f2b8b5", fontSize: 13, margin: "16px 0 0" }}>{error}</p>}
-            <button type="button" onClick={() => { void enter(); }} disabled={busy}
-              style={{
-                margin: "34px auto 0", width: "100%", maxWidth: 320, padding: "16px 0", borderRadius: 999,
-                border: "none", background: busy ? "#8a733e" : GOLD, color: NAVY_INK, fontSize: 18, fontWeight: 800,
-                letterSpacing: "0.06em", cursor: busy ? "default" : "pointer", boxShadow: "0 10px 30px rgba(200,155,60,0.35)",
-              }}>
+            {error && <p style={{ color: "#b3261e", fontSize: 13, margin: "16px 0 0" }}>{error}</p>}
+            <button type="button" onClick={() => { void enter(); }} disabled={busy} style={goldButton(busy)}>
               {busy ? "One moment…" : "Enter"}
             </button>
           </>
@@ -351,8 +390,8 @@ export function JoinService(): ReactElement {
 
         {stage === "details" && svc && (
           <div style={{ textAlign: "left" }}>
-            <div style={{ color: GOLD, fontSize: 12, fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase", textAlign: "center" }}>{congregation}</div>
-            <h2 style={{ color: "#fff", fontSize: 24, fontFamily: "Georgia, 'Times New Roman', serif", fontWeight: 600, margin: "14px 0 4px", textAlign: "center" }}>
+            <div style={{ color: GOLD_DEEP, fontSize: 12, fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase", textAlign: "center" }}>{congregation}</div>
+            <h2 style={{ ...serif, color: INK, fontSize: 25, fontWeight: 700, margin: "14px 0 4px", textAlign: "center" }}>
               So we can welcome you properly
             </h2>
             <p style={{ color: MUTED, fontSize: 13.5, textAlign: "center", margin: "0 0 10px" }}>
@@ -365,9 +404,9 @@ export function JoinService(): ReactElement {
                   style={{
                     flex: 1, padding: "11px 8px", borderRadius: 12, fontSize: 14, fontWeight: 700,
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer",
-                    border: mode === m ? `1.5px solid ${GOLD}` : "1px solid rgba(148,167,188,0.35)",
-                    background: mode === m ? "rgba(200,155,60,0.14)" : "transparent",
-                    color: mode === m ? CREAM : MUTED,
+                    border: mode === m ? `1.5px solid ${GOLD}` : `1px solid ${LINE}`,
+                    background: mode === m ? "rgba(200,155,60,0.12)" : "#fff",
+                    color: mode === m ? INK : MUTED,
                   }}>
                   <Icon size={16} /> {text}
                 </button>
@@ -389,13 +428,9 @@ export function JoinService(): ReactElement {
               <input style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} type="password"
                 autoComplete={mode === "new" ? "new-password" : "current-password"} minLength={mode === "new" ? 8 : 1} required />
 
-              {error && <p style={{ color: "#f2b8b5", fontSize: 13, margin: "12px 0 0" }}>{error}</p>}
+              {error && <p style={{ color: "#b3261e", fontSize: 13, margin: "12px 0 0" }}>{error}</p>}
 
-              <button type="submit" disabled={busy}
-                style={{
-                  width: "100%", marginTop: 22, padding: "15px 0", borderRadius: 999, border: "none",
-                  background: busy ? "#8a733e" : GOLD, color: NAVY_INK, fontSize: 16.5, fontWeight: 800, cursor: busy ? "default" : "pointer",
-                }}>
+              <button type="submit" disabled={busy} style={{ ...goldButton(busy), margin: "22px auto 0", maxWidth: "none" }}>
                 {busy ? "One moment…" : "Enter"}
               </button>
             </form>
@@ -404,20 +439,20 @@ export function JoinService(): ReactElement {
 
         {stage === "celebrate" && svc && (
           <>
-            <div style={{ color: GOLD, fontSize: 12, fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase" }}>{congregation}</div>
-            <h1 style={{ color: "#fff", fontSize: 36, fontFamily: "Georgia, 'Times New Roman', serif", fontWeight: 600, margin: "18px 0 8px", lineHeight: 1.15 }}>
+            <div style={{ color: GOLD_DEEP, fontSize: 12, fontWeight: 700, letterSpacing: "0.3em", textTransform: "uppercase" }}>{congregation}</div>
+            <h1 style={{ ...serif, color: INK, fontSize: 38, fontWeight: 700, margin: "18px 0 8px", lineHeight: 1.12 }}>
               {greetName ? <>Karibu,<br />{greetName}!</> : <>Karibu!</>}
             </h1>
-            <p style={{ color: CREAM, fontSize: 16, margin: "6px 0" }}>You&apos;re in — {svc.title}.</p>
-            <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "10px 0 0" }}>
+            <p style={{ color: INK, fontSize: 16.5, margin: "6px 0", fontWeight: 600 }}>You&apos;re in — {svc.title}.</p>
+            <p style={{ color: MUTED, fontSize: 14.5, lineHeight: 1.65, margin: "10px auto 0", maxWidth: 380 }}>
               {wasNew
-                ? <>So glad you&apos;re here. Your discipleship pathway is ready — download the <b style={{ color: CREAM }}>Nuru Pathway</b> app and sign in with the email and password you just chose.</>
+                ? <>So glad you&apos;re here — welcome to the family. Your discipleship pathway is ready: download the <b style={{ color: INK }}>Nuru Pathway</b> app and sign in with the email and password you just chose.</>
                 : <>Good to have you home. Enjoy the service.</>}
             </p>
           </>
         )}
 
-        <p style={{ color: "rgba(148,167,188,0.55)", fontSize: 11.5, marginTop: 40 }}>
+        <p style={{ color: "#a89f8d", fontSize: 11.5, marginTop: 40 }}>
           Nuru Place Discipleship Pathway
         </p>
       </div>
