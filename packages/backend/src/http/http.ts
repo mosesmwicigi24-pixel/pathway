@@ -9,7 +9,7 @@ import type { AccessClaims } from "../modules/identity/tokens.js";
 export interface Principal {
   userId: string;
   role: AccessClaims["role"];
-  congregationId: string;
+  congregationId: string | null;
   mfa?: boolean; // a second factor was verified for the presenting token (§5.3)
   mfaAt?: number; // unix seconds of that verification
   pwdAt?: number; // unix seconds of a PASSWORD re-confirmation on this token (§5.3)
@@ -37,6 +37,21 @@ export function handler(fn: AsyncHandler) {
 export function requirePrincipal(req: Request): Principal {
   if (!req.principal) throw new ApiError("AUTH_REQUIRED", "Authentication required");
   return req.principal;
+}
+
+/**
+ * The unplaced-member rule (2026-08-21, after cong:"" reached uuid-typed SQL
+ * as a 500): READS take a null congregation and come back empty — an unplaced
+ * member simply has nothing scoped to see. WRITES land here instead: creating
+ * or changing congregation-scoped state with no congregation is a question
+ * with no right answer, so it gets a named refusal a human can act on, not an
+ * orphan row and not a 500.
+ */
+export function requirePlacement(principal: Principal): string {
+  if (!principal.congregationId) {
+    throw new ApiError("UNPROCESSABLE", "Your account is not placed in a congregation yet — ask an admin to place you");
+  }
+  return principal.congregationId;
 }
 
 export function parseBody<S extends ZodTypeAny>(schema: S, body: unknown): output<S> {

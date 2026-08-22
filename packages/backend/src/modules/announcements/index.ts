@@ -5,7 +5,7 @@ import { Router } from "express";
 import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole } from "../../http/auth.js";
-import { handler, parseBody, requirePrincipal } from "../../http/http.js";
+import { handler, parseBody, requirePrincipal, requirePlacement } from "../../http/http.js";
 import { buildEmailProvider } from "../identity/email.js";
 import { AnnouncementService } from "./service.js";
 
@@ -23,9 +23,13 @@ export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService
   const adminOnly = [auth, requireRole("Admin")] as const;
   // Admin reads/writes are scoped to the caller's congregation (§5 multi-tenant
   // fix; legacy NULL-congregation rows stay visible). SuperAdmin sees all.
+  // An UNPLACED non-SuperAdmin cannot fall through to the "sees all" arm —
+  // in this service's queries an absent scope means everything, and "no
+  // congregation" must never widen into "every congregation". They get the
+  // named placement refusal instead.
   const scopeOf = (req: Parameters<typeof requirePrincipal>[0]): string | undefined => {
     const p = requirePrincipal(req);
-    return p.role === "SuperAdmin" ? undefined : p.congregationId;
+    return p.role === "SuperAdmin" ? undefined : requirePlacement(p);
   };
   const r = announcementsRouter;
 

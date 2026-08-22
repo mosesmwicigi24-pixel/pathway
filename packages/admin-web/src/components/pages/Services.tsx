@@ -23,7 +23,9 @@ import {
   Plus, QrCode, X, CalendarDays, Clock, ShieldCheck, ShieldAlert,
   Loader2, Check, Maximize2,
 } from "lucide-react";
-import { ServicesApi, type ChurchService, type ServiceQrPayload } from "../../api/client";
+import {
+  ServicesApi, type ChurchService, type ServiceQrPayload, type ServiceSchedule,
+} from "../../api/client";
 import { errorMessage } from "../../util/error";
 import { checkinWindow, hhmm, isoDate, phaseRank, servicePhase, type ServicePhase } from "../../util/serviceSchedule";
 
@@ -179,6 +181,8 @@ export function Services(): ReactElement {
           </div>
         </section>
       )}
+
+      <WeeklyRhythm onMaterialized={() => void load()} />
 
       {creating && (
         <CreateServiceDialog
@@ -474,3 +478,138 @@ const ghostBtn: React.CSSProperties = {
   fontSize: 13, fontWeight: 600, color: NAVY_INK, cursor: "pointer",
 };
 
+
+// ---------------------------------------------------------------------------
+// Weekly rhythm (migration 201). A service is a date; a RHYTHM is "every
+// Sunday at nine". Declaring one here means the worker materializes each
+// week's service a week ahead — so the standing QR poster at the door never
+// resolves to a Sunday nobody remembered to create. A hand-created service
+// for the same day and title takes precedence; the rhythm steps aside.
+// ---------------------------------------------------------------------------
+
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function WeeklyRhythm({ onMaterialized }: { onMaterialized: () => void }): ReactElement {
+  const [schedules, setSchedules] = useState<ServiceSchedule[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [title, setTitle] = useState("Sunday Service");
+  const [day, setDay] = useState(0);
+  const [time, setTime] = useState("09:00");
+
+  const load = useCallback(async () => {
+    try {
+      setSchedules(await ServicesApi.schedules());
+      setError(null);
+    } catch (e) {
+      setError(errorMessage(e, "Couldn't load the weekly rhythm."));
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const add = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await ServicesApi.createSchedule({ title, day_of_week: day, starts_time: time });
+      setAdding(false);
+      await load();
+      // The declare also materialized the nearest occurrence — show it above.
+      onMaterialized();
+    } catch (e) {
+      setError(errorMessage(e, "Couldn't add the weekly service."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggle = async (s: ServiceSchedule): Promise<void> => {
+    try {
+      await ServicesApi.setScheduleActive(s.schedule_id, !s.is_active);
+      await load();
+    } catch (e) {
+      setError(errorMessage(e, "Couldn't update the schedule."));
+    }
+  };
+
+  return (
+    <section style={card(16)}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <h2 style={{ margin: 0, fontSize: 15, color: NAVY_INK, display: "flex", alignItems: "center", gap: 8 }}>
+            <CalendarDays size={16} color={GOLD} /> Weekly rhythm
+          </h2>
+          <p style={{ margin: "3px 0 0", color: MUTED, fontSize: 12.5 }}>
+            Each week&apos;s service is created automatically, a week ahead — the printed door code always
+            has a service to point at. A service you create by hand for the same day takes precedence.
+          </p>
+        </div>
+        <button onClick={() => setAdding((v) => !v)} style={ghostBtn}>
+          {adding ? "Cancel" : "Add weekly service"}
+        </button>
+      </div>
+
+      {error && <p style={{ color: "#991b1b", fontSize: 12.5, margin: "10px 0 0" }}>{error}</p>}
+
+      {adding && (
+        <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: MUTED, display: "grid", gap: 4 }}>
+            TITLE
+            <input value={title} onChange={(e) => setTitle(e.target.value)}
+              style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13, minWidth: 180 }} />
+          </label>
+          <label style={{ fontSize: 11, fontWeight: 700, color: MUTED, display: "grid", gap: 4 }}>
+            DAY
+            <select value={day} onChange={(e) => setDay(Number(e.target.value))}
+              style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13 }}>
+              {DAY_NAMES.map((d, i) => <option key={d} value={i}>{d}</option>)}
+            </select>
+          </label>
+          <label style={{ fontSize: 11, fontWeight: 700, color: MUTED, display: "grid", gap: 4 }}>
+            STARTS
+            <input type="time" value={time} onChange={(e) => setTime(e.target.value)}
+              style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 13 }} />
+          </label>
+          <button onClick={() => void add()} disabled={busy || !title.trim()}
+            style={{
+              padding: "9px 16px", borderRadius: 10, background: busy ? "#9db4cf" : NAVY, color: "#fff",
+              border: "none", fontSize: 13, fontWeight: 600, cursor: busy ? "default" : "pointer",
+            }}>
+            {busy ? "Adding…" : "Add"}
+          </button>
+          <span style={{ fontSize: 11.5, color: MUTED }}>
+            Check-in opens 45 min before and closes 4 h after the start.
+          </span>
+        </div>
+      )}
+
+      {schedules !== null && schedules.length > 0 && (
+        <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+          {schedules.map((s) => (
+            <div key={s.schedule_id}
+              style={{
+                display: "flex", alignItems: "center", gap: 12, padding: "9px 12px", borderRadius: 10,
+                border: "1px solid var(--border)", background: s.is_active ? "#fff" : "#f8fafc",
+              }}>
+              <Clock size={14} color={s.is_active ? NAVY : MUTED} />
+              <span style={{ fontSize: 13, fontWeight: 600, color: s.is_active ? NAVY_INK : MUTED }}>{s.title}</span>
+              <span style={{ fontSize: 12.5, color: MUTED }}>
+                {DAY_NAMES[s.day_of_week]} · {s.starts_time.slice(0, 5)}
+              </span>
+              <span style={{ flex: 1 }} />
+              <button onClick={() => void toggle(s)}
+                title={s.is_active ? "Pause — stops future weeks; services already created stay" : "Resume weekly creation"}
+                style={{
+                  fontSize: 11.5, fontWeight: 700, padding: "4px 11px", borderRadius: 999, cursor: "pointer",
+                  border: `1px solid ${s.is_active ? "#bbf7d0" : "var(--border)"}`,
+                  background: s.is_active ? "#f0fdf4" : "#fff", color: s.is_active ? "#15803d" : MUTED,
+                }}>
+                {s.is_active ? "Every week" : "Paused"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}

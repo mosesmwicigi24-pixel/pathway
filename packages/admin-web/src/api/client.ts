@@ -2992,4 +2992,37 @@ export const ServicesApi = {
     const { data } = await api.get<ServiceQrPayload>(`/services/${serviceId}/qr`);
     return data;
   },
+  /** The congregation's declared weekly rhythm (migration 201). */
+  async schedules(): Promise<ServiceSchedule[]> {
+    const { data } = await api.get<{ data: ServiceSchedule[] }>("/admin/service-schedules");
+    return data.data;
+  },
+  /** Declare a weekly service; its nearest occurrence exists on return. */
+  async createSchedule(body: ServiceScheduleCreateBody): Promise<ServiceSchedule> {
+    const { data } = await api.post<ServiceSchedule>("/admin/service-schedules", body);
+    return data;
+  },
+  async setScheduleActive(scheduleId: string, active: boolean): Promise<void> {
+    await api.patch(`/admin/service-schedules/${scheduleId}`, { is_active: active });
+  },
 };
+
+export interface ServiceSchedule {
+  schedule_id: string;
+  title: string;
+  day_of_week: number; // 0 = Sunday
+  starts_time: string; // "HH:MM:SS" from Postgres TIME
+  duration_minutes: number | null;
+  checkin_opens_minutes: number;
+  checkin_closes_minutes: number;
+  counts_for_streak: boolean;
+  is_active: boolean;
+}
+
+export interface ServiceScheduleCreateBody {
+  title: string;
+  day_of_week: number;
+  starts_time: string; // "HH:MM"
+  checkin_opens_minutes?: number;
+  checkin_closes_minutes?: number;
+}

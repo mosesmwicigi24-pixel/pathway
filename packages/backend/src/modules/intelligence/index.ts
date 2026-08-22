@@ -14,7 +14,7 @@ import multer from "multer";
 import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole } from "../../http/auth.js";
-import { handler, parseBody, requirePrincipal } from "../../http/http.js";
+import { handler, parseBody, requirePrincipal, requirePlacement } from "../../http/http.js";
 import { buildAiProvider, type AiProvider } from "../assistant/provider.js";
 import { AiUsageService } from "../assistant/usage.js";
 import { NotificationService } from "../notifications/service.js";
@@ -251,7 +251,7 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
       const { band } = parseBody(LiturgyBandParam, req.params);
       const { duration_sec } = parseBody(LiturgyRecordingBody, req.body ?? {});
       const p = requirePrincipal(req);
-      const { previousAudioUrl } = await liturgyRecordings.upsert(p.congregationId, band, {
+      const { previousAudioUrl } = await liturgyRecordings.upsert(requirePlacement(p), band, {
         audioUrl: `${publicBase}/${file.filename}`,
         durationSec: duration_sec,
         recordedBy: p.userId,
@@ -287,7 +287,7 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   // immediately; no other band is affected.
   r.delete("/admin/liturgy/recordings/:band", auth, requireRole("Admin"), handler(async (req, res) => {
     const { band } = parseBody(LiturgyBandParam, req.params);
-    const { audio_url } = await liturgyRecordings.remove(requirePrincipal(req).congregationId, band);
+    const { audio_url } = await liturgyRecordings.remove(requirePlacement(requirePrincipal(req)), band);
     const oldFile = liturgyRecordingFile(audio_url);
     // Same treatment as the replace path above — one failure is a class, and
     // this is the sibling occurrence.

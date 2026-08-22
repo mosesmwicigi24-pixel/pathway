@@ -501,7 +501,7 @@ export class ChurchAttendanceService {
    * attended/missed. Bounded at their first-ever check-in: services held before
    * a member ever showed up are not failures they own (see ./streak.ts).
    */
-  private async outcomes(c: Queryable, userId: string, congregationId: string): Promise<ServiceOutcome[]> {
+  private async outcomes(c: Queryable, userId: string, congregationId: string | null): Promise<ServiceOutcome[]> {
     return many<ServiceOutcome>(
       c,
       `SELECT s.service_id,
@@ -527,7 +527,7 @@ export class ChurchAttendanceService {
   }
 
   /** Recompute from source and refresh the cohort-query snapshot. */
-  private async recomputeStreak(c: Queryable, userId: string, congregationId: string): Promise<AttendanceStreak> {
+  private async recomputeStreak(c: Queryable, userId: string, congregationId: string | null): Promise<AttendanceStreak> {
     const streak = computeAttendanceStreak(await this.outcomes(c, userId, congregationId));
     await c.query(
       `INSERT INTO service_attendance_streaks
@@ -596,7 +596,7 @@ function toServiceView(r: ChurchServiceRow & { attended_at: string | null }, ope
 }
 
 /** Per-service HMAC seed. Rotating it invalidates every code already printed. */
-function randomSecret(): string {
+export function randomSecret(): string {
   return randomBytes(32).toString("hex");
 }
 
