@@ -7,6 +7,7 @@ import type { Env } from "../config/env.js";
 import type { DbPools } from "../db/pool.js";
 import type { ObjectStore } from "../modules/certificates/objectStore.js";
 import type { WebAuthnVerifier } from "../modules/identity/webauthn.js";
+import type { MessageProvider } from "../modules/announcements/providers.js";
 
 export interface AppContext {
   env: Env;
@@ -23,4 +24,9 @@ export interface AppContext {
   // @simplewebauthn adapter; tests inject FakeWebAuthnVerifier (no authenticator
   // hardware in CI).
   webauthnVerifier?: WebAuthnVerifier | undefined;
+  // Outbound SMS (§5.10, keys by name only). Optional — the worker falls back to
+  // buildSmsProvider(env), which binds Africa's Talking when it is configured
+  // and nothing when it is not; tests inject FakeMessageProvider so no message
+  // ever costs the church a shilling in CI.
+  smsProvider?: MessageProvider | undefined;
 }

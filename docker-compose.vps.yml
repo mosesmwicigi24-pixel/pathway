@@ -93,6 +93,14 @@ services:
       # indistinguishable from a mistyped secret unless you know to look here.
       WEBSITE_CONTACT_WEBHOOK_SECRET: ${WEBSITE_CONTACT_WEBHOOK_SECRET:-}
       WEBSITE_GIVING_WEBHOOK_SECRET: ${WEBSITE_GIVING_WEBHOOK_SECRET:-}
+      # Africa's Talking. The WORKER is what sends the giving receipt, so these
+      # matter most there (see below) — they are here as well so a future
+      # api-side sender (announcement SMS) does not rediscover this file's
+      # favourite trap. Nothing in the api sends SMS today.
+      AFRICASTALKING_API_KEY: ${AFRICASTALKING_API_KEY:-}
+      AFRICASTALKING_USERNAME: ${AFRICASTALKING_USERNAME:-}
+      AFRICASTALKING_SENDER_ID: ${AFRICASTALKING_SENDER_ID:-}
+      AFRICASTALKING_ENV: ${AFRICASTALKING_ENV:-sandbox}
 
   # The worker runs the notification dispatcher (worker.ts → buildDispatchProvider),
   # so it — not the api — is what actually sends FCM pushes. Mount the same
@@ -125,6 +133,15 @@ services:
       SMTP_PASS: ${SMTP_PASS}
       EMAIL_FROM: ${EMAIL_FROM}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL}
+      # Africa's Talking SMS. THIS is the process that sends the giving receipt
+      # — a website giver has no account, so no notifications row can reach
+      # them, and the worker drains the outbox job that texts them instead.
+      # Missing here and the receipt silently never sends, which is the same
+      # class of gap as the SMTP one recorded just above.
+      AFRICASTALKING_API_KEY: ${AFRICASTALKING_API_KEY:-}
+      AFRICASTALKING_USERNAME: ${AFRICASTALKING_USERNAME:-}
+      AFRICASTALKING_SENDER_ID: ${AFRICASTALKING_SENDER_ID:-}
+      AFRICASTALKING_ENV: ${AFRICASTALKING_ENV:-sandbox}
     volumes:
       - /opt/pathway/secrets/fcm-service-account.json:/run/secrets/fcm.json:ro
       # rw: the sweep registers recordings AND (follow-up) unlinks soft-deleted ones.

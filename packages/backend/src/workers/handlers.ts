@@ -14,6 +14,7 @@ import { CalendarService } from "../modules/calendar/service.js";
 import { GamificationService } from "../modules/gamification/service.js";
 import type { OutboxHandler } from "./outbox.js";
 import { CadenceService } from "../modules/attendance/cadence.js";
+import { buildSmsProvider } from "../modules/announcements/africastalking.js";
 
 export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler> {
   // Cert PDFs render to the shared object store (disk under MEDIA_STORAGE_DIR by
@@ -28,6 +29,10 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   const notifications = new NotificationService(ctx.db.primary);
   const cadence = new CadenceService(ctx.db.primary, notifications, ctx.log);
   const video = new VideoService(ctx.db.primary, new MediaService(ctx.env.CLOUDINARY_URL), buildVideoPipeline(ctx.env));
+  // Undefined unless Africa's Talking is configured. Used for the one message
+  // the notifications system structurally cannot send: a receipt to a giver who
+  // has no account (see sendMemberlessReceipt below).
+  const sms = ctx.smsProvider ?? buildSmsProvider(ctx.env);
 
   const handlers = new Map<string, OutboxHandler>();
 
@@ -97,7 +102,17 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   handlers.set("giving.receipt", async (p) => {
     const transactionId = String(p.transaction_id ?? "");
     const userId = String(p.user_id ?? "");
-    if (!transactionId || !userId) return; // malformed payload — nothing to receipt
+    if (!transactionId) return; // malformed payload — nothing to receipt
+
+    // No user means a website gift (migration 202): a stranger with a phone and
+    // no account. `notifications` rows are keyed to a user_id, so nothing in
+    // that system can reach them — this used to `return` here, and the giver
+    // got Safaricom's SMS and nothing whatever from the church. Text them
+    // instead, on the number that paid.
+    if (!userId) {
+      await sendMemberlessReceipt(transactionId);
+      return;
+    }
 
     const txn = await maybeOne<{
       amount_minor: string;
@@ -139,6 +154,71 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
       },
     });
   });
+
+  /**
+   * Thank a giver who has no account, by SMS to the number that paid.
+   *
+   * Only for settled website gifts. A `processing` row means the giver has not
+   * confirmed on their handset yet, and thanking someone for money they have
+   * not sent is worse than saying nothing.
+   *
+   * Idempotent by the outbox's own dedupe? No — the outbox is at-least-once, so
+   * a redelivery COULD text someone twice. That is bounded by the outbox's
+   * attempt cap and is the right trade here: a duplicate thank-you is a small
+   * embarrassment, while a swallowed one leaves a giver unacknowledged. If it
+   * ever matters, the fix is a `receipt_sent_at` column rather than silence.
+   */
+  async function sendMemberlessReceipt(transactionId: string): Promise<void> {
+    if (!sms) {
+      // Loud, because the alternative is a giver who is never thanked and
+      // nobody knowing. Not an error: the church may simply not have wired SMS.
+      ctx.log.warn(
+        { transaction_id: transactionId },
+        "website gift settled but no SMS provider is configured — the giver was not thanked. " +
+          "Set AFRICASTALKING_API_KEY and AFRICASTALKING_USERNAME.",
+      );
+      return;
+    }
+
+    const gift = await maybeOne<{
+      amount_minor: string;
+      currency: string;
+      fund: string | null;
+      giver_name: string | null;
+      giver_phone: string | null;
+      receipt_code: string | null;
+      status: string;
+    }>(
+      ctx.db.primary,
+      `SELECT t.amount_minor, t.currency, f.name AS fund, t.giver_name, t.giver_phone,
+              t.receipt_code, t.status
+         FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
+        WHERE t.transaction_id = $1 AND t.source = 'website'`,
+      [transactionId],
+    );
+    if (!gift || gift.status !== "succeeded" || !gift.giver_phone) return;
+
+    // Integer minor units to a human figure — never a float multiply.
+    const major = (Number(gift.amount_minor) / 100).toLocaleString("en-KE", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    const firstName = gift.giver_name?.trim().split(/\s+/)[0];
+    const body =
+      `${firstName ? `${firstName}, thank` : "Thank"} you for your gift of ` +
+      `${gift.currency} ${major} to ${gift.fund ?? "the church"}. ` +
+      `${gift.receipt_code ? `M-Pesa ref ${gift.receipt_code}. ` : ""}` +
+      `God bless you. — The Good News Mission`;
+
+    try {
+      await sms.send({ to: gift.giver_phone, title: "Thank you", body });
+    } catch (err) {
+      // Rethrow so the outbox retries. Swallowing here would mark the job done
+      // and lose the receipt permanently on one transient network blip.
+      ctx.log.error({ err, transaction_id: transactionId }, "giving receipt SMS failed");
+      throw err;
+    }
+  }
 
   return handlers;
 }

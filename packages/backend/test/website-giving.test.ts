@@ -14,8 +14,9 @@
 //                      member's gift does, and reconciles by phone.
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { createHmac } from "node:crypto";
-import { agent, makeApp } from "./helpers/app.js";
+import { agent, makeApp, bearer } from "./helpers/app.js";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
+import { createCongregation, createUser } from "./helpers/factories.js";
 import supertest from "supertest";
 import { FinancialService } from "../src/modules/financial/service.js";
 import { SIGNATURE_TOLERANCE_SECONDS } from "../src/http/websiteSignature.js";
@@ -396,5 +397,116 @@ describe("website giving — a second app does not inherit the first app's env",
     const unconfigured = makeApp({ MPESA_CALLBACK_SECRET: MM_SECRET });
     expect((await post(supertest(configured), gift())).status).toBe(201);
     expect((await post(supertest(unconfigured), gift())).status).toBe(503);
+  });
+});
+
+describe("website giving — did it land?", () => {
+  /** The website asks this while the giver is at their handset. */
+  function status(app: supertest.Agent, transactionId: string, header?: string | null) {
+    const raw = JSON.stringify({ transaction_id: transactionId });
+    const req = app.post("/v1/webhooks/website-giving/status").set("content-type", "application/json");
+    if (header !== null) req.set("x-nuruplace-signature", header ?? sign(raw));
+    return req.send(raw);
+  }
+
+  it("reports processing while the push is still out", async () => {
+    const app = fresh();
+    const made = await post(app, gift({ amount_minor: 500_00, fund: "tithe" }));
+    const res = await status(app, made.body.transaction_id);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("processing");
+    expect(res.body.settled_at).toBeNull();
+    // The giver's own figure, in the units they typed — not 50000.
+    expect(res.body.amount_minor).toBe(500_00);
+    expect(res.body.fund).toBe("Tithe");
+  });
+
+  it("reports succeeded with the M-Pesa code once the callback lands", async () => {
+    // This is what turns "check your phone" into "thank you".
+    const app = fresh();
+    const made = await post(app, gift({ amount_minor: 500_00 }));
+    const callback = JSON.stringify({
+      event_id: "evt-status-1",
+      ref: made.body.provider_ref,
+      status: "succeeded",
+      receipt: "SJ12ABC345",
+    });
+    await app
+      .post("/v1/webhooks/mobilemoney/mpesa")
+      .set("content-type", "application/json")
+      .set("x-mm-signature", createHmac("sha256", MM_SECRET).update(callback).digest("hex"))
+      .send(callback);
+
+    const res = await status(app, made.body.transaction_id);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("succeeded");
+    expect(res.body.settled_at).not.toBeNull();
+    // So the giver can match it against the SMS Safaricom sent them.
+    expect(res.body.receipt_code).toBe("SJ12ABC345");
+  });
+
+  it("reports failed when the giver cancels on their phone", async () => {
+    const app = fresh();
+    const made = await post(app, gift());
+    const callback = JSON.stringify({ event_id: "evt-status-2", ref: made.body.provider_ref, status: "failed" });
+    await app
+      .post("/v1/webhooks/mobilemoney/mpesa")
+      .set("content-type", "application/json")
+      .set("x-mm-signature", createHmac("sha256", MM_SECRET).update(callback).digest("hex"))
+      .send(callback);
+    const res = await status(app, made.body.transaction_id);
+    expect(res.body.status).toBe("failed");
+  });
+
+  it("never carries the giver's phone or name back to the page", async () => {
+    // The website sent both, so echoing them adds nothing and puts personal
+    // data on a response a polling page fetches dozens of times.
+    const app = fresh();
+    const made = await post(app, gift({ giver_name: "Amina Wanjiru" }));
+    const res = await status(app, made.body.transaction_id);
+    expect(Object.keys(res.body).sort()).toEqual(
+      ["amount_minor", "currency", "fund", "receipt_code", "settled_at", "status"].sort(),
+    );
+  });
+
+  it("refuses to report on a MEMBER's transaction", async () => {
+    // Anyone able to sign could otherwise read any transaction in the ledger.
+    const cong = await createCongregation();
+    const member = await createUser({ congregationId: cong, email: "giver@dev.local" });
+    const tok = bearer({ sub: member.user_id, role: "Student", cong });
+    const app = fresh();
+    const own = await app
+      .post("/v1/giving/intents")
+      .set("authorization", tok)
+      .send({ fund: "tithe", amount_minor: 100_00, currency: "KES", method: "mpesa", phone_number: "+254700111222" });
+    expect(own.status).toBe(201);
+    const res = await status(app, own.body.transaction_id);
+    expect(res.status).toBe(404);
+  });
+
+  it("refuses an unsigned or forged status request", async () => {
+    const app = fresh();
+    const made = await post(app, gift());
+    expect((await status(app, made.body.transaction_id, null)).status).toBe(401);
+    const raw = JSON.stringify({ transaction_id: made.body.transaction_id });
+    expect((await status(app, made.body.transaction_id, sign(raw, "wrong-secret"))).status).toBe(401);
+  });
+
+  it("rejects a malformed id with 400 rather than a 500 from Postgres", async () => {
+    expect((await status(fresh(), "not-a-uuid")).status).toBe(400);
+  });
+
+  it("404s an id that is not a gift at all", async () => {
+    expect((await status(fresh(), "00000000-0000-4000-8000-000000000000")).status).toBe(404);
+  });
+
+  it("lets a page poll for minutes without being throttled", async () => {
+    // The thank-you screen polls every few seconds; throttling it would punish
+    // the person who just gave.
+    const app = agent(LIVE_ENV);
+    const made = await post(app, gift());
+    const codes: number[] = [];
+    for (let i = 0; i < 60; i++) codes.push((await status(app, made.body.transaction_id)).status);
+    expect(codes.every((c) => c === 200)).toBe(true);
   });
 });

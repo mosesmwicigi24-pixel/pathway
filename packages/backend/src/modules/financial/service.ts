@@ -335,6 +335,53 @@ export class FinancialService {
     };
   }
 
+  /**
+   * Has a website gift landed yet?
+   *
+   * The website asks this after sending someone to their handset, so it can
+   * stop saying "check your phone" and start saying thank you. Without it the
+   * page's last word is an instruction: a visitor pays and the site behaves as
+   * though nothing happened.
+   *
+   * Scoped to `source = 'website'`, which is not a formality. Anyone able to
+   * sign a request could otherwise read the status of any transaction in the
+   * ledger by its id, including a member's. This endpoint exists to answer for
+   * gifts the website itself started and nothing else.
+   *
+   * What it returns is deliberately narrow. The amount and fund the giver
+   * chose, whether it settled, and the M-Pesa code so they can match it to
+   * their SMS. NOT the phone number and NOT the giver's name: the website sent
+   * those, so echoing them back adds nothing and puts personal data on a
+   * response that a polling page will fetch dozens of times.
+   */
+  async websiteGiftStatus(transactionId: string): Promise<{
+    status: string;
+    amount_minor: number;
+    currency: string;
+    fund: string | null;
+    receipt_code: string | null;
+    settled_at: string | null;
+  } | null> {
+    const row = await maybeOne<{
+      status: string;
+      amount_minor: string;
+      currency: string;
+      fund: string | null;
+      receipt_code: string | null;
+      settled_at: string | null;
+    }>(
+      this.pool,
+      `SELECT t.status, t.amount_minor, t.currency, f.name AS fund, t.receipt_code, t.settled_at
+         FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
+        WHERE t.transaction_id = $1 AND t.source = 'website'`,
+      [transactionId],
+    );
+    if (!row) return null;
+    // amount_minor is BIGINT and arrives as a string; the giver's own figure
+    // should not reach their screen as "50000" when it is 500.00.
+    return { ...row, amount_minor: Number(row.amount_minor) };
+  }
+
   /** Active funds a visitor may give to. Public — no auth, so it carries the
    *  code and the display name and nothing else about the church's finances. */
   async publicFunds(): Promise<{ code: string; name: string }[]> {

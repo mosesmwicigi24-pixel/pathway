@@ -27,6 +27,7 @@
 // forged requests at their number — trading a harassment vector for a
 // denial-of-service one.
 import express, { Router } from "express";
+import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
 import { handler, parseBody } from "../../http/http.js";
 import { ApiError } from "../../http/errors.js";
@@ -69,6 +70,17 @@ const IP_REFILL_PER_SEC = 1 / 60;
  */
 const RELAY_BURST = 60;
 const RELAY_REFILL_PER_SEC = 1 / 10;
+
+/**
+ * Polling the thank-you screen, per transaction.
+ *
+ * 90 covers a page asking every 2.5 seconds for the ~3 minutes an STK push can
+ * take, with room to spare; the slow refill means the same gift cannot be
+ * polled all day. Nothing here rings a phone or moves money, so it can be this
+ * loose without being a lever on anybody.
+ */
+const STATUS_BURST = 90;
+const STATUS_REFILL_PER_SEC = 1 / 20;
 
 export function registerWebsiteGiving(
   ctx: AppContext,
@@ -154,6 +166,49 @@ export function registerWebsiteGiving(
       await consume(rl, "webgive:phone", toMsisdn(input.phone_number), PHONE_BURST, PHONE_REFILL_PER_SEC, res);
 
       res.status(201).json(await svc.createWebsiteGivingIntent(input));
+    }),
+  );
+
+  /**
+   * Did that gift land?
+   *
+   * The website polls this while the giver is at their handset, so the page can
+   * stop saying "check your phone" and say thank you instead. Signed like the
+   * intake — same secret, same scheme — because it reads from the ledger, and
+   * an open version would let anyone holding a transaction id learn what was
+   * given.
+   *
+   * Its own bucket, keyed on the transaction and far looser than the giving
+   * one: a page polling every few seconds for two minutes is the INTENDED
+   * behaviour here, and reusing the STK bucket would throttle the thank-you
+   * screen of the very person who just gave. Bounded all the same, so a
+   * signature-holder cannot poll one gift indefinitely.
+   */
+  r.post(
+    "/webhooks/website-giving/status",
+    express.raw({ type: "*/*", limit: "8kb" }),
+    handler(async (req, res) => {
+      const secret = ctx.env.WEBSITE_GIVING_WEBHOOK_SECRET;
+      if (!secret) throw new ApiError("UPSTREAM_UNAVAILABLE", "Website giving is not configured");
+
+      const rawBody: string = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : JSON.stringify(req.body ?? {});
+      verifyWebsiteSignature(rawBody, req.header("x-nuruplace-signature"), secret);
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawBody);
+      } catch {
+        throw new ApiError("VALIDATION_FAILED", "Body is not valid JSON");
+      }
+      // .uuid() rather than a bare string: a malformed id would otherwise reach
+      // Postgres and come back as a 500 instead of a readable 400.
+      const input = parseBody(z.object({ transaction_id: z.string().uuid() }), parsed);
+
+      await consume(rl, "webgive:status", input.transaction_id, STATUS_BURST, STATUS_REFILL_PER_SEC);
+
+      const gift = await svc.websiteGiftStatus(input.transaction_id);
+      if (!gift) throw new ApiError("NOT_FOUND", "No website gift with that id");
+      res.json(gift);
     }),
   );
 

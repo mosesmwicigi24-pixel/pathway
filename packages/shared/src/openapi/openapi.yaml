@@ -2568,6 +2568,64 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { description: "RATE_LIMITED — too many pushes to this number, from this address, or through the relay. Retry-After is set for the per-number bucket." }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+  /webhooks/website-giving/status:
+    post:
+      tags: [giving]
+      summary: Has a website gift landed yet? HMAC-signed; the site polls this to stop saying "check your phone".
+      description: >
+        nuruplace.org polls this while the giver is at their handset, so the page
+        can stop showing an instruction and say thank you instead. Without it the
+        flow ends on "enter your M-Pesa PIN" and stays there long after the gift
+        has settled.
+
+        Signed with the same secret as the intake, because it reads from the
+        ledger. Scoped to `source='website'`: a member's transaction returns 404
+        even to a caller holding a valid signature, so this cannot be turned into
+        a way to read the ledger by transaction id.
+
+        Deliberately narrow. It carries the amount and fund the giver chose,
+        whether it settled, and the M-Pesa code so they can match it against
+        their SMS — but NOT the phone number and NOT the giver's name. The
+        website sent those, so echoing them back adds nothing and would put
+        personal data on a response a polling page fetches dozens of times.
+
+        Its own rate-limit bucket, per transaction and much looser than the
+        giving one: polling every few seconds is the intended behaviour here, and
+        reusing the STK bucket would throttle the thank-you screen of the very
+        person who just gave.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [transaction_id]
+              properties:
+                transaction_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The gift's current state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [requires_action, processing, succeeded, failed, refunded]
+                  amount_minor: { type: integer }
+                  currency: { type: string, example: KES }
+                  fund: { type: [string, "null"] }
+                  receipt_code:
+                    type: [string, "null"]
+                    description: The M-Pesa code, once the callback has carried one.
+                  settled_at: { type: [string, "null"], format: date-time }
+        "400": { description: "VALIDATION_FAILED — the id is not a UUID." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { description: "RATE_LIMITED — this gift has been polled too often." }
+        "503": { $ref: "#/components/responses/UpstreamUnavailable" }
   /giving/intents:
     post:
       tags: [giving]
