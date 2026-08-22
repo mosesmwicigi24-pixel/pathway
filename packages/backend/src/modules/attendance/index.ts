@@ -5,12 +5,13 @@
 import { Router } from "express";
 import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole, requirePermission} from "../../http/auth.js";
-import { handler, parseBody, requirePrincipal } from "../../http/http.js";
+import { handler, parseBody, requirePrincipal, requirePlacement } from "../../http/http.js";
 import { ChurchAttendanceService, checkInSchema, createServiceSchema } from "./service.js";
 import { FollowUpService } from "./follow-up.js";
 import { ServiceJoinService, joinByScanSchema, returnByScanSchema } from "./join.js";
 import { signCheckinContinuity, verifyCheckinContinuity } from "../identity/tokens.js";
 import { CadenceService, recordContactSchema, createCadenceSchema } from "./cadence.js";
+import { ServiceScheduleService, createScheduleSchema } from "./schedule.js";
 import { z } from "zod";
 
 export const attendanceRouter: Router = Router();
@@ -33,6 +34,7 @@ export function registerAttendance(ctx: AppContext): Router {
   const r = attendanceRouter;
   const joinSvc = new ServiceJoinService(ctx.db.primary);
   const cadence = new CadenceService(ctx.db.primary, undefined, ctx.log);
+  const schedules = new ServiceScheduleService(ctx.db.primary);
 
   // --- Public: joining by scan ---
 
@@ -172,6 +174,39 @@ export function registerAttendance(ctx: AppContext): Router {
     }),
   );
 
+  // --- Weekly schedules (migration 201): the rhythm behind the standing QR ---
+
+  /** The congregation's declared weekly rhythm. */
+  r.get(
+    "/admin/service-schedules",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      res.json({ data: await schedules.list(requirePrincipal(req).congregationId) });
+    }),
+  );
+
+  /** Declare a weekly service. Its nearest occurrence exists before the response returns. */
+  r.post(
+    "/admin/service-schedules",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      const p = requirePrincipal(req);
+      const body = parseBody(createScheduleSchema, req.body ?? {});
+      res.status(201).json(await schedules.create(requirePlacement(p), p.userId, body));
+    }),
+  );
+
+  /** Pause or resume a rhythm. Occurrences already materialized stay. */
+  r.patch(
+    "/admin/service-schedules/:id",
+    ...leaderPlus,
+    handler(async (req, res) => {
+      const body = parseBody(z.object({ is_active: z.boolean() }).strict(), req.body ?? {});
+      await schedules.setActive(requirePlacement(requirePrincipal(req)), req.params.id ?? "", body.is_active);
+      res.status(204).end();
+    }),
+  );
+
   /** The string to render as the QR on the sanctuary screen. Never member-visible. */
   r.get(
     "/services/:id/qr",
@@ -210,7 +245,7 @@ export function registerAttendance(ctx: AppContext): Router {
     handler(async (req, res) => {
       const p = requirePrincipal(req);
       const body = parseBody(createCadenceSchema, req.body ?? {});
-      res.status(201).json(await cadence.createCadence(p.congregationId, p.userId, body));
+      res.status(201).json(await cadence.createCadence(requirePlacement(p), p.userId, body));
     }),
   );
 
@@ -220,7 +255,7 @@ export function registerAttendance(ctx: AppContext): Router {
     ...followUpEdit,
     handler(async (req, res) => {
       const body = parseBody(z.object({ is_active: z.boolean() }).strict(), req.body ?? {});
-      await cadence.setActive(requirePrincipal(req).congregationId, req.params.id ?? "", body.is_active);
+      await cadence.setActive(requirePlacement(requirePrincipal(req)), req.params.id ?? "", body.is_active);
       res.status(204).end();
     }),
   );

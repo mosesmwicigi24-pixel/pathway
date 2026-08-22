@@ -221,7 +221,7 @@ export class CadenceService {
   }
 
   /** The leader's list: human steps that are due, oldest first. */
-  async dueForLeaders(congregationId: string, limit = 100): Promise<DueStep[]> {
+  async dueForLeaders(congregationId: string | null, limit = 100): Promise<DueStep[]> {
     return many<DueStep>(
       this.pool,
       `SELECT e.event_id, e.run_id, e.step_id, r.user_id,
@@ -247,7 +247,7 @@ export class CadenceService {
   }
 
   /** Every cadence for the congregation, with its steps and how many runs are open. */
-  async listCadences(congregationId: string): Promise<unknown[]> {
+  async listCadences(congregationId: string | null): Promise<unknown[]> {
     const cadences = await many<{
       cadence_id: string; name: string; trigger: string; trigger_threshold: number;
       is_active: boolean; created_at: string; open_runs: number;

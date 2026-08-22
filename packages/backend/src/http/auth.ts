@@ -32,7 +32,13 @@ export function authenticate(env: Env) {
       req.principal = {
         userId: claims.sub,
         role: claims.role,
-        congregationId: claims.cong,
+        // `|| null` and not `?? null`: tokens minted before 2026-08-21 carried
+        // cong:"" for an unplaced member, and that empty string reached
+        // uuid-typed SQL as `invalid input syntax for type uuid: ""` — a 500
+        // on every congregation-scoped route for that member. Null is what
+        // those queries can actually digest (no rows, not an error), and it
+        // makes `?? defaultCongregation` fallbacks fire, which "" never did.
+        congregationId: claims.cong || null,
         ...(claims.mfa === true ? { mfa: true } : {}),
         ...(typeof claims.mfa_at === "number" ? { mfaAt: claims.mfa_at } : {}),
         ...(typeof claims.pwd_at === "number" ? { pwdAt: claims.pwd_at } : {}),

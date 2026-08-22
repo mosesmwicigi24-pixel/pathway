@@ -13,7 +13,7 @@ import { many, maybeOne } from "../../db/db.js";
 export interface AccessClaims {
   sub: string; // user_id
   role: UserRole;
-  cong: string; // congregation_id
+  cong: string | null; // congregation_id — null for a member not yet placed
   mfa?: boolean; // a second factor was verified for this token (§5.3 step-up)
   mfa_at?: number; // unix seconds of that verification (freshness for re-prompt)
   /** Unix seconds of a PASSWORD re-confirmation on this token (§5.3 step-up).

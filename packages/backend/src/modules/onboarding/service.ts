@@ -246,7 +246,7 @@ export class OnboardingService {
 
   // ---------------- Directory ----------------
 
-  directory(congregationId: string, search?: string): Promise<unknown[]> {
+  directory(congregationId: string | null, search?: string): Promise<unknown[]> {
     const params: unknown[] = [congregationId];
     let where = `congregation_id = $1`;
     if (search && search.trim()) {

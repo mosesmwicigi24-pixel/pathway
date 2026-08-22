@@ -378,14 +378,18 @@ export class AnnouncementService {
 
   /** The homepage-featured announcement for THIS congregation (§8; NULL-cong
    *  legacy rows count as global). Wire shape unchanged. */
-  async featured(congregationId?: string): Promise<unknown | null> {
+  async featured(congregationId?: string | null): Promise<unknown | null> {
+    // Callers always pass the member's own scope, so a null here means an
+    // UNPLACED member — who sees only the global (congregation-less) rows.
+    // The old `$1 IS NULL OR …` arm made null mean "everything", which is
+    // the one thing "no congregation" must never mean.
     return (
       (await maybeOne(
         this.pool,
         `SELECT announcement_id, title, body, primary_image_url, gallery_image_urls, video_url, sent_at
            FROM announcements
           WHERE is_featured = true AND deleted_at IS NULL AND archived_at IS NULL AND status = 'sent'
-            AND ($1::uuid IS NULL OR congregation_id = $1 OR congregation_id IS NULL)
+            AND (congregation_id = $1 OR congregation_id IS NULL)
           ORDER BY congregation_id NULLS LAST
           LIMIT 1`,
         [congregationId ?? null],

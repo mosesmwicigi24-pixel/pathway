@@ -98,7 +98,7 @@ export class IdentityService {
     const access = signAccessToken(this.env, {
       sub: user.user_id,
       role: user.role,
-      cong: user.congregation_id ?? "",
+      cong: user.congregation_id ?? null,
     });
     const refresh = await issueRefreshToken(
       this.pool,
@@ -156,7 +156,7 @@ export class IdentityService {
     const access = signAccessToken(this.env, {
       sub: user.user_id,
       role: user.role,
-      cong: user.congregation_id ?? "",
+      cong: user.congregation_id ?? null,
     });
     return {
       access_token: access,
@@ -256,7 +256,7 @@ export class IdentityService {
     const access = signAccessToken(this.env, {
       sub: row.user_id,
       role: row.role,
-      cong: row.congregation_id ?? "",
+      cong: row.congregation_id ?? null,
       pwd_at: confirmedAt,
       ...(carry?.mfa === true ? { mfa: true } : {}),
       ...(typeof carry?.mfaAt === "number" ? { mfa_at: carry.mfaAt } : {}),
@@ -701,7 +701,7 @@ export class IdentityService {
     const access = signAccessToken(this.env, {
       sub: userId,
       role: row.role,
-      cong: row.congregation_id ?? "",
+      cong: row.congregation_id ?? null,
       mfa: true,
       mfa_at: Math.floor(Date.now() / 1000),
     });

@@ -37,6 +37,7 @@ import { LiturgyService } from "./modules/intelligence/liturgy.js";
 import { CommunityService } from "./modules/intelligence/community.js";
 import { LiveService } from "./modules/live/service.js";
 import { CadenceService } from "./modules/attendance/cadence.js";
+import { ServiceScheduleService } from "./modules/attendance/schedule.js";
 
 function main(): void {
   const env = loadEnv();
@@ -150,6 +151,18 @@ function main(): void {
         const cadence = new CadenceService(db.primary, new NotificationService(db.primary), log);
         const { armed } = await cadence.armAbsentees();
         if (armed > 0) log.info({ armed }, "absentee cadences armed");
+      }),
+    ),
+
+    // Weekly service schedules → concrete services, a week ahead (migration
+    // 201). Daily is enough because the horizon is seven days: any single
+    // missed run is absorbed, and the standing QR poster never points at a
+    // Sunday that nobody remembered to create. Idempotent by the slot index.
+    cron.schedule(
+      "40 2 * * *",
+      safe("materialize scheduled services", async () => {
+        const created = await new ServiceScheduleService(db.primary).materialize();
+        if (created > 0) log.info({ created }, "scheduled services materialized");
       }),
     ),
 

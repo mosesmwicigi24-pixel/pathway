@@ -28,7 +28,7 @@ export class LiturgyRecordingService {
   /** Every band's recording status for this congregation, in clock order —
    *  drives the admin recorder UI ("which bands already have his voice").
    *  Never exposed to members (no recorded_by / no member-facing route). */
-  async list(congregationId: string): Promise<LiturgyRecording[]> {
+  async list(congregationId: string | null): Promise<LiturgyRecording[]> {
     const rows = await many<{ band: DayBand; audio_url: string; duration_sec: number; recorded_at: string }>(
       this.pool,
       `SELECT band, audio_url, duration_sec, recorded_at FROM liturgy_recordings WHERE congregation_id = $1`,

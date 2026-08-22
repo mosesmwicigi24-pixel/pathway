@@ -1852,6 +1852,68 @@ paths:
         "401": { description: "Continuity token invalid/expired — sign in once to mint a fresh one" }
         "403": { description: That service belongs to another congregation }
         "422": { description: Check-in is not open for this service }
+  /admin/service-schedules:
+    get:
+      tags: [attendance]
+      summary: >-
+        The congregation's declared weekly rhythm (migration 201) — the
+        schedules the worker materializes into concrete services a week ahead,
+        so the standing join QR always has a service to resolve to.
+        Leader+ (Instructor and above).
+      responses:
+        "200":
+          description: >-
+            { data: [{ schedule_id, title, day_of_week (0=Sunday), starts_time,
+            duration_minutes, checkin_opens_minutes, checkin_closes_minutes,
+            counts_for_streak, is_active }] }
+    post:
+      tags: [attendance]
+      summary: >-
+        Declare a weekly service. Its nearest occurrence is materialized before
+        the response returns; after that the daily worker keeps a seven-day
+        horizon. A hand-created service with the same congregation, date and
+        title takes precedence — the schedule steps aside (slot uniqueness).
+        Times are local to the congregation's timezone. Leader+.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, day_of_week, starts_time]
+              properties:
+                title: { type: string, maxLength: 255 }
+                day_of_week: { type: integer, minimum: 0, maximum: 6, description: "0 = Sunday, matching EXTRACT(DOW)" }
+                starts_time: { type: string, pattern: "^([01]\\d|2[0-3]):[0-5]\\d$", description: "Local HH:MM (24h)" }
+                duration_minutes: { type: [integer, "null"], minimum: 15, maximum: 720 }
+                checkin_opens_minutes: { type: integer, minimum: 0, maximum: 720, default: 45 }
+                checkin_closes_minutes: { type: integer, minimum: 30, maximum: 1440, default: 240 }
+                counts_for_streak: { type: boolean, default: true }
+      responses:
+        "201": { description: The created schedule }
+        "409": { description: That weekly service already exists }
+        "422": { description: Caller's account is not placed in a congregation }
+  /admin/service-schedules/{id}:
+    patch:
+      tags: [attendance]
+      summary: >-
+        Pause or resume a weekly rhythm. Off stops FUTURE materialization;
+        occurrences already created stay (people may already be invited).
+        Leader+.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_active]
+              properties:
+                is_active: { type: boolean }
+      responses:
+        "204": { description: Updated }
+        "404": { description: Schedule not found }
   /services/open:
     get:
       tags: [attendance]

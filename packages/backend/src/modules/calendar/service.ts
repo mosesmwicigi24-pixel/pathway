@@ -1336,7 +1336,7 @@ export class CalendarService {
   }
 
   /** The single homepage-featured event for the mobile Home screen (or null). */
-  async featuredEvent(congregationId: string): Promise<unknown | null> {
+  async featuredEvent(congregationId: string | null): Promise<unknown | null> {
     return (
       (await maybeOne(
         this.pool,
@@ -1376,7 +1376,7 @@ export class CalendarService {
    *  Home screen (`show_on_home`), soonest first. Reads the materialized
    *  `events` rows (same source as RSVPs/attendance) so `my_rsvp` is a cheap
    *  join, not a re-projection. The server — never the client — caps this at 5. */
-  async homeEvents(userId: string, congregationId: string): Promise<unknown[]> {
+  async homeEvents(userId: string, congregationId: string | null): Promise<unknown[]> {
     // §2: ensure-materialize this reader's own window first (cheap DO NOTHING
     // upserts over the few curated series) — Home no longer depends on a
     // create-time horizon or on the nightly sweep having run.
@@ -1409,7 +1409,7 @@ export class CalendarService {
 
   /** Recent community moments for a congregation (the mobile Events "Moments"
    *  carousel + the portal gallery). Newest first, soft-deletes excluded. */
-  async listMoments(congregationId: string): Promise<unknown[]> {
+  async listMoments(congregationId: string | null): Promise<unknown[]> {
     return many(
       this.pool,
       `SELECT moment_id, image_url, caption, tag, created_at
