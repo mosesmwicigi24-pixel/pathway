@@ -81,6 +81,18 @@ services:
       MPESA_ENV: ${MPESA_ENV:-sandbox}
       MPESA_TX_TYPE: ${MPESA_TX_TYPE:-CustomerPayBillOnline}
       MPESA_CALLBACK_URL: ${MPESA_CALLBACK_URL:-https://pathway.nuruplace.org/v1/webhooks/mobilemoney/mpesa}
+      # nuruplace.org's two signed intakes: the connection card / contact form /
+      # prayer request (migration 201), and giving (migration 202). Each must
+      # equal its counterpart in /srv/nuruplace/.env — CONTACT_WEBHOOK_SECRET
+      # and PATHWAY_GIVING_SECRET respectively.
+      #
+      # These belong HERE and not only in .env, for the reason this file already
+      # records twice above: compose passes a container only what an
+      # `environment` block names. Left out, both endpoints read their secret as
+      # unset and refuse every request with 503 — the correct failure, and one
+      # indistinguishable from a mistyped secret unless you know to look here.
+      WEBSITE_CONTACT_WEBHOOK_SECRET: ${WEBSITE_CONTACT_WEBHOOK_SECRET:-}
+      WEBSITE_GIVING_WEBHOOK_SECRET: ${WEBSITE_GIVING_WEBHOOK_SECRET:-}
 
   # The worker runs the notification dispatcher (worker.ts → buildDispatchProvider),
   # so it — not the api — is what actually sends FCM pushes. Mount the same
