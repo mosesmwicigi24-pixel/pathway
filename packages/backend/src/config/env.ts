@@ -53,6 +53,11 @@ const EnvSchema = z.object({
   PAYPAL_SECRET: z.string().optional(),
   PAYPAL_ENV: z.enum(["sandbox", "live"]).default("sandbox"),
   PAYPAL_RETURN_URL: z.string().default("https://app.nurupathway.org/giving/paypal/return"),
+  // --- Website giving (migration 202). Shared with nuruplace.org, which signs
+  // every gift it forwards. Unset means the intake refuses everything: an
+  // unsigned endpoint that initiates STK pushes is a way to make a stranger's
+  // phone ring on demand, so it fails closed rather than open. ---
+  WEBSITE_GIVING_WEBHOOK_SECRET: z.string().optional(),
 
   YOUVERSION_APP_KEY: z.string().optional(),
   YOUVERSION_LANGUAGE_RANGES: z.string().default("en"),

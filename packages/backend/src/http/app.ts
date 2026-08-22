@@ -26,6 +26,7 @@ import { registerProgress } from "../modules/progress/index.js";
 import { registerAssessment } from "../modules/assessment/index.js";
 import { registerEngagement } from "../modules/engagement/index.js";
 import { registerFinancial } from "../modules/financial/index.js";
+import { registerWebsiteGiving } from "../modules/financial/website.js";
 import { registerNotifications } from "../modules/notifications/index.js";
 import { registerCertificates } from "../modules/certificates/index.js";
 import { registerSync } from "../modules/sync/index.js";
@@ -163,6 +164,12 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerAssessment(ctx));
   v1.use(registerEngagement(ctx));
   v1.use(registerFinancial(ctx));
+  // Website giving (migration 202). Mounted BEFORE nothing in particular — its
+  // paths don't overlap — but it takes the rate-limit store, because the buckets
+  // that stop a donate button being used to ring a stranger's phone must be the
+  // SAME buckets across every instance. With a per-process store, N instances
+  // behind the load balancer means N times the allowance.
+  v1.use(registerWebsiteGiving(ctx, rl));
   v1.use(registerNotifications(ctx));
   v1.use(registerCertificates(ctx));
   v1.use(registerSync(ctx));
