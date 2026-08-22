@@ -22,6 +22,8 @@ import { FakeMessageProvider } from "../src/modules/announcements/providers.js";
 import { AfricasTalkingSmsProvider, buildSmsProvider } from "../src/modules/announcements/africastalking.js";
 import type { Env } from "../src/config/env.js";
 import { isGsm7, smsSegments } from "../src/lib/sms-text.js";
+import { SmsDispatchProvider } from "../src/workers/dispatch.js";
+import type { AiProvider } from "../src/modules/assistant/provider.js";
 
 const log = pino({ level: "silent" });
 
@@ -242,6 +244,101 @@ describe("Africa's Talking — binding", () => {
     } as Env) as AfricasTalkingSmsProvider;
     expect(JSON.stringify(p)).toContain("https://api.africastalking.com");
     expect(JSON.stringify(p)).not.toContain("sandbox");
+  });
+});
+
+describe("Claude writes the thank-you — for the website giver and the app giver alike", () => {
+  const DRAFT = (name: string, amount: string, fund: string, ref: string) =>
+    `${name}, asante for your gift! ${amount} to ${fund}. M-Pesa ref ${ref}. Mungu akubariki. - The Good News Mission`;
+
+  const aiStub = (fn: (input: { system: string; messages: { text: string }[] }) => string): AiProvider => ({
+    name: "stub",
+    complete: (input) => Promise.resolve(fn(input as never)),
+  });
+
+  it("website giver: the composed message is what Africa's Talking receives", async () => {
+    const sms = new FakeMessageProvider("sms");
+    const ai = aiStub(() => DRAFT("Amina", "KES 500.00", "Tithe", "SJ12ABC345"));
+    const id = await websiteGift({});
+    await buildOutboxHandlers({ ...ctxWith(sms), aiProvider: ai }).get("giving.receipt")!({
+      transaction_id: id,
+      user_id: null,
+    });
+    expect(sms.sent[0]!.body).toContain("Mungu akubariki");
+    expect(sms.sent[0]!.body).toContain("KES 500.00");
+  });
+
+  it("website giver: an off-script draft falls back to the template and the gift is still receipted", async () => {
+    const sms = new FakeMessageProvider("sms");
+    const ai = aiStub(() => "A very long letter — with an em dash and no facts at all");
+    const id = await websiteGift({});
+    await buildOutboxHandlers({ ...ctxWith(sms), aiProvider: ai }).get("giving.receipt")!({
+      transaction_id: id,
+      user_id: null,
+    });
+    expect(sms.sent).toHaveLength(1);
+    expect(sms.sent[0]!.body).toContain("- The Good News Mission");
+    expect(isGsm7(sms.sent[0]!.body)).toBe(true);
+  });
+
+  it("website giver: the model is told this is a repeat gift, counted by the phone that paid", async () => {
+    const seen: string[] = [];
+    const ai = aiStub((input) => {
+      seen.push(input.messages[0]!.text);
+      return DRAFT("Amina", "KES 500.00", "Tithe", "SJ12ABC345");
+    });
+    const first = await websiteGift({});
+    const sms = new FakeMessageProvider("sms");
+    const handlers = buildOutboxHandlers({ ...ctxWith(sms), aiProvider: ai });
+    await handlers.get("giving.receipt")!({ transaction_id: first, user_id: null });
+    const second = await websiteGift({});
+    await handlers.get("giving.receipt")!({ transaction_id: second, user_id: null });
+    expect(seen[0]).toContain('"prior_gifts":0');
+    expect(seen[1]).toContain('"prior_gifts":1');
+  });
+
+  it("app giver: the composed body rides the notification payload and dispatch sends it", async () => {
+    const cong = await createCongregation();
+    const member = await createUser({ congregationId: cong, email: "app-giver@dev.local", fullName: "Amina Wanjiru" });
+    await testPool().query(
+      `INSERT INTO funds (code,name,is_active) VALUES ('tithe','Tithe',TRUE) ON CONFLICT (code) DO NOTHING`);
+    const { rows } = await testPool().query(
+      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref,
+                                 idempotency_key, receipt_code, settled_at)
+       SELECT $1, fund_id, 50000, 'KES', 'succeeded', 'mpesa', 'app-ref-1', 'app-ref-1', 'SJ12ABC345', now()
+         FROM funds WHERE code='tithe' RETURNING transaction_id`,
+      [member.user_id],
+    );
+    const ai = aiStub(() => DRAFT("Amina", "KES 500.00", "Tithe", "SJ12ABC345"));
+    await buildOutboxHandlers({ ...ctxWith(new FakeMessageProvider("sms")), aiProvider: ai })
+      .get("giving.receipt")!({ transaction_id: rows[0].transaction_id, user_id: member.user_id });
+
+    const note = await testPool().query(
+      `SELECT payload FROM notifications WHERE user_id = $1 AND channel = 'sms' AND template = 'giving_receipt'`,
+      [member.user_id],
+    );
+    expect(note.rows).toHaveLength(1);
+    const payload = note.rows[0].payload as Record<string, unknown>;
+    expect(String(payload.sms_body)).toContain("Mungu akubariki");
+
+    // ...and the dispatch layer sends that body, not the template.
+    const fake = new FakeMessageProvider("sms");
+    await new SmsDispatchProvider(fake, log).send({
+      channel: "sms", to: "+254700000000", template: "giving_receipt", payload,
+    });
+    expect(fake.sent[0]!.body).toBe(String(payload.sms_body));
+  });
+
+  it("dispatch refuses a stored sms_body that is no longer one clean segment", async () => {
+    // The payload has been through the database; re-measure before spending.
+    const fake = new FakeMessageProvider("sms");
+    await new SmsDispatchProvider(fake, log).send({
+      channel: "sms", to: "+254700000000", template: "giving_receipt",
+      payload: { sms_body: "tampered — em dash", amount_minor: 50000, currency: "KES", fund: "Tithe",
+                 receipt_code: "SJ12ABC345", member_name: "Amina Wanjiru" },
+    });
+    expect(fake.sent[0]!.body).not.toContain("tampered");
+    expect(fake.sent[0]!.body).toContain("KES 500.00");
   });
 });
 

@@ -11,7 +11,7 @@ import type { Env } from "../config/env.js";
 import { buildEmailProvider, type EmailProvider } from "../modules/identity/email.js";
 import { buildSmsProvider } from "../modules/announcements/africastalking.js";
 import type { MessageProvider } from "../modules/announcements/providers.js";
-import { fitSms, firstNameOf } from "../lib/sms-text.js";
+import { fitSms, firstNameOf, gsm7Length } from "../lib/sms-text.js";
 
 export interface DispatchMessage {
   channel: "push" | "email" | "sms";
@@ -529,7 +529,18 @@ export function renderGivingReceiptSms(p: Record<string, unknown>): string {
 }
 
 const SMS_TEMPLATE_COPY: Record<string, (p: Record<string, unknown>) => string> = {
-  giving_receipt: (p) => renderGivingReceiptSms(p),
+  giving_receipt: (p) => {
+    // A Claude-composed body may ride in the payload (see receipt-ai.ts). It
+    // was validated when composed, but the payload has been through the
+    // database since — re-measure before trusting it with the church's
+    // airtime, and fall back to the template rather than send a dud.
+    const composed = str(p.sms_body);
+    if (composed) {
+      const septets = gsm7Length(composed);
+      if (septets !== null && septets <= 160) return composed;
+    }
+    return renderGivingReceiptSms(p);
+  },
   check_in_welcome: (p) => renderCheckInWelcome(p),
 };
 
