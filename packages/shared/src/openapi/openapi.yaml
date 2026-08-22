@@ -2481,6 +2481,10 @@ paths:
         amount bounds and which providers actually work, so the page can render
         an honest "not available yet" instead of a button that fails after the
         visitor has typed their number.
+        Each fund carries `name` (English) and `name_sw` (Swahili, null when the
+        church has not named that fund in Swahili — the caller falls back to
+        `name`). The list is ordered by `name` in both locales so it does not
+        reshuffle when a reader switches language.
       security: []
       responses:
         "200":
@@ -2588,6 +2592,11 @@ paths:
         their SMS — but NOT the phone number and NOT the giver's name. The
         website sent those, so echoing them back adds nothing and would put
         personal data on a response a polling page fetches dozens of times.
+
+        The fund comes as `fund` (English) and `fund_sw` (Swahili, null when
+        that fund has no Swahili name), so the thank-you screen can name the
+        fund in the language being read rather than thanking a Swahili reader
+        "kwa Tithe".
 
         Its own rate-limit bucket, per transaction and much looser than the
         giving one: polling every few seconds is the intended behaviour here, and

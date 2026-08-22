@@ -15,6 +15,7 @@ import { GamificationService } from "../modules/gamification/service.js";
 import type { OutboxHandler } from "./outbox.js";
 import { CadenceService } from "../modules/attendance/cadence.js";
 import { buildSmsProvider } from "../modules/announcements/africastalking.js";
+import { renderGivingReceiptSms } from "./dispatch.js";
 
 export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler> {
   // Cert PDFs render to the shared object store (disk under MEDIA_STORAGE_DIR by
@@ -32,7 +33,7 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   // Undefined unless Africa's Talking is configured. Used for the one message
   // the notifications system structurally cannot send: a receipt to a giver who
   // has no account (see sendMemberlessReceipt below).
-  const sms = ctx.smsProvider ?? buildSmsProvider(ctx.env);
+  const sms = ctx.smsProvider ?? buildSmsProvider(ctx.env, ctx.log);
 
   const handlers = new Map<string, OutboxHandler>();
 
@@ -257,11 +258,15 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
    * confirmed on their handset yet, and thanking someone for money they have
    * not sent is worse than saying nothing.
    *
-   * Idempotent by the outbox's own dedupe? No — the outbox is at-least-once, so
-   * a redelivery COULD text someone twice. That is bounded by the outbox's
-   * attempt cap and is the right trade here: a duplicate thank-you is a small
-   * embarrassment, while a swallowed one leaves a giver unacknowledged. If it
-   * ever matters, the fix is a `receipt_sent_at` column rather than silence.
+   * Idempotent on `receipt_sms_at` (migration 206): the outbox is
+   * at-least-once, and before that column a redelivery texted the giver twice.
+   * A row with receipt_sms_at set has been thanked; the handler stops.
+   *
+   * That column is also the AUDIT. On 2026-08-22 a real receipt never arrived
+   * and the outbox said only `done` — which this function returns for four
+   * different worlds (unbound provider, unsettled gift, no phone, genuine
+   * accept). Now "was this giver thanked" is a query on the transaction, and
+   * the provider's message id is there to quote at Africa's Talking support.
    */
   async function sendMemberlessReceipt(transactionId: string): Promise<void> {
     if (!sms) {
@@ -269,8 +274,9 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
       // nobody knowing. Not an error: the church may simply not have wired SMS.
       ctx.log.warn(
         { transaction_id: transactionId },
-        "website gift settled but no SMS provider is configured — the giver was not thanked. " +
-          "Set AFRICASTALKING_API_KEY and AFRICASTALKING_USERNAME.",
+        "website gift settled but no SMS provider is configured — the giver was NOT thanked. " +
+          "Set AFRICASTALKING_API_KEY and AFRICASTALKING_USERNAME (in the WORKER container, " +
+          "not merely in .env — compose only passes what its environment block names).",
       );
       return;
     }
@@ -283,30 +289,39 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
       giver_phone: string | null;
       receipt_code: string | null;
       status: string;
+      receipt_sms_at: string | null;
     }>(
       ctx.db.primary,
       `SELECT t.amount_minor, t.currency, f.name AS fund, t.giver_name, t.giver_phone,
-              t.receipt_code, t.status
+              t.receipt_code, t.status, t.receipt_sms_at
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
         WHERE t.transaction_id = $1 AND t.source = 'website'`,
       [transactionId],
     );
     if (!gift || gift.status !== "succeeded" || !gift.giver_phone) return;
+    if (gift.receipt_sms_at) return; // already thanked — a redelivery must not text twice
 
-    // Integer minor units to a human figure — never a float multiply.
-    const major = (Number(gift.amount_minor) / 100).toLocaleString("en-KE", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
+    // The SAME renderer the member receipt uses — this used to be a second,
+    // hand-built copy of the message, and it still carried the em dash after
+    // the template was fixed. One character outside GSM-7 demotes the whole
+    // text to UCS-2 and bills it as two segments; a second copy of the copy is
+    // how a fixed bug keeps shipping.
+    const body = renderGivingReceiptSms({
+      amount_minor: Number(gift.amount_minor),
+      currency: gift.currency,
+      fund: gift.fund ?? "the church",
+      receipt_code: gift.receipt_code,
+      member_name: gift.giver_name,
     });
-    const firstName = gift.giver_name?.trim().split(/\s+/)[0];
-    const body =
-      `${firstName ? `${firstName}, thank` : "Thank"} you for your gift of ` +
-      `${gift.currency} ${major} to ${gift.fund ?? "the church"}. ` +
-      `${gift.receipt_code ? `M-Pesa ref ${gift.receipt_code}. ` : ""}` +
-      `God bless you. — The Good News Mission`;
 
     try {
-      await sms.send({ to: gift.giver_phone, title: "Thank you", body });
+      const { ref } = await sms.send({ to: gift.giver_phone, title: "Thank you", body });
+      // The durable trace, written only on acceptance. NULL forever = never sent.
+      await ctx.db.primary.query(
+        `UPDATE transactions SET receipt_sms_at = now(), receipt_sms_ref = $2
+          WHERE transaction_id = $1`,
+        [transactionId, ref.slice(0, 100)],
+      );
     } catch (err) {
       // Rethrow so the outbox retries. Swallowing here would mark the job done
       // and lose the receipt permanently on one transient network blip.

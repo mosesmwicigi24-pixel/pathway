@@ -61,7 +61,7 @@ function main(): void {
   // so dev/tests run offline). SMS now rides Africa's Talking when it is
   // configured; WhatsApp still has no provider, and both record
   // suppressed(no_provider) when unbound rather than a fabricated "delivered".
-  const smsProvider = buildSmsProvider(env);
+  const smsProvider = buildSmsProvider(env, log);
   const announcements = new AnnouncementService(db.primary, {
     email: buildEmailProvider(env, log),
     ...(smsProvider ? { sms: smsProvider } : {}),
