@@ -1,4 +1,4 @@
-// Weekly service schedules (migration 201): the rhythm behind the standing QR.
+// Weekly service schedules (migration 203): the rhythm behind the standing QR.
 //
 // A schedule is a declared rhythm — "Sunday Service, 9 am, every week" — and
 // the materializer turns rhythm into rows: every active schedule gets its

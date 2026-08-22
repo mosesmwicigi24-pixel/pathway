@@ -3024,7 +3024,7 @@ export const ServicesApi = {
     const { data } = await api.get<ServiceQrPayload>(`/services/${serviceId}/qr`);
     return data;
   },
-  /** The congregation's declared weekly rhythm (migration 201). */
+  /** The congregation's declared weekly rhythm (migration 203). */
   async schedules(): Promise<ServiceSchedule[]> {
     const { data } = await api.get<{ data: ServiceSchedule[] }>("/admin/service-schedules");
     return data.data;

@@ -480,7 +480,7 @@ const ghostBtn: React.CSSProperties = {
 
 
 // ---------------------------------------------------------------------------
-// Weekly rhythm (migration 201). A service is a date; a RHYTHM is "every
+// Weekly rhythm (migration 203). A service is a date; a RHYTHM is "every
 // Sunday at nine". Declaring one here means the worker materializes each
 // week's service a week ahead — so the standing QR poster at the door never
 // resolves to a Sunday nobody remembered to create. A hand-created service

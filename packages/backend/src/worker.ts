@@ -155,7 +155,7 @@ function main(): void {
     ),
 
     // Weekly service schedules → concrete services, a week ahead (migration
-    // 201). Daily is enough because the horizon is seven days: any single
+    // 203). Daily is enough because the horizon is seven days: any single
     // missed run is absorbed, and the standing QR poster never points at a
     // Sunday that nobody remembered to create. Idempotent by the slot index.
     cron.schedule(
