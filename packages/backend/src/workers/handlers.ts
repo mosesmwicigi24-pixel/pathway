@@ -15,7 +15,6 @@ import { GamificationService } from "../modules/gamification/service.js";
 import type { OutboxHandler } from "./outbox.js";
 import { CadenceService } from "../modules/attendance/cadence.js";
 import { buildSmsProvider } from "../modules/announcements/africastalking.js";
-import { renderGivingReceiptSms } from "./dispatch.js";
 import { composeReceiptSms } from "./receipt-ai.js";
 import { buildAiProvider } from "../modules/assistant/provider.js";
 
