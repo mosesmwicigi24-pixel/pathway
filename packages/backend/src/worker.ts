@@ -22,6 +22,7 @@ import { GamificationService } from "./modules/gamification/service.js";
 import { AnnouncementService } from "./modules/announcements/service.js";
 import { CalendarService } from "./modules/calendar/service.js";
 import { buildEmailProvider } from "./modules/identity/email.js";
+import { buildSmsProvider } from "./modules/announcements/africastalking.js";
 import { FinancialService } from "./modules/financial/service.js";
 import { buildPaymentGateway } from "./modules/financial/gateway.js";
 import { buildMobileMoneyProviders } from "./modules/financial/providers.js";
@@ -57,9 +58,14 @@ function main(): void {
   // dispatchDue() is idempotent per (recipient, channel), so overlap is safe.
   // EVENTS_ARCHITECTURE §5: the email channel rides the same SMTP EmailProvider
   // as password reset (Brevo in prod; logging fallback when SMTP env is absent,
-  // so dev/tests run offline). SMS/WhatsApp have NO provider bound — deliveries
-  // record suppressed(no_provider), never a fabricated "delivered".
-  const announcements = new AnnouncementService(db.primary, { email: buildEmailProvider(env, log) });
+  // so dev/tests run offline). SMS now rides Africa's Talking when it is
+  // configured; WhatsApp still has no provider, and both record
+  // suppressed(no_provider) when unbound rather than a fabricated "delivered".
+  const smsProvider = buildSmsProvider(env);
+  const announcements = new AnnouncementService(db.primary, {
+    email: buildEmailProvider(env, log),
+    ...(smsProvider ? { sms: smsProvider } : {}),
+  });
   const annTimer = setInterval(
     () => void announcements.dispatchDue().catch((err) => log.error({ err }, "announcement dispatch failed")),
     60_000,

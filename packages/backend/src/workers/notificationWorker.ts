@@ -22,13 +22,14 @@ export class NotificationWorker {
       const rows = await many<{
         notification_id: string;
         user_id: string;
-        channel: "push" | "email";
+        channel: "push" | "email" | "sms";
         template: string;
         payload: Record<string, unknown>;
         email: string | null;
+        phone_number: string | null;
       }>(
         c,
-        `SELECT n.notification_id, n.user_id, n.channel, n.template, n.payload, u.email
+        `SELECT n.notification_id, n.user_id, n.channel, n.template, n.payload, u.email, u.phone_number
            FROM notifications n JOIN users u ON u.user_id = n.user_id
           WHERE n.status = 'scheduled' AND n.scheduled_for <= now()
           ORDER BY n.scheduled_for
@@ -39,16 +40,22 @@ export class NotificationWorker {
 
       for (const r of rows) {
         try {
+          // Each channel is addressed differently: an email address, a phone
+          // number, or the most recent active push token. A member with no
+          // phone on file has no SMS address, and the row below fails honestly
+          // rather than being marked sent to nobody.
           const to =
             r.channel === "email"
               ? r.email
-              : (
+              : r.channel === "sms"
+                ? r.phone_number
+                : (
                   await maybeOne<{ token: string }>(
                     c,
                     `SELECT token FROM push_tokens WHERE user_id = $1 AND is_active ORDER BY updated_at DESC LIMIT 1`,
                     [r.user_id],
                   )
-                )?.token ?? null;
+                  )?.token ?? null;
 
           if (!to) {
             await c.query(`UPDATE notifications SET status = 'failed' WHERE notification_id = $1`, [r.notification_id]);

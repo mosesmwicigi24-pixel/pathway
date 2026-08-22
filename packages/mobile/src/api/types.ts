@@ -526,6 +526,18 @@ export interface NotificationRow {
   read_at: string | null;
 }
 
+/**
+ * The channel toggles. SMS defaults OFF where the other two default ON: push
+ * and email are free and are what installing the app implies consenting to,
+ * while a text costs the church per message and arrives whether or not the app
+ * is open. Nobody is opted into a paid channel by inaction.
+ */
+export interface NotificationPreferences {
+  push_enabled: boolean;
+  email_enabled: boolean;
+  sms_enabled: boolean;
+}
+
 export interface MyAnnouncement {
   announcement_id: string;
   title: string;

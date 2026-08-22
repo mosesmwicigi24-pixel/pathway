@@ -175,9 +175,54 @@ export function ProfileScreen(): ReactElement {
   const [sheet, setSheet] = useState<null | "password" | "twofa" | "disable2fa" | "appLang" | "support" | "privacy">(null);
   const [twoFA, setTwoFA] = useState(false);
   const [appLanguage, setAppLanguage] = useState("English");
+  // Channel toggles, now loaded from and written back to the server.
+  //
+  // These were plain local state: flipping SMS set a boolean that died when the
+  // screen unmounted, so a member who turned texts on was never recorded as
+  // having done so, and never got one. The endpoint has existed all along.
   const [pushOn, setPushOn] = useState(true);
   const [emailOn, setEmailOn] = useState(true);
   const [smsOn, setSmsOn] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void NuruApi.notificationPreferences()
+      .then((p) => {
+        if (!alive) return;
+        setPushOn(p.push_enabled);
+        setEmailOn(p.email_enabled);
+        setSmsOn(p.sms_enabled);
+      })
+      // A failed read leaves the defaults on screen. It must NOT then be saved
+      // back as if it were a choice — which is why saving only ever happens
+      // from a toggle the member actually pressed.
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+  /**
+   * Persist all three together — the endpoint takes the whole set, so sending a
+   * partial one would silently reset the other two.
+   */
+  const saveNotifPrefs = (next: { push?: boolean; email?: boolean; sms?: boolean }): void => {
+    void NuruApi.saveNotificationPreferences({
+      push_enabled: next.push ?? pushOn,
+      email_enabled: next.email ?? emailOn,
+      sms_enabled: next.sms ?? smsOn,
+    }).catch((e) => {
+      // Re-read rather than guess at a rollback: the server is the authority on
+      // what is actually in force, and showing a switch that is not in force is
+      // the failure this whole change exists to fix.
+      void NuruApi.notificationPreferences()
+        .then((p) => {
+          setPushOn(p.push_enabled);
+          setEmailOn(p.email_enabled);
+          setSmsOn(p.sms_enabled);
+        })
+        .catch(() => undefined);
+      Alert.alert("Not saved", errorMessage(e));
+    });
+  };
   const [socials, setSocials] = useState<Record<string, boolean>>({ Google: true, Facebook: false, Instagram: true, X: false, LinkedIn: false, YouTube: false });
   // Approximate-location sharing (opt-in, default OFF; parity gap #4 Phase 2).
   // `locationBusy` blocks re-entrancy while a fix/round-trip is in flight;
@@ -462,6 +507,7 @@ export function ProfileScreen(): ReactElement {
             <PreferenceRow Icon={Bell} title="Push notifications" meta="Devotionals, events, reminders" on={pushOn} onToggle={() => {
               const next = !pushOn;
               setPushOn(next);
+              saveNotifPrefs({ push: next });
               void (async () => {
                 if (next) {
                   await requestNotifPermission();
@@ -472,8 +518,21 @@ export function ProfileScreen(): ReactElement {
                 }
               })();
             }} />
-            <PreferenceRow divider Icon={Mail} title="Email" meta="Weekly summary & receipts" on={emailOn} onToggle={() => setEmailOn(!emailOn)} />
-            <PreferenceRow divider Icon={Phone} title="SMS" meta="Critical updates only" on={smsOn} onToggle={() => setSmsOn(!smsOn)} />
+            <PreferenceRow divider Icon={Mail} title="Email" meta="Weekly summary & receipts" on={emailOn} onToggle={() => {
+              const next = !emailOn;
+              setEmailOn(next);
+              saveNotifPrefs({ email: next });
+            }} />
+            {/* "Critical updates only" was aspirational while nothing could send
+                on this channel. It now governs announcements and nudges — a
+                check-in welcome and a giving receipt acknowledge something the
+                member just did and are sent regardless, as a bank sends a
+                receipt whatever your marketing preferences say. */}
+            <PreferenceRow divider Icon={Phone} title="SMS" meta="Announcements and reminders by text" on={smsOn} onToggle={() => {
+              const next = !smsOn;
+              setSmsOn(next);
+              saveNotifPrefs({ sms: next });
+            }} />
             <ActionRow divider Icon={Bell} tint="#FEF3C7" color="#B45309" title="Notification settings" meta="Manage sounds & toggles in phone settings" onPress={() => void openNotificationSettings()} />
           </Section>
 

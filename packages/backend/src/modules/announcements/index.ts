@@ -7,18 +7,39 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal, requirePlacement } from "../../http/http.js";
 import { buildEmailProvider } from "../identity/email.js";
+import { buildSmsProvider } from "./africastalking.js";
 import { AnnouncementService } from "./service.js";
 
 const IdParam = z.object({ id: z.string().uuid() });
 
-export const announcementsRouter: Router = Router();
+/**
+ * A FRESH Router per registration, deliberately unlike the module-level
+ * singletons most modules export.
+ *
+ * With a singleton, every createApp() re-registers these handlers onto the same
+ * object and the FIRST registration permanently wins — so a second app built
+ * with different env is served by the first app's closures, which still hold
+ * the first env. That is not hypothetical here: /admin/announcements/channels
+ * reports whether an SMS provider is bound, read from ctx.env, and under a
+ * singleton it answered "no provider" for an app that had one.
+ *
+ * Nothing outside this file imported the old exported router.
+ */
 
 export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService): Router {
   // EVENTS_ARCHITECTURE §5: the email channel rides the real SMTP EmailProvider
   // (same infra as password reset; logging fallback when SMTP env is absent so
   // dev/tests run offline). SMS/WhatsApp deliberately have NO provider bound —
   // their deliveries record suppressed(no_provider), never a fabricated send.
-  const service = svc ?? new AnnouncementService(ctx.db.primary, { email: buildEmailProvider(ctx.env, ctx.log) });
+  // SMS is bound when Africa's Talking is configured, and left unbound when it
+  // is not — the service records suppressed(no_provider) in that case, which is
+  // honest, rather than a fake provider swallowing the message.
+  const service =
+    svc ??
+    new AnnouncementService(ctx.db.primary, {
+      email: buildEmailProvider(ctx.env, ctx.log),
+      ...(buildSmsProvider(ctx.env) ? { sms: buildSmsProvider(ctx.env)! } : {}),
+    });
   const auth = authenticate(ctx.env);
   const adminOnly = [auth, requireRole("Admin")] as const;
   // Admin reads/writes are scoped to the caller's congregation (§5 multi-tenant
@@ -31,7 +52,7 @@ export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService
     const p = requirePrincipal(req);
     return p.role === "SuperAdmin" ? undefined : requirePlacement(p);
   };
-  const r = announcementsRouter;
+  const r = Router();
 
   // ---- Admin ----
   r.get("/admin/announcements", ...adminOnly, handler(async (req, res) => {
@@ -44,6 +65,33 @@ export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService
     res.status(201).json(await service.create(requirePrincipal(req).userId, input));
   }));
 
+  // Registered BEFORE /admin/announcements/:id — Express matches in order, so
+  // with :id first the literal path "channels" is read as an announcement id
+  // and every request 400s on an invalid uuid.
+  // Which channels can actually deliver right now.
+  //
+  // The composer used to hardcode `available: false` for SMS and WhatsApp with
+  // the note "awaiting provider" — true when it was written, and it would have
+  // stayed on screen after Africa's Talking was wired, because nothing told the
+  // portal otherwise. Availability is a property of the deployment, so the
+  // deployment reports it.
+  r.get("/admin/announcements/channels", ...adminOnly, handler(async (_req, res) => {
+    const smsBound = Boolean(buildSmsProvider(ctx.env));
+    res.json({
+      channels: [
+        { key: "push", available: true },
+        { key: "email", available: true },
+        { key: "banner", available: true },
+        {
+          key: "sms",
+          available: smsBound,
+          ...(smsBound ? { note: "costs the church per message" } : { note: "awaiting provider" }),
+        },
+        { key: "whatsapp", available: false, note: "awaiting provider" },
+      ],
+    });
+  }));
+
   r.get("/admin/announcements/:id", ...adminOnly, handler(async (req, res) => {
     const { id } = parseBody(IdParam, req.params);
     res.json(await service.get(id, scopeOf(req)));
@@ -53,6 +101,13 @@ export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService
     const { id } = parseBody(IdParam, req.params);
     const input = parseBody(AnnouncementService.Compose, req.body);
     res.json(await service.update(requirePrincipal(req).userId, id, input));
+  }));
+
+  // What pressing send would actually cost, per channel. Read-only, and
+  // deliberately its own call rather than folded into the detail route: an
+  // admin should be able to ask "how many?" without any risk of sending.
+  r.get("/admin/announcements/:id/reach", ...adminOnly, handler(async (req, res) => {
+    res.json(await service.reach(String(req.params.id)));
   }));
 
   r.post("/admin/announcements/:id/send", ...adminOnly, handler(async (req, res) => {

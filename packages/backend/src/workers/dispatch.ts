@@ -9,10 +9,13 @@ import type { Messaging } from "firebase-admin/messaging";
 import type { Logger } from "pino";
 import type { Env } from "../config/env.js";
 import { buildEmailProvider, type EmailProvider } from "../modules/identity/email.js";
+import { buildSmsProvider } from "../modules/announcements/africastalking.js";
+import type { MessageProvider } from "../modules/announcements/providers.js";
+import { fitSms, firstNameOf } from "../lib/sms-text.js";
 
 export interface DispatchMessage {
-  channel: "push" | "email";
-  to: string; // device token or email address
+  channel: "push" | "email" | "sms";
+  to: string; // device token, email address, or E.164 phone number
   template: string;
   payload: Record<string, unknown>;
 }
@@ -446,11 +449,141 @@ export function buildDispatchProvider(env: Env, log?: Logger): DispatchProvider 
     log,
   );
 
-  // Routes by channel — push and email are fully independent providers below
-  // this line; neither ever silently substitutes for the other.
+  // SMS costs the church per message and reaches a member whether or not they
+  // have the app, so an unbound provider must FAIL the row rather than log and
+  // move on — the same rule the email path already follows, and for the same
+  // reason: a notification marked `sent` that nobody received is worse than one
+  // marked `failed`.
+  const smsProvider = new SmsDispatchProvider(buildSmsProvider(env), log);
+  if (buildSmsProvider(env)) log?.info("notification dispatch: Africa's Talking SMS provider active");
+
+  // Routes by channel — the three are fully independent below this line; none
+  // ever silently substitutes for another.
   return {
-    send: (msg) => (msg.channel === "email" ? emailProvider.send(msg) : pushProvider.send(msg)),
+    send: (msg) =>
+      msg.channel === "email"
+        ? emailProvider.send(msg)
+        : msg.channel === "sms"
+          ? smsProvider.send(msg)
+          : pushProvider.send(msg),
   };
+}
+
+/**
+ * SMS delivery for the notification channel.
+ *
+ * Thin on purpose: the copy lives in SMS_TEMPLATE_COPY beside the push and
+ * email renderers, and the sending is the same MessageProvider announcements
+ * use, so there is one Africa's Talking client in the process rather than two.
+ */
+export class SmsDispatchProvider implements DispatchProvider {
+  constructor(
+    private readonly provider: MessageProvider | undefined,
+    private readonly log?: Logger | undefined,
+  ) {}
+
+  async send(msg: DispatchMessage): Promise<void> {
+    if (!this.provider) {
+      // THROW, do not log-and-return. The worker marks a throwing row `failed`,
+      // which is the truth; swallowing it would mark it `sent` and the member
+      // would be recorded as having been told something they never received.
+      throw new Error(
+        `SMS dispatch: no provider configured (set AFRICASTALKING_API_KEY and ` +
+          `AFRICASTALKING_USERNAME) — refusing to report template "${msg.template}" as sent`,
+      );
+    }
+    const body = smsCopy(msg, this.log);
+    await this.provider.send({ to: msg.to, title: "", body });
+  }
+}
+
+/**
+ * Template → the text a member actually receives.
+ *
+ * One entry per template that may be scheduled on the SMS channel. An unknown
+ * template is NOT sent: a text costs money and lands on someone's phone, so a
+ * generic fallback ("giving receipt") would be worse than nothing. Push can
+ * afford a fallback; this cannot.
+ */
+const SMS_TEMPLATE_COPY: Record<string, (p: Record<string, unknown>) => string> = {
+  giving_receipt: (p) => {
+    const amount = num(p.amount_minor);
+    const money = amount === undefined ? "" : `${str(p.currency) ?? "KES"} ${(amount / 100).toFixed(2)}`;
+    const fund = str(p.fund);
+    const code = str(p.receipt_code);
+    const who = firstNameOf(str(p.member_name));
+    return (
+      `${who ? `${who}, thank` : "Thank"} you for your gift${money ? ` of ${money}` : ""}` +
+      `${fund ? ` to ${fund}` : ""}. ${code ? `M-Pesa ref ${code}. ` : ""}` +
+      // A hyphen, NOT an em dash. A single character outside GSM-7 demotes the
+      // WHOLE message to UCS-2, whose one-segment budget is 70 rather than 160
+      // — so the em dash that used to sit here billed every receipt as two
+      // texts instead of one. Nothing errored; only the invoice knew.
+      `God bless you. - The Good News Mission`
+    );
+  },
+  check_in_welcome: (p) => renderCheckInWelcome(p),
+};
+
+/** One segment. The owner asked for 140; GSM-7 allows 160, so this sits inside it. */
+export const CHECK_IN_SMS_BUDGET = 140;
+
+/**
+ * Welcome someone who has just checked in at a service.
+ *
+ * Two versions, and which one you get depends on whether the app is already on
+ * your phone. Telling someone standing there holding the app to go and download
+ * the app reads as a form letter, so it is not mentioned at all in that case;
+ * someone who checked in from the web page has not got it, and this is the one
+ * moment they have a concrete reason to want it.
+ *
+ * Length is a ladder, not a truncation. Kenyan names and congregation names are
+ * each long enough to blow a 140-character budget — measured, not assumed: a
+ * "Nyambura-Wangeci" at a "Nuru Christian Fellowship Church Nairobi" renders at
+ * 148 once the download link is on the end. So the copy drops the congregation
+ * name, then the greeting name, then the link, each rung still a sentence a
+ * person would write. Truncating the overflow instead would text somebody half
+ * their own name. The last rung has no variable parts at all, so "it fits" is a
+ * property of the ladder rather than a hope about the inputs.
+ */
+export function renderCheckInWelcome(p: Record<string, unknown>): string {
+  const name = firstNameOf(str(p.member_name));
+  const church = str(p.congregation)?.trim();
+  const hasApp = p.has_app === true;
+  const url = str(p.app_url)?.trim();
+
+  const withApp = [
+    name && church ? `Karibu ${name}! Great to see you at ${church} today. God bless you.` : "",
+    name ? `Karibu ${name}! Great to see you at church today. God bless you.` : "",
+    `Karibu! Great to see you at church today. God bless you.`,
+  ].filter(Boolean);
+
+  if (hasApp || !url) return fitSms(withApp, CHECK_IN_SMS_BUDGET);
+
+  return fitSms(
+    [
+      name && church ? `Karibu ${name}! Great to see you at ${church} today. Get the Nuru Pathway app: ${url}` : "",
+      name ? `Karibu ${name}! Great to see you today. Get the Nuru Pathway app: ${url}` : "",
+      `Karibu! Great to see you today. Get the Nuru Pathway app: ${url}`,
+      // Floor: no link at all. Reached only if APP_PUBLIC_URL is long enough to
+      // break even the barest invitation, in which case a welcome without a
+      // link beats an over-length message billed as two.
+      ...withApp,
+    ].filter(Boolean),
+    CHECK_IN_SMS_BUDGET,
+  );
+}
+
+function smsCopy(msg: DispatchMessage, log?: Logger): string {
+  const render = SMS_TEMPLATE_COPY[msg.template];
+  if (!render) {
+    log?.error(
+      { template: msg.template },
+      "sms dispatch: no copy for template — refusing to send rather than texting a placeholder",
+    );
+    throw new Error(`SMS dispatch: no copy for template "${msg.template}"`);
+  }
+  return render(msg.payload);
 }
 
 // Exported for tests: unit-test copy resolution and email rendering directly

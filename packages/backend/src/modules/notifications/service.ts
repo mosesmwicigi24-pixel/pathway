@@ -9,6 +9,7 @@ import { many, maybeOne, one, audit } from "../../db/db.js";
 export interface NotifPrefs {
   push_enabled: boolean;
   email_enabled: boolean;
+  sms_enabled: boolean;
   quiet_from: string; // 'HH:MM[:SS]'
   quiet_to: string;
   max_daily: number;
@@ -17,6 +18,12 @@ export interface NotifPrefs {
 const DEFAULT_PREFS: NotifPrefs = {
   push_enabled: true,
   email_enabled: true,
+  // OFF, unlike the other two. Push and email are free and expected — a member
+  // installed the app, so a push is what they signed up for. A text is neither:
+  // it costs the church per message and arrives whether or not the app is
+  // installed. A member with no preferences row must not be silently opted in.
+  // Mirrors the column default from migration 90.
+  sms_enabled: false,
   quiet_from: "21:00",
   quiet_to: "07:00",
   max_daily: 3,
@@ -64,7 +71,13 @@ export class NotificationService {
   private async prefs(userId: string): Promise<NotifPrefs> {
     const row = await maybeOne<NotifPrefs>(
       this.pool,
-      `SELECT push_enabled, email_enabled, quiet_from::text AS quiet_from, quiet_to::text AS quiet_to, max_daily
+      // sms_enabled has to be SELECTed, not merely declared on the type. Left
+      // out, it arrives undefined for every member who HAS a preferences row —
+      // falsy — so their SMS is suppressed whatever the app's toggle says,
+      // while a member with NO row falls back to DEFAULT_PREFS. Two members,
+      // the same setting, opposite outcomes, and no error anywhere.
+      `SELECT push_enabled, email_enabled, sms_enabled,
+              quiet_from::text AS quiet_from, quiet_to::text AS quiet_to, max_daily
          FROM notification_preferences WHERE user_id = $1`,
       [userId],
     );
@@ -78,7 +91,7 @@ export class NotificationService {
    */
   async schedule(input: {
     userId: string;
-    channel: "push" | "email";
+    channel: "push" | "email" | "sms";
     template: string;
     payload?: Record<string, unknown>;
     timezone?: string;
@@ -87,7 +100,14 @@ export class NotificationService {
     at?: number;
   }): Promise<{ notification_id: string; status: string; scheduled_for: string }> {
     const prefs = await this.prefs(input.userId);
-    const channelEnabled = input.channel === "push" ? prefs.push_enabled : prefs.email_enabled;
+    // A ternary chain silently lumped any non-push channel in with email; with
+    // three channels that would have made every SMS obey the EMAIL toggle.
+    const channelEnabled =
+      input.channel === "push"
+        ? prefs.push_enabled
+        : input.channel === "email"
+          ? prefs.email_enabled
+          : prefs.sms_enabled;
 
     // Count "today" by the SAME clock the scheduler uses (injectable in tests) —
     // mixing the DB's now() with this.now() makes the cap silently miscount.

@@ -275,6 +275,19 @@ export class ChurchAttendanceService {
       await enqueueOutbox(c, "gamification.evaluate", { user_id: principal.userId });
       await recordActivityEvent(c, principal.userId, "check_in");
 
+      // Say hello, by text, to the number on the check-in.
+      //
+      // Enqueued here and NOT in the duplicate branch above: a second scan of
+      // the same code is already answered with "you're already in", and a
+      // second text for it would be a charge for a non-event. Outbox rather
+      // than an inline send, so a provider outage cannot roll back an
+      // attendance that genuinely happened.
+      await enqueueOutbox(c, "attendance.welcome", {
+        user_id: principal.userId,
+        service_id: serviceId,
+        congregation_id: principal.congregationId,
+      });
+
       // Attending is the answer to being chased. Any open follow-up run for this
       // member closes here — a "we have missed you" sequence that keeps firing
       // after someone walks back through the door is worse than no sequence, and

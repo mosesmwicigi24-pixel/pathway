@@ -1822,6 +1822,23 @@ export const AnnouncementsApi = {
     api.get<AnnouncementRow & { stats: AnnouncementStats[] }>(`/admin/announcements/${id}`).then((r) => r.data),
   send: (id: string) =>
     api.post<{ recipients: number; deliveries: number }>(`/admin/announcements/${id}/send`).then((r) => r.data),
+  /** Which channels can actually deliver on THIS deployment. The composer used
+   *  to hardcode "awaiting provider" for SMS, which would have stayed on screen
+   *  after a provider was wired. */
+  channels: () =>
+    api
+      .get<{ channels: Array<{ key: string; available: boolean; note?: string }> }>(
+        "/admin/announcements/channels",
+      )
+      .then((r) => r.data.channels),
+  /** How many people this would actually reach, per channel — read-only, and
+   *  the number an admin sees before spending the church's airtime. */
+  reach: (id: string) =>
+    api
+      .get<{ total: number; sms: number; email: number; sms_unreachable: number }>(
+        `/admin/announcements/${id}/reach`,
+      )
+      .then((r) => r.data),
   cancel: (id: string) => api.post(`/admin/announcements/${id}/cancel`).then((r) => r.data),
   update: (id: string, body: Record<string, unknown>) =>
     api.put<AnnouncementRow>(`/admin/announcements/${id}`, body).then((r) => r.data),
