@@ -359,6 +359,7 @@ export class FinancialService {
     amount_minor: number;
     currency: string;
     fund: string | null;
+    fund_sw: string | null;
     receipt_code: string | null;
     settled_at: string | null;
   } | null> {
@@ -367,11 +368,17 @@ export class FinancialService {
       amount_minor: string;
       currency: string;
       fund: string | null;
+      fund_sw: string | null;
       receipt_code: string | null;
       settled_at: string | null;
     }>(
       this.pool,
-      `SELECT t.status, t.amount_minor, t.currency, f.name AS fund, t.receipt_code, t.settled_at
+      // Both names, because the thank-you screen names the fund back to the
+      // giver and /sw must not thank somebody "kwa Tithe". Which one is shown
+      // is the website's decision — it knows the locale, this does not.
+      `SELECT t.status, t.amount_minor, t.currency,
+              f.name AS fund, f.name_sw AS fund_sw,
+              t.receipt_code, t.settled_at
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
         WHERE t.transaction_id = $1 AND t.source = 'website'`,
       [transactionId],
@@ -382,14 +389,25 @@ export class FinancialService {
     return { ...row, amount_minor: Number(row.amount_minor) };
   }
 
-  /** Active funds a visitor may give to. Public — no auth, so it carries the
-   *  code and the display name and nothing else about the church's finances. */
-  async publicFunds(): Promise<{ code: string; name: string }[]> {
+  /**
+   * Active funds a visitor may give to. Public — no auth, so it carries the
+   * code and the display names and nothing else about the church's finances.
+   *
+   * `name_sw` is null for any fund the church has not named in Swahili; the
+   * caller falls back to `name`. Ordered by the English name so the list does
+   * not reshuffle between the two locales — a giver who switches language
+   * should find the funds where they left them.
+   */
+  async publicFunds(): Promise<{ code: string; name: string; name_sw: string | null }[]> {
     const rows = await many<Record<string, unknown>>(
       this.pool,
-      `SELECT code, name FROM funds WHERE is_active ORDER BY name`,
+      `SELECT code, name, name_sw FROM funds WHERE is_active ORDER BY name`,
     );
-    return rows.map((r) => ({ code: String(r.code), name: String(r.name) }));
+    return rows.map((r) => ({
+      code: String(r.code),
+      name: String(r.name),
+      name_sw: r.name_sw == null ? null : String(r.name_sw),
+    }));
   }
 
   /** Capture a PayPal order the member approved; settle the ledger on COMPLETED

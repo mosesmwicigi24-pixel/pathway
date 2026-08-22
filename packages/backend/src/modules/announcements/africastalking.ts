@@ -15,11 +15,24 @@
 // airtime, which is why nothing here retries on its own — the outbox does that,
 // with its own attempt cap, and a provider that also retried would multiply the
 // two.
+import type { Logger } from "pino";
 import type { Env } from "../../config/env.js";
 import type { MessageProvider, OutboundMessage } from "./providers.js";
 
-/** Africa's Talking status codes that mean "we have it". 101 sent, 102 queued. */
-const ACCEPTED = new Set([101, 102]);
+/**
+ * Africa's Talking status codes that mean "we have it": 100 Processed,
+ * 101 Sent, 102 Queued — everything else in their table (401 RiskHold,
+ * 402 InvalidSenderId, 405 InsufficientBalance, ...) is a failure.
+ *
+ * 100 was missing from this set on 2026-08-22, and the error it produced reads
+ * like a paradox worth remembering: "rejected the message: Success (code 100)".
+ * The very first receipt Africa's Talking genuinely accepted was thrown as a
+ * failure, so the outbox dutifully retried a DELIVERED text up to its attempt
+ * cap — the giver was thanked in quintuplicate, at five times the cost. A wrong
+ * entry here fails safe in NEITHER direction, which is why the tests pin all
+ * three success codes individually.
+ */
+const ACCEPTED = new Set([100, 101, 102]);
 
 interface ATRecipient {
   statusCode?: number;
@@ -43,6 +56,7 @@ export class AfricasTalkingSmsProvider implements MessageProvider {
       baseUrl: string;
       timeoutMs?: number | undefined;
     },
+    private readonly log?: Logger | undefined,
   ) {}
 
   async send(msg: OutboundMessage): Promise<{ ref: string }> {
@@ -87,6 +101,28 @@ export class AfricasTalkingSmsProvider implements MessageProvider {
           `${first?.statusCode ? ` (code ${first.statusCode})` : ""}`,
       );
     }
+
+    // Log the outcome even though it succeeded.
+    //
+    // 101 and 102 are BOTH accepted, and they do not mean the same thing: 101
+    // is sent, 102 is queued — and a queue can sit forever when the sender id
+    // is not approved or the account is under review. A receipt that Africa's
+    // Talking accepted and never delivered used to leave no trace at all here,
+    // so "the church says it texted me and I got nothing" was unanswerable.
+    // `cost` is the other tell: a message that will never be delivered is
+    // usually accepted at a cost of 0.
+    this.log?.info(
+      {
+        at_status: first.status,
+        at_status_code: first.statusCode,
+        at_message_id: first.messageId,
+        at_cost: first.cost,
+        sender_id: this.cfg.senderId ?? "(shared pool)",
+      },
+      first.statusCode === 102
+        ? "sms QUEUED by Africa's Talking (not yet sent) — check the sender id is approved if it never arrives"
+        : "sms accepted by Africa's Talking",
+    );
     return { ref: first.messageId ?? `at-${first.statusCode}` };
   }
 }
@@ -102,19 +138,34 @@ export class AfricasTalkingSmsProvider implements MessageProvider {
  * takes its providers by constructor injection, so bulk sending stays a
  * separate, deliberate decision. Every message costs the church money.
  */
-export function buildSmsProvider(env: Env): MessageProvider | undefined {
+export function buildSmsProvider(env: Env, log?: Logger): MessageProvider | undefined {
   const apiKey = env.AFRICASTALKING_API_KEY?.trim();
   const username = env.AFRICASTALKING_USERNAME?.trim();
   if (!apiKey || !username) return undefined;
-  return new AfricasTalkingSmsProvider({
-    apiKey,
-    username,
-    senderId: env.AFRICASTALKING_SENDER_ID?.trim() || undefined,
-    // Sandbox is a different host, not a flag. Pointing production traffic at
-    // it silently delivers nothing to anybody.
-    baseUrl:
-      env.AFRICASTALKING_ENV === "production"
-        ? "https://api.africastalking.com"
-        : "https://api.sandbox.africastalking.com",
-  });
+  if (env.AFRICASTALKING_ENV !== "production") {
+    // The sandbox is not a degraded mode — it is a different host that ACCEPTS
+    // every message with a happy 101 and delivers to nobody outside their
+    // simulator. Bound here by accident, every receipt reports sent and no
+    // phone ever rings, which is indistinguishable from working in every place
+    // but the giver's pocket. Say so at bind time, once, where logs are read.
+    log?.warn(
+      { at_env: env.AFRICASTALKING_ENV ?? "(unset)" },
+      "Africa's Talking bound to the SANDBOX host — messages will be accepted and delivered to NOBODY. " +
+        "Set AFRICASTALKING_ENV=production in the api AND worker containers if this is production.",
+    );
+  }
+  return new AfricasTalkingSmsProvider(
+    {
+      apiKey,
+      username,
+      senderId: env.AFRICASTALKING_SENDER_ID?.trim() || undefined,
+      // Sandbox is a different host, not a flag. Pointing production traffic at
+      // it silently delivers nothing to anybody.
+      baseUrl:
+        env.AFRICASTALKING_ENV === "production"
+          ? "https://api.africastalking.com"
+          : "https://api.sandbox.africastalking.com",
+    },
+    log,
+  );
 }

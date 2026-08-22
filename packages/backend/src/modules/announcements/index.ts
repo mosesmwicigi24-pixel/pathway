@@ -34,11 +34,14 @@ export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService
   // SMS is bound when Africa's Talking is configured, and left unbound when it
   // is not — the service records suppressed(no_provider) in that case, which is
   // honest, rather than a fake provider swallowing the message.
+  // Built once and reused: constructing it twice made two HTTP clients and two
+  // sets of credentials for one channel.
+  const smsProvider = buildSmsProvider(ctx.env, ctx.log);
   const service =
     svc ??
     new AnnouncementService(ctx.db.primary, {
       email: buildEmailProvider(ctx.env, ctx.log),
-      ...(buildSmsProvider(ctx.env) ? { sms: buildSmsProvider(ctx.env)! } : {}),
+      ...(smsProvider ? { sms: smsProvider } : {}),
     });
   const auth = authenticate(ctx.env);
   const adminOnly = [auth, requireRole("Admin")] as const;
@@ -76,7 +79,7 @@ export function registerAnnouncements(ctx: AppContext, svc?: AnnouncementService
   // portal otherwise. Availability is a property of the deployment, so the
   // deployment reports it.
   r.get("/admin/announcements/channels", ...adminOnly, handler(async (_req, res) => {
-    const smsBound = Boolean(buildSmsProvider(ctx.env));
+    const smsBound = Boolean(smsProvider);
     res.json({
       channels: [
         { key: "push", available: true },

@@ -382,9 +382,13 @@ describe("website giving — the public funds list", () => {
   });
 
   it("carries fund names but nothing about the church's money", async () => {
+    // Exact, not a subset: this endpoint is public and unauthenticated, so the
+    // test has to fail when a column is added rather than quietly widen.
+    // name_sw joined the list deliberately in migration 205 — a Swahili giver
+    // was choosing "Tithe" from an otherwise Swahili form.
     const res = await fresh().get("/v1/giving/funds");
     const keys = Object.keys(res.body.funds[0]).sort();
-    expect(keys).toEqual(["code", "name"]);
+    expect(keys).toEqual(["code", "name", "name_sw"]);
   });
 });
 
@@ -464,8 +468,10 @@ describe("website giving — did it land?", () => {
     const app = fresh();
     const made = await post(app, gift({ giver_name: "Amina Wanjiru" }));
     const res = await status(app, made.body.transaction_id);
+    // fund_sw is the fund's name, not the giver's data — it lets /sw thank
+    // somebody in the language they are reading (migration 205).
     expect(Object.keys(res.body).sort()).toEqual(
-      ["amount_minor", "currency", "fund", "receipt_code", "settled_at", "status"].sort(),
+      ["amount_minor", "currency", "fund", "fund_sw", "receipt_code", "settled_at", "status"].sort(),
     );
   });
 

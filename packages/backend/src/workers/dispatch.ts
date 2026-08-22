@@ -454,8 +454,9 @@ export function buildDispatchProvider(env: Env, log?: Logger): DispatchProvider 
   // move on — the same rule the email path already follows, and for the same
   // reason: a notification marked `sent` that nobody received is worse than one
   // marked `failed`.
-  const smsProvider = new SmsDispatchProvider(buildSmsProvider(env), log);
-  if (buildSmsProvider(env)) log?.info("notification dispatch: Africa's Talking SMS provider active");
+  const sms = buildSmsProvider(env, log);
+  const smsProvider = new SmsDispatchProvider(sms, log);
+  if (sms) log?.info("notification dispatch: Africa's Talking SMS provider active");
 
   // Routes by channel — the three are fully independent below this line; none
   // ever silently substitutes for another.
@@ -505,23 +506,30 @@ export class SmsDispatchProvider implements DispatchProvider {
  * generic fallback ("giving receipt") would be worse than nothing. Push can
  * afford a fallback; this cannot.
  */
+/**
+ * The one and only rendering of the giving-receipt text.
+ *
+ * Exported because the memberless website receipt used to build its own copy of
+ * this message by hand — and that copy still carried the em dash after this one
+ * was fixed, so every website receipt kept billing as two segments. A message
+ * that exists twice gets fixed once.
+ */
+export function renderGivingReceiptSms(p: Record<string, unknown>): string {
+  const amount = num(p.amount_minor);
+  const money = amount === undefined ? "" : `${str(p.currency) ?? "KES"} ${(amount / 100).toFixed(2)}`;
+  const fund = str(p.fund);
+  const code = str(p.receipt_code);
+  const who = firstNameOf(str(p.member_name));
+  return (
+    `${who ? `${who}, thank` : "Thank"} you for your gift${money ? ` of ${money}` : ""}` +
+    `${fund ? ` to ${fund}` : ""}. ${code ? `M-Pesa ref ${code}. ` : ""}` +
+    // A hyphen, NOT an em dash — one non-GSM-7 character bills the text double.
+    `God bless you. - The Good News Mission`
+  );
+}
+
 const SMS_TEMPLATE_COPY: Record<string, (p: Record<string, unknown>) => string> = {
-  giving_receipt: (p) => {
-    const amount = num(p.amount_minor);
-    const money = amount === undefined ? "" : `${str(p.currency) ?? "KES"} ${(amount / 100).toFixed(2)}`;
-    const fund = str(p.fund);
-    const code = str(p.receipt_code);
-    const who = firstNameOf(str(p.member_name));
-    return (
-      `${who ? `${who}, thank` : "Thank"} you for your gift${money ? ` of ${money}` : ""}` +
-      `${fund ? ` to ${fund}` : ""}. ${code ? `M-Pesa ref ${code}. ` : ""}` +
-      // A hyphen, NOT an em dash. A single character outside GSM-7 demotes the
-      // WHOLE message to UCS-2, whose one-segment budget is 70 rather than 160
-      // — so the em dash that used to sit here billed every receipt as two
-      // texts instead of one. Nothing errored; only the invoice knew.
-      `God bless you. - The Good News Mission`
-    );
-  },
+  giving_receipt: (p) => renderGivingReceiptSms(p),
   check_in_welcome: (p) => renderCheckInWelcome(p),
 };
 

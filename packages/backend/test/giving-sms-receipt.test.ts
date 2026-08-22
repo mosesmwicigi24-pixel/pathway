@@ -21,6 +21,7 @@ import { buildOutboxHandlers } from "../src/workers/handlers.js";
 import { FakeMessageProvider } from "../src/modules/announcements/providers.js";
 import { AfricasTalkingSmsProvider, buildSmsProvider } from "../src/modules/announcements/africastalking.js";
 import type { Env } from "../src/config/env.js";
+import { isGsm7, smsSegments } from "../src/lib/sms-text.js";
 
 const log = pino({ level: "silent" });
 
@@ -156,8 +157,8 @@ describe("Africa's Talking — a 200 is not success", () => {
   const provider = () =>
     new AfricasTalkingSmsProvider({ apiKey: "k", username: "u", senderId: "NURU", baseUrl: "https://at.test" });
 
-  it("accepts statusCode 101 (sent) and 102 (queued)", async () => {
-    for (const code of [101, 102]) {
+  it("accepts statusCode 100 (processed), 101 (sent) and 102 (queued)", async () => {
+    for (const code of [100, 101, 102]) {
       vi.stubGlobal("fetch", async () =>
         new Response(JSON.stringify({ SMSMessageData: { Recipients: [{ statusCode: code, messageId: `ATXid_${code}` }] } }), {
           status: 200,
@@ -241,6 +242,66 @@ describe("Africa's Talking — binding", () => {
     } as Env) as AfricasTalkingSmsProvider;
     expect(JSON.stringify(p)).toContain("https://api.africastalking.com");
     expect(JSON.stringify(p)).not.toContain("sandbox");
+  });
+});
+
+describe("the trace and the alphabet — what the missing 21:54 receipt taught", () => {
+  it("every website receipt is GSM-7 and one segment — including THIS path", async () => {
+    // The template was fixed and this handler still carried its own hand-built
+    // copy with the em dash, so the fix shipped for members and not for the
+    // only receipts actually being sent. Asserting on the body THIS handler
+    // produces is what would have caught it.
+    const sms = new FakeMessageProvider("sms");
+    const id = await websiteGift({});
+    await buildOutboxHandlers(ctxWith(sms)).get("giving.receipt")!({ transaction_id: id, user_id: null });
+    const body = sms.sent[0]!.body;
+    expect(isGsm7(body), `not GSM-7: ${body}`).toBe(true);
+    expect(smsSegments(body)).toBe(1);
+    expect(body).toContain("- The Good News Mission");
+    expect(body).not.toContain("\u2014");
+  });
+
+  it("stamps receipt_sms_at and the provider ref on the transaction", async () => {
+    // `done` in the outbox is reachable four different ways; the transaction
+    // row is the record that a giver was actually thanked, and the ref is what
+    // a support ticket to Africa's Talking quotes.
+    const sms = new FakeMessageProvider("sms");
+    const id = await websiteGift({});
+    await buildOutboxHandlers(ctxWith(sms)).get("giving.receipt")!({ transaction_id: id, user_id: null });
+    const { rows } = await testPool().query(
+      `SELECT receipt_sms_at, receipt_sms_ref FROM transactions WHERE transaction_id = $1`,
+      [id],
+    );
+    expect(rows[0].receipt_sms_at).not.toBeNull();
+    expect(rows[0].receipt_sms_ref).toBe("sms-fake-1");
+  });
+
+  it("a redelivered outbox job does NOT text the giver twice", async () => {
+    // The outbox is at-least-once; before migration 206 a redelivery meant a
+    // duplicate text, documented at the time as an accepted cost. It no longer
+    // needs accepting.
+    const sms = new FakeMessageProvider("sms");
+    const h = buildOutboxHandlers(ctxWith(sms)).get("giving.receipt")!;
+    const id = await websiteGift({});
+    await h({ transaction_id: id, user_id: null });
+    await h({ transaction_id: id, user_id: null });
+    expect(sms.sent).toHaveLength(1);
+  });
+
+  it("leaves the trace NULL when the provider rejects — never a false 'thanked'", async () => {
+    const reject: FakeMessageProvider = new FakeMessageProvider("sms");
+    reject.send = async () => {
+      throw new Error("Africa's Talking rejected the message: InvalidSenderId (code 403)");
+    };
+    const id = await websiteGift({});
+    await expect(
+      buildOutboxHandlers(ctxWith(reject)).get("giving.receipt")!({ transaction_id: id, user_id: null }),
+    ).rejects.toThrow(/rejected/);
+    const { rows } = await testPool().query(
+      `SELECT receipt_sms_at FROM transactions WHERE transaction_id = $1`,
+      [id],
+    );
+    expect(rows[0].receipt_sms_at).toBeNull();
   });
 });
 
