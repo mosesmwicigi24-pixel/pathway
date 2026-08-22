@@ -349,11 +349,9 @@ export function JoinService(): ReactElement {
             <p style={{ ...serif, color: GOLD_DEEP, fontSize: 18, fontStyle: "italic", margin: "0 0 18px" }}>
               Where everyone is someone!
             </p>
-            <p style={{ color: INK, fontSize: 15.5, lineHeight: 1.7, margin: "0 auto", maxWidth: 400, opacity: 0.9 }}>
-              <b>{congregation}</b> is more than a church — it&apos;s a family of believers who have
-              come together to share the love of God. Our heart is to help you become the person
-              God made you to be. No matter where you are in your journey of faith, you&apos;re
-              invited to discover your purpose and live it out with us.
+            <p style={{ color: INK, fontSize: 15.5, lineHeight: 1.7, margin: "0 auto", maxWidth: 380, opacity: 0.9 }}>
+              More than a church — a family sharing the love of God. Wherever you are in your
+              journey of faith, come discover your purpose and live it out with us.
             </p>
             {resolution.next && (
               <p style={{ color: MUTED, fontSize: 14.5, lineHeight: 1.6, margin: "18px 0 0" }}>
