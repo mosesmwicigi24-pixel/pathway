@@ -24,7 +24,11 @@
 import type { Logger } from "pino";
 import type { AiProvider } from "../modules/assistant/provider.js";
 import { gsm7Length, firstNameOf } from "../lib/sms-text.js";
-import { renderGivingReceiptSms } from "./dispatch.js";
+import { renderGivingReceiptSms, RECEIPT_SIGNATURE } from "./dispatch.js";
+
+// Re-exported so callers and tests keep one import site for the composer's
+// whole contract; the constant itself lives beside the template in dispatch.ts.
+export { RECEIPT_SIGNATURE };
 
 /** Everything the message may state, plus everything it may draw on. */
 export interface ReceiptFacts {
@@ -42,7 +46,6 @@ export interface ReceiptFacts {
   seed: number;
 }
 
-export const RECEIPT_SIGNATURE = "- The Good News Mission";
 /** One GSM-7 segment. The validator is the contract; the prompt just aims low. */
 const MAX_SEPTETS = 160;
 const AI_TIMEOUT_MS = 6_000;

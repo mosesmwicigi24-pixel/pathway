@@ -22,7 +22,7 @@ import { FakeMessageProvider } from "../src/modules/announcements/providers.js";
 import { AfricasTalkingSmsProvider, buildSmsProvider } from "../src/modules/announcements/africastalking.js";
 import type { Env } from "../src/config/env.js";
 import { isGsm7, smsSegments } from "../src/lib/sms-text.js";
-import { SmsDispatchProvider } from "../src/workers/dispatch.js";
+import { SmsDispatchProvider, RECEIPT_SIGNATURE } from "../src/workers/dispatch.js";
 import type { AiProvider } from "../src/modules/assistant/provider.js";
 
 const log = pino({ level: "silent" });
@@ -249,7 +249,7 @@ describe("Africa's Talking — binding", () => {
 
 describe("Claude writes the thank-you — for the website giver and the app giver alike", () => {
   const DRAFT = (name: string, amount: string, fund: string, ref: string) =>
-    `${name}, asante for your gift! ${amount} to ${fund}. M-Pesa ref ${ref}. Mungu akubariki. - The Good News Mission`;
+    `${name}, asante for your gift! ${amount} to ${fund}. M-Pesa ref ${ref}. Mungu akubariki. ${RECEIPT_SIGNATURE}`;
 
   const aiStub = (fn: (input: { system: string; messages: { text: string }[] }) => string): AiProvider => ({
     name: "stub",
@@ -277,7 +277,7 @@ describe("Claude writes the thank-you — for the website giver and the app give
       user_id: null,
     });
     expect(sms.sent).toHaveLength(1);
-    expect(sms.sent[0]!.body).toContain("- The Good News Mission");
+    expect(sms.sent[0]!.body).toContain(RECEIPT_SIGNATURE);
     expect(isGsm7(sms.sent[0]!.body)).toBe(true);
   });
 
@@ -354,7 +354,7 @@ describe("the trace and the alphabet — what the missing 21:54 receipt taught",
     const body = sms.sent[0]!.body;
     expect(isGsm7(body), `not GSM-7: ${body}`).toBe(true);
     expect(smsSegments(body)).toBe(1);
-    expect(body).toContain("- The Good News Mission");
+    expect(body).toContain(RECEIPT_SIGNATURE);
     expect(body).not.toContain("\u2014");
   });
 
