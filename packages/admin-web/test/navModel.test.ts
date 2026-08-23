@@ -46,9 +46,12 @@ describe("portal nav model", () => {
     expect(titleFor("/uploads-sessions")).toBe("Uploads & Sessions");
   });
 
-  it("exposes Communication (Chat) and Settings (Users, Roles, Congregations, Countries, Languages)", () => {
+  it("exposes Communication (Chat, Broadcast, SMS Center) and Settings (Users, Roles, Congregations, Countries, Languages)", () => {
     const comms = navGroups.find((g) => g.label === "Communication");
-    expect(comms?.items.map((i) => i.path)).toEqual(["/chat", "/broadcast"]);
+    // SMS Center joined on 2026-08-23: bulk campaigns with per-person delivery
+    // truth. Coarse Admin+ gate server-side, so no permission key here.
+    expect(comms?.items.map((i) => i.path)).toEqual(["/chat", "/broadcast", "/sms"]);
+    expect(titleFor("/sms")).toBe("SMS Center");
     const settings = navGroups.find((g) => g.label === "Settings");
     expect(settings?.items.map((i) => i.path)).toEqual(["/users", "/roles", "/congregations", "/countries", "/languages"]);
   });
