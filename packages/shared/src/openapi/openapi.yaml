@@ -4676,6 +4676,7 @@ paths:
       summary: Admin. Remove one person from a group.
       parameters:
         - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/UserIdPath"
       responses:
         "200": { description: Removed }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
