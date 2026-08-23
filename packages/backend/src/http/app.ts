@@ -36,6 +36,7 @@ import { registerAdminOps } from "../modules/adminops/index.js";
 import { registerOnboarding } from "../modules/onboarding/index.js";
 import { registerGamification } from "../modules/gamification/index.js";
 import { registerAnnouncements } from "../modules/announcements/index.js";
+import { registerSms } from "../modules/sms/index.js";
 import { registerGrowth } from "../modules/growth/index.js";
 import { registerThoughts } from "../modules/thoughts/index.js";
 import { registerCommunity } from "../modules/community/index.js";
@@ -184,6 +185,8 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerActivity(ctx));
   v1.use(registerAdminOps(ctx));
   v1.use(registerAnnouncements(ctx));
+  // SMS center: bulk campaigns + the Africa's Talking delivery-report webhook.
+  v1.use(registerSms(ctx, rl));
   v1.use(registerGrowth(ctx));
   v1.use(registerThoughts(ctx));
   v1.use(registerCommunity(ctx));

@@ -16,6 +16,8 @@ import type { OutboxHandler } from "./outbox.js";
 import { CadenceService } from "../modules/attendance/cadence.js";
 import { buildSmsProvider } from "../modules/announcements/africastalking.js";
 import { composeReceiptSms } from "./receipt-ai.js";
+import { SmsCampaignService, type SmsBulkSender } from "../modules/sms/service.js";
+import { AfricasTalkingSmsProvider } from "../modules/announcements/africastalking.js";
 import { buildAiProvider } from "../modules/assistant/provider.js";
 
 export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler> {
@@ -90,6 +92,22 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
   // High-signal events trigger a single-member engagement refresh (§1.8).
   handlers.set("engagement.recompute", async (p) => {
     await engagement.recomputeOne(String(p.user_id));
+  });
+
+  // Bulk SMS campaigns: the HTTP send() froze the audience and flipped status;
+  // the actual submitting happens here so a blast survives restarts and the
+  // admin's request returns in milliseconds. Re-running is safe — submit()
+  // only ever takes rows still queued.
+  const bulkSms: SmsBulkSender | undefined =
+    sms instanceof AfricasTalkingSmsProvider
+      ? sms
+      : sms && typeof (sms as Partial<SmsBulkSender>).sendBatch === "function"
+        ? (sms as unknown as SmsBulkSender)
+        : undefined;
+  const campaigns = new SmsCampaignService(ctx.db.primary, bulkSms);
+  handlers.set("sms.campaign_submit", async (p) => {
+    const out = await campaigns.submit(String(p.campaign_id ?? ""));
+    ctx.log.info({ campaign_id: p.campaign_id, ...out }, "sms campaign submitted");
   });
 
   /**

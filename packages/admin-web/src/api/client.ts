@@ -1599,6 +1599,97 @@ export interface ReflectionHistoryRow {
   occurred_at: string;
 }
 
+// ---- SMS center (bulk campaigns; delivery truth from the AT webhook) ----
+
+export type SmsAudience =
+  | { kind: "all" }
+  | { kind: "cells"; cell_group_ids: string[] }
+  | { kind: "level"; level_number: number }
+  | { kind: "group"; group_id: string }
+  | { kind: "individuals"; user_ids: string[] }
+  | { kind: "event_rsvps"; event_id: string };
+
+export interface SmsPreview {
+  total: number;
+  sendable: number;
+  suppressed: { opted_out: number; no_phone: number; duplicate_phone: number };
+  septets: number | null;
+  segments: number;
+  message_units: number;
+  balance: string | null;
+}
+
+export interface SmsCampaignRow {
+  campaign_id: string;
+  title: string;
+  status: "draft" | "sending" | "sent";
+  segments: number;
+  created_at: string;
+  sent_at: string | null;
+  audience: SmsAudience;
+  recipients: number;
+  delivered: number;
+  awaiting: number;
+  failed: number;
+  suppressed: number;
+}
+
+export interface SmsRecipientRow {
+  recipient_id: string;
+  user_id: string | null;
+  full_name: string | null;
+  phone: string;
+  status: "queued" | "submitted" | "delivered" | "failed" | "suppressed";
+  suppress_reason: string | null;
+  failure_reason: string | null;
+  cost: string | null;
+  attempts: number;
+  submitted_at: string | null;
+  delivered_at: string | null;
+}
+
+export interface SmsGroupRow { group_id: string; name: string; created_at: string; members: number }
+
+/** One campaign with its people — `recipients` is the rows here, not a count. */
+export interface SmsCampaignDetail {
+  campaign_id: string;
+  title: string;
+  body: string;
+  status: "draft" | "sending" | "sent";
+  segments: number;
+  created_at: string;
+  sent_at: string | null;
+  audience: SmsAudience;
+  recipients: SmsRecipientRow[];
+}
+
+export const SmsApi = {
+  overview: () =>
+    api.get<{ configured: boolean; sender_id: string | null; balance: string | null }>("/admin/sms/overview").then((r) => r.data),
+  groups: () => api.get<{ data: SmsGroupRow[] }>("/admin/sms/groups").then((r) => r.data.data),
+  createGroup: (name: string) => api.post<{ group_id: string }>("/admin/sms/groups", { name }).then((r) => r.data),
+  deleteGroup: (id: string) => api.delete(`/admin/sms/groups/${id}`).then((r) => r.data),
+  groupMembers: (id: string) =>
+    api.get<{ data: Array<{ user_id: string; full_name: string; phone_number: string | null }> }>(`/admin/sms/groups/${id}/members`).then((r) => r.data.data),
+  addGroupMembers: (id: string, user_ids: string[]) =>
+    api.post<{ added: number }>(`/admin/sms/groups/${id}/members`, { user_ids }).then((r) => r.data),
+  removeGroupMember: (id: string, userId: string) =>
+    api.delete(`/admin/sms/groups/${id}/members/${userId}`).then((r) => r.data),
+  /** Server-computed truth for the compose screen — septets, segments, who is
+   *  reachable and who is suppressed and why, with the AT balance beside it. */
+  preview: (audience: SmsAudience, body: string) =>
+    api.post<SmsPreview>("/admin/sms/preview", { audience, body }).then((r) => r.data),
+  campaigns: () => api.get<{ data: SmsCampaignRow[] }>("/admin/sms/campaigns").then((r) => r.data.data),
+  createCampaign: (body: { title: string; body: string; audience: SmsAudience }) =>
+    api.post<{ campaign_id: string }>("/admin/sms/campaigns", body).then((r) => r.data),
+  campaign: (id: string) =>
+    api.get<SmsCampaignDetail>(`/admin/sms/campaigns/${id}`).then((r) => r.data),
+  send: (id: string) =>
+    api.post<{ queued: number; suppressed: number }>(`/admin/sms/campaigns/${id}/send`).then((r) => r.data),
+  retry: (id: string) =>
+    api.post<{ retried: number; skipped_terminal: number; skipped_attempts: number }>(`/admin/sms/campaigns/${id}/retry`).then((r) => r.data),
+};
+
 export const OpsApi = {
   members: (
     q: {

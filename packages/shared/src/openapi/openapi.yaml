@@ -4620,6 +4620,145 @@ paths:
         "200": { description: Restored }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/sms/overview:
+    get:
+      tags: [sms]
+      summary: Admin. Is bulk SMS configured, which sender id, and the Africa's Talking balance (advisory).
+      responses:
+        "200": { description: "configured, sender_id, balance" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/sms/groups:
+    get:
+      tags: [sms]
+      summary: Admin. Named member groups for bulk SMS, with member counts. Congregation-scoped.
+      responses:
+        "200": { description: Group list }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [sms]
+      summary: Admin. Create a named group ("Ushering team"). 409 on a duplicate name.
+      responses:
+        "201": { description: Created }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/sms/groups/{id}:
+    delete:
+      tags: [sms]
+      summary: Admin. Delete a group (memberships cascade; members themselves are untouched).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Deleted }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/sms/groups/{id}/members:
+    get:
+      tags: [sms]
+      summary: Admin. The people in a group.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Members }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [sms]
+      summary: Admin. Add members (this congregation only — a group cannot reach another branch's roster).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: How many were added }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/sms/groups/{id}/members/{userId}:
+    delete:
+      tags: [sms]
+      summary: Admin. Remove one person from a group.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - $ref: "#/components/parameters/UserIdPath"
+      responses:
+        "200": { description: Removed }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/sms/preview:
+    post:
+      tags: [sms]
+      summary: >-
+        Admin. Compose-time truth: who the audience reaches, who is suppressed
+        and why (opted out / no phone / duplicate), septets and segments for
+        the body, message units (sendable x segments), and the account balance
+        beside it. Read-only — never creates anything.
+      responses:
+        "200": { description: Preview figures }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/sms/campaigns:
+    get:
+      tags: [sms]
+      summary: Admin. Campaigns with per-status recipient totals (delivered / awaiting report / failed / suppressed).
+      responses:
+        "200": { description: Campaign list }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [sms]
+      summary: Admin. Create a draft campaign (title, body <= 4 GSM-7 segments, audience).
+      responses:
+        "201": { description: Created draft }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/sms/campaigns/{id}:
+    get:
+      tags: [sms]
+      summary: >-
+        Admin. The report: every person with their state. `delivered` comes
+        only from Africa's Talking's delivery-report webhook; `submitted` shows
+        honestly as awaiting the report; `failed` carries their reason
+        verbatim; `suppressed` names why someone was never texted.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: Campaign report }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/sms/campaigns/{id}/send:
+    post:
+      tags: [sms]
+      summary: >-
+        Admin. Fire a draft. Atomic draft->sending flip (a double-click 409s,
+        never double-blasts); audience frozen into recipient rows with
+        suppressions named; actual submitting rides the outbox in batches.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "queued + suppressed counts" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /admin/sms/campaigns/{id}/retry:
+    post:
+      tags: [sms]
+      summary: >-
+        Admin. Re-queue retryable failures (bounded at 3 attempts). Terminal
+        reasons (blacklist, invalid number, sender id) are skipped and counted
+        — retrying those wastes money until a human fixes something.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "retried / skipped_terminal / skipped_attempts" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /webhooks/at/delivery:
+    post:
+      tags: [sms]
+      summary: >-
+        Africa's Talking delivery reports (form-encoded, unsigned — configure
+        the callback URL in their dashboard). The ONLY writer of 'delivered'.
+        Trusts nothing but a matching message id; unknown ids answer 200 with
+        matched:false so their retrier stops. Rate-limited.
+      security: []
+      responses:
+        "200": { description: "matched: whether the id belonged to us" }
+        "400": { description: id and status are required }
   /admin/announcements/channels:
     get:
       tags: [announcements]

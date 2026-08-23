@@ -125,6 +125,71 @@ export class AfricasTalkingSmsProvider implements MessageProvider {
     );
     return { ref: first.messageId ?? `at-${first.statusCode}` };
   }
+
+  /**
+   * Submit ONE body to MANY numbers and return Africa's Talking's verdict for
+   * each. Campaigns need the per-recipient rows — messageId is what the
+   * delivery-report webhook keys on, statusCode is per-number (one blacklisted
+   * number does not fail its neighbours), and cost is the honest bill.
+   *
+   * The caller chunks; this sends exactly what it is given in one request.
+   * HTTP-level failure throws (nothing was accepted); a per-recipient refusal
+   * does NOT throw — it is a row in the report, not an exception.
+   */
+  async sendBatch(
+    numbers: string[],
+    body: string,
+  ): Promise<Array<{ number: string; statusCode: number; status: string; messageId: string | null; cost: string | null }>> {
+    if (numbers.length === 0) return [];
+    const form = new URLSearchParams({
+      username: this.cfg.username,
+      to: numbers.join(","),
+      message: body,
+    });
+    if (this.cfg.senderId) form.set("from", this.cfg.senderId);
+    const res = await fetch(`${this.cfg.baseUrl}/version1/messaging`, {
+      method: "POST",
+      headers: {
+        apiKey: this.cfg.apiKey,
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: form.toString(),
+      signal: AbortSignal.timeout(this.cfg.timeoutMs ?? 30_000),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`Africa's Talking returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
+    }
+    const parsed = (await res.json()) as { SMSMessageData?: { Recipients?: ATRecipient[] } };
+    return (parsed.SMSMessageData?.Recipients ?? []).map((r) => ({
+      number: r.number ?? "",
+      statusCode: Number(r.statusCode ?? 0),
+      status: r.status ?? "",
+      messageId: r.messageId ?? null,
+      cost: r.cost ?? null,
+    }));
+  }
+
+  /**
+   * The account balance, as Africa's Talking states it ("KES 1234.50"), or
+   * null when unreadable. Advisory only — shown beside the cost estimate so an
+   * admin sees "credit is about to run out" BEFORE the delivery reports say it
+   * the expensive way. Never blocks a send on its own.
+   */
+  async balance(): Promise<string | null> {
+    try {
+      const res = await fetch(
+        `${this.cfg.baseUrl}/version1/user?username=${encodeURIComponent(this.cfg.username)}`,
+        { headers: { apiKey: this.cfg.apiKey, Accept: "application/json" }, signal: AbortSignal.timeout(10_000) },
+      );
+      if (!res.ok) return null;
+      const parsed = (await res.json()) as { UserData?: { balance?: string } };
+      return parsed.UserData?.balance ?? null;
+    } catch {
+      return null;
+    }
+  }
 }
 
 /**

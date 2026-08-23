@@ -2,7 +2,7 @@
 // rebuilt to the "Final Pathway Portal" Figma make. Routes drive react-router.
 import {
   LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
-  TrendingUp, MessageSquare, MessagesSquare, Video, Star, AlignLeft, Bell,
+  TrendingUp, MessageSquare, MessageSquareText, MessagesSquare, Video, Star, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
   Radio, SlidersVertical, ListMusic, UserCheck, UserRoundCheck, HeartHandshake, HeartPulse, Megaphone, QrCode,
   Inbox,
@@ -106,6 +106,9 @@ export const navGroups: NavGroup[] = [
       // Between the shepherd and the flock — the item itself is hidden from
       // everyone below SuperAdmin (the server enforces it regardless).
       { path: "/broadcast", label: "Broadcast", icon: Megaphone, superAdminOnly: true },
+      // Bulk SMS campaigns with per-person delivery truth. requireRole("Admin")
+      // coarse gate server-side — no fine RBAC permission to key off. Visible.
+      { path: "/sms", label: "SMS Center", icon: MessageSquareText },
     ],
   },
   {
@@ -189,6 +192,7 @@ export const pageTitles: Record<string, string> = {
   "/discipleship-hub": "Discipleship Hub",
   "/chat": "Chat",
   "/broadcast": "Broadcast",
+  "/sms": "SMS Center",
   "/events": "Events & Attendance",
   "/finance": "Finance",
   "/certificates": "Certificates & Badges",

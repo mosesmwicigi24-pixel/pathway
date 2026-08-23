@@ -47,6 +47,7 @@ import { Roles } from "./components/pages/Roles";
 import { Congregations } from "./components/pages/Congregations";
 import { Countries } from "./components/pages/Countries";
 import { Languages } from "./components/pages/Languages";
+import { SmsCenter } from "./components/pages/SmsCenter";
 import { NotificationsProvider } from "./components/notifications/NotificationsProvider";
 
 /**
@@ -119,6 +120,7 @@ const router = createBrowserRouter([
       { path: "discipleship-hub", element: <Guarded><DiscipleshipHub /></Guarded> },
       { path: "chat", element: <Guarded><Chat /></Guarded> },
       { path: "broadcast", element: <Guarded><Broadcast /></Guarded> },
+      { path: "sms", element: <Guarded><SmsCenter /></Guarded> },
       // Events page family (EVENTS_ARCHITECTURE §9): the Operations Center hub
       // and the per-series Command Center.
       { path: "events", element: <Guarded><EventsHub /></Guarded> },
