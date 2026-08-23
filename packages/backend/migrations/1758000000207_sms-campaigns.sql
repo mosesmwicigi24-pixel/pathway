@@ -45,6 +45,9 @@ CREATE TABLE sms_group_members (
   added_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (group_id, user_id)
 );
+-- Deleting a user cascades into memberships; the PK leads with group_id, so
+-- that delete path needs its own index (fk-index-coverage).
+CREATE INDEX idx_sms_group_members_user ON sms_group_members (user_id);
 
 CREATE TABLE sms_campaigns (
   campaign_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
