@@ -19,7 +19,7 @@ import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { testEnv, agent } from "./helpers/app.js";
 import { createCongregation, createUser, createChurchService } from "./helpers/factories.js";
 import { buildOutboxHandlers } from "../src/workers/handlers.js";
-import { renderCheckInWelcome, CHECK_IN_SMS_BUDGET, SmsDispatchProvider } from "../src/workers/dispatch.js";
+import { renderCheckInWelcome, CHECK_IN_SMS_BUDGET, SmsDispatchProvider, RECEIPT_SIGNATURE } from "../src/workers/dispatch.js";
 import { FakeMessageProvider } from "../src/modules/announcements/providers.js";
 import { isGsm7, gsm7Length, smsSegments, nonGsm7Characters, fitSms } from "../src/lib/sms-text.js";
 import { ChurchAttendanceService, serviceScanToken } from "../src/modules/attendance/service.js";
@@ -235,8 +235,9 @@ describe("the giving receipt's alphabet, which was already costing double", () =
     const body = fake.sent[0]!.body;
     expect(isGsm7(body)).toBe(true);
     expect(smsSegments(body)).toBe(1);
-    // Proof the old copy was the expensive one, not a hypothetical.
-    expect(smsSegments(body.replace(" - The Good News", " — The Good News"))).toBe(2);
+    // Proof an em dash in the signature would cost double — planted, not hypothetical.
+    expect(body).toContain(RECEIPT_SIGNATURE);
+    expect(smsSegments(body.replace(RECEIPT_SIGNATURE, RECEIPT_SIGNATURE.replace("-", "\u2014")))).toBe(2);
   });
 });
 

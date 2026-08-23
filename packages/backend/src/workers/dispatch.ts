@@ -507,6 +507,15 @@ export class SmsDispatchProvider implements DispatchProvider {
  * afford a fallback; this cannot.
  */
 /**
+ * How every receipt signs off — the pastor, not the institution (owner ruling,
+ * 2026-08-23). One constant shared with the Claude composer's validator
+ * (receipt-ai.ts), so the template and AI paths can never drift apart. The
+ * leading hyphen is deliberate: an em dash is not GSM-7 and bills every text
+ * as two segments.
+ */
+export const RECEIPT_SIGNATURE = "- Pst Moses, TGNM";
+
+/**
  * The one and only rendering of the giving-receipt text.
  *
  * Exported because the memberless website receipt used to build its own copy of
@@ -523,8 +532,7 @@ export function renderGivingReceiptSms(p: Record<string, unknown>): string {
   return (
     `${who ? `${who}, thank` : "Thank"} you for your gift${money ? ` of ${money}` : ""}` +
     `${fund ? ` to ${fund}` : ""}. ${code ? `M-Pesa ref ${code}. ` : ""}` +
-    // A hyphen, NOT an em dash — one non-GSM-7 character bills the text double.
-    `God bless you. - The Good News Mission`
+    `God bless you. ${RECEIPT_SIGNATURE}`
   );
 }
 
