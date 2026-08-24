@@ -437,14 +437,16 @@ describe("seven-band persistence + backward compatibility", () => {
 
 describe("per-band length guidance", () => {
   it("the prompt encodes a distinct length band for every DayBand, not one global cap", () => {
-    // Sunrise/evening earn a fuller paragraph; midday/afternoon stay one breath.
-    expect(LITURGY_SYSTEM).toContain("sunrise (45-80 words");
-    expect(LITURGY_SYSTEM).toContain("evening (45-80 words");
-    expect(LITURGY_SYSTEM).toContain("midday (12-25 words");
-    expect(LITURGY_SYSTEM).toContain("afternoon (12-25 words");
-    expect(LITURGY_SYSTEM).toContain("morning (25-45 words");
-    expect(LITURGY_SYSTEM).toContain("night (25-45 words");
-    expect(LITURGY_SYSTEM).toContain("midnight (20-40 words");
+    // Sunrise/evening stay the fullest; midday/afternoon stay one breath.
+    // (Owner's voice pass, 2026-08-24: every band tightened ~35% — the card's
+    // type shrank and the lines were sprawling.)
+    expect(LITURGY_SYSTEM).toContain("sunrise (30-50 words");
+    expect(LITURGY_SYSTEM).toContain("evening (30-50 words");
+    expect(LITURGY_SYSTEM).toContain("midday (10-18 words");
+    expect(LITURGY_SYSTEM).toContain("afternoon (10-18 words");
+    expect(LITURGY_SYSTEM).toContain("morning (18-32 words");
+    expect(LITURGY_SYSTEM).toContain("night (16-28 words");
+    expect(LITURGY_SYSTEM).toContain("midnight (14-24 words");
     // Not a single uniform cap repeated seven times.
     const distinctLengthPhrases = new Set(
       [...LITURGY_SYSTEM.matchAll(/\d+-\d+ words/g)].map((m) => m[0]),

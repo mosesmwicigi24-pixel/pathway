@@ -749,9 +749,16 @@ export class LiturgyService {
     // charge, exactly as before.
     let charge = CHARGES[band][parity]!;
     let verseLine = VERSE_LINES[band][parity]!;
+    // ONE thought in three parts for a member who carries something (owner's
+    // format, 2026-08-24): composed statement → line, chosen verse →
+    // verse_line, brief explanation → charge. scripture_ref goes null so the
+    // card cites only the chosen verse. Empty-handed members keep the
+    // communal liturgy untouched.
+    let personalLine: string | null = null;
     if (userId) {
-      const touch = await personalTouch(this.pool, userId, part, band, dayKey);
+      const touch = await personalTouch(this.pool, this.provider, userId, part, band, dayKey);
       if (touch) {
+        personalLine = touch.statement;
         charge = touch.charge;
         verseLine = touch.verse_line;
       }
@@ -761,8 +768,8 @@ export class LiturgyService {
       band,
       season,
       is_sunday: isSunday,
-      line: line.line,
-      scripture_ref: line.scripture,
+      line: personalLine ?? line.line,
+      scripture_ref: personalLine ? null : line.scripture,
       art: pickBandArt("liturgy", band, dayKey),
       charge,
       verse_line: verseLine,
