@@ -121,11 +121,18 @@ export function registerCalendar(ctx: AppContext): Router {
   );
 
   // ---- Leader attendance ops (Contract Matrix B2; cell-scoped, audited) ----
+  //
+  // Every id-addressed reader/writer here ensure-materializes first (§2), same
+  // as the QR panel and the CSV export below. These three were missed, so the
+  // command center's 30s roster poll 404'd on any occurrence nobody had
+  // RSVP'd to or checked into yet — a projected Sunday looked broken until
+  // the first person arrived.
   r.post(
     "/admin/events/:id/checkins",
     ...leaderPlus("edit"),
     handler(async (req, res) => {
       const input = parseBody(AttendanceService.ManualCheckIn, req.body ?? {});
+      await svc.ensureEvent(req.params.id ?? "");
       res.status(201).json(await attendance.manualCheckIn(requirePrincipal(req), req.params.id ?? "", input));
     }),
   );
@@ -135,6 +142,7 @@ export function registerCalendar(ctx: AppContext): Router {
     ...leaderPlus("edit"),
     handler(async (req, res) => {
       const input = parseBody(AttendanceService.AddGuest, req.body ?? {});
+      await svc.ensureEvent(req.params.id ?? "");
       res.status(201).json(await attendance.addGuest(requirePrincipal(req), req.params.id ?? "", input));
     }),
   );
@@ -143,6 +151,7 @@ export function registerCalendar(ctx: AppContext): Router {
     "/admin/events/:id/attendance",
     ...leaderPlus("view"),
     handler(async (req, res) => {
+      await svc.ensureEvent(req.params.id ?? "");
       res.json(await attendance.roster(requirePrincipal(req), req.params.id ?? ""));
     }),
   );

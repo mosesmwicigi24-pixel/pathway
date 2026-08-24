@@ -197,3 +197,71 @@ describe("cancel/reschedule notifications + materialized toggles", () => {
     expect(note.rowCount).toBe(1);
   });
 });
+
+describe("projected occurrences — ops routes ensure-materialize (§2)", () => {
+  // The command center polls roster/rsvps for the SELECTED occurrence, which
+  // for any future Sunday is a synthetic "<series>:<ISO>" projection with no
+  // events row yet. The QR panel and CSV export ensure-materialized; the
+  // attendance roster, manual check-in and guest routes did not, so a
+  // projected occurrence 404'd until the first RSVP or QR scan created it.
+  async function projectedOccurrence(): Promise<string> {
+    const svc = new CalendarService(testPool());
+    const start = new Date(Date.now() + 7 * 86_400_000);
+    await svc.createSeries(principal(adminId, "Admin"), {
+      title: "Sunday Service",
+      timezone: "Africa/Nairobi",
+      dtstart_local: start.toISOString().slice(0, 19),
+      duration_min: 90,
+      rrule: "FREQ=WEEKLY;COUNT=4",
+      visibility: "congregation",
+    });
+    const projected = (await svc.projectRange(
+      adminId,
+      new Date(Date.now()).toISOString(),
+      new Date(Date.now() + 14 * 86_400_000).toISOString(),
+    )) as Array<{ occurrence_id: string }>;
+    const occ = projected.find((o) => o.occurrence_id.includes(":"));
+    expect(occ, "expected a synthetic projected occurrence").toBeDefined();
+    return occ!.occurrence_id;
+  }
+
+  it("the roster answers 200 (empty) for a projected occurrence, not 404", async () => {
+    const occId = await projectedOccurrence();
+    const before = await testPool().query("SELECT count(*)::int n FROM events WHERE event_id=$1", [occId]);
+    expect(before.rows[0].n).toBe(0);
+
+    const roster = await agent().get(`/v1/admin/events/${occId}/attendance`).set(auth(adminTok));
+    expect(roster.status).toBe(200);
+    expect(roster.body.checked_in).toEqual([]);
+    expect(roster.body.guests).toEqual([]);
+
+    const after = await testPool().query("SELECT count(*)::int n FROM events WHERE event_id=$1", [occId]);
+    expect(after.rows[0].n).toBe(1); // materialized by the read, same as QR/CSV
+  });
+
+  it("manual check-in and guests work on a projected occurrence", async () => {
+    const occId = await projectedOccurrence();
+    const checkin = await agent()
+      .post(`/v1/admin/events/${occId}/checkins`)
+      .set(auth(adminTok))
+      .send({ user_id: memberId, note: "arrived early" });
+    expect(checkin.status).toBe(201);
+
+    const guest = await agent()
+      .post(`/v1/admin/events/${occId}/guests`)
+      .set(auth(adminTok))
+      .send({ guest_name: "First-time Visitor", first_time: true });
+    expect(guest.status).toBe(201);
+
+    const roster = await agent().get(`/v1/admin/events/${occId}/attendance`).set(auth(adminTok));
+    expect(roster.body.checked_in).toHaveLength(1);
+    expect(roster.body.guests).toHaveLength(1);
+  });
+
+  it("an id that projects nothing still 404s — ensure never invents events", async () => {
+    const res = await agent()
+      .get(`/v1/admin/events/00000000-0000-4000-8000-00000000dead:2030-01-01T00:00:00.000Z/attendance`)
+      .set(auth(adminTok));
+    expect(res.status).toBe(404);
+  });
+});
