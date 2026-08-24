@@ -603,14 +603,16 @@ export class AdminOpsService {
       `SELECT cg.cell_group_id, cg.name,
               cg.discipler_name, cg.discipler_role, cg.focus, cg.level_label,
               cg.meets, cg.room, cg.next_session, cg.tone, cg.image_url, cg.is_featured,
+              cg.leader_user_id, lu.full_name AS leader_full_name,
               count(es.user_id)::int                       AS members,
               COALESCE(round(avg(es.e_score), 3), 0)::float AS avg_engagement,
               count(*) FILTER (WHERE es.band = 'at_risk')::int AS at_risk
          FROM cell_groups cg
+         LEFT JOIN users lu ON lu.user_id = cg.leader_user_id
          LEFT JOIN engagement_scores es ON es.cell_group_id = cg.cell_group_id
         GROUP BY cg.cell_group_id, cg.name, cg.discipler_name, cg.discipler_role,
                  cg.focus, cg.level_label, cg.meets, cg.room, cg.next_session, cg.tone,
-                 cg.image_url, cg.is_featured
+                 cg.image_url, cg.is_featured, cg.leader_user_id, lu.full_name
         ORDER BY avg_engagement ASC NULLS LAST
         LIMIT 50`,
     );
@@ -633,8 +635,19 @@ export class AdminOpsService {
       tone: z.enum(["amber", "blue", "green", "violet", "rose", "red"]).optional(),
       image_url: z.string().url().max(2048).optional(),
       meeting_cadence: z.coerce.number().int().min(1).max(31).default(8),
+      leader_user_id: z.string().uuid().nullable().optional(),
     })
     .strict();
+
+  /** A cell leader must be a live member of the same congregation. */
+  private async assertLeaderCandidate(c: Queryable, userId: string, congregationId: string): Promise<void> {
+    const u = await maybeOne<{ user_id: string }>(
+      c,
+      `SELECT user_id FROM users WHERE user_id = $1 AND congregation_id = $2 AND deleted_at IS NULL`,
+      [userId, congregationId],
+    );
+    if (!u) throw new ApiError("VALIDATION_FAILED", "Leader must be an active member of this congregation");
+  }
 
   /**
    * Register a new cell (Figma "Register a new cell"). The cell joins the single
@@ -654,12 +667,13 @@ export class AdminOpsService {
         [cong.congregation_id, input.name],
       );
       if (dup) throw new ApiError("CONFLICT", "A cell with that name already exists");
+      if (input.leader_user_id) await this.assertLeaderCandidate(c, input.leader_user_id, cong.congregation_id);
       const row = await one<{ cell_group_id: string }>(
         c,
         `INSERT INTO cell_groups
            (congregation_id, name, meeting_cadence, discipler_name, discipler_role,
-            focus, level_label, meets, room, next_session, tone, image_url)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            focus, level_label, meets, room, next_session, tone, image_url, leader_user_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          RETURNING cell_group_id`,
         [
           cong.congregation_id,
@@ -674,8 +688,19 @@ export class AdminOpsService {
           input.next_session ?? null,
           input.tone ?? null,
           input.image_url ?? null,
+          input.leader_user_id ?? null,
         ],
       );
+      if (input.leader_user_id) {
+        // Keep leader_assignments in lockstep — it is the table every cell RBAC
+        // scope check reads (assertCellInScope), so a leader set here is a
+        // leader who can actually see their cell.
+        await c.query(
+          `INSERT INTO leader_assignments (leader_user_id, cell_group_id) VALUES ($1, $2)
+           ON CONFLICT (leader_user_id, cell_group_id) DO NOTHING`,
+          [input.leader_user_id, row.cell_group_id],
+        );
+      }
       // Provision the cell's group chat room immediately, so members have a
       // place to talk the moment they're added to the cell (otherwise the room
       // is created lazily only when someone first opens Chat). Members auto-join
@@ -691,10 +716,13 @@ export class AdminOpsService {
       await audit(c, adminId, "cell.created", "cell_groups", row.cell_group_id, { name: input.name });
       return one(
         c,
-        `SELECT cell_group_id, name, discipler_name, discipler_role, focus, level_label,
-                meets, room, next_session, tone, image_url, meeting_cadence, is_featured,
+        `SELECT cg.cell_group_id, cg.name, cg.discipler_name, cg.discipler_role, cg.focus, cg.level_label,
+                cg.meets, cg.room, cg.next_session, cg.tone, cg.image_url, cg.meeting_cadence, cg.is_featured,
+                cg.leader_user_id, lu.full_name AS leader_full_name,
                 0 AS members, 0::float AS avg_engagement, 0 AS at_risk
-           FROM cell_groups WHERE cell_group_id = $1`,
+           FROM cell_groups cg
+           LEFT JOIN users lu ON lu.user_id = cg.leader_user_id
+          WHERE cg.cell_group_id = $1`,
         [row.cell_group_id],
       );
     });
@@ -713,6 +741,7 @@ export class AdminOpsService {
       tone: z.enum(["amber", "blue", "green", "violet", "rose", "red"]).nullable().optional(),
       image_url: z.string().url().max(2048).nullable().optional(),
       meeting_cadence: z.coerce.number().int().min(1).max(31).optional(),
+      leader_user_id: z.string().uuid().nullable().optional(),
     })
     .strict();
 
@@ -723,9 +752,9 @@ export class AdminOpsService {
    */
   async updateCell(adminId: string, cellId: string, input: z.infer<typeof AdminOpsService.UpdateCell>): Promise<unknown> {
     return tx(this.pool, async (c) => {
-      const cell = await maybeOne<{ congregation_id: string }>(
+      const cell = await maybeOne<{ congregation_id: string; leader_user_id: string | null }>(
         c,
-        `SELECT congregation_id FROM cell_groups WHERE cell_group_id = $1`,
+        `SELECT congregation_id, leader_user_id FROM cell_groups WHERE cell_group_id = $1`,
         [cellId],
       );
       if (!cell) throw new ApiError("NOT_FOUND", "Cell not found");
@@ -749,14 +778,39 @@ export class AdminOpsService {
       if (set.length > 0) {
         await c.query(`UPDATE cell_groups SET ${set.join(", ")} WHERE cell_group_id = $1`, [cellId, ...vals]);
       }
+      // Leader changes carry a side effect (leader_assignments sync), so they
+      // bypass the generic column loop above.
+      if (input.leader_user_id !== undefined && input.leader_user_id !== cell.leader_user_id) {
+        if (input.leader_user_id) await this.assertLeaderCandidate(c, input.leader_user_id, cell.congregation_id);
+        await c.query(`UPDATE cell_groups SET leader_user_id = $2 WHERE cell_group_id = $1`, [cellId, input.leader_user_id]);
+        if (cell.leader_user_id) {
+          await c.query(
+            `DELETE FROM leader_assignments WHERE cell_group_id = $1 AND leader_user_id = $2`,
+            [cellId, cell.leader_user_id],
+          );
+        }
+        if (input.leader_user_id) {
+          await c.query(
+            `INSERT INTO leader_assignments (leader_user_id, cell_group_id) VALUES ($1, $2)
+             ON CONFLICT (leader_user_id, cell_group_id) DO NOTHING`,
+            [input.leader_user_id, cellId],
+          );
+        }
+        await audit(c, adminId, "cell.leader_set", "cell_groups", cellId, {
+          from: cell.leader_user_id, to: input.leader_user_id,
+        });
+      }
       await audit(c, adminId, "cell.updated", "cell_groups", cellId, { fields: set.length });
       return one(
         c,
         `SELECT cg.cell_group_id, cg.name, cg.discipler_name, cg.discipler_role, cg.focus, cg.level_label,
                 cg.meets, cg.room, cg.next_session, cg.tone, cg.image_url, cg.meeting_cadence, cg.is_featured,
+                cg.leader_user_id, lu.full_name AS leader_full_name,
                 (SELECT count(*)::int FROM users u WHERE u.cell_group_id = cg.cell_group_id AND u.deleted_at IS NULL) AS members,
                 0::float AS avg_engagement, 0 AS at_risk
-           FROM cell_groups cg WHERE cg.cell_group_id = $1`,
+           FROM cell_groups cg
+           LEFT JOIN users lu ON lu.user_id = cg.leader_user_id
+          WHERE cg.cell_group_id = $1`,
         [cellId],
       );
     });
