@@ -146,6 +146,7 @@ pushed flows, all on member endpoints, offline-first via `/sync/{pull,push}`.
 | Prayer / Verses | PrayerJournal, PrayerWall(+Detail), VerseLibrary | /me/prayers, /prayer-wall/*, /me/verses |
 | Gifts / Profile / Notifs | Gifts, Profile, Notifications | /gifts/*, /me, /me/notifications |
 | Discipleship | DiscipleshipHub (student view) | /me/discipleship (+ /chat/dms for messaging discipler) |
+| Your Cell | CellInfo (iOS `CellInfoView`, Android `CellInfoScreen`) | /me/cell-summary — since cell-truth (2026-08-24) the SINGLE payload for the screen: own-cell descriptive fields, series-derived `meets` + exceptions-aware `next`, roster faces, cell `turnout`, leader-only `leader_view`. `/home/featured-cell` is Home-only again (its use on the cell screen showed OTHER cells' details; Android's `FeaturedCellEnv` decode bug fixed in the same change-set). Upstream truth is authored on portal Cell Detail ("Shepherding": leader picker → `leader_assignments` sync; weekly-rhythm editor → real cell `event_series`). |
 
 Shares with admin surfaces: the backend, `@nuru/shared`, and `tokens.ts`.
 
