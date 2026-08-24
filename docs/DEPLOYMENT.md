@@ -117,3 +117,42 @@ since the deploy may not survive it.
 
 Portal: extract the previous run's artifact over `$PORTAL_ROOT`. It is a static
 bundle, so this is instant and total.
+
+## Incident ledger
+
+### 2026-08-24 — Daily liturgy silently served fallback (thinking exhausted the compose budget)
+
+**Symptom.** After the liturgy voice-rules deploy (#454, `cba9a8a`), today's
+`liturgies` rows never appeared: every `/home/liturgy` fetch re-ran the deep-tier
+compose (~36-46 s response times) and members read the authored fallback. The
+usage ledger (`ai_usage_events`) showed the calls *succeeding*, which sent the
+investigation down two false trails (GitHub billing, then request timing).
+
+**Root cause.** Deep-tier thinking shares `max_tokens` with the visible output.
+The new voice rules made Opus deliberate longer while writing *less*; at
+`maxTokens: 3200` thinking consumed the entire budget and the reply contained no
+text ("The assistant had nothing to say"). `composeFor`'s catch swallowed the
+error without logging and served `FALLBACK_LITURGY` uncached — correct behavior
+wearing an invisibility cloak.
+
+**Why undetected.** (1) The catch was silent — a governance violation ("never
+swallow errors silently") that had sat there since the catch was written.
+(2) `ai_usage_events` records success at the HTTP layer, before the empty-text
+guard throws. (3) The member-facing response still returned 200 with a plausible
+line, and the personal-word override masked the communal line in probes.
+
+**Fix.** #455 (`662d80a`): `maxTokens` 3200 → 8000 (visible JSON is ~700
+tokens; thinking can no longer quietly exhaust the budget) and the catch logs
+what it swallows. Proven live: the first real fetch on the fixed image composed
+and cached all 7 bands.
+
+**Class audit.** Other deep/standard-tier call sites either stream, use ample
+budgets, or surface errors to the caller; the empty-text-after-thinking hazard
+is specific to bounded-JSON deep calls — `daily_liturgy` was the only one at a
+tight budget. The silent-catch pattern was not found elsewhere in the
+intelligence module (`personalLiturgy` falls back loudly via its own guard and
+caches deterministically).
+
+**Prevention.** Any future bounded-output deep-tier call: budget ≥ 4x the
+expected visible output, and no catch without a log line. `ai_usage_events`
+"success" must not be read as "output usable".
