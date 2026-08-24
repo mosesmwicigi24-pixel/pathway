@@ -274,6 +274,10 @@ export interface EngagementCellRow {
   image_url?: string | null;
   // Homepage-featured cell ("This week at Nuru"); single-row invariant (PR #125).
   is_featured?: boolean;
+  // The cell's leader (users.user_id) — synced into leader_assignments so the
+  // leader's app actually sees their cell (assertCellInScope reads that table).
+  leader_user_id?: string | null;
+  leader_full_name?: string | null;
 }
 export interface EngagementReport {
   bands: Record<string, number>;
@@ -291,6 +295,7 @@ export interface CreateCellBody {
   tone?: string;
   image_url?: string | null;
   meeting_cadence?: number;
+  leader_user_id?: string | null;
 }
 
 // Member Intelligence aggregate (SuperAdmin/Admin analytics cockpit).

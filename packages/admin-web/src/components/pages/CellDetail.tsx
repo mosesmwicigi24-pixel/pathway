@@ -5,8 +5,8 @@
 // last active, level). Mock sub-scores / next-session / activity are omitted.
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ChevronRight, ChevronDown, CircleAlert, Clock3, Send, Users, MessageSquareText } from "lucide-react";
-import { AdminApi, OpsApi, type EngagementCellRow, type MemberRow } from "../../api/client";
+import { ArrowLeft, ChevronRight, ChevronDown, CircleAlert, Clock3, Send, Users, MessageSquareText, Crown, CalendarClock } from "lucide-react";
+import { AdminApi, OpsApi, type EngagementCellRow, type MemberRow, type AdminSeriesRow } from "../../api/client";
 import { errorMessage } from "../../util/error";
 
 const BANDS = ["thriving", "steady", "watch", "at_risk"] as const;
@@ -21,29 +21,113 @@ const initials = (name: string): string => name.split(/\s+/).map((p) => p[0]).fi
 const pct = (v: number | null): number => Math.round((v ?? 0) * 100);
 const daysAgo = (iso: string | null): number | null => { if (!iso) return null; const t = new Date(iso).getTime(); if (Number.isNaN(t)) return null; return Math.max(0, Math.floor((Date.now() - t) / 86400000)); };
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+/** Next calendar date falling on `weekday` (0=Sunday), as a wall-clock dtstart_local. */
+const nextDtstartLocal = (weekday: number, time: string): string => {
+  const d = new Date();
+  d.setDate(d.getDate() + ((weekday - d.getDay() + 7) % 7 || 7));
+  const pad2 = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${time}:00`;
+};
+/** Weekday (0=Sunday) and HH:MM out of a series' wall-clock dtstart_local. */
+const rhythmFromSeries = (s: AdminSeriesRow): { day: number; time: string } => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(s.dtstart_local);
+  if (!m) return { day: 0, time: "14:00" };
+  return { day: new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getDay(), time: `${m[4]}:${m[5]}` };
+};
+
 export function CellDetail(): ReactElement {
   const navigate = useNavigate();
   const { cellId } = useParams<{ cellId: string }>();
   const [cell, setCell] = useState<EngagementCellRow | null>(null);
   const [roster, setRoster] = useState<MemberRow[]>([]);
+  const [allMembers, setAllMembers] = useState<MemberRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortAsc, setSortAsc] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Shepherding: leader pick + the cell's real weekly series (the rhythm the
+  // member app derives "Meets" / "Next session" from — typed text is only a fallback).
+  const [leaderSel, setLeaderSel] = useState<string>("");
+  const [leaderBusy, setLeaderBusy] = useState(false);
+  const [leaderMsg, setLeaderMsg] = useState<string | null>(null);
+  const [rhythmSeries, setRhythmSeries] = useState<AdminSeriesRow | null>(null);
+  const [rhythmDay, setRhythmDay] = useState(0);
+  const [rhythmTime, setRhythmTime] = useState("14:00");
+  const [rhythmLocation, setRhythmLocation] = useState("");
+  const [rhythmBusy, setRhythmBusy] = useState(false);
+  const [rhythmMsg, setRhythmMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!cellId) { setLoading(false); return; }
     let alive = true;
     void (async () => {
       try {
-        const [report, mem] = await Promise.all([AdminApi.engagementReport(), OpsApi.members({})]);
+        const [report, mem, series] = await Promise.all([
+          AdminApi.engagementReport(),
+          OpsApi.members({}),
+          OpsApi.adminSeriesList({ status: "all" }),
+        ]);
         if (!alive) return;
-        setCell(report.cells.find((c) => c.cell_group_id === cellId) ?? null);
+        const row = report.cells.find((c) => c.cell_group_id === cellId) ?? null;
+        setCell(row);
+        setLeaderSel(row?.leader_user_id ?? "");
         setRoster(mem.data.filter((m) => m.cell_group_id === cellId));
+        setAllMembers(mem.data);
+        const s = series.find((x) => x.cell_group_id === cellId && x.status === "active" && !x.is_paused)
+          ?? series.find((x) => x.cell_group_id === cellId) ?? null;
+        setRhythmSeries(s);
+        if (s) {
+          const r = rhythmFromSeries(s);
+          setRhythmDay(r.day);
+          setRhythmTime(r.time);
+          setRhythmLocation(s.location ?? "");
+        } else if (row?.room) {
+          setRhythmLocation(row.room);
+        }
       } catch (e) { if (alive) setError(errorMessage(e, "Could not load the cell.")); }
       finally { if (alive) setLoading(false); }
     })();
     return () => { alive = false; };
   }, [cellId]);
+
+  const saveLeader = async (): Promise<void> => {
+    if (!cellId) return;
+    setLeaderBusy(true); setLeaderMsg(null);
+    try {
+      const updated = await AdminApi.updateCell(cellId, { leader_user_id: leaderSel || null });
+      setCell((prev) => prev ? { ...prev, leader_user_id: updated.leader_user_id ?? null, leader_full_name: updated.leader_full_name ?? null } : prev);
+      setLeaderMsg(leaderSel ? "Leader set — their app now sees this cell." : "Leader cleared.");
+    } catch (e) { setLeaderMsg(errorMessage(e, "Could not save the leader.")); }
+    finally { setLeaderBusy(false); }
+  };
+
+  const saveRhythm = async (): Promise<void> => {
+    if (!cellId || !cell) return;
+    setRhythmBusy(true); setRhythmMsg(null);
+    try {
+      const body = {
+        dtstart_local: nextDtstartLocal(rhythmDay, rhythmTime),
+        rrule: "FREQ=WEEKLY",
+        location: rhythmLocation.trim() || null,
+        timezone: rhythmSeries?.timezone ?? "Africa/Nairobi",
+      };
+      if (rhythmSeries) {
+        await OpsApi.updateSeries(rhythmSeries.series_id, body);
+        setRhythmSeries({ ...rhythmSeries, ...body });
+      } else {
+        const created = await OpsApi.createSeries({
+          ...body,
+          cell_group_id: cellId,
+          title: `${cell.name} — cell meeting`,
+          duration_min: 90,
+          visibility: "cell",
+        }) as AdminSeriesRow;
+        setRhythmSeries(created);
+      }
+      setRhythmMsg(`Saved — the app now shows "${WEEKDAYS[rhythmDay]}s".`);
+    } catch (e) { setRhythmMsg(errorMessage(e, "Could not save the rhythm.")); }
+    finally { setRhythmBusy(false); }
+  };
 
   const sorted = useMemo(() => [...roster].sort((a, b) => sortAsc ? (a.e_score ?? 0) - (b.e_score ?? 0) : (b.e_score ?? 0) - (a.e_score ?? 0)), [roster, sortAsc]);
   const bandCounts = useMemo(() => {
@@ -103,6 +187,67 @@ export function CellDetail(): ReactElement {
       </div>
 
       <section style={{ padding: "24px clamp(16px,4vw,48px) 48px" }}>
+        {/* Shepherding — the two upstream facts every member surface derives from:
+            who leads this cell (synced into leader_assignments) and when it
+            actually meets (a real weekly series, not typed text). */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+          <div className="rounded-3xl p-6" style={{ background: "var(--card)", border: "1px solid var(--border)", boxShadow: "0 1px 2px rgba(11,31,51,0.04)" }}>
+            <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+              <Crown size={14} style={{ color: "var(--nuru-gold)" }} />
+              <div className="nuru-eyebrow nuru-eyebrow-gold">Cell leader</div>
+            </div>
+            <h3 style={{ fontSize: 14, fontWeight: 600, color: "var(--nuru-navy)", marginBottom: 4 }}>
+              {cell.leader_full_name ?? (cell.discipler_name ? `${cell.discipler_name} (typed only — not linked to an account)` : "Not set")}
+            </h3>
+            <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 14 }}>
+              Linking a real account lets their app see this cell's roster, turnout, and who's been missing.
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select value={leaderSel} onChange={(e) => setLeaderSel(e.target.value)} className="rounded-xl px-3 py-2.5" style={{ border: "1px solid var(--border)", background: "var(--card)", fontSize: 13, color: "var(--foreground)", minWidth: 220 }}>
+                <option value="">— No linked leader —</option>
+                <optgroup label="In this cell">
+                  {roster.map((m) => <option key={m.user_id} value={m.user_id}>{m.full_name}</option>)}
+                </optgroup>
+                <optgroup label="Everyone else">
+                  {allMembers.filter((m) => m.cell_group_id !== cellId).map((m) => <option key={m.user_id} value={m.user_id}>{m.full_name}</option>)}
+                </optgroup>
+              </select>
+              <button onClick={() => { void saveLeader(); }} disabled={leaderBusy || leaderSel === (cell.leader_user_id ?? "")} className="rounded-xl px-4 py-2.5" style={{ background: "var(--nuru-gold)", color: "#fff", fontSize: 13, fontWeight: 700, border: "none", opacity: leaderBusy || leaderSel === (cell.leader_user_id ?? "") ? 0.5 : 1 }}>
+                {leaderBusy ? "Saving…" : "Save leader"}
+              </button>
+            </div>
+            {leaderMsg ? <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 10 }}>{leaderMsg}</p> : null}
+          </div>
+
+          <div className="rounded-3xl p-6" style={{ background: "var(--card)", border: "1px solid var(--border)", boxShadow: "0 1px 2px rgba(11,31,51,0.04)" }}>
+            <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+              <CalendarClock size={14} style={{ color: "var(--nuru-gold)" }} />
+              <div className="nuru-eyebrow nuru-eyebrow-gold">Weekly rhythm</div>
+            </div>
+            <h3 style={{ fontSize: 14, fontWeight: 600, color: "var(--nuru-navy)", marginBottom: 4 }}>
+              {rhythmSeries ? `${WEEKDAYS[rhythmFromSeries(rhythmSeries).day]}s · ${rhythmFromSeries(rhythmSeries).time}` : "No real schedule yet"}
+            </h3>
+            <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginBottom: 14 }}>
+              {rhythmSeries
+                ? "The member app derives “Meets” and the next session from this series — cancellations and reschedules flow through."
+                : cell.meets
+                  ? `Members currently see the typed text “${cell.meets}”, which goes stale. Set the real weekly gathering instead.`
+                  : "Set the real weekly gathering so the app can announce it (with RSVP and check-in)."}
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select value={rhythmDay} onChange={(e) => setRhythmDay(Number(e.target.value))} className="rounded-xl px-3 py-2.5" style={{ border: "1px solid var(--border)", background: "var(--card)", fontSize: 13, color: "var(--foreground)" }}>
+                {WEEKDAYS.map((d, i) => <option key={d} value={i}>{d}s</option>)}
+              </select>
+              <input type="time" value={rhythmTime} onChange={(e) => setRhythmTime(e.target.value)} className="rounded-xl px-3 py-2" style={{ border: "1px solid var(--border)", background: "var(--card)", fontSize: 13, color: "var(--foreground)" }} />
+              <input type="text" value={rhythmLocation} onChange={(e) => setRhythmLocation(e.target.value)} placeholder="Where (e.g. Nuru Place)" className="rounded-xl px-3 py-2.5" style={{ border: "1px solid var(--border)", background: "var(--card)", fontSize: 13, color: "var(--foreground)", minWidth: 170 }} />
+              <button onClick={() => { void saveRhythm(); }} disabled={rhythmBusy} className="rounded-xl px-4 py-2.5" style={{ background: "var(--nuru-gold)", color: "#fff", fontSize: 13, fontWeight: 700, border: "none", opacity: rhythmBusy ? 0.5 : 1 }}>
+                {rhythmBusy ? "Saving…" : rhythmSeries ? "Update rhythm" : "Create rhythm"}
+              </button>
+            </div>
+            {rhythmMsg ? <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 10 }}>{rhythmMsg}</p> : null}
+          </div>
+        </div>
+
         {/* Band breakdown + KPI tiles — clean white cards, one soft shadow each */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
           <div className="rounded-3xl p-6" style={{ background: "var(--card)", border: "1px solid var(--border)", boxShadow: "0 1px 2px rgba(11,31,51,0.04)" }}>

@@ -3652,9 +3652,20 @@ paths:
   /me/cell-summary:
     get:
       tags: [system]
-      summary: The member's cell summary for the Events tab (cell, members, this-month attendance, next gathering). Returns cell=null without a cell.
+      summary: The member's own cell — descriptive fields, series-derived rhythm (exceptions-aware next gathering), roster faces, cell turnout, and a leader-only missing-members view. Returns cell=null without a cell.
       responses:
-        "200": { description: Cell summary }
+        "200":
+          description: Cell summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cell]
+                properties:
+                  cell:
+                    anyOf:
+                      - $ref: "#/components/schemas/CellSummary"
+                      - { type: "null" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /admin/events/{id}/checkins:
     post:
@@ -3790,7 +3801,7 @@ paths:
   /admin/cells:
     post:
       tags: [portal]
-      summary: Admin. Register a new cell (name + discipler/focus/level/meeting metadata). Engagement metrics stay derived; a fresh cell reports zeros until disciples are assigned. Audited.
+      summary: Admin. Register a new cell (name + discipler/focus/level/meeting metadata + optional leader_user_id, synced into leader_assignments). Engagement metrics stay derived; a fresh cell reports zeros until disciples are assigned. Audited.
       responses:
         "201": { description: Cell created }
         "400": { description: Validation failed }
@@ -3799,7 +3810,7 @@ paths:
   /admin/cells/{id}:
     patch:
       tags: [portal]
-      summary: Admin. Edit a cell's details (name + discipler/focus/level/meeting metadata). Only supplied fields change; name stays unique per congregation. Audited.
+      summary: Admin. Edit a cell's details (name + discipler/focus/level/meeting metadata + nullable leader_user_id, synced into leader_assignments). Only supplied fields change; name stays unique per congregation. Audited.
       parameters:
         - $ref: "#/components/parameters/IdPath"
       responses:
@@ -9252,6 +9263,83 @@ components:
               status: { type: string, enum: [applied, duplicate, rejected] }
               code: { type: string }
               detail: { type: string }
+
+    # --- The member's own cell (Your Cell screen) ---
+    CellSummary:
+      type: object
+      required: [cell_group_id, name, members, leader, attendance, next, focus, level_label, room, tone, image_url, meets, rhythm_source, roster, turnout, leader_view]
+      properties:
+        cell_group_id: { type: string, format: uuid }
+        name: { type: string }
+        members: { type: integer }
+        leader:
+          type: [object, "null"]
+          required: [name, role, avatar_url]
+          properties:
+            name: { type: string }
+            role: { type: [string, "null"] }
+            avatar_url: { type: [string, "null"] }
+        attendance:
+          type: object
+          description: The CALLER's own check-ins at this cell's gatherings over the last 30 days vs the cell's expected cadence — a personal ratio, not the cell's turnout.
+          required: [attended, expected]
+          properties:
+            attended: { type: integer }
+            expected: { type: integer }
+        next:
+          type: [object, "null"]
+          description: Exceptions-aware next gathering (cancelled meetings are never announced; reschedules show the real time).
+          required: [start_at, end_at, occurrence_id, location]
+          properties:
+            start_at: { type: string, format: date-time }
+            end_at: { type: string, format: date-time }
+            occurrence_id: { type: string }
+            location: { type: [string, "null"] }
+        focus: { type: [string, "null"] }
+        level_label: { type: [string, "null"] }
+        room: { type: [string, "null"] }
+        tone: { type: [string, "null"] }
+        image_url: { type: [string, "null"] }
+        meets:
+          type: [string, "null"]
+          description: Derived from the cell's event series when one exists ("Sundays · 2:00 PM"); otherwise the admin-typed fallback text.
+        rhythm_source:
+          type: [string, "null"]
+          enum: [series, static, null]
+        roster:
+          type: object
+          required: [count, faces]
+          properties:
+            count: { type: integer }
+            faces:
+              type: array
+              maxItems: 8
+              items:
+                type: object
+                required: [first_name, avatar_url]
+                properties:
+                  first_name: { type: string }
+                  avatar_url: { type: [string, "null"] }
+        turnout:
+          type: [object, "null"]
+          description: Cell-wide average check-in share over the last ≤8 meetings the system was live for. Null until the cell has met.
+          required: [rate, meetings, trend]
+          properties:
+            rate: { type: number, minimum: 0, maximum: 1 }
+            meetings: { type: integer }
+            trend:
+              type: [string, "null"]
+              enum: [up, down, steady, null]
+        leader_view:
+          type: [object, "null"]
+          description: Present only for the cell's leader once two recent meetings exist — members who missed both (first names, capped at 4).
+          required: [count, names]
+          properties:
+            count: { type: integer }
+            names:
+              type: array
+              maxItems: 4
+              items: { type: string }
 
     # --- Engagement (§1.8) ---
     EngagementBreakdown:

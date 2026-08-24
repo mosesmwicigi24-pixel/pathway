@@ -134,6 +134,27 @@ function normalizeSeriesInput(raw: unknown): unknown {
   return out;
 }
 
+/**
+ * Human line for a cell's meeting rhythm, derived from its series rather than
+ * admin-typed text ("Sundays · 2:00 PM"). Weekday and time are taken from the
+ * next occurrence rendered in the series' own timezone, so DST shifts and
+ * reschedule exceptions read correctly.
+ */
+function meetsLineFor(s: { rrule: string | null; timezone: string }, nextStartIso: string): string {
+  const d = DateTime.fromISO(nextStartIso, { zone: s.timezone });
+  const weekday = d.toFormat("cccc");
+  const time = d.toFormat("h:mm a");
+  const rr = (s.rrule ?? "").toUpperCase();
+  const interval = Number(/INTERVAL=(\d+)/.exec(rr)?.[1] ?? "1");
+  if (rr.includes("FREQ=WEEKLY")) {
+    if (interval === 2) return `Every other ${weekday} · ${time}`;
+    if (interval > 2) return `Every ${interval} weeks · ${weekday} ${time}`;
+    return `${weekday}s · ${time}`;
+  }
+  if (rr.includes("FREQ=MONTHLY")) return `Monthly · ${weekday} ${time}`;
+  return `${weekday} ${time}`;
+}
+
 interface UserScope {
   congregation_id: string;
   cell_group_id: string | null;
@@ -408,11 +429,15 @@ export class CalendarService {
   }
 
   /**
-   * "Your cell" summary for the Events tab: the member's cell, its size, a
-   * this-month attendance ratio (check-ins vs the cell's expected cadence), and
-   * the next cell gathering. Returns { cell: null } for members without a cell.
-   * Note: this app has no separate "cohort" entity (the Cohort→Cell rename is
-   * pending), so only real cell data is returned — no fabricated cohort.
+   * "Your cell" summary — the single payload behind the member Your-Cell
+   * screen. The rhythm tells the truth: when the cell has a real event series,
+   * `meets` is derived from its rule and `next` is the exceptions-aware next
+   * occurrence (a cancelled meeting is never announced); admin-typed text is
+   * only a fallback, and `rhythm_source` says which one the client is seeing.
+   * Also carries the roster faces (first name + avatar, same exposure as
+   * footprints/presence), cell-wide turnout over recent meetings, and — for the
+   * cell's leader only — who has missed the last two gatherings.
+   * Returns { cell: null } for members without a cell.
    */
   async cellSummary(userId: string): Promise<unknown> {
     const me = await one<{ cell_group_id: string | null; congregation_id: string }>(
@@ -426,11 +451,20 @@ export class CalendarService {
       meeting_cadence: number;
       discipler_name: string | null;
       discipler_role: string | null;
+      focus: string | null;
+      level_label: string | null;
+      meets: string | null;
+      room: string | null;
+      tone: string | null;
+      image_url: string | null;
+      leader_user_id: string | null;
       leader_full_name: string | null;
       leader_avatar_url: string | null;
     }>(
       this.pool,
       `SELECT cg.name, cg.meeting_cadence, cg.discipler_name, cg.discipler_role,
+              cg.focus, cg.level_label, cg.meets, cg.room, cg.tone, cg.image_url,
+              cg.leader_user_id,
               lu.full_name AS leader_full_name, lu.avatar_url AS leader_avatar_url
          FROM cell_groups cg
          LEFT JOIN users lu ON lu.user_id = cg.leader_user_id
@@ -449,16 +483,81 @@ export class CalendarService {
         WHERE a.user_id = $1 AND e.cell_group_id = $2 AND a.checked_in_at >= now() - INTERVAL '30 days'`,
       [userId, me.cell_group_id],
     );
-    // Next cell gathering: expand this cell's visible series over the next 30 days.
+    // Roster faces: cellmates the member already shares a room with (footprints
+    // and presence expose the same first-name + avatar surface). Photos first
+    // so the rail leads with real faces.
+    const faces = await many<{ first_name: string; avatar_url: string | null }>(
+      this.pool,
+      `SELECT split_part(btrim(full_name), ' ', 1) AS first_name, avatar_url
+         FROM users
+        WHERE cell_group_id = $1 AND deleted_at IS NULL
+        ORDER BY (avatar_url IS NULL), full_name
+        LIMIT 8`,
+      [me.cell_group_id],
+    );
+    // Next cell gathering: exceptions-aware, so a cancelled or rescheduled
+    // meeting is announced at its real time or not at all.
     const scope = await this.scopeOf(this.pool, userId);
     const series = (await this.visibleSeries(this.pool, scope)).filter((s) => s.cell_group_id === me.cell_group_id);
+    const exceptions = await this.exceptionsBySeries(series.map((s) => s.series_id));
     const now = new Date();
-    const horizon = new Date(now.getTime() + 30 * 86_400_000);
-    let next: { start_at: string; location: string | null } | null = null;
+    let next: { start_at: string; end_at: string; occurrence_id: string; location: string | null } | null = null;
+    let nextSeries: SeriesRow | null = null;
     for (const s of series) {
-      for (const o of expandOccurrences(s, now, horizon, 4)) {
-        if (new Date(o.start_at) >= now && (!next || o.start_at < next.start_at)) next = { start_at: o.start_at, location: s.location };
+      const o = this.nextOccurrenceOf(s, exceptions.get(s.series_id) ?? new Map(), now, 60);
+      if (o && (!next || o.start_at < next.start_at)) {
+        next = { ...o, location: s.location };
+        nextSeries = s;
       }
+    }
+    const meets = nextSeries && next ? meetsLineFor(nextSeries, next.start_at) : cell.meets;
+    const rhythmSource: "series" | "static" | null = nextSeries ? "series" : cell.meets ? "static" : null;
+    // Turnout: average per-meeting check-in share over the last ≤8 meetings the
+    // system was live for (a series backfills 90d of past occurrences on
+    // creation — those phantom rows must not count as 0-turnout meetings, hence
+    // the `occurs_at >= es.created_at` guard; hand-created events have no
+    // series and always count).
+    for (const s of series) await this.materialize(s.series_id);
+    const past = await many<{ event_id: string; occurs_at: string; checked: number }>(
+      this.pool,
+      `SELECT e.event_id, e.occurs_at,
+              (SELECT count(DISTINCT a.user_id)::int FROM attendance_logs a WHERE a.event_id = e.event_id) AS checked
+         FROM events e
+         LEFT JOIN event_series es ON es.series_id = e.series_id
+        WHERE e.cell_group_id = $1 AND e.occurs_at < now() AND e.archived_at IS NULL
+          AND (e.series_id IS NULL OR e.occurs_at >= es.created_at)
+        ORDER BY e.occurs_at DESC
+        LIMIT 8`,
+      [me.cell_group_id],
+    );
+    const denom = Math.max(members.n, 1);
+    const share = (r: { checked: number }): number => Math.min(1, r.checked / denom);
+    const avg = (rows: Array<{ checked: number }>): number => rows.reduce((a, r) => a + share(r), 0) / rows.length;
+    let turnout: { rate: number; meetings: number; trend: "up" | "down" | "steady" | null } | null = null;
+    if (past.length > 0) {
+      let trend: "up" | "down" | "steady" | null = null;
+      if (past.length >= 6) {
+        const diff = avg(past.slice(0, 4)) - avg(past.slice(4));
+        trend = diff > 0.05 ? "up" : diff < -0.05 ? "down" : "steady";
+      }
+      turnout = { rate: Math.round(avg(past) * 100) / 100, meetings: past.length, trend };
+    }
+    // Leader view: only for this cell's leader, and only once two recent
+    // meetings exist to judge against — first names of members who missed both.
+    const isCellLeader = cell.leader_user_id === userId || scope.leaderCells.includes(me.cell_group_id);
+    let leaderView: { count: number; names: string[] } | null = null;
+    const recentTwo = past.filter((p) => new Date(p.occurs_at).getTime() >= now.getTime() - 45 * 86_400_000).slice(0, 2);
+    if (isCellLeader && recentTwo.length === 2) {
+      const missing = await many<{ first_name: string }>(
+        this.pool,
+        `SELECT split_part(btrim(u.full_name), ' ', 1) AS first_name
+           FROM users u
+          WHERE u.cell_group_id = $1 AND u.deleted_at IS NULL AND u.user_id <> $2
+            AND NOT EXISTS (SELECT 1 FROM attendance_logs a WHERE a.user_id = u.user_id AND a.event_id = ANY($3::varchar[]))
+          ORDER BY u.full_name`,
+        [me.cell_group_id, userId, recentTwo.map((p) => p.event_id)],
+      );
+      leaderView = { count: missing.length, names: missing.slice(0, 4).map((m) => m.first_name) };
     }
     return {
       cell: {
@@ -467,7 +566,17 @@ export class CalendarService {
         members: members.n,
         leader: leaderName ? { name: leaderName, role: cell.discipler_role, avatar_url: cell.leader_avatar_url } : null,
         attendance: { attended: attended.n, expected: cell.meeting_cadence },
-        next: next ? { start_at: next.start_at, location: next.location } : null,
+        next,
+        focus: cell.focus,
+        level_label: cell.level_label,
+        room: cell.room,
+        tone: cell.tone,
+        image_url: cell.image_url,
+        meets,
+        rhythm_source: rhythmSource,
+        roster: { count: members.n, faces },
+        turnout,
+        leader_view: leaderView,
       },
     };
   }
