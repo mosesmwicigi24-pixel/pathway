@@ -653,10 +653,14 @@ export class LiturgyService {
         // actually reads deserves the strongest writer" at a cost that's a
         // rounding error.
         tier: "deep",
-        // 3200, not 1400: output nearly doubled (seven bands, two of them a
-        // full 45-80 word paragraph) and deep-tier thinking shares the same
-        // max_tokens budget with the visible JSON — leave it headroom.
-        maxTokens: 3200,
+        // 8000, not 3200: deep-tier thinking shares the same max_tokens budget
+        // with the visible JSON, and the 2026-08-24 voice rules made the model
+        // deliberate LONGER while writing LESS — at 3200 the thinking consumed
+        // the whole budget and the reply came back with no text at all ("The
+        // assistant had nothing to say"), so every day since the change served
+        // the fallback. The visible JSON is ~700 tokens; 8000 leaves thinking
+        // room it cannot exhaust quietly.
+        maxTokens: 8000,
         feature: "daily_liturgy",
       });
       const parsed = this.parse(raw);
@@ -667,8 +671,12 @@ export class LiturgyService {
       // bookkeeping honest even if that ever changes.
       const offered = new Set(quoteCandidates.map((q) => q.quoteId));
       quoteIdsUsed = parsed.quoteIdsUsed.filter((id) => offered.has(id));
-    } catch {
-      return { day: FALLBACK_LITURGY, cached: false }; // serve, don't cache — retry next call
+    } catch (err) {
+      // Serve, don't cache — retry next call. But say WHY out loud: this catch
+      // swallowed an exhausted-thinking-budget failure silently for a whole
+      // evening (2026-08-24) while every reader got the fallback.
+      console.error("liturgy compose failed, serving fallback:", err instanceof Error ? err.message : String(err));
+      return { day: FALLBACK_LITURGY, cached: false };
     }
 
     for (const band of BANDS) {
