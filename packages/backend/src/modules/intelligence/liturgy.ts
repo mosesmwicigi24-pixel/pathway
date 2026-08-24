@@ -32,6 +32,7 @@
 // are both best-effort, and an empty (or missing) teaching_quotes table
 // still composes a full seven-band day exactly as before.
 import type { Pool } from "pg";
+import { personalTouch } from "./personalLiturgy.js";
 import type { AiProvider } from "../assistant/provider.js";
 import { LITURGY_SYSTEM } from "./prompts.js";
 import { markQuotesUsed, selectQuoteCandidates, type TeachingQuote } from "./teachingQuotes.js";
@@ -699,7 +700,7 @@ export class LiturgyService {
    *  which is the normal, permanent, non-degraded case for most bands (see
    *  liturgy_recordings' header comment). No recorded_by / admin identity
    *  ever rides on this member-facing payload — corporate content only. */
-  async current(congregationId: string | null, now: Date = new Date()): Promise<{
+  async current(congregationId: string | null, now: Date = new Date(), userId: string | null = null): Promise<{
     part: LiturgyPart;
     band: DayBand;
     season: Season;
@@ -741,6 +742,20 @@ export class LiturgyService {
     }
     const dayKey = ymd(eatDate(now));
     const parity = epochDay(dayKey) % 2;
+    // The hour's LINE stays communal — the prayer of the whole church. The
+    // charge and companion verse become PERSONAL when this member carries an
+    // open prayer, a reading plan mid-walk, or an unfinished module (owner's
+    // ask, 2026-08-24; see personalLiturgy.ts). No signals → the church's own
+    // charge, exactly as before.
+    let charge = CHARGES[band][parity]!;
+    let verseLine = VERSE_LINES[band][parity]!;
+    if (userId) {
+      const touch = await personalTouch(this.pool, userId, part, band, dayKey);
+      if (touch) {
+        charge = touch.charge;
+        verseLine = touch.verse_line;
+      }
+    }
     return {
       part,
       band,
@@ -749,8 +764,8 @@ export class LiturgyService {
       line: line.line,
       scripture_ref: line.scripture,
       art: pickBandArt("liturgy", band, dayKey),
-      charge: CHARGES[band][parity]!,
-      verse_line: VERSE_LINES[band][parity]!,
+      charge,
+      verse_line: verseLine,
       recorded_audio_url: recordedUrl,
       recorded_audio_duration_sec: recordedDurationSec,
     };
