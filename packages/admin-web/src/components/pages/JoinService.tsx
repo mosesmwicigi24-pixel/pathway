@@ -227,6 +227,12 @@ export function JoinService(): ReactElement {
   const pledge = (): void => {
     setPledged(true);
     if (canvasRef.current) fireConfetti(canvasRef.current);
+    // After the celebration, carry them into the house (owner, 2026-08-24):
+    // the church's public home page. Long enough to enjoy the confetti,
+    // short enough that nobody wonders whether the tap worked.
+    window.setTimeout(() => {
+      window.location.href = "https://nuruplace.org";
+    }, 4200);
   };
 
   /** ENTER: a remembered phone is one tap; a new phone gets the details step. */
@@ -361,7 +367,7 @@ export function JoinService(): ReactElement {
               </p>
             )}
             <button type="button" onClick={pledge} disabled={pledged} style={goldButton(false)}>
-              {pledged ? "See you there ✓" : "I'll be there"}
+              {pledged ? "See you there ✓ — taking you home…" : "I'll be there"}
             </button>
           </>
         )}
