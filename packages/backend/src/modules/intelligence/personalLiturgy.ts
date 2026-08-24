@@ -17,7 +17,7 @@
 // day — a liturgy should not flicker between fetches — and a different facet
 // of their walk tomorrow.
 import type pg from "pg";
-import { maybeOne, many } from "../../db/db.js";
+import { maybeOne } from "../../db/db.js";
 import type { DayBand, LiturgyPart, BandVerseLine } from "./liturgy.js";
 
 export interface PersonalTouch {
