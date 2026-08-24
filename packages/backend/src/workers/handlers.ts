@@ -249,7 +249,21 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
       receipt_code: txn.receipt_code,
     };
 
-    await notifications.schedule({ userId, channel: "email", template: "giving_receipt", payload: receiptPayload });
+    // The outbox is at-least-once, and this handler used to write a FRESH row
+    // per run — so a redelivered job meant a second receipt, and five runs
+    // meant five. Each channel is now guarded by "does a receipt row for this
+    // transaction already exist": rerunning the job becomes a no-op, whatever
+    // made it rerun.
+    const emailAlready = await maybeOne(
+      ctx.db.primary,
+      `SELECT 1 FROM notifications
+        WHERE user_id = $1 AND channel = 'email' AND template = 'giving_receipt'
+          AND payload->>'transaction_id' = $2`,
+      [userId, transactionId],
+    );
+    if (!emailAlready) {
+      await notifications.schedule({ userId, channel: "email", template: "giving_receipt", payload: receiptPayload });
+    }
 
     // …and a text, to the number that paid.
     //
@@ -267,7 +281,14 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
       `SELECT phone_number FROM users WHERE user_id = $1`,
       [userId],
     );
-    if (sms && contact?.phone_number) {
+    const smsAlready = await maybeOne(
+      ctx.db.primary,
+      `SELECT 1 FROM notifications
+        WHERE user_id = $1 AND channel = 'sms' AND template = 'giving_receipt'
+          AND payload->>'transaction_id' = $2`,
+      [userId, transactionId],
+    );
+    if (sms && contact?.phone_number && !smsAlready) {
       // The app giver gets the same Claude-written thank-you as the website
       // giver. Composed HERE, not at dispatch: the notification worker stays a
       // dumb sender, and the validated body rides in the payload it already
@@ -292,10 +313,17 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
         },
         ctx.log,
       );
+      // WHERE NOT EXISTS again, in the INSERT itself: the SELECT above is a
+      // fast-path that also skips the compose; this closes the read-then-write
+      // race if two runs ever interleave.
       await ctx.db.primary.query(
         `INSERT INTO notifications (user_id, channel, template, payload, status, scheduled_for)
-         VALUES ($1, 'sms', 'giving_receipt', $2, 'scheduled', now())`,
-        [userId, JSON.stringify({ ...receiptPayload, sms_body: composed.body })],
+         SELECT $1, 'sms', 'giving_receipt', $2, 'scheduled', now()
+          WHERE NOT EXISTS (
+            SELECT 1 FROM notifications
+             WHERE user_id = $1 AND channel = 'sms' AND template = 'giving_receipt'
+               AND payload->>'transaction_id' = $3)`,
+        [userId, JSON.stringify({ ...receiptPayload, sms_body: composed.body }), transactionId],
       );
       ctx.log.info({ source: composed.source, user_id: userId }, "member giving receipt composed");
     }
@@ -351,6 +379,23 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
     if (!gift || gift.status !== "succeeded" || !gift.giver_phone) return;
     if (gift.receipt_sms_at) return; // already thanked — a redelivery must not text twice
 
+    // CLAIM the receipt before anything is sent — atomically, so exactly one
+    // run (of outbox redeliveries, concurrent workers, anything) wins and every
+    // other run stops here. The check above is a cheap fast-path; THIS is the
+    // gate. The claim used to be written after the send, and everything that
+    // could fail between the two — a timed-out response from a message Africa's
+    // Talking already had, a failed stamp write — re-sent on retry: one gift,
+    // five texts (2026-08-23). 'claimed' in receipt_sms_ref marks a claim whose
+    // send outcome was never recorded; the real message ref replaces it.
+    const claimed = await maybeOne(
+      ctx.db.primary,
+      `UPDATE transactions SET receipt_sms_at = now(), receipt_sms_ref = 'claimed'
+        WHERE transaction_id = $1 AND receipt_sms_at IS NULL
+        RETURNING transaction_id`,
+      [transactionId],
+    );
+    if (!claimed) return;
+
     // A stranger's history is keyed by the phone that paid — their prior gifts
     // are what let a third gift be NOTICED rather than mail-merged.
     const history = await one<{ prior: number; first_at: string | null }>(
@@ -381,17 +426,31 @@ export function buildOutboxHandlers(ctx: AppContext): Map<string, OutboxHandler>
 
     try {
       const { ref } = await sms.send({ to: gift.giver_phone, title: "Thank you", body });
-      // The durable trace, written only on acceptance. NULL forever = never sent.
-      await ctx.db.primary.query(
-        `UPDATE transactions SET receipt_sms_at = now(), receipt_sms_ref = $2
-          WHERE transaction_id = $1`,
-        [transactionId, ref.slice(0, 100)],
-      );
+      // The durable trace: the provider's id replaces the 'claimed' sentinel.
+      await ctx.db.primary.query(`UPDATE transactions SET receipt_sms_ref = $2 WHERE transaction_id = $1`, [
+        transactionId,
+        ref.slice(0, 100),
+      ]);
     } catch (err) {
-      // Rethrow so the outbox retries. Swallowing here would mark the job done
-      // and lose the receipt permanently on one transient network blip.
-      ctx.log.error({ err, transaction_id: transactionId }, "giving receipt SMS failed");
-      throw err;
+      if ((err as { definitelyNotSent?: boolean }).definitelyNotSent) {
+        // Africa's Talking answered NO — nothing left their side. Release the
+        // claim and rethrow so the outbox may retry a message that never went.
+        await ctx.db.primary.query(
+          `UPDATE transactions SET receipt_sms_at = NULL, receipt_sms_ref = NULL WHERE transaction_id = $1`,
+          [transactionId],
+        );
+        ctx.log.error({ err, transaction_id: transactionId }, "giving receipt SMS refused — claim released for retry");
+        throw err;
+      }
+      // Timeout or transport failure: the message MAY already be on its way,
+      // and a retry would risk texting the giver twice. Keep the claim and do
+      // NOT rethrow — at most once. receipt_sms_ref stays 'claimed', which is
+      // the queryable trace of exactly this outcome:
+      //   SELECT ... WHERE receipt_sms_ref = 'claimed'  → sends with an unknown fate.
+      ctx.log.error(
+        { err, transaction_id: transactionId },
+        "giving receipt SMS outcome unknown — claim kept so the giver cannot be double-texted",
+      );
     }
   }
 

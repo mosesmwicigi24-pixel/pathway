@@ -126,18 +126,36 @@ describe("giving receipt — the stranger's thank-you", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("rethrows a send failure so the outbox retries rather than losing the receipt", async () => {
-    const boom = {
+  it("rethrows an ANSWERED refusal so the outbox retries — but swallows an unknown outcome", async () => {
+    // The at-most-once split (2026-08-23, one gift → five texts): when Africa's
+    // Talking answered no, nothing left their side and a retry is safe — the
+    // job rethrows. When the failure is a timeout or a dead socket, the text
+    // may already be on its way, and retrying risks a duplicate — the job keeps
+    // the claim and completes. The full matrix lives in
+    // receipt-at-most-once.test.ts; this pins the split at the job boundary.
+    const refused = {
       channel: "sms" as const,
-      send: () => Promise.reject(new Error("network went away")),
+      send: () =>
+        Promise.reject(Object.assign(new Error("Africa's Talking returned 401"), { definitelyNotSent: true })),
     };
     const id = await websiteGift();
     await expect(
-      buildOutboxHandlers(ctxWith(boom as unknown as FakeMessageProvider)).get("giving.receipt")!({
+      buildOutboxHandlers(ctxWith(refused as unknown as FakeMessageProvider)).get("giving.receipt")!({
         transaction_id: id,
         user_id: null,
       }),
-    ).rejects.toThrow("network went away");
+    ).rejects.toThrow("401");
+
+    const vanished = {
+      channel: "sms" as const,
+      send: () => Promise.reject(new Error("network went away")),
+    };
+    await expect(
+      buildOutboxHandlers(ctxWith(vanished as unknown as FakeMessageProvider)).get("giving.receipt")!({
+        transaction_id: id,
+        user_id: null,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("ignores a member's transaction — that receipt goes by email", async () => {
@@ -388,7 +406,11 @@ describe("the trace and the alphabet — what the missing 21:54 receipt taught",
   it("leaves the trace NULL when the provider rejects — never a false 'thanked'", async () => {
     const reject: FakeMessageProvider = new FakeMessageProvider("sms");
     reject.send = async () => {
-      throw new Error("Africa's Talking rejected the message: InvalidSenderId (code 403)");
+      // Mirrors the real provider: an ANSWERED rejection carries the marker,
+      // which is what releases the claim and keeps this trace honest.
+      throw Object.assign(new Error("Africa's Talking rejected the message: InvalidSenderId (code 403)"), {
+        definitelyNotSent: true,
+      });
     };
     const id = await websiteGift({});
     await expect(

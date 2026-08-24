@@ -83,8 +83,17 @@ export class AfricasTalkingSmsProvider implements MessageProvider {
       // The body carries their reason ("Invalid sender id", "InsufficientBalance"),
       // which is worth having in the log — a silent failure here means a giver
       // is never thanked and nobody finds out why.
+      //
+      // definitelyNotSent: Africa's Talking ANSWERED and the answer was no —
+      // nothing left their side, so a caller may retry safely. A timeout or a
+      // dropped connection carries no such marker: the request may have gone
+      // through and the text may be on its way, and retrying a maybe-sent
+      // message is how one gift became five texts (2026-08-23).
       const detail = await res.text().catch(() => "");
-      throw new Error(`Africa's Talking returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
+      throw Object.assign(
+        new Error(`Africa's Talking returned ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`),
+        { definitelyNotSent: true },
+      );
     }
 
     const body = (await res.json()) as { SMSMessageData?: { Recipients?: ATRecipient[]; Message?: string } };
@@ -93,12 +102,16 @@ export class AfricasTalkingSmsProvider implements MessageProvider {
     // A 200 is NOT success. Africa's Talking answers 200 with a per-recipient
     // statusCode, so an invalid number, a blocked sender id or an empty account
     // all arrive as a cheerful HTTP 200. Reading only res.ok would report every
-    // one of those as a receipt sent.
+    // one of those as a receipt sent. Same marker as above: a per-recipient
+    // refusal is an ANSWER — the message did not go out.
     if (!first || !ACCEPTED.has(Number(first.statusCode))) {
-      throw new Error(
-        `Africa's Talking rejected the message: ` +
-          `${first?.status ?? body.SMSMessageData?.Message ?? "no recipient in response"}` +
-          `${first?.statusCode ? ` (code ${first.statusCode})` : ""}`,
+      throw Object.assign(
+        new Error(
+          `Africa's Talking rejected the message: ` +
+            `${first?.status ?? body.SMSMessageData?.Message ?? "no recipient in response"}` +
+            `${first?.statusCode ? ` (code ${first.statusCode})` : ""}`,
+        ),
+        { definitelyNotSent: true },
       );
     }
 
