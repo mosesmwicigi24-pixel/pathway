@@ -21,7 +21,7 @@
 // (statement → line, explanation → charge), so every installed build renders
 // it with no client change. Empty-handed members keep the communal liturgy.
 import type pg from "pg";
-import { many, maybeOne } from "../../db/db.js";
+import { maybeOne } from "../../db/db.js";
 import type { AiProvider } from "../assistant/provider.js";
 import { PERSONAL_LITURGY_SYSTEM } from "./prompts.js";
 import type { DayBand, LiturgyPart, BandVerseLine } from "./liturgy.js";
