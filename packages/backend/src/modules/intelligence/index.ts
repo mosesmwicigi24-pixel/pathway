@@ -171,10 +171,12 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   }));
 
   r.get("/home/liturgy", auth, handler(async (req, res) => {
+    const p = requirePrincipal(req);
     const me = await ctx.db.primary.query(`SELECT congregation_id FROM users WHERE user_id = $1`, [
-      requirePrincipal(req).userId,
+      p.userId,
     ]);
-    res.json(await liturgy.current(me.rows[0]?.congregation_id ?? null));
+    // userId personalizes the charge + companion verse (personalLiturgy.ts).
+    res.json(await liturgy.current(me.rows[0]?.congregation_id ?? null, new Date(), p.userId));
   }));
 
   // --- The pastor's own voice on the liturgy (owner request, 2026-08-12) ---
