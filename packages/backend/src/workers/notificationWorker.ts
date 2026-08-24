@@ -62,6 +62,36 @@ export class NotificationWorker {
             failed += 1;
             continue;
           }
+          // A giving-receipt TEXT is claimed on its transaction before it is
+          // sent — through the POOL, not `c`, so the claim commits on its own:
+          // if this batch's transaction later aborts (crash mid-batch), the
+          // row returns to 'scheduled' but the claim SURVIVES, and the rerun
+          // lands here, loses the claim, and marks the row sent instead of
+          // texting the giver twice. Also swallows duplicate rows outright,
+          // should any path ever insert two for one gift.
+          if (r.channel === "sms" && r.template === "giving_receipt") {
+            const txnId = typeof r.payload.transaction_id === "string" ? r.payload.transaction_id : null;
+            if (txnId) {
+              const claimed = await maybeOne(
+                this.pool,
+                `UPDATE transactions SET receipt_sms_at = now(), receipt_sms_ref = COALESCE(receipt_sms_ref, 'claimed')
+                  WHERE transaction_id = $1 AND receipt_sms_at IS NULL
+                  RETURNING transaction_id`,
+                [txnId],
+              );
+              if (!claimed) {
+                await c.query(`UPDATE notifications SET status = 'sent', sent_at = now() WHERE notification_id = $1`, [
+                  r.notification_id,
+                ]);
+                this.log?.info(
+                  { notification_id: r.notification_id, transaction_id: txnId },
+                  "giving receipt already claimed — row closed without re-sending",
+                );
+                sent += 1;
+                continue;
+              }
+            }
+          }
           await this.provider.send({ channel: r.channel, to, template: r.template, payload: r.payload });
           await c.query(`UPDATE notifications SET status = 'sent', sent_at = now() WHERE notification_id = $1`, [
             r.notification_id,
@@ -69,6 +99,21 @@ export class NotificationWorker {
           sent += 1;
         } catch (err) {
           await c.query(`UPDATE notifications SET status = 'failed' WHERE notification_id = $1`, [r.notification_id]);
+          // A refusal Africa's Talking actually answered releases the receipt
+          // claim — the text did NOT go, and the column must not say it did.
+          // A timeout keeps it: maybe-sent, and at-most-once wins.
+          if (
+            r.channel === "sms" &&
+            r.template === "giving_receipt" &&
+            (err as { definitelyNotSent?: boolean }).definitelyNotSent &&
+            typeof r.payload.transaction_id === "string"
+          ) {
+            await this.pool.query(
+              `UPDATE transactions SET receipt_sms_at = NULL, receipt_sms_ref = NULL
+                WHERE transaction_id = $1 AND receipt_sms_ref = 'claimed'`,
+              [r.payload.transaction_id],
+            );
+          }
           failed += 1;
           this.log?.error({ err, notification_id: r.notification_id }, "notification dispatch failed");
         }
