@@ -133,19 +133,23 @@ Respond with ONLY strict JSON, no markdown fences:
 {"sunrise":{"line":"...","scripture":"Book C:V","quote_id":null},"morning":{...},"midday":{...},"afternoon":{...},"evening":{...},"night":{...},"midnight":{...}}
 
 Each band has its own pastoral character AND its own length — honor both:
-- sunrise (45-80 words, a full paragraph): consecrates — the first word of the day belongs to God; invite the reader to meet him before the world does.
-- morning (25-45 words): commissions — sends the reader into their work and people as worship.
-- midday (12-25 words, one breath): steadies — a moment of re-centering at the summit of the day.
-- afternoon (12-25 words, one breath): perseveres — faithfulness in the long stretch when energy is thinnest.
-- evening (45-80 words, a full paragraph): examines — a gentle, honest look back over the day (an examen) — grace, never guilt.
-- night (25-45 words): blesses — a benediction to sleep under.
-- midnight (20-40 words): keeps watch — for the reader awake in the dark hour; God does not sleep either.
+- sunrise (30-50 words): consecrates — the first word of the day belongs to God; invite the reader to meet him before the world does.
+- morning (18-32 words): commissions — sends the reader into their work and people as worship.
+- midday (10-18 words, one breath): steadies — a moment of re-centering at the summit of the day.
+- afternoon (10-18 words, one breath): perseveres — faithfulness in the long stretch when energy is thinnest.
+- evening (30-50 words): examines — a gentle, honest look back over the day (an examen) — grace, never guilt.
+- night (16-28 words): blesses — a benediction to sleep under.
+- midnight (14-24 words): keeps watch — for the reader awake in the dark hour; God does not sleep either.
 
 Each band cites ONE real Scripture reference — the spine passage that fits it best, or another real reference if a different one genuinely serves that band's moment better. Let the season colour every line (Advent waits, Lent repents, Easter rejoices, Ordinary abides).
 
 CRITICAL — do not repeat: prior_lines is what this congregation was ALREADY prayed in the last 14 days. Do not reuse any line from it, and do not lightly reword one (the same sentence shape with synonyms swapped is still a repeat). If today's season and spine resemble a recent day's, find a genuinely different angle — a different image from the passage, a different verb, a different part of the text.
 
-Voice: warm, scriptural, Kenyan-church cadence, second person ("Rise — his mercies are new for you this morning").
+Voice — this matters as much as content:
+- Warm, scriptural, Kenyan-church cadence, second person. A trusted pastor speaking plainly to his people — never an anthology, never a greeting card.
+- PLAIN WORDS AND STRAIGHT SENTENCES. If a sentence needs a second read to parse, rewrite it. No inverted poetic syntax, no stacked qualifying clauses, no lists-inside-sentences ("not by sleep, not by tomorrow's list"), no ornate titles for God chained together ("May the One who ordained the moon and the stars…" — say "God" or "the Lord" or "your Father").
+- ONE image per line at most, and only an image the cited Scripture itself gives you. Never manufacture cleverness.
+- Every line must read naturally when spoken aloud on the first pass. Test each line by ear before you keep it.
 No names, no personal data — this liturgy is prayed by the whole congregation.`;
 
 /** Prayer assist — Gemini-in-Gmail style draft, always in the member's own

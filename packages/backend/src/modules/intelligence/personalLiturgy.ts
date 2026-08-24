@@ -53,29 +53,33 @@ const MODULE_VERSES: readonly BandVerseLine[] = [
 ];
 
 /** morning / midday / evening / night phrasings per signal. The voice matches
- *  the authored CHARGES: short, warm, imperative-adjacent, never saccharine. */
+ *  the authored CHARGES: short, warm, plain. RULE: the member's own words are
+ *  a quoted noun at a clause boundary — subject, appositive, or after a dash —
+ *  NEVER spliced into the middle of a phrase, where an imperative title like
+ *  "Pray for Kenya" turns the sentence to nonsense. Keep every charge to one
+ *  breath; the card's type is small and the words must land, not sprawl. */
 function prayerCharge(part: LiturgyPart, topic: string): string {
   switch (part) {
-    case "morning": return `You laid “${topic}” before God — walk into the day like He heard you. He did.`;
-    case "midday": return `Midday pause: “${topic}” is still before Him — and He is still working.`;
-    case "evening": return `Before the day closes, remember “${topic}” — He does not forget what you gave Him.`;
-    default: return `Sleep comes easier with “${topic}” in His hands — leave it there tonight.`;
+    case "morning": return `He heard you — “${topic}” is already His to carry today.`;
+    case "midday": return `Half the day gone, none of it wasted. “${topic}” is still before Him.`;
+    case "evening": return `The day is closing; your prayer is not. “${topic}” stays before Him.`;
+    default: return `You can sleep now — “${topic}” is watched over tonight.`;
   }
 }
 function planCharge(part: LiturgyPart, plan: string, day: number): string {
   switch (part) {
-    case "morning": return `Day ${day} of ${plan} is waiting — read it before the world starts talking.`;
-    case "midday": return `A page at midday steadies the afternoon — ${plan}, day ${day}, holds yours.`;
-    case "evening": return `Day ${day} of ${plan} would end this day the way days should end — in the Word.`;
-    default: return `One quiet page before sleep — ${plan}, day ${day}, is still open.`;
+    case "morning": return `${plan}, day ${day} — read it before the world starts talking.`;
+    case "midday": return `A steady page for the middle of the day: ${plan}, day ${day}.`;
+    case "evening": return `End the day in the Word — ${plan}, day ${day}, is waiting.`;
+    default: return `One quiet page before sleep: ${plan}, day ${day}.`;
   }
 }
 function moduleCharge(part: LiturgyPart, module: string): string {
   switch (part) {
-    case "morning": return `“${module}” is open on your pathway — one lesson this morning moves you forward.`;
-    case "midday": return `There is still time today for “${module}” — growth is minutes, not seasons.`;
-    case "evening": return `This evening has room for “${module}” — end the day a step further than it began.`;
-    default: return `Tomorrow, “${module}” — set it in your heart before you sleep.`;
+    case "morning": return `One lesson this morning — “${module}” is open on your pathway.`;
+    case "midday": return `Still time today for “${module}” — growth is minutes, not seasons.`;
+    case "evening": return `“${module}” would end today a step further than it began.`;
+    default: return `Tomorrow: “${module}”. Set it in your heart tonight.`;
   }
 }
 
