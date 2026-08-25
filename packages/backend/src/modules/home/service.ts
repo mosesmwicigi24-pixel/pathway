@@ -11,6 +11,7 @@ import { ScoresService, type ScoreBreakdown } from "../scores/service.js";
 import type { AiProvider } from "../assistant/provider.js";
 import { pickVerse, pickEncouragement, THEME_REASON, type Encouragement, type VerseArt, type VerseTheme } from "./verses.js";
 import { bandOf, pickBandArt } from "../intelligence/liturgy.js";
+import { artForText } from "../intelligence/imagery.js";
 
 const TZ = "Africa/Nairobi";
 
@@ -181,7 +182,10 @@ export class HomeService {
         reason: cached.reason,
         ...(cached.mood ? { mood: cached.mood } : {}),
         ...(cached.verse_text ? { text: cached.verse_text } : {}),
-        art: pickBandArt("verse", bandOf(), day.d),
+        // The picture knows the words and the hour (owner, 2026-08-25):
+        // motif-matched art first, the old band rotation only when no motif
+        // genuinely fits these words.
+        art: artForText(cached.verse_text, bandOf(), day.d) ?? pickBandArt("verse", bandOf(), day.d),
         encouragement: pickEncouragement(cached.theme, day.d),
       };
     }
@@ -216,7 +220,7 @@ export class HomeService {
           reason,
           mood: mood.label,
           text: pick.verse_text,
-          art: pickBandArt("verse", bandOf(), day.d),
+          art: artForText(pick.verse_text, bandOf(), day.d) ?? pickBandArt("verse", bandOf(), day.d),
           encouragement: pickEncouragement(mood.theme, day.d),
         };
       }
