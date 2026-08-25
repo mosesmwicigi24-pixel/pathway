@@ -30,3 +30,8 @@ UPDATE reading_plans SET image_url = 'https://images.unsplash.com/photo-14390666
 UPDATE reading_plans SET image_url = 'https://images.unsplash.com/photo-1486870591958-9b9d0d1dda99?auto=format&fit=crop&w=1080&q=70' WHERE title = 'Lead Yourself First';
 UPDATE reading_plans SET image_url = 'https://images.unsplash.com/photo-1445264718234-a623be589d37?auto=format&fit=crop&w=1080&q=70' WHERE title = 'The God of Systems';
 UPDATE reading_plans SET image_url = 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1080&q=70' WHERE title = 'The Reward System';
+
+-- Down Migration
+-- Data refresh: the previous generic covers are deliberately not preserved,
+-- so reversing is an explicit no-op (CI proves down 0 → up for every file).
+SELECT 1;
