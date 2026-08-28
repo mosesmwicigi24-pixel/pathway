@@ -3667,6 +3667,13 @@ paths:
                       - $ref: "#/components/schemas/CellSummary"
                       - { type: "null" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/cell/members:
+    get:
+      tags: [system]
+      summary: The member's own cell roster — one payload, two truths. Everyone receives the people (name, first_name, avatar, is_leader, is_me); only the cell's shepherd (leader_user_id, a leader_assignment holder, or Admin+) additionally receives score (0-100), band, attendance {present, of} over the cell's last <=8 real gatherings, and last_seen_days. can_shepherd says which view was served. cell=null with an empty list for a member without a cell.
+      responses:
+        "200": { description: Cell roster }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /admin/events/{id}/checkins:
     post:
       tags: [portal]
