@@ -23,6 +23,10 @@ CREATE TABLE plan_promo_log (
 );
 
 CREATE INDEX idx_plan_promo_log_recent ON plan_promo_log (user_id, last_shown_on DESC);
+-- plan_id is the SECOND column of the primary key, so it has no usable index of
+-- its own — and its FK cascades. Without this, retiring a plan sequentially
+-- scans every promo ever logged (the repo's fk-index-coverage guard caught it).
+CREATE INDEX idx_plan_promo_log_plan ON plan_promo_log (plan_id);
 
 -- Down Migration
 DROP TABLE plan_promo_log;
