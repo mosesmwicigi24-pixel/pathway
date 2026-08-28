@@ -581,6 +581,113 @@ export class CalendarService {
     };
   }
 
+  /**
+   * The member's own cell roster — ONE payload, two truths (owner's ask,
+   * 2026-08-26: "click members, see name, score, attendance, risk, and a way
+   * to chat").
+   *
+   * Everyone in the cell sees the PEOPLE: name, face, and who shepherds them —
+   * enough to know the room and start a conversation. The cell's shepherd
+   * (its leader_user_id, anyone holding a leader_assignment for it, or
+   * Admin/SuperAdmin) ALSO receives each member's engagement score, risk band,
+   * attendance and last-seen. A member's pastoral standing is never shipped to
+   * their peers — the split happens here, not in a client (§5.4).
+   *
+   * ATTENDANCE, honestly: presence at the last ≤8 gatherings this cell
+   * actually held (the same window the summary's turnout uses), so it reads
+   * "5 of 8" rather than a fabricated percentage. A cell that has never met
+   * returns null, and the client says so instead of showing 0/0.
+   */
+  async cellRoster(userId: string): Promise<unknown> {
+    const me = await one<{ cell_group_id: string | null; role: string }>(
+      this.pool,
+      `SELECT u.cell_group_id, u.role FROM users u WHERE u.user_id = $1`,
+      [userId],
+    );
+    if (!me.cell_group_id) return { cell: null, can_shepherd: false, members: [] };
+    const cell = await one<{ name: string; leader_user_id: string | null }>(
+      this.pool,
+      `SELECT name, leader_user_id FROM cell_groups WHERE cell_group_id = $1`,
+      [me.cell_group_id],
+    );
+    const scope = await this.scopeOf(this.pool, userId);
+    const canShepherd =
+      cell.leader_user_id === userId ||
+      scope.leaderCells.includes(me.cell_group_id) ||
+      me.role === "Admin" ||
+      me.role === "SuperAdmin";
+
+    const people = await many<{
+      user_id: string;
+      full_name: string;
+      avatar_url: string | null;
+      e_score: string | null;
+      band: string | null;
+      last_seen_days: number | null;
+    }>(
+      this.pool,
+      `SELECT u.user_id, u.full_name, u.avatar_url,
+              es.e_score, es.band::text AS band,
+              (SELECT (CURRENT_DATE - MAX(ie.occurred_at)::date)::int
+                 FROM interaction_events ie WHERE ie.user_id = u.user_id) AS last_seen_days
+         FROM users u
+         LEFT JOIN engagement_scores es ON es.user_id = u.user_id
+        WHERE u.cell_group_id = $1 AND u.deleted_at IS NULL
+        ORDER BY (u.user_id = $2) DESC, (u.avatar_url IS NULL), u.full_name`,
+      [me.cell_group_id, cell.leader_user_id],
+    );
+
+    // The gatherings this cell actually held (same window as the summary's
+    // turnout) and who was present at them — one round trip, shepherd only.
+    let meetings: string[] = [];
+    const presence = new Map<string, number>();
+    if (canShepherd) {
+      const past = await many<{ event_id: string }>(
+        this.pool,
+        `SELECT e.event_id
+           FROM events e
+           LEFT JOIN event_series es ON es.series_id = e.series_id
+          WHERE e.cell_group_id = $1 AND e.occurs_at < now() AND e.archived_at IS NULL
+            AND (e.series_id IS NULL OR e.occurs_at >= es.created_at)
+          ORDER BY e.occurs_at DESC
+          LIMIT 8`,
+        [me.cell_group_id],
+      );
+      meetings = past.map((p) => p.event_id);
+      if (meetings.length > 0) {
+        const rows = await many<{ user_id: string; n: number }>(
+          this.pool,
+          `SELECT user_id, count(DISTINCT event_id)::int AS n
+             FROM attendance_logs WHERE event_id = ANY($1::varchar[])
+            GROUP BY user_id`,
+          [meetings],
+        );
+        for (const r of rows) presence.set(r.user_id, r.n);
+      }
+    }
+
+    return {
+      cell: { cell_group_id: me.cell_group_id, name: cell.name },
+      can_shepherd: canShepherd,
+      members: people.map((p) => ({
+        user_id: p.user_id,
+        full_name: p.full_name,
+        first_name: p.full_name.trim().split(/\s+/)[0] ?? p.full_name,
+        avatar_url: p.avatar_url,
+        is_leader: p.user_id === cell.leader_user_id,
+        is_me: p.user_id === userId,
+        ...(canShepherd
+          ? {
+              score: p.e_score == null ? null : Math.round(Number(p.e_score) * 100),
+              band: p.band,
+              attendance: meetings.length > 0 ? { present: presence.get(p.user_id) ?? 0, of: meetings.length } : null,
+              last_seen_days: p.last_seen_days,
+            }
+          : {}),
+      })),
+    };
+  }
+
   // ---------------- Admin: series CRUD ----------------
 
   // Per-series automation config (EVENTS_ARCHITECTURE §7), stored as JSONB and

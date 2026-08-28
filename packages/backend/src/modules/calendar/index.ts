@@ -120,6 +120,19 @@ export function registerCalendar(ctx: AppContext): Router {
     }),
   );
 
+  // The member's own cell roster. ONE payload, two truths: everyone sees the
+  // PEOPLE (name, face, who shepherds); only the cell's shepherd additionally
+  // receives score / risk band / attendance / last-seen. The split is decided
+  // here on the server — a member's pastoral standing is never shipped to
+  // their peers and then hidden by a client (§5.4).
+  r.get(
+    "/me/cell/members",
+    auth,
+    handler(async (req, res) => {
+      res.json(await svc.cellRoster(requirePrincipal(req).userId));
+    }),
+  );
+
   // ---- Leader attendance ops (Contract Matrix B2; cell-scoped, audited) ----
   //
   // Every id-addressed reader/writer here ensure-materializes first (§2), same
