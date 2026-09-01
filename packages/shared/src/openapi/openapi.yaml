@@ -2682,6 +2682,24 @@ paths:
         "200": { description: Cancelled }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /giving/schedules/{id}/resume:
+    post:
+      tags: [system]
+      summary: Resume a recurring gift that repeated collection failures paused. The giver's intent was never in question, so this is one tap. The missed cycle is deliberately NOT charged — the schedule re-arms from now and the response carries the next collection date. 404 when no paused schedule of the caller's matches.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200": { description: "Schedule resumed — schedule_id, status, next_run_at" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/finance/schedules:
+    get:
+      tags: [portal]
+      summary: "finance:view. Recurring giving with collection health — member, amount, method, status, next run, consecutive_failures, last_error and needs_attention. Ordered paused first, then most failures, then soonest due. Optional ?status=active|paused|cancelled and ?limit (max 200)."
+      responses:
+        "200": { description: Recurring giving }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /giving/history:
     get:
       tags: [giving]

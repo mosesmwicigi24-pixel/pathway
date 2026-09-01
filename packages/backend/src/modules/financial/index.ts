@@ -130,6 +130,19 @@ export function registerFinancial(
   // ---- Admin finance reads (ERP, Contract Matrix B1; RBAC finance:view, §5.4) ----
   const perm = requirePermission(ctx.db.replica);
 
+  // Recurring giving — who is committed, and whose collection is failing. There
+  // was no admin read of giving_schedules at all before this.
+  r.get("/admin/finance/schedules", auth, perm("finance", "view"), handler(async (req, res) => {
+    const q = parseBody(
+      z.object({
+        status: z.enum(["active", "paused", "cancelled"]).optional(),
+        limit: z.coerce.number().int().min(1).max(200).optional(),
+      }),
+      req.query,
+    );
+    res.json(await svc.listSchedulesAdmin(q));
+  }));
+
   r.get("/admin/finance/summary", auth, perm("finance", "view"), handler(async (_req, res) => {
     res.json(await svc.financeSummary());
   }));
