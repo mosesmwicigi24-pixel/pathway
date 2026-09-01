@@ -10,6 +10,7 @@ import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { GrowthContentService } from "./service.js";
 import { AdminGrowthService } from "./admin.js";
 import { ReadingSocialService } from "../reading-social/groups.js";
+import { planPromos } from "./promos.js";
 
 const PlanIdParam = z.object({ id: z.string().uuid() });
 const idOf = (req: { params: Record<string, string | undefined> }, k = "id"): string => req.params[k] ?? "";
@@ -45,6 +46,13 @@ export function registerGrowthContent(ctx: AppContext): Router {
 
   r.get("/growth/plans", auth, handler(async (req, res) => {
     res.json(await svc.plans(requirePrincipal(req).userId));
+  }));
+  // Up to five plan promos, each earned from something true about this member
+  // (a plan in progress, what they last finished, the theme of an open prayer,
+  // what their cell is reading, the least-offered plan). Remembers what it
+  // showed so the same plan doesn't fill the shelf — see promos.ts.
+  r.get("/growth/plans/promos", auth, handler(async (req, res) => {
+    res.json({ data: await planPromos(ctx.db.primary, requirePrincipal(req).userId) });
   }));
   r.get("/growth/plans/:id", auth, handler(async (req, res) => {
     const { id } = parseBody(PlanIdParam, req.params);

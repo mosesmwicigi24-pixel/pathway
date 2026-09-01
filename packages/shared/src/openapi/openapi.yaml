@@ -3667,6 +3667,13 @@ paths:
                       - $ref: "#/components/schemas/CellSummary"
                       - { type: "null" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /growth/plans/promos:
+    get:
+      tags: [system]
+      summary: Up to five plan promos, each earned from something true about this member — a plan in progress (continue), what they last finished (next_step), the THEME of an open prayer (carrying; never their own words), what their cell is reading (cell), and the least-offered plan (fresh). Each item is {plan_id, slot, kicker, reason}; the client joins plan_id against its loaded plan list. Remembers what it showed (plan_promo_log) so one plan cannot own the shelf.
+      responses:
+        "200": { description: Plan promos }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/cell/members:
     get:
       tags: [system]
