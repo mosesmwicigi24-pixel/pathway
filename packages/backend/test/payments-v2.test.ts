@@ -449,7 +449,11 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
       expect(await brokenSvc().runDueSchedules(new Date())).toEqual({ run: 0, failed: 0 });
 
       const id = (await testPool().query<{ schedule_id: string }>(`SELECT schedule_id FROM giving_schedules`)).rows[0]!.schedule_id;
-      const resumed = (await brokenSvc().resumeSchedule(user, id)) as { status: string; next_run_at: string };
+      // Through the ROUTE, not the service: mounting is part of the feature,
+      // and a service-only test cannot tell you the endpoint exists.
+      const res = await supertest(app).post(`/v1/giving/schedules/${id}/resume`).set({ Authorization: userTok });
+      expect(res.status).toBe(200);
+      const resumed = res.body as { status: string; next_run_at: string };
       expect(resumed.status).toBe("active");
       // Never a surprise charge: resuming re-arms for the NEXT cycle, it does
       // not collect the month that was missed.

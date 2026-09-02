@@ -127,6 +127,18 @@ export function registerFinancial(
     }),
   );
 
+  // A paused schedule is a standing intention, not a dead one: this re-arms it
+  // from now. It deliberately does NOT charge the cycle that was missed —
+  // money must never surprise anyone; covering the gap is a one-off gift.
+  r.post(
+    "/giving/schedules/:id/resume",
+    auth,
+    handler(async (req, res) => {
+      const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
+      res.json(await svc.resumeSchedule(requirePrincipal(req).userId, id));
+    }),
+  );
+
   // ---- Admin finance reads (ERP, Contract Matrix B1; RBAC finance:view, §5.4) ----
   const perm = requirePermission(ctx.db.replica);
 
