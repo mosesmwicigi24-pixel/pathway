@@ -137,6 +137,16 @@ const PUSH_TEMPLATE_COPY: Record<
     title: "Thinking of you",
     body: "It's been a while — your next step in Nuru Pathway is ready whenever you are.",
   }),
+  // A recurring gift that didn't go through. Never scolding — the giver's
+  // intent is not in question, only the collection.
+  giving_schedule_failed: () => ({
+    title: "Your recurring gift didn't go through",
+    body: "We couldn't collect it this time — we'll try again shortly. Open Give to check your number or method.",
+  }),
+  giving_schedule_paused: () => ({
+    title: "Your recurring gift is paused",
+    body: "We tried a few times and couldn't collect it, so we've stopped trying. Open Give to resume it whenever you're ready.",
+  }),
   reflection_approved: () => ({
     title: "Reflection approved",
     body: "Your reflection was approved — keep going!",

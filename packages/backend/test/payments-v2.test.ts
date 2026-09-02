@@ -379,4 +379,112 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
     const sched = await testPool().query(`SELECT next_run_at < now() AS still_due FROM giving_schedules`);
     expect(sched.rows[0].still_due).toBe(true); // untouched — will retry
   });
+
+  // A failed collection used to be swallowed by `catch { failed += 1 }`: nothing
+  // logged, nothing recorded, nobody told, and a retry every five minutes
+  // forever. These pin the fix (owner, 2026-08-28).
+  describe("a recurring gift that fails says so", () => {
+    const brokenSvc = (): FinancialService => new FinancialService(testPool(), gw); // no mobile-money providers → initiate throws
+    async function dueSchedule(key: string): Promise<void> {
+      await brokenSvc().createSchedule(user, {
+        fund: "tithe", amount_minor: 700, currency: "KES",
+        frequency: "monthly", method: "mpesa", idempotency_key: key,
+      });
+      await testPool().query(`UPDATE giving_schedules SET next_run_at = now() - interval '1 hour'`);
+    }
+    const scheduleRow = async (): Promise<{
+      status: string; consecutive_failures: number; last_error: string | null;
+      retry_after: string | null; next_run_at: string; paused_at: string | null;
+    }> =>
+      (await testPool().query(
+        `SELECT status, consecutive_failures, last_error, retry_after, next_run_at, paused_at
+           FROM giving_schedules LIMIT 1`,
+      )).rows[0];
+
+    it("records the reason, counts the attempt, and backs off instead of hammering", async () => {
+      await dueSchedule("sched-f1");
+      const before = await scheduleRow();
+      await brokenSvc().runDueSchedules(new Date());
+      const after = await scheduleRow();
+      expect(after.consecutive_failures).toBe(1);
+      expect(after.last_error).toBeTruthy();                 // the reason is kept, not swallowed
+      expect(after.retry_after).not.toBeNull();              // backed off
+      expect(new Date(after.retry_after!).getTime()).toBeGreaterThan(Date.now());
+      // THE guarantee: the cycle anchor never moves on failure, so the retry
+      // reuses `sched:{id}:{next_run_at}` and can never charge twice.
+      expect(new Date(after.next_run_at).getTime()).toBe(new Date(before.next_run_at).getTime());
+    });
+
+    it("does not retry until the backoff has passed", async () => {
+      await dueSchedule("sched-f2");
+      await brokenSvc().runDueSchedules(new Date());
+      const second = await brokenSvc().runDueSchedules(new Date());
+      expect(second).toEqual({ run: 0, failed: 0 });         // skipped, not retried
+      expect((await scheduleRow()).consecutive_failures).toBe(1);
+    });
+
+    it("stops after three attempts, pauses rather than cancels, and tells the giver", async () => {
+      await dueSchedule("sched-f3");
+      for (let i = 0; i < 3; i++) {
+        await testPool().query(`UPDATE giving_schedules SET retry_after = NULL`); // fast-forward the backoff
+        await brokenSvc().runDueSchedules(new Date());
+      }
+      const row = await scheduleRow();
+      expect(row.consecutive_failures).toBe(3);
+      expect(row.status).toBe("paused");                     // paused — the intent still stands
+      expect(row.paused_at).not.toBeNull();
+      const notes = await testPool().query<{ template: string }>(
+        `SELECT template FROM notifications WHERE user_id = $1 AND template LIKE 'giving_schedule%' ORDER BY template`,
+        [user],
+      );
+      expect(notes.rows.map((r) => r.template)).toEqual(["giving_schedule_failed", "giving_schedule_paused"]);
+    });
+
+    it("a paused schedule is not charged again until the giver resumes it", async () => {
+      await dueSchedule("sched-f4");
+      for (let i = 0; i < 3; i++) {
+        await testPool().query(`UPDATE giving_schedules SET retry_after = NULL`);
+        await brokenSvc().runDueSchedules(new Date());
+      }
+      expect(await brokenSvc().runDueSchedules(new Date())).toEqual({ run: 0, failed: 0 });
+
+      const id = (await testPool().query<{ schedule_id: string }>(`SELECT schedule_id FROM giving_schedules`)).rows[0]!.schedule_id;
+      // Through the ROUTE, not the service: mounting is part of the feature,
+      // and a service-only test cannot tell you the endpoint exists.
+      const res = await supertest(app).post(`/v1/giving/schedules/${id}/resume`).set({ Authorization: userTok });
+      expect(res.status).toBe(200);
+      const resumed = res.body as { status: string; next_run_at: string };
+      expect(resumed.status).toBe("active");
+      // Never a surprise charge: resuming re-arms for the NEXT cycle, it does
+      // not collect the month that was missed.
+      expect(new Date(resumed.next_run_at).getTime()).toBeGreaterThan(Date.now());
+      const row = await scheduleRow();
+      expect(row.consecutive_failures).toBe(0);
+      expect(row.last_error).toBeNull();
+    });
+
+    it("a successful cycle clears the failure state", async () => {
+      await dueSchedule("sched-f5");
+      await brokenSvc().runDueSchedules(new Date());
+      expect((await scheduleRow()).consecutive_failures).toBe(1);
+      await testPool().query(`UPDATE giving_schedules SET retry_after = NULL`);
+      await svc.runDueSchedules(new Date());                 // svc HAS a working fake provider
+      const row = await scheduleRow();
+      expect(row.consecutive_failures).toBe(0);
+      expect(row.last_error).toBeNull();
+      expect(row.retry_after).toBeNull();
+    });
+
+    it("the church can finally see a failing partner", async () => {
+      await dueSchedule("sched-f6");
+      await brokenSvc().runDueSchedules(new Date());
+      const admin = (await brokenSvc().listSchedulesAdmin({})) as {
+        data: Array<{ needs_attention: boolean; consecutive_failures: number; full_name: string }>;
+      };
+      expect(admin.data).toHaveLength(1);
+      expect(admin.data[0]!.needs_attention).toBe(true);
+      expect(admin.data[0]!.consecutive_failures).toBe(1);
+      expect(admin.data[0]!.full_name).toBeTruthy();
+    });
+  });
 });

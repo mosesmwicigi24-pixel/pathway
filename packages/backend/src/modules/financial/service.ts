@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { maybeOne, one, many, tx, audit, enqueueOutbox } from "../../db/db.js";
+import { NotificationService } from "../notifications/service.js";
 import { ApiError } from "../../http/errors.js";
 import type { PaymentGateway } from "./gateway.js";
 import { sanitizeAccountReference, type MobileMoneyKey, type MobileMoneyProviders } from "./providers.js";
@@ -23,6 +24,14 @@ export class FinancialService {
     private readonly mobileMoney?: MobileMoneyProviders,
     private readonly paypal?: PayPalGateway,
   ) {}
+
+  /** Lazily built so the money path carries no notification cost until a
+   *  recurring gift actually fails (runDueSchedules is the only caller). */
+  private notificationsSvc?: NotificationService;
+  private get notifications(): NotificationService {
+    this.notificationsSvc ??= new NotificationService(this.pool);
+    return this.notificationsSvc;
+  }
 
   static readonly GivingIntent = z.object({
     fund: z.string().min(2).max(40), // validated against the funds table (data-driven, B7)
@@ -821,7 +830,8 @@ export class FinancialService {
     const rows = await many<Record<string, unknown>>(
       this.pool,
       `SELECT s.schedule_id, f.code AS fund, s.amount_minor, s.currency, s.frequency, s.method,
-              s.status, s.next_run_at, s.last_run_at, s.created_at
+              s.status, s.next_run_at, s.last_run_at, s.created_at,
+              s.consecutive_failures, s.last_failed_at, s.paused_at
          FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id
         WHERE s.user_id = $1 ORDER BY s.created_at DESC`,
       [userId],
@@ -833,13 +843,43 @@ export class FinancialService {
     const row = await maybeOne<{ schedule_id: string }>(
       this.pool,
       `UPDATE giving_schedules SET status = 'cancelled', cancelled_at = now()
-        WHERE schedule_id = $1 AND user_id = $2 AND status = 'active'
+        WHERE schedule_id = $1 AND user_id = $2 AND status IN ('active', 'paused')
         RETURNING schedule_id`,
       [scheduleId, userId],
     );
     if (!row) throw new ApiError("NOT_FOUND", "Active schedule not found");
     await audit(this.pool, userId, "giving.schedule_cancelled", "giving_schedules", scheduleId, {});
     return { schedule_id: scheduleId, status: "cancelled" };
+  }
+
+  /**
+   * Resume a schedule that repeated collection failures paused. The giver's
+   * intent was never in question — only the collection — so this is one tap.
+   *
+   * The missed cycle is deliberately NOT charged on resume: money must never
+   * surprise anyone. The schedule re-arms from now, and the caller is told
+   * exactly when the next gift will be collected; anyone wanting to cover the
+   * gap can give once, on purpose.
+   */
+  async resumeSchedule(userId: string, scheduleId: string): Promise<Record<string, unknown>> {
+    const current = await maybeOne<{ frequency: "weekly" | "monthly" }>(
+      this.pool,
+      `SELECT frequency FROM giving_schedules
+        WHERE schedule_id = $1 AND user_id = $2 AND status = 'paused'`,
+      [scheduleId, userId],
+    );
+    if (!current) throw new ApiError("NOT_FOUND", "Paused schedule not found");
+    const nextRun = FinancialService.nextRun(new Date(), current.frequency);
+    await this.pool.query(
+      `UPDATE giving_schedules
+          SET status = 'active', paused_at = NULL, consecutive_failures = 0,
+              retry_after = NULL, last_error = NULL, last_failed_at = NULL,
+              next_run_at = $3
+        WHERE schedule_id = $1 AND user_id = $2`,
+      [scheduleId, userId, nextRun.toISOString()],
+    );
+    await audit(this.pool, userId, "giving.schedule_resumed", "giving_schedules", scheduleId, {});
+    return { schedule_id: scheduleId, status: "active", next_run_at: nextRun.toISOString() };
   }
 
   /**
@@ -858,12 +898,14 @@ export class FinancialService {
       frequency: "weekly" | "monthly";
       method: "card" | "mpesa" | "airtel";
       next_run_at: string;
+      consecutive_failures: number;
     }>(
       this.pool,
       `SELECT s.schedule_id, s.user_id, f.code AS fund, s.amount_minor, s.currency,
-              s.frequency, s.method, s.next_run_at
+              s.frequency, s.method, s.next_run_at, s.consecutive_failures
          FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id
         WHERE s.status = 'active' AND s.next_run_at <= $1
+          AND (s.retry_after IS NULL OR s.retry_after <= $1)
         ORDER BY s.next_run_at`,
       [now.toISOString()],
     );
@@ -883,19 +925,120 @@ export class FinancialService {
           s.schedule_id,
         );
         await this.pool.query(
-          `UPDATE giving_schedules SET last_run_at = $2, next_run_at = $3 WHERE schedule_id = $1`,
+          `UPDATE giving_schedules
+              SET last_run_at = $2, next_run_at = $3,
+                  consecutive_failures = 0, retry_after = NULL, last_error = NULL, last_failed_at = NULL
+            WHERE schedule_id = $1`,
           [s.schedule_id, now.toISOString(), FinancialService.nextRun(new Date(s.next_run_at), s.frequency).toISOString()],
         );
         run += 1;
-      } catch {
-        failed += 1; // provider down etc. — schedule stays due; the next tick retries
+      } catch (err) {
+        // A failed cycle is now VISIBLE, BOUNDED and RECOVERABLE (owner,
+        // 2026-08-28). It used to be `catch { failed += 1 }`: silent to the
+        // giver, silent to the church, and retried every five minutes forever.
+        //
+        // next_run_at deliberately does NOT move — it anchors this cycle's
+        // idempotency key (`sched:{id}:{next_run_at}`), so every retry inside
+        // the cycle reuses that key and can never charge twice. Backoff rides
+        // the separate retry_after gate instead.
+        failed += 1;
+        const attempts = s.consecutive_failures + 1;
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error(
+          `[giving] schedule ${s.schedule_id} failed (attempt ${attempts}, ${s.method}): ${reason}`,
+        );
+        const paused = attempts >= FinancialService.SCHEDULE_MAX_ATTEMPTS;
+        const backoffMs = FinancialService.SCHEDULE_BACKOFF_MIN[
+          Math.min(attempts - 1, FinancialService.SCHEDULE_BACKOFF_MIN.length - 1)
+        ]! * 60_000;
+        await this.pool.query(
+          `UPDATE giving_schedules
+              SET consecutive_failures = $2,
+                  last_error = $3,
+                  last_failed_at = $4,
+                  retry_after = $5,
+                  status = CASE WHEN $6 THEN 'paused' ELSE status END,
+                  paused_at = CASE WHEN $6 THEN $4::timestamptz ELSE paused_at END
+            WHERE schedule_id = $1`,
+          [
+            s.schedule_id,
+            attempts,
+            reason.slice(0, 500),
+            now.toISOString(),
+            new Date(now.getTime() + backoffMs).toISOString(),
+            paused,
+          ],
+        );
+        // Tell the giver — once when it first fails, and again if we stop.
+        // Best-effort: a notification hiccup must never break the tick.
+        try {
+          if (attempts === 1 || paused) {
+            await this.notifications.schedule({
+              userId: s.user_id,
+              channel: "push",
+              template: paused ? "giving_schedule_paused" : "giving_schedule_failed",
+              payload: {
+                schedule_id: s.schedule_id,
+                fund: s.fund,
+                amount_minor: Number(s.amount_minor),
+                currency: s.currency,
+                method: s.method,
+              },
+            });
+          }
+        } catch {
+          /* the ledger matters more than the notice */
+        }
       }
     }
     return { run, failed };
   }
 
+  /** Minutes to wait before re-attempting a failed cycle (1h, 6h, 24h). */
+  private static readonly SCHEDULE_BACKOFF_MIN = [60, 360, 1440] as const;
+  /** Consecutive failures after which we stop and ask the giver. */
+  private static readonly SCHEDULE_MAX_ATTEMPTS = 3;
+
   // ---------------- Admin finance reads (ERP, Contract Matrix B1) ----------------
   // Admin = view-only over the ledger; fund/financial CONFIG stays SuperAdmin (§5.4).
+
+  /**
+   * Recurring giving, for the people responsible for it. There was NO admin
+   * read of giving_schedules at all — the only visibility was two aggregates
+   * buried in Member Intelligence — so a partner whose collection kept failing
+   * was invisible to the church. `needs_attention` first: paused, then the most
+   * failures, then soonest due.
+   */
+  async listSchedulesAdmin(opts: { status?: string | undefined; limit?: number | undefined } = {}): Promise<{ data: unknown[] }> {
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
+    const params: unknown[] = [limit];
+    let where = `WHERE s.status <> 'cancelled'`;
+    if (opts.status) {
+      params.push(opts.status);
+      where = `WHERE s.status = $${params.length}`;
+    }
+    const rows = await many<Record<string, unknown>>(
+      this.pool,
+      `SELECT s.schedule_id, s.user_id, u.full_name, u.phone_number,
+              f.code AS fund, s.amount_minor, s.currency, s.frequency, s.method,
+              s.status, s.next_run_at, s.last_run_at,
+              s.consecutive_failures, s.last_error, s.last_failed_at, s.paused_at, s.created_at
+         FROM giving_schedules s
+         JOIN funds f ON f.fund_id = s.fund_id
+         JOIN users u ON u.user_id = s.user_id
+         ${where}
+        ORDER BY (s.status = 'paused') DESC, s.consecutive_failures DESC, s.next_run_at
+        LIMIT $1`,
+      params,
+    );
+    return {
+      data: rows.map((r) => ({
+        ...r,
+        amount_minor: Number(r.amount_minor),
+        needs_attention: r.status === "paused" || Number(r.consecutive_failures ?? 0) > 0,
+      })),
+    };
+  }
 
   /** Per-fund revenue: settled totals this month + all time (the "Fund Revenue" card). */
   async financeSummary(): Promise<Record<string, unknown>> {
