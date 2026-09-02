@@ -132,6 +132,88 @@ bundle, so this is instant and total.
 
 ## Incident ledger
 
+### 2026-09-02 — Recurring giving could never have worked: the charger had no M-Pesa keys
+
+**Symptom.** A probe of the new `/giving/partnership` endpoint showed six
+active M-Pesa schedules created 17-18 June with `kept: 0` — not one cycle ever
+collected — and `giving_schedules.last_error` reading **"mpesa payments are not
+configured"** on every one.
+
+**Root cause.** The Daraja credentials were listed under the **`api`** service
+in `docker-compose.vps.yml` and nowhere else. The process that charges
+recurring gifts is `runDueSchedules`, which runs in the **`worker`**. The worker
+had never been given those variables — `env | grep -c MPESA_` returned **0** in
+the worker and **7** in the api. Recurring giving has therefore never been
+capable of collecting a single shilling in production since the day it shipped.
+
+**Why undetected.** Two reasons compounding.
+
+1. Until migration 211 landed that same morning, `runDueSchedules` swallowed
+   every failure with a bare `catch { failed += 1 }`. The charger had been
+   failing on every pass for ten weeks and saying nothing to anyone. The only
+   reason this was findable at all is that the failure-visibility work had
+   shipped hours earlier and had started writing `last_error` to the row.
+2. This is the **third** instance of the same class in this one file, which
+   already records the AI keys (2026-08-01) and SMTP. Each time, a provider was
+   wired to the api and the worker — the process that actually runs the job —
+   was forgotten.
+
+**A latent danger this exposed, worse than the outage itself.** `next_run_at`
+advances by ONE interval per success, so a schedule due 24 June becomes 1 July —
+still in the past, still due. The moment M-Pesa was configured, each stale
+schedule would have been charged roughly **ten times in quick succession** over
+the next few worker passes. The per-cycle idempotency key does **not** protect
+against this: it keys on `(schedule, due-instant)`, and ten stale cycles carry
+ten distinct keys. They are not a repeat of one charge; they are ten
+legitimately distinct charges that nothing in the system would have questioned.
+Fixing the configuration without noticing this would have looked like a
+successful deploy while emptying accounts.
+
+**A lie found in our own tests.** The failure-visibility tests written that
+morning simulated "the giver's payment failed" using a `FinancialService`
+constructed with **no providers** — which is the misconfiguration path, not a
+declined payment. They passed while describing something they never exercised,
+and they would have kept passing after the two paths were given different
+behaviour. They now use a provider that is configured and declines.
+
+**An error of judgement, recorded because the fix was not only technical.** On
+finding six rows in `giving_schedules`, I reported them to the owner as "six
+real partners" and wrote "ten weeks of partners believing they were giving"
+into commit messages and a PR body. I drafted an apology letter for him to send
+them. They were all his own test schedules — two accounts, the same phone
+number on all six, three of them exact duplicates. One query against `users`
+would have shown that, and I had been in that database repeatedly. Six rows in
+a giving table are not six people until you check. The engineering findings
+stood; the human urgency I attached to them was invented.
+
+**Permanent fixes.**
+- `docker-compose.vps.yml` hoists the keys into an `x-mpesa-env` **anchor**
+  referenced by both `api` and `worker`. Listing them twice would have worked
+  and invited a fourth outage of this shape; an anchor makes the two impossible
+  to separate by accident.
+- The charger refuses a backlog: a schedule more than one full interval overdue
+  is rolled forward to its next FUTURE occurrence and not collected
+  (`skipped` counter). `rollForward` steps interval by interval so a
+  Tuesday-09:00 gift lands on a future Tuesday at 09:00.
+- `ProviderNotConfiguredError` separates *our* fault from *theirs*. A
+  configuration failure does not count toward a giver's three strikes, does not
+  pause their schedule, and does not notify them — it is recorded and shouted at
+  the operator instead. A distinct type, not a string match: a message anyone
+  may reword is not a thing to branch on.
+
+**What else was audited.** Every payment-provider variable in
+`docker-compose.vps.yml` was checked against both services; M-Pesa was the only
+one still split (Stripe and the webhook secrets already sat in the shared
+anchor). The owner's eight test schedules were cleared from production at his
+instruction, after asserting that no schedule belonged to any other phone and
+that no transaction referenced one; 104 transactions and 112 ledger entries were
+left untouched.
+
+**Still unproven.** Recurring giving has been made *capable* of working and
+verified only that far — the worker now sees the credentials. No charge has ever
+completed end to end in production. Until one does, this is a fix believed to
+work, not a fix demonstrated to work.
+
 ### 2026-09-02 — A migrate container ran for nine days doing nothing
 
 **Symptom.** During the deploy of `2ad3f0b`, `docker ps` showed
