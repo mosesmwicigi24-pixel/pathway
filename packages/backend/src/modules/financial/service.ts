@@ -863,13 +863,13 @@ export class FinancialService {
    */
   async partnership(userId: string): Promise<Record<string, unknown>> {
     const standing = await maybeOne<{
-      status: string; since: string; frequency: string; method: string;
+      schedule_id: string; status: string; since: string; frequency: string; method: string;
       amount_minor: string; currency: string; next_run_at: string | null;
       fund: string; consecutive_failures: number; last_failed_at: string | null;
       paused_at: string | null;
     }>(
       this.pool,
-      `SELECT s.status, s.created_at AS since, s.frequency, s.method, s.amount_minor,
+      `SELECT s.schedule_id, s.status, s.created_at AS since, s.frequency, s.method, s.amount_minor,
               s.currency, s.next_run_at, f.code AS fund,
               s.consecutive_failures, s.last_failed_at, s.paused_at
          FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id
@@ -932,6 +932,7 @@ export class FinancialService {
     return {
       is_partner: true,
       ever_partnered: true,
+      schedule_id: standing.schedule_id,
       status: standing.status,
       since: standing.since,
       kept: collected?.kept ?? 0,

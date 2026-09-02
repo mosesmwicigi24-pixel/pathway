@@ -496,6 +496,7 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
 describe("a partner's standing tells the truth", () => {
   const partnership = async (): Promise<Record<string, never> & {
     is_partner: boolean; ever_partnered: boolean; status?: string; kept?: number;
+    schedule_id?: string;
     given_minor?: number; rhythm?: { frequency: string; next_run_at: string | null };
     trouble?: { paused: boolean; consecutive_failures: number } | null;
     since_you_began?: { levels_completed: number; plans_finished: number } | null;
@@ -531,6 +532,9 @@ describe("a partner's standing tells the truth", () => {
     const p = await partnership();
     expect(p.is_partner).toBe(true);
     expect(p.status).toBe("active");
+    // The resume control needs something real to act on. Without this the
+    // client has to guess, and guessing meant a cache that was never populated.
+    expect(p.schedule_id).toBeTruthy();
     expect(p.rhythm?.frequency).toBe("monthly");
     expect(p.rhythm?.next_run_at).not.toBeNull();
     // Healthy giving shows no trouble block at all — a partner collecting
