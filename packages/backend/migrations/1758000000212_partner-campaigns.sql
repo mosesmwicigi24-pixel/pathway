@@ -12,6 +12,8 @@
 --   · no partners table. That was the whole finding of phase 1: partners are
 --     giving_schedules, and a second home for them is a second truth.
 
+-- Up Migration
+
 -- ── Campaigns ────────────────────────────────────────────────────────────────
 -- Something to invite people to, with a real goal and a real end.
 CREATE TABLE campaigns (
@@ -87,3 +89,12 @@ CREATE TABLE partner_invite_log (
 
 -- "Who may I show this to today?" is answered per campaign, so lead with it.
 CREATE INDEX idx_partner_invite_campaign ON partner_invite_log (campaign_id, last_shown_on);
+
+-- Down Migration
+-- partner_invite_log first: it references campaigns.
+DROP INDEX IF EXISTS idx_partner_invite_campaign;
+DROP TABLE IF EXISTS partner_invite_log;
+DROP INDEX IF EXISTS idx_campaigns_created_by;
+DROP INDEX IF EXISTS idx_campaigns_fund;
+DROP INDEX IF EXISTS idx_campaigns_live;
+DROP TABLE IF EXISTS campaigns;
