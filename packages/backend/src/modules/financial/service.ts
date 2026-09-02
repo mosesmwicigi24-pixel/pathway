@@ -839,6 +839,131 @@ export class FinancialService {
     return { data: rows.map((r) => ({ ...r, amount_minor: Number(r.amount_minor) })) };
   }
 
+  /**
+   * A member's standing as a PARTNER — someone who decided in advance to keep
+   * giving, rather than someone who gave once.
+   *
+   * Nothing here is new money machinery. A partner IS an active or paused
+   * giving_schedule; this derives the standing rather than storing it, so a
+   * paused schedule and a lapsed partner can never disagree with each other.
+   *
+   * TWO HONESTY RULES, and they are the whole reason this method is careful:
+   *
+   * 1. `kept` counts CYCLES ACTUALLY COLLECTED (succeeded transactions carrying
+   *    this member's schedule_id), never cycles scheduled. A partner whose
+   *    M-Pesa failed in June did not keep June, and telling them they did would
+   *    be flattery built on a false number.
+   *
+   * 2. `since_you_began` is what the WHOLE CHURCH did during their partnership.
+   *    It is NOT their money traced to an outcome — we cannot trace a shilling
+   *    to a disciple and must never imply we can. The field is named for what it
+   *    is, and the clients say "since you began partnering", never "your giving
+   *    produced". Attribution we cannot prove is not encouragement, it is a lie
+   *    told kindly.
+   */
+  async partnership(userId: string): Promise<Record<string, unknown>> {
+    const standing = await maybeOne<{
+      status: string; since: string; frequency: string; method: string;
+      amount_minor: string; currency: string; next_run_at: string | null;
+      fund: string; consecutive_failures: number; last_failed_at: string | null;
+      paused_at: string | null;
+    }>(
+      this.pool,
+      `SELECT s.status, s.created_at AS since, s.frequency, s.method, s.amount_minor,
+              s.currency, s.next_run_at, f.code AS fund,
+              s.consecutive_failures, s.last_failed_at, s.paused_at
+         FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id
+        WHERE s.user_id = $1 AND s.status IN ('active','paused')
+        ORDER BY s.created_at ASC LIMIT 1`,
+      [userId],
+    );
+
+    if (!standing) {
+      // Not a partner today. We still say whether they ever were — someone who
+      // partnered and stopped is not a stranger, and the page greets them
+      // differently from someone who never has.
+      const past = await maybeOne<{ since: string }>(
+        this.pool,
+        `SELECT min(created_at) AS since FROM giving_schedules
+          WHERE user_id = $1 AND status = 'cancelled'`,
+        [userId],
+      );
+      return {
+        is_partner: false,
+        ever_partnered: past?.since != null,
+        since: past?.since ?? null,
+        kept: 0,
+        rhythm: null,
+        trouble: null,
+        since_you_began: null,
+      };
+    }
+
+    // Cycles actually collected, and what they came to. Both from succeeded
+    // transactions tied to this member's schedules — never from the calendar.
+    const collected = await maybeOne<{ kept: number; total_minor: string | null }>(
+      this.pool,
+      `SELECT count(*)::int AS kept, sum(t.amount_minor) AS total_minor
+         FROM transactions t
+         JOIN giving_schedules s ON s.schedule_id = t.schedule_id
+        WHERE s.user_id = $1 AND t.status = 'succeeded'`,
+      [userId],
+    );
+
+    // What the church did in their season. Aggregate and anonymous — counts of
+    // completions, never a name, never a ranking.
+    const together = await maybeOne<{
+      levels: number; modules: number; plans: number;
+    }>(
+      this.pool,
+      // Only one parameter here: the day they began. The member's own id is
+      // deliberately absent — these are church-wide counts, not their own.
+      `SELECT
+         (SELECT count(*)::int FROM enrollments
+           WHERE completed_at IS NOT NULL AND completed_at >= $1)                AS levels,
+         (SELECT count(*)::int FROM module_progress
+           WHERE is_completed AND completed_at >= $1)                            AS modules,
+         (SELECT count(*)::int FROM reading_plan_progress
+           WHERE completed_at IS NOT NULL AND completed_at >= $1)                AS plans`,
+      [standing.since],
+    );
+
+    const failing = standing.consecutive_failures > 0;
+    return {
+      is_partner: true,
+      ever_partnered: true,
+      status: standing.status,
+      since: standing.since,
+      kept: collected?.kept ?? 0,
+      given_minor: Number(collected?.total_minor ?? 0),
+      currency: standing.currency,
+      rhythm: {
+        frequency: standing.frequency,
+        method: standing.method,
+        amount_minor: Number(standing.amount_minor),
+        fund: standing.fund,
+        next_run_at: standing.status === "active" ? standing.next_run_at : null,
+      },
+      // Present only when there is something to say. A partner whose giving is
+      // collecting cleanly should never see a trouble block at all.
+      trouble: failing || standing.status === "paused"
+        ? {
+            paused: standing.status === "paused",
+            consecutive_failures: standing.consecutive_failures,
+            last_failed_at: standing.last_failed_at,
+            // Deliberately NOT last_error: the provider's wording is for the
+            // church's admin view, not for the member who is already worried.
+          }
+        : null,
+      since_you_began: {
+        from: standing.since,
+        levels_completed: together?.levels ?? 0,
+        modules_completed: together?.modules ?? 0,
+        plans_finished: together?.plans ?? 0,
+      },
+    };
+  }
+
   async cancelSchedule(userId: string, scheduleId: string): Promise<Record<string, unknown>> {
     const row = await maybeOne<{ schedule_id: string }>(
       this.pool,

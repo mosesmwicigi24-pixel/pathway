@@ -118,6 +118,17 @@ export function registerFinancial(
     }),
   );
 
+  // A member's standing as a PARTNER — derived from their giving schedule, not
+  // stored separately, so the two can never disagree. Recognition, not receipts:
+  // receipts live under /giving/history and stay there.
+  r.get(
+    "/giving/partnership",
+    auth,
+    handler(async (req, res) => {
+      res.json(await svc.partnership(requirePrincipal(req).userId));
+    }),
+  );
+
   r.post(
     "/giving/schedules/:id/cancel",
     auth,

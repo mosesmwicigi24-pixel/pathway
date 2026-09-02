@@ -2682,6 +2682,18 @@ paths:
         "200": { description: Cancelled }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /giving/partnership:
+    get:
+      tags: [financial]
+      summary: The caller's standing as a partner — derived from their giving schedule
+      description: >-
+        Recognition rather than receipts. `kept` counts cycles actually collected,
+        never cycles scheduled. `since_you_began` is what the whole church did during
+        the partnership and is NOT attributed to this member's money.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "Partner standing — is_partner, since, kept, rhythm, trouble, since_you_began" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /giving/schedules/{id}/resume:
     post:
       tags: [system]

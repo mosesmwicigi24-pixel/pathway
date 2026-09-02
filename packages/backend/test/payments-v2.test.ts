@@ -488,3 +488,117 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Partners (Phase 1). A partner is not a new record — it is an active or paused
+// giving_schedule, read a different way. These tests exist mostly to pin the two
+// honesty rules, because both are easy to "improve" into a lie later.
+describe("a partner's standing tells the truth", () => {
+  const partnership = async (): Promise<Record<string, never> & {
+    is_partner: boolean; ever_partnered: boolean; status?: string; kept?: number;
+    given_minor?: number; rhythm?: { frequency: string; next_run_at: string | null };
+    trouble?: { paused: boolean; consecutive_failures: number } | null;
+    since_you_began?: { levels_completed: number; plans_finished: number } | null;
+  }> => {
+    const res = await supertest(app).get("/v1/giving/partnership").set({ Authorization: userTok });
+    expect(res.status).toBe(200);
+    return res.body;
+  };
+
+  it("a member who has never given is not a partner, and is not called a lapsed one", async () => {
+    const p = await partnership();
+    expect(p.is_partner).toBe(false);
+    expect(p.ever_partnered).toBe(false);
+    expect(p.since_you_began).toBeNull();
+  });
+
+  it("someone who partnered and stopped is remembered as having partnered", async () => {
+    const s = await svc.createSchedule(user, {
+      fund: "tithe", amount_minor: 500, currency: "KES",
+      frequency: "monthly", method: "mpesa", idempotency_key: "p-lapsed",
+    }) as { schedule_id: string };
+    await svc.cancelSchedule(user, s.schedule_id);
+    const p = await partnership();
+    expect(p.is_partner).toBe(false);
+    expect(p.ever_partnered).toBe(true);
+  });
+
+  it("an active partner shows their rhythm and their next collection", async () => {
+    await svc.createSchedule(user, {
+      fund: "tithe", amount_minor: 500, currency: "KES",
+      frequency: "monthly", method: "mpesa", idempotency_key: "p-active",
+    });
+    const p = await partnership();
+    expect(p.is_partner).toBe(true);
+    expect(p.status).toBe("active");
+    expect(p.rhythm?.frequency).toBe("monthly");
+    expect(p.rhythm?.next_run_at).not.toBeNull();
+    // Healthy giving shows no trouble block at all — a partner collecting
+    // cleanly should never be shown a warning shaped like one.
+    expect(p.trouble).toBeNull();
+  });
+
+  // THE RULE THAT MATTERS. Scheduling a cycle is not keeping it.
+  it("counts cycles actually COLLECTED, never cycles merely scheduled", async () => {
+    const s = await svc.createSchedule(user, {
+      fund: "tithe", amount_minor: 500, currency: "KES",
+      frequency: "monthly", method: "mpesa", idempotency_key: "p-kept",
+    }) as { schedule_id: string };
+
+    // Three cycles reached the provider; only two were ever collected.
+    for (const [ref, status] of [["r1", "succeeded"], ["r2", "succeeded"], ["r3", "failed"]] as const) {
+      await testPool().query(
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status,
+                                   idempotency_key, schedule_id)
+         SELECT $1, fund_id, 500, 'KES', $2::txn_status, $3, $4 FROM funds WHERE code = 'tithe'`,
+        [user, status, `sched:${s.schedule_id}:${ref}`, s.schedule_id],
+      );
+    }
+    const p = await partnership();
+    expect(p.kept).toBe(2);              // not 3
+    expect(p.given_minor).toBe(1000);    // and the money agrees
+  });
+
+  it("a paused partner is told plainly, without the provider's error text", async () => {
+    await svc.createSchedule(user, {
+      fund: "tithe", amount_minor: 500, currency: "KES",
+      frequency: "monthly", method: "mpesa", idempotency_key: "p-paused",
+    });
+    await testPool().query(
+      `UPDATE giving_schedules SET status = 'paused', paused_at = now(),
+              consecutive_failures = 3, last_error = 'MPESA 2001: wrong PIN'`,
+    );
+    const p = await partnership();
+    expect(p.is_partner).toBe(true);     // still a partner — the intent stands
+    expect(p.status).toBe("paused");
+    expect(p.trouble?.paused).toBe(true);
+    expect(p.trouble?.consecutive_failures).toBe(3);
+    expect(p.rhythm?.next_run_at).toBeNull();   // nothing is coming while paused
+    expect(JSON.stringify(p)).not.toContain("wrong PIN");  // never the raw reason
+  });
+
+  it("what the church did is counted from the day they began, and is never called theirs", async () => {
+    await svc.createSchedule(user, {
+      fund: "tithe", amount_minor: 500, currency: "KES",
+      frequency: "monthly", method: "mpesa", idempotency_key: "p-impact",
+    });
+    // One plan finished before they began, one after. Only the later one counts.
+    const other = (await createUser({ congregationId: cong, phone: "+254799000111" })).user_id;
+    const plan = (await testPool().query(
+      `SELECT plan_id FROM reading_plans WHERE is_active LIMIT 1`,
+    )).rows[0]?.plan_id;
+    if (plan) {
+      await testPool().query(
+        `INSERT INTO reading_plan_progress (user_id, plan_id, completed_at)
+         VALUES ($1, $2, now() - interval '400 days'), ($3, $2, now())
+         ON CONFLICT DO NOTHING`,
+        [other, plan, user],
+      );
+      const p = await partnership();
+      expect(p.since_you_began?.plans_finished).toBe(1);
+    }
+    const p2 = await partnership();
+    // The shape says whose it is: a season, not an attribution.
+    expect(p2.since_you_began).toHaveProperty("from");
+  });
+});
