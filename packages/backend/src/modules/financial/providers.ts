@@ -5,7 +5,7 @@
 // no network/secrets (CLAUDE.md); a real deployment binds Daraja / Airtel APIs
 // here by env-named credentials.
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { ApiError } from "../../http/errors.js";
+import { ApiError, ProviderNotConfiguredError } from "../../http/errors.js";
 import type { Env } from "../../config/env.js";
 
 export type MobileMoneyKey = "mpesa" | "airtel";
@@ -237,10 +237,10 @@ export class DarajaMpesaProvider implements MobileMoneyProvider {
 class NotConfiguredProvider implements MobileMoneyProvider {
   constructor(readonly key: MobileMoneyKey) {}
   initiate(): Promise<{ ref: string }> {
-    throw new ApiError("UPSTREAM_UNAVAILABLE", `${this.key} payments are not configured`);
+    throw new ProviderNotConfiguredError(`${this.key} payments are not configured`);
   }
   verifyCallback(): MobileMoneyCallback {
-    throw new ApiError("UPSTREAM_UNAVAILABLE", `${this.key} payments are not configured`);
+    throw new ProviderNotConfiguredError(`${this.key} payments are not configured`);
   }
 }
 

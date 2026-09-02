@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { maybeOne, one, many, tx, audit, enqueueOutbox } from "../../db/db.js";
 import { NotificationService } from "../notifications/service.js";
-import { ApiError } from "../../http/errors.js";
+import { ApiError, ProviderNotConfiguredError } from "../../http/errors.js";
 import type { PaymentGateway } from "./gateway.js";
 import { sanitizeAccountReference, type MobileMoneyKey, type MobileMoneyProviders } from "./providers.js";
 import type { PayPalGateway } from "./paypal.js";
@@ -56,7 +56,7 @@ export class FinancialService {
 
   private provider(key: MobileMoneyKey) {
     const p = this.mobileMoney?.[key];
-    if (!p) throw new ApiError("UPSTREAM_UNAVAILABLE", `${key} payments are not configured`);
+    if (!p) throw new ProviderNotConfiguredError(`${key} payments are not configured`);
     return p;
   }
 
@@ -1009,12 +1009,31 @@ export class FinancialService {
   }
 
   /**
+   * The next occurrence of this cadence strictly AFTER `now`, keeping the
+   * original phase — a Tuesday-evening weekly gift stays Tuesday evening, and a
+   * monthly gift keeps its day of the month. Stepping interval by interval
+   * (rather than computing an offset) is what preserves that phase through
+   * month-length differences and DST.
+   *
+   * Bounded so a corrupt far-past date cannot spin: 520 weeks is ten years, far
+   * beyond any real backlog, and reaching it means the data is wrong rather
+   * than merely stale.
+   */
+  static rollForward(from: Date, frequency: "weekly" | "monthly", now: Date): Date {
+    let next = FinancialService.nextRun(from, frequency);
+    for (let i = 0; i < 520 && next.getTime() <= now.getTime(); i += 1) {
+      next = FinancialService.nextRun(next, frequency);
+    }
+    return next;
+  }
+
+  /**
    * Scheduler hook: charge every due active schedule. The cycle's intent key is
    * deterministic (schedule id + the due instant), so a crashed/overlapping run
    * can never double-charge; next_run_at advances from the DUE time, not "now",
    * so cadence never drifts.
    */
-  async runDueSchedules(now: Date = new Date()): Promise<{ run: number; failed: number }> {
+  async runDueSchedules(now: Date = new Date()): Promise<{ run: number; failed: number; skipped: number }> {
     const due = await many<{
       schedule_id: string;
       user_id: string;
@@ -1037,7 +1056,49 @@ export class FinancialService {
     );
     let run = 0;
     let failed = 0;
+    let skipped = 0;
     for (const s of due) {
+      // ── THE BACKLOG GUARD ────────────────────────────────────────────────
+      // A schedule can fall far behind — the provider was unconfigured for
+      // weeks, the worker was down, the church changed gateways. When it
+      // catches up, next_run_at advances by ONE interval per success, so a
+      // schedule ten weeks overdue would be charged ten times in quick
+      // succession on the next few passes.
+      //
+      // The double-charge guard does NOT protect against this: each stale
+      // cycle has its own idempotency key, so these are ten legitimately
+      // distinct charges, not a repeat of one.
+      //
+      // A member who set up "KSh 1,000 weekly" consented to a rhythm, not to a
+      // lump sum arriving without warning. So we do not collect the backlog:
+      // we roll the schedule forward to its next FUTURE occurrence and start
+      // the rhythm again from there. The church forgoes money it never
+      // collected — which is the right trade against surprising a partner with
+      // ten charges they did not expect.
+      //
+      // Discovered in production 2026-09-02: six real M-Pesa schedules from
+      // June had never collected once ("mpesa payments are not configured"),
+      // and configuring the provider would have triggered exactly this.
+      const dueAt = new Date(s.next_run_at);
+      const nextAfterDue = FinancialService.nextRun(dueAt, s.frequency);
+      if (nextAfterDue.getTime() <= now.getTime()) {
+        const rolled = FinancialService.rollForward(dueAt, s.frequency, now);
+        console.warn(
+          `[giving] schedule ${s.schedule_id} was ${Math.round(
+            (now.getTime() - dueAt.getTime()) / 86_400_000,
+          )} days behind; rolling to ${rolled.toISOString()} WITHOUT collecting the backlog`,
+        );
+        await this.pool.query(
+          `UPDATE giving_schedules
+              SET next_run_at = $2, consecutive_failures = 0, retry_after = NULL,
+                  last_error = NULL, last_failed_at = NULL
+            WHERE schedule_id = $1`,
+          [s.schedule_id, rolled.toISOString()],
+        );
+        skipped += 1;
+        continue;
+      }
+
       try {
         await this.createGivingIntent(
           s.user_id,
@@ -1068,8 +1129,35 @@ export class FinancialService {
         // the cycle reuses that key and can never charge twice. Backoff rides
         // the separate retry_after gate instead.
         failed += 1;
-        const attempts = s.consecutive_failures + 1;
         const reason = err instanceof Error ? err.message : String(err);
+
+        // OUR FAULT, NOT THEIRS. If the provider is not configured on this
+        // server, the giver's payment did not fail — we never asked for it.
+        // Telling them "your recurring gift didn't go through" alarms them
+        // about our plumbing and offers a retry that cannot possibly work, so
+        // a configuration failure:
+        //   · does NOT count toward their three strikes
+        //   · does NOT pause their schedule
+        //   · does NOT notify them at all
+        // It is recorded and shouted at the operator instead, because the
+        // people who can fix it are us. (Owner, 2026-09-02, on finding six real
+        // partners three hours from exactly that message.)
+        if (err instanceof ProviderNotConfiguredError) {
+          console.error(
+            `[giving] CONFIGURATION FAULT — schedule ${s.schedule_id} cannot be charged: ${reason}. ` +
+            `This is a server misconfiguration, not a failed payment. The giver has NOT been notified.`,
+          );
+          await this.pool.query(
+            `UPDATE giving_schedules
+                SET last_error = $2, last_failed_at = $3, retry_after = $4
+              WHERE schedule_id = $1`,
+            [s.schedule_id, reason, now.toISOString(),
+             new Date(now.getTime() + 60 * 60_000).toISOString()],
+          );
+          continue;
+        }
+
+        const attempts = s.consecutive_failures + 1;
         console.error(
           `[giving] schedule ${s.schedule_id} failed (attempt ${attempts}, ${s.method}): ${reason}`,
         );
@@ -1117,7 +1205,7 @@ export class FinancialService {
         }
       }
     }
-    return { run, failed };
+    return { run, failed, skipped };
   }
 
   /** Minutes to wait before re-attempting a failed cycle (1h, 6h, 24h). */
