@@ -22,10 +22,22 @@ built in CI and downloaded.
 ```bash
 cd /opt/pathway
 docker compose -f docker-compose.prod.yml -f docker-compose.vps.yml pull
-docker compose -f docker-compose.prod.yml -f docker-compose.vps.yml run --rm migrate
+docker compose -f docker-compose.prod.yml -f docker-compose.vps.yml run --rm -T migrate
 docker compose -f docker-compose.prod.yml -f docker-compose.vps.yml up -d \
   --force-recreate --no-deps api worker
 ```
+
+> **Why `-T`.** Without it, `compose run` allocates a TTY and holds stdin open.
+> If the terminal you launched it from then goes away — ssh drops, the laptop
+> sleeps, the session is closed — the migrate process is left blocked in
+> `epoll` on a pty nobody is attached to. It never exits, so `--rm` never
+> fires, and the container sits "Up" forever holding a reference to a stale
+> image. That is exactly what happened on 2026-08-24 (see the ledger entry
+> below): a container ran for nine days doing nothing. `-T` makes the step
+> non-interactive, which is what a deploy step should be anyway.
+>
+> A TTY container also makes `docker logs` block on the pty, which is what
+> makes these look scarier than they are when you find one.
 
 Pulling a private GHCR image needs `docker login ghcr.io` with a `read:packages`
 PAT, unless the package has been made public. The image holds only compiled JS —
@@ -119,6 +131,50 @@ Portal: extract the previous run's artifact over `$PORTAL_ROOT`. It is a static
 bundle, so this is instant and total.
 
 ## Incident ledger
+
+### 2026-09-02 — A migrate container ran for nine days doing nothing
+
+**Symptom.** During the deploy of `2ad3f0b`, `docker ps` showed
+`pathway-migrate-run-0057e65ff03f` **"Up 9 days (unhealthy)"** on the floating
+`:latest` tag, alongside the real `api`/`worker` on their pinned sha.
+
+**A wrong turn worth recording.** The first two attempts to inspect it timed
+out, and I reported that *`docker inspect` hangs on this container* — and
+reasoned from that to "something is deeply stuck". That was wrong. Both
+commands were batched with `docker logs`, and `docker logs` is what blocked.
+Bounded separately, `docker inspect` on the stray container returned in
+milliseconds, exit 0, same as on a healthy one. **Lesson: never attribute a
+hang to a command you did not time in isolation** — batching diagnostics
+hides which one failed.
+
+**Root cause.** The container was started 2026-08-24T12:39:52Z with
+`Tty=true, OpenStdin=true` — a `docker compose run --rm migrate` *without*
+`-T`. Its process tree was `sh -lc pnpm migrate:up` → `node pnpm migrate:up`,
+with stdin/stdout bound to `/dev/pts/0` and the child parked in `ep_poll`.
+The launching terminal went away; the process was left waiting on a pty
+nobody was attached to, so it never exited, so `--rm` never fired. The TTY is
+also why `docker logs` blocked on it.
+
+**Blast radius: none.** It held no database lock (`pg_locks` ungranted = 0, no
+idle-in-transaction backends, oldest xact age 00:00:00), consumed 0.0% CPU,
+and was not in D-state. It could not have blocked a future migration. Its only
+cost was clutter and a reference to a stale image.
+
+**Why undetected.** Nothing watches for orphaned `*-run-*` containers, and
+`docker ps` output is long enough on this box (41 shims, five stacks) that one
+extra line reads as normal.
+
+**Permanent fix.** The runbook's migrate step now specifies `--rm -T`
+(§1 above, with the reasoning inline). A deploy step should be
+non-interactive; the TTY bought nothing and cost nine days of a phantom
+container.
+
+**What else was audited.** Every stack on the box (`pathway`, `neema`,
+`bethany`, `bethanywebsite`, `mailcow`) for `-run-` leftovers: this was the
+only one. The migrate run from *this* deploy cleaned itself up correctly. The
+only other TTY-allocated containers are two mailcow services, which are
+configured that way deliberately and are not orphans. No sibling instances of
+the class exist.
 
 ### 2026-08-24 — Daily liturgy silently served fallback (thinking exhausted the compose budget)
 
