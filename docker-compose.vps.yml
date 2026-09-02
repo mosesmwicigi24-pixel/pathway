@@ -7,6 +7,30 @@
 # Caddy. The extra environment passthrough wires Brevo SMTP (password reset),
 # Nuru AI (Claude primary; Groq/Gemini fallback), Cloudinary uploads, and the
 # public app URL — all read from the VPS-only .env (§5.10), never committed.
+# Mobile-money credentials (Daraja/M-Pesa), read from the VPS-only .env (§5.10).
+#
+# THIS IS AN ANCHOR, AND THAT IS THE POINT. It is referenced by BOTH api and
+# worker below, because both need it for different halves of the same feature:
+# the api starts an STK push when a member gives, and the WORKER charges every
+# recurring schedule. Listing the keys under one service only is what caused the
+# outage recorded below — and it would be the third such gap in this file, after
+# the AI keys (2026-08-01) and SMTP. An anchor makes the two impossible to
+# separate by accident.
+#
+# PRODUCTION OUTAGE FOUND 2026-09-02: these keys were on `api` alone. Six real
+# partners set up weekly/monthly M-Pesa giving on 17-18 June and not one cycle
+# was ever collected — every run threw "mpesa payments are not configured" from
+# the worker, and until migration 211 shipped that failure was swallowed in
+# silence. Ten weeks, six givers, zero shillings.
+x-mpesa-env: &mpesa-env
+  MPESA_CONSUMER_KEY: ${MPESA_CONSUMER_KEY:-}
+  MPESA_CONSUMER_SECRET: ${MPESA_CONSUMER_SECRET:-}
+  MPESA_PASSKEY: ${MPESA_PASSKEY:-}
+  MPESA_SHORTCODE: ${MPESA_SHORTCODE:-}
+  MPESA_ENV: ${MPESA_ENV:-sandbox}
+  MPESA_TX_TYPE: ${MPESA_TX_TYPE:-CustomerPayBillOnline}
+  MPESA_CALLBACK_URL: ${MPESA_CALLBACK_URL:-https://pathway.nuruplace.org/v1/webhooks/mobilemoney/mpesa}
+
 services:
   api:
     ports:
@@ -72,15 +96,8 @@ services:
       CLOUDINARY_URL: ${CLOUDINARY_URL:-}
       EMAIL_FROM: ${EMAIL_FROM}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL}
-      # M-Pesa (Daraja) STK push — read from the VPS-only .env (§5.10). The provider
-      # is "ready" only when key+secret+passkey+shortcode+callback URL are all set.
-      MPESA_CONSUMER_KEY: ${MPESA_CONSUMER_KEY:-}
-      MPESA_CONSUMER_SECRET: ${MPESA_CONSUMER_SECRET:-}
-      MPESA_PASSKEY: ${MPESA_PASSKEY:-}
-      MPESA_SHORTCODE: ${MPESA_SHORTCODE:-}
-      MPESA_ENV: ${MPESA_ENV:-sandbox}
-      MPESA_TX_TYPE: ${MPESA_TX_TYPE:-CustomerPayBillOnline}
-      MPESA_CALLBACK_URL: ${MPESA_CALLBACK_URL:-https://pathway.nuruplace.org/v1/webhooks/mobilemoney/mpesa}
+      # M-Pesa (Daraja) STK push — see x-mpesa-env at the top of this file.
+      <<: *mpesa-env
       # nuruplace.org's two signed intakes: the connection card / contact form /
       # prayer request (migration 201), and giving (migration 202). Each must
       # equal its counterpart in /srv/nuruplace/.env — CONTACT_WEBHOOK_SECRET
@@ -113,6 +130,11 @@ services:
     # nothing surfaced that because the fallback is deliberately silent. The
     # worker is the process that RUNS those jobs, so it needs the keys too.
     environment:
+      # The worker runs runDueSchedules — it is the process that actually
+      # collects every recurring gift, so it needs the mobile-money keys just as
+      # much as the api does. Absent here from the day recurring giving shipped
+      # until 2026-09-02; see x-mpesa-env at the top of this file.
+      <<: *mpesa-env
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
       ANTHROPIC_MODEL_FAST: ${ANTHROPIC_MODEL_FAST:-claude-haiku-4-5-20251001}

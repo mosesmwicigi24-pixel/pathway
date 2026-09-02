@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { maybeOne, one, many, tx, audit, enqueueOutbox } from "../../db/db.js";
 import { NotificationService } from "../notifications/service.js";
-import { ApiError } from "../../http/errors.js";
+import { ApiError, ProviderNotConfiguredError } from "../../http/errors.js";
 import type { PaymentGateway } from "./gateway.js";
 import { sanitizeAccountReference, type MobileMoneyKey, type MobileMoneyProviders } from "./providers.js";
 import type { PayPalGateway } from "./paypal.js";
@@ -56,7 +56,7 @@ export class FinancialService {
 
   private provider(key: MobileMoneyKey) {
     const p = this.mobileMoney?.[key];
-    if (!p) throw new ApiError("UPSTREAM_UNAVAILABLE", `${key} payments are not configured`);
+    if (!p) throw new ProviderNotConfiguredError(`${key} payments are not configured`);
     return p;
   }
 
@@ -1129,8 +1129,35 @@ export class FinancialService {
         // the cycle reuses that key and can never charge twice. Backoff rides
         // the separate retry_after gate instead.
         failed += 1;
-        const attempts = s.consecutive_failures + 1;
         const reason = err instanceof Error ? err.message : String(err);
+
+        // OUR FAULT, NOT THEIRS. If the provider is not configured on this
+        // server, the giver's payment did not fail — we never asked for it.
+        // Telling them "your recurring gift didn't go through" alarms them
+        // about our plumbing and offers a retry that cannot possibly work, so
+        // a configuration failure:
+        //   · does NOT count toward their three strikes
+        //   · does NOT pause their schedule
+        //   · does NOT notify them at all
+        // It is recorded and shouted at the operator instead, because the
+        // people who can fix it are us. (Owner, 2026-09-02, on finding six real
+        // partners three hours from exactly that message.)
+        if (err instanceof ProviderNotConfiguredError) {
+          console.error(
+            `[giving] CONFIGURATION FAULT — schedule ${s.schedule_id} cannot be charged: ${reason}. ` +
+            `This is a server misconfiguration, not a failed payment. The giver has NOT been notified.`,
+          );
+          await this.pool.query(
+            `UPDATE giving_schedules
+                SET last_error = $2, last_failed_at = $3, retry_after = $4
+              WHERE schedule_id = $1`,
+            [s.schedule_id, reason, now.toISOString(),
+             new Date(now.getTime() + 60 * 60_000).toISOString()],
+          );
+          continue;
+        }
+
+        const attempts = s.consecutive_failures + 1;
         console.error(
           `[giving] schedule ${s.schedule_id} failed (attempt ${attempts}, ${s.method}): ${reason}`,
         );

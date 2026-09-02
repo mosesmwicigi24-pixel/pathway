@@ -27,3 +27,26 @@ export class ApiError extends Error {
     };
   }
 }
+
+
+/**
+ * The provider itself is not set up on THIS server — no Daraja keys, no Stripe
+ * secret. It is our misconfiguration, not the giver's payment failing, and the
+ * two must never be treated the same:
+ *
+ *   · a card declined      → the member can act; tell them.
+ *   · a provider unset     → the member can do nothing; telling them their
+ *                            gift "didn't go through" alarms them about our
+ *                            plumbing and offers a retry that cannot work.
+ *
+ * A distinct type rather than a string match, because a message anyone is free
+ * to reword is not a thing to branch on. Found necessary on 2026-09-02, when
+ * six real M-Pesa partners were three hours from being told their giving had
+ * failed — because the server had never had Daraja credentials.
+ */
+export class ProviderNotConfiguredError extends ApiError {
+  constructor(message: string) {
+    super("UPSTREAM_UNAVAILABLE", message);
+    this.name = "ProviderNotConfiguredError";
+  }
+}

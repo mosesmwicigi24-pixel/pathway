@@ -11,7 +11,7 @@ import { createCongregation, createUser } from "./helpers/factories.js";
 import { testEnv, bearer } from "./helpers/app.js";
 import { createApp } from "../src/http/app.js";
 import { FinancialService } from "../src/modules/financial/service.js";
-import { FakeMobileMoneyProvider } from "../src/modules/financial/providers.js";
+import { FakeMobileMoneyProvider, type MobileMoneyProvider } from "../src/modules/financial/providers.js";
 import { ApiError } from "../src/http/errors.js";
 import type { PaymentGateway, WebhookEvent } from "../src/modules/financial/gateway.js";
 
@@ -25,6 +25,27 @@ class FakeGateway implements PaymentGateway {
   }
   verifyWebhook(rawBody: Buffer | string): WebhookEvent {
     return JSON.parse(typeof rawBody === "string" ? rawBody : rawBody.toString("utf8")) as WebhookEvent;
+  }
+}
+
+
+/**
+ * A provider that is fully configured and whose CHARGE fails — a declined
+ * payment, a timeout, a wrong PIN. Distinct from having no provider at all,
+ * which is a server misconfiguration and now takes a different path entirely.
+ *
+ * Until 2026-09-02 these tests used a service with NO providers, so they
+ * described "the giver's payment failed" while actually exercising "we never
+ * configured M-Pesa". The two behave differently now, so the fake has to be
+ * honest about which one it is.
+ */
+class DecliningMobileMoneyProvider implements MobileMoneyProvider {
+  constructor(readonly key: "mpesa" | "airtel") {}
+  initiate(): Promise<{ ref: string }> {
+    return Promise.reject(new ApiError("UPSTREAM_UNAVAILABLE", "MPESA 2001: wrong PIN"));
+  }
+  verifyCallback(): never {
+    throw new ApiError("UPSTREAM_UNAVAILABLE", "not used in these tests");
   }
 }
 
@@ -384,7 +405,14 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
   // logged, nothing recorded, nobody told, and a retry every five minutes
   // forever. These pin the fix (owner, 2026-08-28).
   describe("a recurring gift that fails says so", () => {
-    const brokenSvc = (): FinancialService => new FinancialService(testPool(), gw); // no mobile-money providers → initiate throws
+    // A CONFIGURED provider whose charge is declined — the giver's payment
+    // failing, which is what this describe block is about. (Using a service
+    // with no providers would exercise the misconfiguration path instead.)
+    const brokenSvc = (): FinancialService =>
+      new FinancialService(testPool(), gw, {
+        mpesa: new DecliningMobileMoneyProvider("mpesa"),
+        airtel: new DecliningMobileMoneyProvider("airtel"),
+      });
     async function dueSchedule(key: string): Promise<void> {
       await brokenSvc().createSchedule(user, {
         fund: "tithe", amount_minor: 700, currency: "KES",
@@ -669,5 +697,46 @@ describe("a schedule that fell far behind does not collect the backlog", () => {
     expect(rolled.getUTCHours()).toBe(due.getUTCHours());
     // And it is the FIRST such Tuesday, not one further out.
     expect(rolled.getTime() - now.getTime()).toBeLessThanOrEqual(7 * 86_400_000);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A configuration fault is OURS, not the giver's. Found in production on
+// 2026-09-02: six real partners were about three hours from being told their
+// recurring gift had failed, when in truth the worker had never been given the
+// M-Pesa credentials and no charge was ever attempted.
+describe("a server misconfiguration is not the giver's failure", () => {
+  it("does not count strikes, does not pause, and does not notify the member", async () => {
+    // A service whose mobile-money providers were never configured — exactly
+    // the production shape, where the worker had no MPESA_* env at all.
+    const unconfigured = new FinancialService(testPool(), gw);
+    await unconfigured.createSchedule(user, {
+      fund: "tithe", amount_minor: 100_000, currency: "KES",
+      frequency: "weekly", method: "mpesa", idempotency_key: "cfg-1",
+    });
+    await testPool().query(`UPDATE giving_schedules SET next_run_at = now() - interval '1 hour'`);
+
+    // Run it well past the three attempts that would normally pause a schedule.
+    for (let i = 0; i < 4; i++) {
+      await testPool().query(`UPDATE giving_schedules SET retry_after = NULL`);
+      const res = await unconfigured.runDueSchedules(new Date());
+      expect(res.failed).toBe(1);
+    }
+
+    const row = (await testPool().query<{
+      status: string; consecutive_failures: number; last_error: string | null;
+    }>(`SELECT status, consecutive_failures, last_error FROM giving_schedules LIMIT 1`)).rows[0]!;
+
+    expect(row.status).toBe("active");            // never paused
+    expect(row.consecutive_failures).toBe(0);     // no strikes against them
+    expect(row.last_error).toMatch(/not configured/); // but it IS recorded
+
+    // And crucially: the member was told nothing at all.
+    const notes = await testPool().query(
+      `SELECT template FROM notifications WHERE user_id = $1`, [user]);
+    expect(notes.rows.map((r) => r.template))
+      .not.toContain("giving_schedule_failed");
+    expect(notes.rows.map((r) => r.template))
+      .not.toContain("giving_schedule_paused");
   });
 });
