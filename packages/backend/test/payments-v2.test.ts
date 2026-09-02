@@ -375,7 +375,7 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
     });
     await testPool().query(`UPDATE giving_schedules SET next_run_at=now() - interval '1 hour'`);
     const result = await lonely.runDueSchedules(new Date());
-    expect(result).toEqual({ run: 0, failed: 1 });
+    expect(result).toEqual({ run: 0, failed: 1, skipped: 0 });
     const sched = await testPool().query(`SELECT next_run_at < now() AS still_due FROM giving_schedules`);
     expect(sched.rows[0].still_due).toBe(true); // untouched — will retry
   });
@@ -419,7 +419,7 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
       await dueSchedule("sched-f2");
       await brokenSvc().runDueSchedules(new Date());
       const second = await brokenSvc().runDueSchedules(new Date());
-      expect(second).toEqual({ run: 0, failed: 0 });         // skipped, not retried
+      expect(second).toEqual({ run: 0, failed: 0, skipped: 0 });         // skipped, not retried
       expect((await scheduleRow()).consecutive_failures).toBe(1);
     });
 
@@ -446,7 +446,7 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
         await testPool().query(`UPDATE giving_schedules SET retry_after = NULL`);
         await brokenSvc().runDueSchedules(new Date());
       }
-      expect(await brokenSvc().runDueSchedules(new Date())).toEqual({ run: 0, failed: 0 });
+      expect(await brokenSvc().runDueSchedules(new Date())).toEqual({ run: 0, failed: 0, skipped: 0 });
 
       const id = (await testPool().query<{ schedule_id: string }>(`SELECT schedule_id FROM giving_schedules`)).rows[0]!.schedule_id;
       // Through the ROUTE, not the service: mounting is part of the feature,
@@ -604,5 +604,70 @@ describe("a partner's standing tells the truth", () => {
     const p2 = await partnership();
     // The shape says whose it is: a season, not an attribution.
     expect(p2.since_you_began).toHaveProperty("from");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The backlog guard. Found in production on 2026-09-02: six real M-Pesa
+// schedules created in June had never collected once, because the provider was
+// never configured on that server. Each was ~10 weeks overdue. Configuring
+// M-Pesa would have charged six real people ten times in quick succession —
+// and the double-charge guard would not have stopped it, because each stale
+// cycle carries its own idempotency key.
+describe("a schedule that fell far behind does not collect the backlog", () => {
+  const weeksAgo = (n: number): string =>
+    new Date(Date.now() - n * 7 * 86_400_000).toISOString();
+
+  it("rolls a badly overdue schedule forward instead of charging every missed cycle", async () => {
+    await svc.createSchedule(user, {
+      fund: "tithe", amount_minor: 100_000, currency: "KES",
+      frequency: "weekly", method: "mpesa", idempotency_key: "backlog-1",
+    });
+    // Ten weeks behind — the exact production shape.
+    await testPool().query(`UPDATE giving_schedules SET next_run_at = $1`, [weeksAgo(10)]);
+
+    const first = await svc.runDueSchedules(new Date());
+    expect(first.skipped).toBe(1);
+    expect(first.run).toBe(0);          // nothing collected
+    expect(first.failed).toBe(0);       // and it is not a failure either
+
+    // Not one charge was created for the backlog.
+    const txns = await testPool().query(`SELECT count(*)::int AS n FROM transactions`);
+    expect(txns.rows[0].n).toBe(0);
+
+    // And it is now armed for a FUTURE date, so the rhythm resumes normally.
+    const row = await testPool().query<{ next_run_at: string }>(
+      `SELECT next_run_at FROM giving_schedules LIMIT 1`);
+    expect(new Date(row.rows[0]!.next_run_at).getTime()).toBeGreaterThan(Date.now());
+
+    // A second pass does nothing at all — it is no longer due.
+    expect(await svc.runDueSchedules(new Date())).toEqual({ run: 0, failed: 0, skipped: 0 });
+  });
+
+  it("still charges a schedule that is merely due, not behind", async () => {
+    await svc.createSchedule(user, {
+      fund: "tithe", amount_minor: 100_000, currency: "KES",
+      frequency: "weekly", method: "mpesa", idempotency_key: "backlog-2",
+    });
+    // Due an hour ago: within this cycle, so it collects as normal. The guard
+    // must not swallow ordinary work.
+    await testPool().query(
+      `UPDATE giving_schedules SET next_run_at = now() - interval '1 hour'`);
+    const res = await svc.runDueSchedules(new Date());
+    expect(res.run).toBe(1);
+    expect(res.skipped).toBe(0);
+  });
+
+  it("keeps the cadence's phase when it rolls forward", () => {
+    // A Tuesday 09:00 weekly gift, ten weeks stale, must land on a future
+    // Tuesday 09:00 — not "ten weeks from whenever the worker happened to run".
+    const due = new Date("2026-06-23T09:00:00.000Z");        // a Tuesday
+    const now = new Date("2026-09-02T12:00:00.000Z");
+    const rolled = FinancialService.rollForward(due, "weekly", now);
+    expect(rolled.getTime()).toBeGreaterThan(now.getTime());
+    expect(rolled.getUTCDay()).toBe(due.getUTCDay());
+    expect(rolled.getUTCHours()).toBe(due.getUTCHours());
+    // And it is the FIRST such Tuesday, not one further out.
+    expect(rolled.getTime() - now.getTime()).toBeLessThanOrEqual(7 * 86_400_000);
   });
 });
