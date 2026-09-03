@@ -59,6 +59,19 @@ describe("the invitation asks, and mostly declines to ask", () => {
     expect(d.campaign?.tiers[0]?.meaning).toContain("one disciple");
   });
 
+  it("counts which showing this is, so the apps know when to offer a permanent no", async () => {
+    const c = await liveCampaign();
+    // First sight of it.
+    expect((await invitationFor(testPool(), user, MIDMORNING)).showing).toBe(1);
+
+    await recordShown(testPool(), user, c, MIDMORNING);
+    await testPool().query(
+      `UPDATE partner_invite_log SET last_shown_on = $1::date - 15`,
+      [MIDMORNING.toISOString().slice(0, 10)]);
+    // Second — and this is where "Don't ask again" becomes available.
+    expect((await invitationFor(testPool(), user, MIDMORNING)).showing).toBe(2);
+  });
+
   it("says nothing at all when no campaign is running", async () => {
     const d = await invitationFor(testPool(), user, MIDMORNING);
     expect(d).toEqual({ show: false, reason: "no_campaign" });
