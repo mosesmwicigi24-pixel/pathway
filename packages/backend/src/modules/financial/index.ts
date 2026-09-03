@@ -7,6 +7,7 @@ import { authenticate, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { FinancialService } from "./service.js";
 import { invitationFor, recordShown, recordOutcome } from "./invitation.js";
+import { CampaignService, CampaignInput } from "./campaigns.js";
 import { buildPaymentGateway, type PaymentGateway } from "./gateway.js";
 import { buildMobileMoneyProviders, type MobileMoneyProviders } from "./providers.js";
 import { buildPayPalGateway, type PayPalGateway } from "./paypal.js";
@@ -196,6 +197,43 @@ export function registerFinancial(
 
   // Recurring giving — who is committed, and whose collection is failing. There
   // was no admin read of giving_schedules at all before this.
+  // ── Campaign authoring (finance:manage) ────────────────────────────────────
+  // A campaign is created as a DRAFT and reaches nobody until someone
+  // deliberately puts it live. The reach read exists so "why did nobody give?"
+  // can be answered with facts — it distinguishes a campaign nobody saw from
+  // one people saw and declined, which look identical in the giving totals.
+  const campaignsSvc = new CampaignService(ctx.db.primary);
+  const congOf = (req: Parameters<typeof requirePrincipal>[0]): string => {
+    const c = requirePrincipal(req).congregationId;
+    if (!c) throw new ApiError("UNPROCESSABLE", "This account is not attached to a congregation");
+    return c;
+  };
+
+  r.get("/admin/campaigns", auth, perm("finance", "view"), handler(async (req, res) => {
+    res.json(await campaignsSvc.list(congOf(req)));
+  }));
+
+  r.post("/admin/campaigns", auth, perm("finance", "manage"), handler(async (req, res) => {
+    const input = parseBody(CampaignInput, req.body);
+    res.status(201).json(await campaignsSvc.create(congOf(req), requirePrincipal(req).userId, input));
+  }));
+
+  r.put("/admin/campaigns/:id", auth, perm("finance", "manage"), handler(async (req, res) => {
+    const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
+    res.json(await campaignsSvc.update(congOf(req), id, parseBody(CampaignInput, req.body)));
+  }));
+
+  r.post("/admin/campaigns/:id/status", auth, perm("finance", "manage"), handler(async (req, res) => {
+    const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
+    const { status } = parseBody(z.object({ status: z.enum(["live", "ended"]) }), req.body);
+    res.json(await campaignsSvc.setStatus(congOf(req), id, status));
+  }));
+
+  r.get("/admin/campaigns/:id/reach", auth, perm("finance", "view"), handler(async (req, res) => {
+    const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
+    res.json(await campaignsSvc.reach(congOf(req), id));
+  }));
+
   r.get("/admin/finance/schedules", auth, perm("finance", "view"), handler(async (req, res) => {
     const q = parseBody(
       z.object({
