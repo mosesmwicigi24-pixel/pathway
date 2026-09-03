@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser } from "./helpers/factories.js";
 import { invitationFor, recordShown, recordOutcome, inQuietHours } from "../src/modules/financial/invitation.js";
+import { CampaignService, CampaignInput } from "../src/modules/financial/campaigns.js";
 
 let cong: string, user: string;
 
@@ -193,5 +194,68 @@ describe("quiet hours wrap midnight", () => {
   it("handles a same-day window too", () => {
     expect(inQuietHours(at(13), "12:00", "14:00")).toBe(true);
     expect(inQuietHours(at(15), "12:00", "14:00")).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Campaign authoring. Two refusals matter more than the CRUD around them.
+describe("what the church may not author", () => {
+  const draft = {
+    title: "Carry a disciple", blurb: "Forty through Level 1.",
+    fund: "tithe", goal_minor: 4000000, currency: "KES",
+    starts_on: "2026-09-01", ends_on: "2026-09-30",
+  };
+
+  it("refuses a match with no one who pledged it", () => {
+    const bad = CampaignInput.safeParse({ ...draft, match_minor: 1000000, match_pledger: null });
+    expect(bad.success).toBe(false);
+    expect(JSON.stringify(bad.error?.issues)).toContain("Name the pledger");
+  });
+
+  it("accepts a match when someone really pledged it", () => {
+    expect(CampaignInput.safeParse({
+      ...draft, match_minor: 1000000, match_pledger: "The Kamau family",
+    }).success).toBe(true);
+  });
+
+  it("refuses a campaign that ends before it starts", () => {
+    expect(CampaignInput.safeParse({
+      ...draft, starts_on: "2026-09-30", ends_on: "2026-09-01",
+    }).success).toBe(false);
+  });
+
+  it("creates as a DRAFT — nothing reaches a member by accident", async () => {
+    const svc = new CampaignService(testPool());
+    const created = await svc.create(cong, user, draft as never) as
+      { status: string; campaign_id: string };
+    expect(created.status).toBe("draft");
+
+    // A draft is invisible to the invitation engine.
+    expect((await invitationFor(testPool(), user, MIDMORNING)).reason).toBe("no_campaign");
+
+    // Going live is the deliberate act that changes that.
+    await svc.setStatus(cong, created.campaign_id, "live");
+    expect((await invitationFor(testPool(), user, MIDMORNING)).show).toBe(true);
+  });
+
+  it("never reopens an ended campaign", async () => {
+    const svc = new CampaignService(testPool());
+    const c = await svc.create(cong, user, draft as never) as { campaign_id: string };
+    await svc.setStatus(cong, c.campaign_id, "ended");
+    await expect(svc.setStatus(cong, c.campaign_id, "live")).rejects.toThrow(/ended/i);
+  });
+
+  it("tells a campaign nobody saw apart from one everybody declined", async () => {
+    const svc = new CampaignService(testPool());
+    const c = await svc.create(cong, user, draft as never) as { campaign_id: string };
+
+    expect(Number((await svc.reach(cong, c.campaign_id)).people_asked)).toBe(0);
+
+    await recordShown(testPool(), user, c.campaign_id, MIDMORNING);
+    await recordOutcome(testPool(), user, c.campaign_id, "declined");
+    const seen = await svc.reach(cong, c.campaign_id);
+    expect(Number(seen.people_asked)).toBe(1);
+    expect(Number(seen.declined)).toBe(1);
+    expect(Number(seen.gave)).toBe(0);
   });
 });

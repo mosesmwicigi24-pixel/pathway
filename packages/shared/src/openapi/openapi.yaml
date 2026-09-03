@@ -2682,6 +2682,72 @@ paths:
         "200": { description: Cancelled }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/campaigns:
+    get:
+      tags: [financial]
+      summary: Campaigns for the caller's congregation, with reach and money raised
+      description: >-
+        Each row carries people_asked / gave / declined alongside raised_minor, so a
+        campaign nobody saw can be told apart from one people saw and declined —
+        they look identical in the giving totals alone.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: Campaign list }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [financial]
+      summary: Create a campaign (always as a draft)
+      description: >-
+        Created as a draft; nothing reaches a member until it is deliberately put
+        live. A match is rejected unless a pledger is named.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201": { description: Created as a draft }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /admin/campaigns/{id}:
+    put:
+      tags: [financial]
+      summary: Edit a campaign
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Updated }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/campaigns/{id}/status:
+    post:
+      tags: [financial]
+      summary: Put a campaign live, or end it
+      description: >-
+        Going live is a deliberate act, separate from editing. Ending is final —
+        an ended campaign is never reopened, so a closed appeal cannot resume.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Status changed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /admin/campaigns/{id}/reach:
+    get:
+      tags: [financial]
+      summary: How far an invitation actually travelled
+      description: people_asked, times_shown, opened, gave, dismissed, declined.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Reach summary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /giving/invitation:
     get:
       tags: [financial]
