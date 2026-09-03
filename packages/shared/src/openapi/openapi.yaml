@@ -2682,6 +2682,44 @@ paths:
         "200": { description: Cancelled }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /giving/invitation:
+    get:
+      tags: [financial]
+      summary: May we invite this member to partner today, and with what
+      description: >-
+        Returns show:false with a `reason` far more often than it returns a
+        campaign. Every rule of restraint (never a partner, never a minor, three
+        showings per campaign, a fortnight between waves, quiet hours, the first
+        week) is enforced here so the clients cannot drift apart.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "show + reason, or show + the campaign and its tiers" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /giving/invitation/{id}/shown:
+    post:
+      tags: [financial]
+      summary: Record that the invitation was actually rendered
+      description: A decision to show is not a showing; this is what the cap counts.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Recorded }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /giving/invitation/{id}/outcome:
+    post:
+      tags: [financial]
+      summary: Record what the member did about the invitation
+      description: >-
+        dismissed | declined | opened | gave. `declined` is permanent — it is the
+        member asking not to be asked again.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Recorded }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /giving/partnership:
     get:
       tags: [financial]

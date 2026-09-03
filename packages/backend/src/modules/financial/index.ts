@@ -6,6 +6,7 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { FinancialService } from "./service.js";
+import { invitationFor, recordShown, recordOutcome } from "./invitation.js";
 import { buildPaymentGateway, type PaymentGateway } from "./gateway.js";
 import { buildMobileMoneyProviders, type MobileMoneyProviders } from "./providers.js";
 import { buildPayPalGateway, type PayPalGateway } from "./paypal.js";
@@ -115,6 +116,46 @@ export function registerFinancial(
     auth,
     handler(async (req, res) => {
       res.json(await svc.listSchedules(requirePrincipal(req).userId));
+    }),
+  );
+
+  // ── The partner invitation (phase 2) ───────────────────────────────────────
+  // The client asks "may I show this?" and renders whatever comes back. Every
+  // rule of restraint lives on the server (invitation.ts) so the two apps
+  // cannot drift apart — and they would only ever drift towards asking more.
+  r.get(
+    "/giving/invitation",
+    auth,
+    handler(async (req, res) => {
+      res.json(await invitationFor(ctx.db.primary, requirePrincipal(req).userId));
+    }),
+  );
+
+  // Rendered, not merely decided. The client calls this when the invitation is
+  // actually on screen, which is what the "three times, ever" rule counts.
+  r.post(
+    "/giving/invitation/:id/shown",
+    auth,
+    handler(async (req, res) => {
+      const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
+      await recordShown(ctx.db.primary, requirePrincipal(req).userId, id);
+      res.status(204).end();
+    }),
+  );
+
+  // What they did about it. 'declined' is the permanent one — the member saying
+  // don't ask again, and nothing may override it.
+  r.post(
+    "/giving/invitation/:id/outcome",
+    auth,
+    handler(async (req, res) => {
+      const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
+      const { outcome } = parseBody(
+        z.object({ outcome: z.enum(["dismissed", "declined", "opened", "gave"]) }),
+        req.body,
+      );
+      await recordOutcome(ctx.db.primary, requirePrincipal(req).userId, id, outcome);
+      res.status(204).end();
     }),
   );
 
