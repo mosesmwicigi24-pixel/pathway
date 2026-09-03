@@ -28,6 +28,14 @@ export type InviteRefusal =
 export interface InviteDecision {
   show: boolean;
   reason?: InviteRefusal;
+  /**
+   * How many times this member has already seen THIS campaign. The clients use
+   * it for one thing: "Don't ask again" appears only from the second showing.
+   * Offering a permanent no immediately invites one from someone who simply had
+   * a busy morning — but a person who has now been asked twice deserves a way
+   * to end it. Server-side like every other rule, so the two apps agree.
+   */
+  showing?: number;
   campaign?: {
     campaign_id: string;
     title: string;
@@ -165,6 +173,8 @@ export async function invitationFor(
   const daysLeft = Math.max(0, daysBetween(now, new Date(`${campaign.ends_on}T23:59:59Z`)));
   return {
     show: true,
+    // The showing this is about to become, not the one already recorded.
+    showing: (log?.times_shown ?? 0) + 1,
     campaign: {
       campaign_id: campaign.campaign_id,
       title: campaign.title,
