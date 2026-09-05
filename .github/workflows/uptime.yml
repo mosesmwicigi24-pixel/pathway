@@ -1,0 +1,95 @@
+name: Uptime
+
+# Outside-in watch on pathway.nuruplace.org (owner ask, 2026-09-05, after a
+# connection timeout seen from a laptop and a phone at 11:49 EAT with no way
+# onto the box). Every five minutes a runner asks the API whether it is READY —
+# Postgres and Redis answer inside /readyz — three attempts, ten seconds apart,
+# before it is called down. A failure opens ONE issue labelled `outage` and
+# @mentions the owner (or comments on the open one); recovery comments the
+# time and closes it. GitHub then reaches the owner's phone, and the incident
+# ledger finally gets real timings instead of "the site was slow at some point".
+#
+# It lives in THIS repo because it is public and Actions minutes are free
+# here; the private umbrella would spend its whole monthly allowance on a
+# five-minute schedule (each run bills a full minute).
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe readiness (three attempts)
+        id: probe
+        shell: bash
+        run: |
+          set +e
+          status="down"
+          log=""
+          for attempt in 1 2 3; do
+            out=$(curl -sS -o /tmp/body -m 20 -w "%{http_code} %{time_total}" https://pathway.nuruplace.org/readyz 2>&1)
+            code=${out%% *}; t=${out##* }
+            body=$(head -c 120 /tmp/body 2>/dev/null | tr -d '\n')
+            line="$(date -u +%FT%TZ) readyz attempt $attempt: http=$code time=${t}s ${body:+body=$body}"
+            [ "$code" = "200" ] || line="$line ($out)"
+            echo "$line"
+            log="$log$line"$'\n'
+            if [ "$code" = "200" ]; then status="up"; break; fi
+            sleep 10
+          done
+          # The portal alongside, so the record says which half failed: a
+          # dead box fails both; a dead API alone still serves the SPA.
+          pout=$(curl -sS -o /dev/null -m 20 -w "%{http_code} %{time_total}" https://pathway.nuruplace.org/ 2>&1)
+          line="$(date -u +%FT%TZ) portal /: http=${pout%% *} time=${pout##* }s"
+          echo "$line"
+          log="$log$line"$'\n'
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "log<<NURU_EOF"
+            printf '%s' "$log"
+            echo "NURU_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the outage issue
+        if: steps.probe.outputs.status == 'down'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LOG: ${{ steps.probe.outputs.log }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OWNER: ${{ github.repository_owner }}
+        shell: bash
+        run: |
+          existing=$(gh issue list --label outage --state open --json number --jq '.[0].number')
+          body="@${OWNER} — pathway.nuruplace.org did not answer its readiness probe from GitHub's runner (three attempts, ten seconds apart)."$'\n\n```\n'"${LOG}"$'```\n\n'"Run: ${RUN_URL}"$'\n\n'"On the box: \`uptime\`, \`docker compose -f docker-compose.prod.yml ps\`, then \`docker compose -f docker-compose.prod.yml logs --since 30m api worker | grep -iE 'error|timeout'\` (docs/DEPLOYMENT.md §3)."
+          if [ -z "$existing" ]; then
+            gh label create outage --color B60205 --description "pathway.nuruplace.org not answering" 2>/dev/null || true
+            gh issue create --title "Outage: pathway.nuruplace.org not ready ($(date -u +'%Y-%m-%d %H:%M')Z)" --label outage --body "$body"
+          else
+            gh issue comment "$existing" --body "Still down at $(date -u +'%H:%M:%S')Z."$'\n\n```\n'"${LOG}"$'```'
+          fi
+
+      - name: Close the outage issue on recovery
+        if: steps.probe.outputs.status == 'up'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LOG: ${{ steps.probe.outputs.log }}
+        shell: bash
+        run: |
+          existing=$(gh issue list --label outage --state open --json number --jq '.[0].number')
+          [ -z "$existing" ] && exit 0
+          gh issue comment "$existing" --body "Recovered at $(date -u +'%Y-%m-%d %H:%M:%S')Z."$'\n\n```\n'"${LOG}"$'```'
+          gh issue close "$existing" --reason completed
