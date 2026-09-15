@@ -12,6 +12,7 @@ import { z } from "zod";
 import { many, maybeOne, one, tx, recordChange, audit, recordActivityEvent, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { loadEnrollment, loadModule, isModuleUnlocked, type EnrollmentRef } from "../progress/gating.js";
+import { completeModuleOnQuizPass } from "../progress/completion.js";
 import { splitContentPages } from "../curriculum/service.js";
 import { gradeSubmission, stripAnswerSignal, shuffleChoices, type GradableQuestion } from "./grading.js";
 
@@ -314,6 +315,8 @@ export class AssessmentService {
       // Feed the activity ledger so quizzes count toward habit/curriculum scores
       // + streak. A pass is the curriculum-significant signal; record both kinds.
       await recordActivityEvent(c, userId, isPassed ? "quiz_passed" : "quiz_attempt", { moduleId });
+      // A pass IS the completion of a quiz module (see progress/completion.ts).
+      if (isPassed) await completeModuleOnQuizPass(c, userId, moduleId, prog.progress_id);
 
       return {
         attempt_id: attempt.attempt_id,
