@@ -17,6 +17,8 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # About double a normal 14–18 min run: on 2026-09-15 run 34994208068 hung in the test step for 30+ min.
+    timeout-minutes: 35
 
     services:
       postgres:
