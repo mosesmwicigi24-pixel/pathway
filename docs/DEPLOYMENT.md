@@ -132,6 +132,73 @@ bundle, so this is instant and total.
 
 ## Incident ledger
 
+### 2026-09-05 → 2026-09-11 — The whole box vanishes for two to four hours, about every three days
+
+**Symptom.** Members on Android and iOS, and the owner in Firefox, saw
+"taking too long to respond" / "failed to connect to pathway.nuruplace.org/
+72.60.187.67 (port 443) … after 15000ms" — at 21:03, 22:54 and 12:49 EAT on
+different days, from different phones and networks. The first report
+(5 Sep, 11:49 EAT) could not be caught: by the time anyone probed, the site
+answered again and nothing had recorded when it failed or for how long.
+
+**What the outside watch recorded** (`.github/workflows/uptime.yml`, added
+that day, every five minutes from a GitHub runner):
+
+| Down (UTC) | Up (UTC) | Length | EAT window |
+|---|---|---|---|
+| 2026-09-05 19:25 | 21:25 | 2 h 00 | Fri 22:25 → 00:25 |
+| 2026-09-08 23:20 | 01:17 | 1 h 57 | Tue 02:20 → 04:17 |
+| 2026-09-11 04:52 | 09:11 | 4 h 19 | Thu 07:52 → 12:11 |
+
+Every failed probe was a **TCP connect timeout** — on `/readyz` AND on the
+portal's `/`. Not a 502, not a 503 "degraded": nginx itself was not accepting
+connections. The machine, or the route to it, was gone; it came back with no
+human touching it (issues #469, #470, #471, closed by the probe on recovery).
+
+**What it is not.** Not old phones and not the apps: the same failure was
+seen from GitHub's runners in the same windows, and the apps' own error
+text is exactly what OkHttp / URLSession say when a SYN gets no answer. Not
+Hostinger's published status either (nothing posted on those dates).
+
+**Where the cause lives — all on the box, none of it visible from outside.**
+The address is Hostinger, Paris, shared with the mail server
+(rDNS `mail.bethanyhouse.co.ke`) and four other stacks, on a host the
+runbook already calls CPU-starved and oversubscribed. Three explanations
+fit "whole box, hours, self-recovering", and the box's own records decide
+between them:
+
+1. **Memory exhaustion → swap thrash**, until the OOM killer frees it:
+   `dmesg -T | grep -iE 'oom|killed process'` and `journalctl --since`
+   for those windows; `free -h` now.
+2. **Provider mitigation.** A mail host draws abuse; a null-route or a
+   firewall block for a fixed period looks exactly like this. hPanel →
+   the VPS → Firewall / security events for those dates; Hostinger
+   support can confirm a null-route.
+3. **A scheduled job on the host** (backup, log rotation, mail housekeeping)
+   pegging IO for hours: `crontab -l`, `ls /etc/cron.*`, and mailcow's own
+   schedules, against the window start times.
+
+**Permanent fixes, in order of effect.**
+- Move the pathway API off the mail box. A small dedicated VPS ends the
+  shared fate with mail and the CPU steal in one move, and makes the
+  runbook's "do not build on the box" caveat moot.
+- Until then, memory limits on the other stacks (`mem_limit` in their
+  compose files) so mail cannot take the API down with it.
+- Cloudflare in front of `pathway.nuruplace.org`: Kenyan members terminate
+  TLS at a Nairobi edge instead of Paris, the origin address is hidden from
+  abuse, and the portal's static bundle stays served from cache during a
+  short origin loss. (An origin null-route still takes the API down — this
+  is a mitigation, not the fix.)
+- The apps: keep the last good copy of what they read and show it while the
+  server is away, say plainly that the server is unreachable, and retry
+  without being asked — so a two-hour host outage is a stale Home, not a
+  blank page. (Tracked in the mobile repos.)
+
+**Still unproven.** Which of the three it is. Nothing here can be settled
+without a shell on the box or hPanel; the commands above are the first ten
+minutes of that session.
+
+
 ### 2026-09-02 — Recurring giving could never have worked: the charger had no M-Pesa keys
 
 **Symptom.** A probe of the new `/giving/partnership` endpoint showed six
