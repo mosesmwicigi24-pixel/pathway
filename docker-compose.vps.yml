@@ -31,6 +31,25 @@ x-mpesa-env: &mpesa-env
   MPESA_TX_TYPE: ${MPESA_TX_TYPE:-CustomerPayBillOnline}
   MPESA_CALLBACK_URL: ${MPESA_CALLBACK_URL:-https://pathway.nuruplace.org/v1/webhooks/mobilemoney/mpesa}
 
+# Streaming hostnames — the api hands them to encoders and the worker builds
+# its radio provider from them (buildStreamProvider needs ICECAST_SOURCE_HOST
+# AND ICECAST_PUBLIC_BASE; without both it silently picks a different provider).
+# One anchor, both services: listing them under api alone is exactly how the
+# worker ran a different radio provider than the api for weeks, and how the
+# M-Pesa keys reached the api and never the worker on 2026-09-02.
+# Behind Cloudflare, LIVE_RTMP_BASE_URL and ICECAST_SOURCE_HOST MUST be the
+# unproxied origin name — RTMP :1935 and Icecast :8300 cannot traverse an
+# HTTP proxy.
+x-stream-env: &stream-env
+  LIVE_CDN_BASE: ${LIVE_CDN_BASE:-}
+  LIVE_CDN_PER_STREAM: ${LIVE_CDN_PER_STREAM:-false}
+  ICECAST_SOURCE_HOST: ${ICECAST_SOURCE_HOST:-}
+  LIVE_RTMP_BASE_URL: ${LIVE_RTMP_BASE_URL:-}
+  ICECAST_SOURCE_PORT: ${ICECAST_SOURCE_PORT:-}
+  ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:-}
+  ICECAST_PUBLIC_BASE: ${ICECAST_PUBLIC_BASE:-}
+  ICECAST_STATUS_URL: ${ICECAST_STATUS_URL:-}
+
 services:
   api:
     ports:
@@ -58,18 +77,12 @@ services:
       # this file on 2026-07-31 dropped LIVE_CDN_BASE and silently disabled the
       # R2 fan-out until it was caught). LIVE_CDN_PER_STREAM scopes church HLS
       # objects by stream_id (flicker fix, docs/LIVE_CDN_PERSTREAM.md).
-      LIVE_CDN_BASE: ${LIVE_CDN_BASE:-}
-      LIVE_CDN_PER_STREAM: ${LIVE_CDN_PER_STREAM:-false}
       MEDIA_STORAGE_DIR: ${MEDIA_STORAGE_DIR:-/data/media}
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-https://pathway.nuruplace.org/media}
       # Live radio via self-hosted Icecast (source-driven). Values from the VPS-only
       # .env; provider falls back to "fake" when unset.
       RADIO_STREAM_PROVIDER: ${RADIO_STREAM_PROVIDER:-fake}
-      ICECAST_SOURCE_HOST: ${ICECAST_SOURCE_HOST:-}
-      ICECAST_SOURCE_PORT: ${ICECAST_SOURCE_PORT:-}
-      ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:-}
-      ICECAST_PUBLIC_BASE: ${ICECAST_PUBLIC_BASE:-}
-      ICECAST_STATUS_URL: ${ICECAST_STATUS_URL:-}
+      # API hands this URL to every encoder. Forwarded here because .env alone
       # Live-mix engine (liquidsoap on the host) — mixer/live/* endpoints.
       LIQUIDSOAP_HOST: ${LIQUIDSOAP_HOST:-}
       LIQUIDSOAP_PORT: ${LIQUIDSOAP_PORT:-1234}
@@ -97,7 +110,7 @@ services:
       EMAIL_FROM: ${EMAIL_FROM}
       APP_PUBLIC_URL: ${APP_PUBLIC_URL}
       # M-Pesa (Daraja) STK push — see x-mpesa-env at the top of this file.
-      <<: *mpesa-env
+      <<: [*mpesa-env, *stream-env]
       # nuruplace.org's two signed intakes: the connection card / contact form /
       # prayer request (migration 201), and giving (migration 202). Each must
       # equal its counterpart in /srv/nuruplace/.env — CONTACT_WEBHOOK_SECRET
@@ -129,12 +142,19 @@ services:
     # the nightly story narrative were canned offline text, not model output, and
     # nothing surfaced that because the fallback is deliberately silent. The
     # worker is the process that RUNS those jobs, so it needs the keys too.
+    # The worker now builds the SAME Icecast provider as the api (x-stream-env),
+    # so it needs the same road to the host: ICECAST_STATUS_URL points at
+    # host.docker.internal:8300. Without this mapping the name does not resolve
+    # and every radio sweep fails — a loud broken provider instead of a silent
+    # wrong one. Mirrors the api's mapping above.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # The worker runs runDueSchedules — it is the process that actually
       # collects every recurring gift, so it needs the mobile-money keys just as
       # much as the api does. Absent here from the day recurring giving shipped
       # until 2026-09-02; see x-mpesa-env at the top of this file.
-      <<: *mpesa-env
+      <<: [*mpesa-env, *stream-env]
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
       ANTHROPIC_MODEL_FAST: ${ANTHROPIC_MODEL_FAST:-claude-haiku-4-5-20251001}
