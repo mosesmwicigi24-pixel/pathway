@@ -12,9 +12,11 @@ import {
 } from "./helpers/factories.js";
 import { AssessmentService } from "../src/modules/assessment/service.js";
 import { ProgressService } from "../src/modules/progress/service.js";
+import { CurriculumService } from "../src/modules/curriculum/service.js";
 
 const assess = () => new AssessmentService(testPool());
 const progress = () => new ProgressService(testPool());
+const curriculum = () => new CurriculumService(testPool());
 
 const MUT = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
@@ -75,6 +77,55 @@ describe("assessment / quiz (§1.9, §3.7)", () => {
     expect(res.score_achieved).toBe(100);
     expect(res.is_passed).toBe(true);
     expect(res.pass_mark).toBe(70);
+    // A pass IS the completion of a quiz module — written by the server, in the
+    // same transaction, not left to a client follow-up (2026-09-16: 33 rows
+    // across 18 members had a pass and is_completed = false; the app re-offered
+    // the test every visit).
+    const row = await testPool().query(
+      `SELECT mp.is_completed, mp.completed_at FROM module_progress mp
+         JOIN enrollments e ON e.enrollment_id = mp.enrollment_id
+        WHERE e.user_id = $1 AND mp.module_id = $2`,
+      [userId, l1m1],
+    );
+    expect(row.rows[0].is_completed).toBe(true);
+    expect(row.rows[0].completed_at).not.toBeNull();
+    const detail = (await curriculum().getModule(userId, l1m1)) as { completed_at: string | null; best_score: number | null };
+    expect(detail.completed_at).not.toBeNull();
+    expect(detail.best_score).toBe(100);
+    const done = await testPool().query(
+      `SELECT 1 FROM interaction_events WHERE user_id = $1 AND kind = 'module_completed' AND module_id = $2`,
+      [userId, l1m1],
+    );
+    expect(done.rowCount).toBe(1);
+  });
+
+  it("a retake of an already-completed module does not re-fire completion", async () => {
+    const pass = { answers: [{ question_id: q1, given_answer: "A" }, { question_id: q2, given_answer: "B" }] };
+    await assess().submitQuiz(userId, l1m1, { client_mutation_id: MUT, ...pass });
+    await assess().submitQuiz(userId, l1m1, { client_mutation_id: "aaaaaaaa-bbbb-cccc-dddd-000000000002", ...pass });
+    const done = await testPool().query(
+      `SELECT count(*)::int AS n FROM interaction_events WHERE user_id = $1 AND kind = 'module_completed' AND module_id = $2`,
+      [userId, l1m1],
+    );
+    expect(done.rows[0].n).toBe(1);
+  });
+
+  it("a legacy row (passed attempt, is_completed still false) reads as completed with its score", async () => {
+    await assess().submitQuiz(userId, l1m1, {
+      client_mutation_id: MUT,
+      answers: [{ question_id: q1, given_answer: "A" }, { question_id: q2, given_answer: "B" }],
+    });
+    // The shape prod carried before 2026-09-16.
+    await testPool().query(
+      `UPDATE module_progress mp SET is_completed = FALSE, completed_at = NULL
+         FROM enrollments e WHERE e.enrollment_id = mp.enrollment_id AND e.user_id = $1 AND mp.module_id = $2`,
+      [userId, l1m1],
+    );
+    const detail = (await curriculum().getModule(userId, l1m1)) as { completed_at: string | null; best_score: number | null };
+    expect(detail.completed_at).not.toBeNull();
+    expect(detail.best_score).toBe(100);
+    const list = (await curriculum().listModulesForLevel(userId, 1)) as Array<{ module_id: string; completed: boolean }>;
+    expect(list.find((m) => m.module_id === l1m1)?.completed).toBe(true);
   });
 
   it("fails a half-correct submission below the pass mark (unanswered = wrong)", async () => {

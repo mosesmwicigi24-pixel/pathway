@@ -210,7 +210,12 @@ export class CurriculumService {
     const completedRows = enrollment
       ? await many<{ module_id: string }>(
           this.pool,
-          `SELECT module_id FROM module_progress WHERE enrollment_id = $1 AND is_completed`,
+          // A passed quiz counts as completed even where the row was never
+          // flipped (rows from before 2026-09-16 — see progress/completion.ts).
+          `SELECT mp.module_id FROM module_progress mp
+            WHERE mp.enrollment_id = $1
+              AND (mp.is_completed
+                   OR EXISTS (SELECT 1 FROM quiz_attempts qa WHERE qa.progress_id = mp.progress_id AND qa.is_passed))`,
           [enrollment.enrollment_id],
         )
       : [];
@@ -344,13 +349,17 @@ export class CurriculumService {
     // PASSING quiz score for this module (null when no quiz / never passed).
     const completion = await maybeOne<{ completed_at: string; best_score: number | null }>(
       this.pool,
-      `SELECT mp.completed_at::text AS completed_at,
+      `SELECT COALESCE(mp.completed_at,
+                       (SELECT min(qa.attempted_at) FROM quiz_attempts qa
+                         WHERE qa.progress_id = mp.progress_id AND qa.is_passed))::text AS completed_at,
               (SELECT max(qa.score_achieved)::int
                  FROM quiz_attempts qa
                 WHERE qa.progress_id = mp.progress_id AND qa.is_passed) AS best_score
          FROM module_progress mp
          JOIN enrollments e ON e.enrollment_id = mp.enrollment_id
-        WHERE e.user_id = $1 AND mp.module_id = $2 AND mp.is_completed`,
+        WHERE e.user_id = $1 AND mp.module_id = $2
+          AND (mp.is_completed
+               OR EXISTS (SELECT 1 FROM quiz_attempts qa WHERE qa.progress_id = mp.progress_id AND qa.is_passed))`,
       [userId, moduleId],
     );
 
