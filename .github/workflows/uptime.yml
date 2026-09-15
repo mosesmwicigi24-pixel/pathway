@@ -55,6 +55,18 @@ jobs:
           line="$(date -u +%FT%TZ) portal /: http=${pout%% *} time=${pout##* }s"
           echo "$line"
           log="$log$line"$'\n'
+          # The origin DIRECTLY, bypassing Cloudflare, so an outage record says
+          # whether the edge or the box failed — they look identical from the
+          # member's phone and need opposite fixes. Informational only: it never
+          # changes `status`, and it stays quiet until the name exists in DNS.
+          if getent hosts origin.nuruplace.org >/dev/null 2>&1; then
+            oout=$(curl -sS -o /dev/null -m 20 -w "%{http_code} %{time_total}" https://origin.nuruplace.org/readyz 2>&1)
+            line="$(date -u +%FT%TZ) origin readyz (direct): http=${oout%% *} time=${oout##* }s"
+          else
+            line="$(date -u +%FT%TZ) origin readyz (direct): origin.nuruplace.org not in DNS yet"
+          fi
+          echo "$line"
+          log="$log$line"$'\n'
           echo "status=$status" >> "$GITHUB_OUTPUT"
           {
             echo "log<<NURU_EOF"
