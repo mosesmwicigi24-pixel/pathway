@@ -465,6 +465,65 @@ export function registerMedia(ctx: AppContext): Router {
     }),
   );
 
+  // Session audio, chunked. Same chunk endpoint as video (bytes are bytes);
+  // its own finalize because the rules differ: audio types, the 250 MB audio
+  // cap, and a bare { url, duration_sec } — no media_assets row, exactly what
+  // the single-request /audio/upload returns. WHY: Cloudflare in front of the
+  // portal caps one request at 100 MB and real sermons run 130–150 MB; video
+  // was already chunked, audio was not (2026-09-16).
+  r.post(
+    "/admin/media/audio/finalize",
+    auth, perm("videos", "create"),
+    handler(async (req, res) => {
+      const body = parseBody(
+        z.object({
+          upload_id: z.string().uuid(),
+          total_chunks: z.coerce.number().int().min(1).max(200_000),
+          filename: z.string().min(1).max(300),
+          duration_sec: z.coerce.number().int().positive().optional(),
+        }),
+        req.body ?? {},
+      );
+      const dir = join(chunksRoot, body.upload_id);
+      const ext = extname(body.filename).toLowerCase().replace(/[^.a-z0-9]/g, "");
+      if (!AUDIO_EXTS.has(ext)) {
+        rmSync(dir, { recursive: true, force: true });
+        throw new ApiError("VALIDATION_FAILED", "Only MP3, WAV, AAC or ALAC (.m4a) audio can be uploaded");
+      }
+      let total = 0;
+      for (let i = 0; i < body.total_chunks; i++) {
+        const cp = join(dir, String(i));
+        if (!existsSync(cp)) throw new ApiError("VALIDATION_FAILED", `Missing chunk ${i} — please retry the upload`);
+        total += statSync(cp).size;
+      }
+      if (total > AUDIO_MAX_BYTES) {
+        rmSync(dir, { recursive: true, force: true });
+        throw new ApiError("VALIDATION_FAILED", "Audio exceeds the 250 MB upload limit");
+      }
+      const finalName = `${randomUUID()}${ext}`;
+      const finalPath = join(storageDir, finalName);
+      const out = createWriteStream(finalPath);
+      try {
+        for (let i = 0; i < body.total_chunks; i++) {
+          const cp = join(dir, String(i));
+          await new Promise<void>((resolve, reject) => {
+            const rs = createReadStream(cp);
+            rs.on("error", reject);
+            rs.on("end", () => resolve());
+            rs.pipe(out, { end: false });
+          });
+        }
+        await new Promise<void>((resolve, reject) => { out.end(() => resolve()); out.on("error", reject); });
+      } catch (e) {
+        out.destroy();
+        unlink(finalPath, () => undefined);
+        throw e;
+      }
+      rmSync(dir, { recursive: true, force: true });
+      res.status(201).json({ url: `${publicBase}/${finalName}`, duration_sec: body.duration_sec ?? null });
+    }),
+  );
+
   // Register an external (YouTube/Vimeo/direct/private) video — no transcode.
   r.post(
     "/admin/media/external",
