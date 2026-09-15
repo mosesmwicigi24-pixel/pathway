@@ -3125,6 +3125,30 @@ paths:
         "201": { description: Stored asset }
         "400": { description: Validation failed (missing chunk / too large) }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/media/audio/finalize:
+    post:
+      tags: [system]
+      summary: Admin. Finalize a chunked session-audio upload (chunks via /admin/media/videos/chunk) — concatenates and returns a bare { url, duration_sec }, like /admin/media/audio/upload. Exists because the proxy caps one request at 100 MB and sermons run larger.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upload_id, total_chunks, filename]
+              properties:
+                upload_id: { type: string, format: uuid }
+                total_chunks: { type: integer }
+                filename: { type: string, description: "Original filename; its extension decides the stored type (mp3/wav/m4a/aac/alac)." }
+                duration_sec: { type: integer }
+      responses:
+        "201":
+          description: Stored audio URL
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AudioUploadResult" }
+        "400": { description: Validation failed (missing chunk / not audio / too large) }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /home/welcome-video:
     get:
       tags: [system]

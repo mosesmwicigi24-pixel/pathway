@@ -562,6 +562,51 @@ describe("radio — audio upload validation", () => {
   });
 });
 
+describe("radio — chunked audio upload (the proxy caps one request at 100 MB)", () => {
+  const uuid = (): string => crypto.randomUUID();
+  const put = (id: string, i: number, bytes: Buffer) =>
+    agent()
+      .put(`/v1/admin/media/videos/chunk?upload_id=${id}&index=${i}`)
+      .set(auth(adminTok))
+      .set("Content-Type", "application/octet-stream")
+      .send(bytes);
+
+  it("concatenates the chunks into one stored file and answers like /audio/upload", async () => {
+    const id = uuid();
+    await put(id, 0, Buffer.from("ID3-first-half-")).expect(200);
+    await put(id, 1, Buffer.from("second-half")).expect(200);
+    const res = await agent()
+      .post("/v1/admin/media/audio/finalize")
+      .set(auth(adminTok))
+      .send({ upload_id: id, total_chunks: 2, filename: "Sunday sermon.MP3", duration_sec: 3600 });
+    expect(res.status).toBe(201);
+    expect(res.body.url).toMatch(/\/media\/[0-9a-f-]{36}\.mp3$/);
+    expect(res.body.duration_sec).toBe(3600);
+  });
+
+  it("rejects finalize when a chunk is missing", async () => {
+    const id = uuid();
+    await put(id, 0, Buffer.from("only-one")).expect(200);
+    const res = await agent()
+      .post("/v1/admin/media/audio/finalize")
+      .set(auth(adminTok))
+      .send({ upload_id: id, total_chunks: 2, filename: "a.m4a" });
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/Missing chunk 1/);
+  });
+
+  it("rejects a non-audio filename", async () => {
+    const id = uuid();
+    await put(id, 0, Buffer.from("video-bytes")).expect(200);
+    const res = await agent()
+      .post("/v1/admin/media/audio/finalize")
+      .set(auth(adminTok))
+      .send({ upload_id: id, total_chunks: 1, filename: "clip.mov" });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_FAILED");
+  });
+});
+
 describe("radio — audio library (tracks)", () => {
   async function createTrack(overrides: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     const res = await agent()
