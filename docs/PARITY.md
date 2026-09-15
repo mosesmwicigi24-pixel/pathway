@@ -138,7 +138,7 @@ pushed flows, all on member endpoints, offline-first via `/sync/{pull,push}`.
 | Area | Screens | Member endpoints |
 |---|---|---|
 | Home | HomeDashboard | /me/home/*, /me/rhythm/*, /me/scores, /me/pathway, /home/featured-*, /me/announcements |
-| Pathway | Levels, Level, Module, Quiz, Reflection, LevelComplete | /me/pathway, /levels/:n/modules, /modules/:id (+complete, quiz, reflection) |
+| Pathway | Levels, Level, Module, Quiz, Reflection, LevelComplete | /me/pathway, /levels/:n/modules, /modules/:id (+complete, quiz, reflection). **Quiz resume + finish line (2026-09-15, both apps):** every answer is saved on the device the moment it is given (iOS `Offline/QuizDraftStore.swift`, Android `data/QuizDraftStore.kt`; 14-day expiry) and a relaunch lands on the saved question — the draft keeps the member's own question order because the server assembles `ORDER BY random()`. Applies to module quiz, level exam and the gifts assessment. On any verdict, pass or fail, "Congratulations — You've finished the test / exam / assessment" fires before the score; the Nuru coach review ends "You've finished the review". No wire change: scoring stays server-authoritative, the draft holds answers only. |
 | Plans / Growth | ReadingPlans, PlanDetail, PlanDay, Watch, Devotional, MemoryVerse, Resources, Mentor | /growth/* , /me/scores/word |
 | Events | Events, Calendar, EventDetail, AnnouncementDetail | /calendar, /events/:id (+rsvp, posts), /me/rsvps, /announcements/:id |
 | Chat | Chat, ChatThread, NewMessage, SpacePreview, NuruAssistant, CohortDiscussions, Thread | /chat/*, /assistant/*, /community/threads* |
