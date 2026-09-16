@@ -19,6 +19,11 @@ export function registerHome(ctx: AppContext): Router {
   const r = homeRouter;
 
   // The single most valuable next step for this member (the Home hero card).
+  // "What needs you today" — the ordered rail behind Home's nudge cards.
+  r.get("/me/home/nudges", auth, handler(async (req, res) => {
+    res.json(await svc.nudges(requirePrincipal(req).userId));
+  }));
+
   r.get("/me/home/next-action", auth, handler(async (req, res) => {
     res.json(await svc.nextAction(requirePrincipal(req).userId));
   }));

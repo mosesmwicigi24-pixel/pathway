@@ -2,7 +2,8 @@
 // priority prompt for the member, computed from their real signals.
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
-import { resetDb, closeTestPool } from "./helpers/db.js";
+import { resetDb, closeTestPool, testPool } from "./helpers/db.js";
+import { HomeService } from "../src/modules/home/service.js";
 import { createCongregation, createCellGroup, createUser, createEnrollment, createModule } from "./helpers/factories.js";
 import { pickVerse, pickVerseArt, pickEncouragement, VERSE_ART, VERSE_POOL, ENCOURAGEMENTS } from "../src/modules/home/verses.js";
 
@@ -35,6 +36,30 @@ describe("GET /me/home/next-action", () => {
     expect(a.route).toBe("module");
     expect(a.params.moduleId).toBe(moduleId);
     expect(a.cta_label).toBeTruthy();
+  });
+
+  it("nudges: a fresh member owes today's reflection; an unread letter joins the rail above it", async () => {
+    const svc = new HomeService(testPool());
+    const first = await svc.nudges(meId);
+    expect(first.nudges.map((n) => n.kind)).toContain("reflection_due");
+    const due = first.nudges.find((n) => n.kind === "reflection_due")!;
+    expect(due.route).toBe("devotional");
+    expect(due.due).toBe("today");
+    await testPool().query(
+      `INSERT INTO pastoral_letters (user_id, week_of, body, title) VALUES ($1, current_date, 'Grace for the week.', 'Grace for the week')`,
+      [meId],
+    );
+    const second = await svc.nudges(meId);
+    const kinds = second.nudges.map((n) => n.kind);
+    expect(kinds.indexOf("letter_unread")).toBeLessThan(kinds.indexOf("reflection_due")); // 75 > 70
+    const letter = second.nudges.find((n) => n.kind === "letter_unread")!;
+    expect(letter.route).toBe("letter");
+    expect(letter.params?.letterId).toBeTruthy();
+    // the wire shape both apps decode
+    const res = await agent().get("/v1/me/home/nudges").set("Authorization", meTok);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.nudges)).toBe(true);
+    expect(res.body.nudges[0]).toMatchObject({ id: expect.any(String), title: expect.any(String), cta_label: expect.any(String), route: expect.any(String), priority: expect.any(Number) });
   });
 
   it("always returns a hero (affirmation fallback) even with no enrollment", async () => {

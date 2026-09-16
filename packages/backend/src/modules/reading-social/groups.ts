@@ -22,6 +22,7 @@ import { ApiError } from "../../http/errors.js";
 import { NotificationService } from "../notifications/service.js";
 import { GrowthContentService } from "../growth-content/service.js";
 import { mintInviteToken } from "./tokens.js";
+import { postReadingInviteToDm } from "./inviteDm.js";
 
 export interface GroupMemberRow {
   user_id: string;
@@ -51,7 +52,10 @@ export class ReadingSocialService {
   private readonly notifications: NotificationService;
   private readonly growthContent: GrowthContentService;
 
-  constructor(private readonly pool: Pool, notifications?: NotificationService) {
+  private readonly publicBaseUrl: string;
+
+  constructor(private readonly pool: Pool, notifications?: NotificationService, publicBaseUrl = "https://pathway.nuruplace.org") {
+    this.publicBaseUrl = publicBaseUrl;
     this.notifications = notifications ?? new NotificationService(pool);
     this.growthContent = new GrowthContentService(pool);
   }
@@ -134,6 +138,10 @@ export class ReadingSocialService {
    * no-op, not a second row).
    */
   async createOrGetGroup(userId: string, input: z.infer<typeof ReadingSocialService.CreateGroup>): Promise<GroupRow> {
+    // DM cards are posted AFTER commit (see the note below the transaction):
+    // the poster reads the new group through its own connection, and the chat
+    // service must not hold a second pool connection while this one is out.
+    const dmsToPost: Array<{ inviteeId: string; token: string; groupId: string; inviterName: string | null }> = [];
     const result = await tx(this.pool, async (c) => {
       const plan = await maybeOne<{ plan_id: string }>(c, `SELECT plan_id FROM reading_plans WHERE plan_id = $1 AND is_active`, [input.plan_id]);
       if (!plan) throw new ApiError("NOT_FOUND", "Reading plan not found");
@@ -192,6 +200,7 @@ export class ReadingSocialService {
         const inviter = await this.person(c, userId);
         await audit(c, userId, "reading_invite.created", "shared_plan_invites", inviteRow.invite_id, { group_id: groupId, invitee_user_id: id });
         await this.notify(id, "plan_group_invite_received", { group_id: groupId, invite_token: token, inviter_id: userId, inviter_name: inviter.full_name });
+        dmsToPost.push({ inviteeId: id, token, groupId, inviterName: inviter.full_name });
       }
 
       const row = await this.groupRow(c, groupId);
@@ -206,6 +215,10 @@ export class ReadingSocialService {
     // the first is still checked out (pool starvation/deadlock risk under
     // load). Idempotent upsert either way, so this is safe to run standalone.
     await this.growthContent.startPlan(userId, input.plan_id);
+    // …and each named friend's invite lands in their DM as a card (see inviteDm.ts).
+    for (const d of dmsToPost) {
+      await postReadingInviteToDm(this.pool, this.publicBaseUrl, { inviterId: userId, inviteeId: d.inviteeId, groupId: d.groupId, token: d.token, inviterName: d.inviterName });
+    }
     return result;
   }
 

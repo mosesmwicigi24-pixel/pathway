@@ -6,8 +6,10 @@
 // highest-priority one. Deterministic + explainable (pastoral, never shaming);
 // the ranking can later grow into segments / bandits / ML behind this same shape.
 import type { Pool } from "pg";
-import { one, maybeOne, tx } from "../../db/db.js";
+import { one, maybeOne, many, tx } from "../../db/db.js";
 import { ScoresService, type ScoreBreakdown } from "../scores/service.js";
+import { CurriculumService } from "../curriculum/service.js";
+import { CalendarService } from "../calendar/service.js";
 import type { AiProvider } from "../assistant/provider.js";
 import { pickVerse, pickEncouragement, THEME_REASON, type Encouragement, type VerseArt, type VerseTheme } from "./verses.js";
 import { bandOf, pickBandArt } from "../intelligence/liturgy.js";
@@ -23,6 +25,31 @@ export type HomeRoute =
   | "devotional"
   | "events"
   | "none";
+
+/** One card on Home's "What needs you today" rail (2026-09-16). Server-computed
+ *  and ordered so both apps render the same list and every tap lands on the
+ *  exact screen. Distinct from NextAction (the single hero): the rail is the
+ *  set of things with a real deadline or a real person waiting. */
+export type NudgeKind =
+  | "reflection_due" | "quiz_in_progress" | "level_review" | "letter_unread"
+  | "cell_gathering" | "plan_day_due" | "reading_invite" | "chat_unread";
+export type NudgeRoute =
+  | "devotional" | "quiz" | "level_exam" | "letter" | "cell" | "plan" | "reading_invite" | "chat";
+export interface HomeNudge {
+  id: string;
+  kind: NudgeKind;
+  title: string;
+  body: string;
+  cta_label: string;
+  route: NudgeRoute;
+  params?: {
+    moduleId?: string; levelNumber?: number; planId?: string;
+    token?: string; conversationId?: string; letterId?: string;
+  };
+  accent: "gold" | "navy" | "success" | "steady";
+  priority: number;
+  due: "today" | "tomorrow" | null;
+}
 
 export interface NextAction {
   id: string;
@@ -61,6 +88,8 @@ export class HomeService {
     private readonly pool: Pool,
     private readonly provider: AiProvider | null = null,
     private readonly scores = new ScoresService(pool),
+    private readonly curriculum = new CurriculumService(pool),
+    private readonly calendar = new CalendarService(pool),
   ) {}
 
   /**
@@ -470,6 +499,198 @@ export class HomeService {
   }
 
   /** The single most valuable next step for this member right now (or null). */
+  /** "What needs you today" — every item with a deadline or a person waiting,
+   *  ordered by priority, capped at five. Each source is isolated: one failing
+   *  query drops one card, never the rail. Dates are judged in Africa/Nairobi
+   *  (the church's day), same as the rhythm. */
+  async nudges(userId: string): Promise<{ nudges: HomeNudge[] }> {
+    const out: HomeNudge[] = [];
+    const tz = "Africa/Nairobi";
+    const safe = async (fn: () => Promise<void>): Promise<void> => {
+      try { await fn(); } catch { /* one card lost, rail kept */ }
+    };
+
+    // Reflection due — the rhythm's third tick, still open today.
+    await safe(async () => {
+      const r = await one<{ done: boolean }>(
+        this.pool,
+        `SELECT COALESCE(bool_or(kind = 'reflection'), false) AS done
+           FROM interaction_events
+          WHERE user_id = $1 AND (occurred_at AT TIME ZONE $2)::date = (now() AT TIME ZONE $2)::date`,
+        [userId, tz],
+      );
+      if (!r.done) {
+        out.push({
+          id: "reflection_due", kind: "reflection_due",
+          title: "Reflection due today", body: "Write today's devotional reflection — a few honest lines.",
+          cta_label: "Start reflection", route: "devotional", accent: "gold", priority: 70, due: "today",
+        });
+      }
+    });
+
+    // A test started and not finished — the answers are saved on the phone.
+    await safe(async () => {
+      const rows = await many<{ module_id: string; title: string }>(
+        this.pool,
+        `SELECT m.module_id, m.title
+           FROM module_progress mp
+           JOIN enrollments e ON e.enrollment_id = mp.enrollment_id
+           JOIN modules m ON m.module_id = mp.module_id
+          WHERE e.user_id = $1 AND mp.quiz_started_at IS NOT NULL AND NOT mp.is_completed
+            AND m.evaluation_kind = 'quiz'
+            AND NOT EXISTS (SELECT 1 FROM quiz_attempts qa WHERE qa.progress_id = mp.progress_id AND qa.is_passed)
+          ORDER BY mp.quiz_started_at DESC LIMIT 1`,
+        [userId],
+      );
+      for (const m of rows) {
+        out.push({
+          id: `quiz:${m.module_id}`, kind: "quiz_in_progress",
+          title: `Finish the ${m.title} test`, body: "You started it — every answer you gave is saved.",
+          cta_label: "Continue test", route: "quiz", params: { moduleId: m.module_id },
+          accent: "navy", priority: 80, due: "today",
+        });
+      }
+    });
+
+    // The level review is open: every module done, exam published, not yet passed.
+    await safe(async () => {
+      const enr = await maybeOne<{ current_level: number }>(
+        this.pool, `SELECT current_level FROM enrollments WHERE user_id = $1 LIMIT 1`, [userId],
+      );
+      if (!enr) return;
+      const rows = (await this.curriculum.listModulesForLevel(userId, enr.current_level)) as Array<{
+        evaluation_kind?: string; status?: string;
+      }>;
+      const exam = rows.find((r) => r.evaluation_kind === "exit_exam" && r.status === "next");
+      if (exam) {
+        out.push({
+          id: `level_review:${enr.current_level}`, kind: "level_review",
+          title: `Level ${enr.current_level} review is open`,
+          body: `Every module is done — one review stands between you and Level ${enr.current_level + 1}.`,
+          cta_label: "Start review", route: "level_exam", params: { levelNumber: enr.current_level },
+          accent: "gold", priority: 85, due: null,
+        });
+      }
+    });
+
+    // The Sunday letter, still sealed.
+    await safe(async () => {
+      const l = await maybeOne<{ letter_id: string; title: string | null }>(
+        this.pool,
+        `SELECT letter_id, title FROM pastoral_letters
+          WHERE user_id = $1 AND read_at IS NULL ORDER BY week_of DESC LIMIT 1`,
+        [userId],
+      );
+      if (l) {
+        out.push({
+          id: `letter:${l.letter_id}`, kind: "letter_unread",
+          title: "Your Sunday letter is waiting", body: l.title ?? "Written for your week.",
+          cta_label: "Read it", route: "letter", params: { letterId: l.letter_id },
+          accent: "navy", priority: 75, due: null,
+        });
+      }
+    });
+
+    // Cell gathering today or tomorrow.
+    await safe(async () => {
+      const summary = (await this.calendar.cellSummary(userId)) as {
+        cell?: { name?: string } | null;
+        next?: { start_at?: string; location?: string | null } | null;
+      };
+      const start = summary?.next?.start_at ? new Date(summary.next.start_at) : null;
+      if (!start || Number.isNaN(start.getTime())) return;
+      const dayOf = (d: Date): string => d.toLocaleDateString("en-CA", { timeZone: tz });
+      const today = dayOf(new Date());
+      const tomorrow = dayOf(new Date(Date.now() + 86_400_000));
+      const day = dayOf(start);
+      if (day !== today && day !== tomorrow) return;
+      const time = start.toLocaleTimeString("en-KE", { timeZone: tz, hour: "numeric", minute: "2-digit" });
+      const name = summary?.cell?.name ?? "Your cell";
+      out.push({
+        id: "cell_gathering", kind: "cell_gathering",
+        title: `${name} meets ${day === today ? "today" : "tomorrow"}`,
+        body: [time, summary?.next?.location].filter(Boolean).join(" · "),
+        cta_label: "See details", route: "cell", accent: "success", priority: 65,
+        due: day === today ? "today" : "tomorrow",
+      });
+    });
+
+    // A reading plan with today's day still unread.
+    await safe(async () => {
+      const r = await maybeOne<{ plan_id: string; title: string; current_day: number; day_count: number }>(
+        this.pool,
+        `SELECT rp.plan_id, p.title, rp.current_day, p.day_count
+           FROM reading_plan_progress rp JOIN reading_plans p ON p.plan_id = rp.plan_id
+          WHERE rp.user_id = $1 AND rp.completed_at IS NULL
+            AND (rp.updated_at AT TIME ZONE $2)::date < (now() AT TIME ZONE $2)::date
+          ORDER BY rp.updated_at DESC LIMIT 1`,
+        [userId, tz],
+      );
+      if (r) {
+        out.push({
+          id: `plan:${r.plan_id}`, kind: "plan_day_due",
+          title: `Day ${r.current_day} of ${r.day_count} · ${r.title}`, body: "A few minutes keeps the thread from breaking.",
+          cta_label: "Read today", route: "plan", params: { planId: r.plan_id },
+          accent: "gold", priority: 60, due: "today",
+        });
+      }
+    });
+
+    // Someone invited me to read with them.
+    await safe(async () => {
+      const r = await maybeOne<{ token: string; title: string; day_count: number; full_name: string }>(
+        this.pool,
+        `SELECT i.token, p.title, p.day_count, u.full_name
+           FROM shared_plan_invites i
+           JOIN shared_plan_groups g ON g.group_id = i.group_id
+           JOIN reading_plans p ON p.plan_id = g.plan_id
+           JOIN users u ON u.user_id = i.inviter_id
+          WHERE i.invitee_user_id = $1 AND i.status = 'pending'
+            AND (i.expires_at IS NULL OR i.expires_at > now())
+          ORDER BY i.created_at DESC LIMIT 1`,
+        [userId],
+      );
+      if (r) {
+        const first = (r.full_name ?? "A friend").split(" ")[0];
+        out.push({
+          id: `invite:${r.token}`, kind: "reading_invite",
+          title: `${first} invited you to read ${r.title}`, body: `${r.day_count}-day plan · read it together`,
+          cta_label: "See invite", route: "reading_invite", params: { token: r.token },
+          accent: "gold", priority: 78, due: null,
+        });
+      }
+    });
+
+    // Unread messages — the most recent conversation with something new.
+    await safe(async () => {
+      const r = await maybeOne<{ conversation_id: string; unread: number; total: number }>(
+        this.pool,
+        `WITH mine AS (
+           SELECT mem.conversation_id,
+                  (SELECT count(*)::int FROM chat_messages um
+                    WHERE um.conversation_id = mem.conversation_id AND um.author_user_id <> $1
+                      AND (mem.last_read_at IS NULL OR um.created_at > mem.last_read_at)) AS unread,
+                  (SELECT max(um.created_at) FROM chat_messages um WHERE um.conversation_id = mem.conversation_id) AS last_at
+             FROM chat_members mem WHERE mem.user_id = $1 AND mem.status = 'active')
+         SELECT conversation_id, unread, (SELECT sum(unread)::int FROM mine) AS total
+           FROM mine WHERE unread > 0 ORDER BY last_at DESC NULLS LAST LIMIT 1`,
+        [userId],
+      );
+      if (r && r.total > 0) {
+        out.push({
+          id: "chat_unread", kind: "chat_unread",
+          title: r.total === 1 ? "1 unread message" : `${r.total} unread messages`,
+          body: "Someone in your community is waiting on you.",
+          cta_label: "Open chat", route: "chat", params: { conversationId: r.conversation_id },
+          accent: "steady", priority: 50, due: null,
+        });
+      }
+    });
+
+    out.sort((a, b) => b.priority - a.priority);
+    return { nudges: out.slice(0, 5) };
+  }
+
   async nextAction(userId: string): Promise<{ action: NextAction | null }> {
     const scores = await this.scores.all(userId);
     const ctx = await one<Ctx>(

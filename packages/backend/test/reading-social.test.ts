@@ -153,6 +153,25 @@ describe("group creation with named members", () => {
 
     const notif = await testPool().query(`SELECT template FROM notifications WHERE user_id = $1`, [bId]);
     expect(notif.rows.map((r: { template: string }) => r.template)).toContain("plan_group_invite_received");
+    // …and the invite lands in their DM as a card (attachment_meta.invite) with the join link in the text.
+    const dm = await testPool().query(
+      `SELECT m.body, m.attachment_meta FROM chat_messages m
+         JOIN chat_members a ON a.conversation_id = m.conversation_id AND a.user_id = $1
+         JOIN chat_members b ON b.conversation_id = m.conversation_id AND b.user_id = $2
+        WHERE m.author_user_id = $1 ORDER BY m.created_at DESC LIMIT 1`,
+      [aId, bId],
+    );
+    expect(dm.rowCount).toBe(1);
+    expect(dm.rows[0].body).toMatch(/\/join\/[A-Za-z0-9_-]+/);
+    const meta = dm.rows[0].attachment_meta as { invite?: { token?: string; join_url?: string; plan_title?: string; day_count?: number } };
+    expect(meta.invite?.token).toBeTruthy();
+    expect(meta.invite?.join_url).toContain(`/join/${meta.invite?.token}`);
+    expect(meta.invite?.plan_title).toBeTruthy();
+    // The public landing page carries the token into Play's install referrer (store-then-plan).
+    const page = await agent().get(`/join/${meta.invite?.token}`);
+    expect(page.status).toBe(200);
+    expect(page.text).toContain("referrer=join_token%3D");
+    expect(page.text).toContain(`nuru://join/${meta.invite?.token}`);
   });
 
   it("refuses a minor member (403 FORBIDDEN_SCOPE)", async () => {
