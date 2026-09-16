@@ -17,6 +17,10 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # Twice (2026-09-15, 2026-09-16) the test step hung for 30–40 min on code
+    # identical to main; without this GitHub lets a hung job burn six hours.
+    # Normal runs take 15–20 min.
+    timeout-minutes: 35
 
     services:
       postgres:
