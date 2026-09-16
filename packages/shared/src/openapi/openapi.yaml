@@ -5459,6 +5459,23 @@ paths:
         "200": { description: Disciplers }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /me/home/nudges:
+    get:
+      tags: [progress]
+      summary: Member. "What needs you today" — an ordered list of cards with a real deadline or a real person waiting (reflection due, a test left mid-way, the level review, an unread letter, a cell gathering today/tomorrow, a plan day due, a reading invite, unread chat). Every item carries a route + params the apps deep-link to.
+      responses:
+        "200":
+          description: Ordered nudges (at most five)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nudges]
+                properties:
+                  nudges:
+                    type: array
+                    items: { $ref: "#/components/schemas/HomeNudge" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /me/home/next-action:
     get:
       tags: [progress]
@@ -8628,6 +8645,28 @@ components:
         - type: object
           properties:
             status: { type: string, enum: [draft, scheduled, live, ended] }
+    HomeNudge:
+      type: object
+      required: [id, kind, title, body, cta_label, route, accent, priority, due]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [reflection_due, quiz_in_progress, level_review, letter_unread, cell_gathering, plan_day_due, reading_invite, chat_unread] }
+        title: { type: string }
+        body: { type: string }
+        cta_label: { type: string }
+        route: { type: string, enum: [devotional, quiz, level_exam, letter, cell, plan, reading_invite, chat] }
+        params:
+          type: object
+          properties:
+            moduleId: { type: string }
+            levelNumber: { type: integer }
+            planId: { type: string }
+            token: { type: string }
+            conversationId: { type: string }
+            letterId: { type: string }
+        accent: { type: string, enum: [gold, navy, success, steady] }
+        priority: { type: integer }
+        due: { type: [string, "null"], enum: [today, tomorrow, null] }
     AudioUploadResult:
       type: object
       description: Bare result of POST /admin/media/audio/upload (no media_assets row).

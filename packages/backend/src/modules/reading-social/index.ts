@@ -27,8 +27,8 @@ export const readingSocialRouter: Router = Router();
 export const readingSocialJoinRouter: Router = Router();
 
 export function registerReadingSocial(ctx: AppContext): Router {
-  const groups = new ReadingSocialService(ctx.db.primary);
-  const invites = new ReadingInvitesService(ctx.db.primary, groups);
+  const groups = new ReadingSocialService(ctx.db.primary, undefined, ctx.env.APP_PUBLIC_URL);
+  const invites = new ReadingInvitesService(ctx.db.primary, groups, undefined, ctx.env.APP_PUBLIC_URL);
   const auth = authenticate(ctx.env);
   const r = readingSocialRouter;
 
@@ -95,8 +95,8 @@ export function registerReadingSocial(ctx: AppContext): Router {
  *  error envelope; a bad/expired/revoked/declined token always renders a
  *  friendly 404 HTML page instead. */
 export function registerReadingSocialJoin(ctx: AppContext): Router {
-  const groups = new ReadingSocialService(ctx.db.primary);
-  const invites = new ReadingInvitesService(ctx.db.primary, groups);
+  const groups = new ReadingSocialService(ctx.db.primary, undefined, ctx.env.APP_PUBLIC_URL);
+  const invites = new ReadingInvitesService(ctx.db.primary, groups, undefined, ctx.env.APP_PUBLIC_URL);
   const r = readingSocialJoinRouter;
 
   r.get("/join/:token", async (req, res) => {
@@ -114,7 +114,11 @@ export function registerReadingSocialJoin(ctx: AppContext): Router {
         inviterFirstName: firstName(preview.inviter.full_name),
         message: preview.message,
         appScheme: ctx.env.READING_INVITE_APP_SCHEME,
-        androidStoreUrl: ctx.env.READING_INVITE_ANDROID_STORE_URL ?? null,
+        // Store-then-plan: Play's install referrer carries the token so the app
+        // opens this very invite on first launch after install.
+        androidStoreUrl: ctx.env.READING_INVITE_ANDROID_STORE_URL
+          ? `${ctx.env.READING_INVITE_ANDROID_STORE_URL}&referrer=${encodeURIComponent(`join_token=${token}`)}`
+          : null,
         iosStoreUrl: ctx.env.READING_INVITE_IOS_STORE_URL ?? null,
       });
       res.status(200).type("html").send(html);

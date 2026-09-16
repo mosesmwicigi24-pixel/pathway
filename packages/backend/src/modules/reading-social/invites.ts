@@ -21,6 +21,7 @@ import { z } from "zod";
 import { many, maybeOne, one, tx, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { NotificationService } from "../notifications/service.js";
+import { postReadingInviteToDm } from "./inviteDm.js";
 import type { ReadingSocialService } from "./groups.js";
 import { mintInviteToken } from "./tokens.js";
 
@@ -51,12 +52,16 @@ export interface InvitePreview {
 export class ReadingInvitesService {
   private readonly notifications: NotificationService;
 
+  private readonly publicBaseUrl: string;
+
   constructor(
     private readonly pool: Pool,
     private readonly groups: ReadingSocialService,
     notifications?: NotificationService,
+    publicBaseUrl = "https://pathway.nuruplace.org",
   ) {
     this.notifications = notifications ?? new NotificationService(pool);
+    this.publicBaseUrl = publicBaseUrl.replace(/\/+$/, "");
   }
 
   private async notify(userId: string, template: string, payload: Record<string, unknown>): Promise<void> {
@@ -100,7 +105,10 @@ export class ReadingInvitesService {
    *  on client_mutation_id (offline-originated writes, §3.6), matching
    *  ConnectionsService.requestConnection()'s replay-dedup precedent. */
   async createInvite(userId: string, groupId: string, input: z.infer<typeof ReadingInvitesService.CreateInvite>): Promise<InviteRow & { duplicate?: boolean }> {
-    return tx(this.pool, async (c) => {
+    // The DM card is posted AFTER commit — the chat service must not hold a
+    // second pool connection while this transaction's is out.
+    const dm: { pending: { inviteeId: string; token: string; inviterName: string | null } | null } = { pending: null };
+    const created = await tx(this.pool, async (c) => {
       if (input.client_mutation_id) {
         const dup = await maybeOne<InviteRow>(c, `SELECT * FROM shared_plan_invites WHERE client_mutation_id = $1`, [input.client_mutation_id]);
         if (dup) return { ...dup, duplicate: true };
@@ -134,6 +142,11 @@ export class ReadingInvitesService {
         );
         await audit(c, userId, "reading_invite.created", "shared_plan_invites", row.invite_id, { group_id: groupId, invitee_user_id: input.user_id });
         await this.notify(input.user_id, "plan_group_invite_received", { group_id: groupId, invite_token: token, inviter_id: userId, inviter_name: me.full_name });
+        // The invite also lands in the DM with that friend as a card the app
+        // renders (owner, 2026-09-16: "share with a friend, which goes to a chat
+        // as a link"). Best effort: a DM the consent rules refuse must never
+        // fail the invite — the push above still reaches them.
+        dm.pending = { inviteeId: input.user_id, token, inviterName: me.full_name };
         return row;
       }
 
@@ -148,6 +161,11 @@ export class ReadingInvitesService {
       await audit(c, userId, "reading_invite.created", "shared_plan_invites", row.invite_id, { group_id: groupId, open_link: true });
       return row;
     });
+    const replay = "duplicate" in created && created.duplicate === true;
+    if (dm.pending && !replay) {
+      await postReadingInviteToDm(this.pool, this.publicBaseUrl, { inviterId: userId, inviteeId: dm.pending.inviteeId, groupId, token: dm.pending.token, inviterName: dm.pending.inviterName });
+    }
+    return created;
   }
 
   /** Pending + past invites for a group — active member only. */
