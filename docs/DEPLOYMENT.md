@@ -54,11 +54,16 @@ unzip -o portal-<sha>.zip -d /tmp/portal-new
 rsync -a --delete /tmp/portal-new/ "$PORTAL_ROOT"/
 ```
 
-> **`$PORTAL_ROOT` is the one thing this document cannot tell you.** The
-> `Caddyfile` is mounted into the container from the box and is not in this
-> repo, so the static root is only visible on the server. Read it out of the
-> Caddyfile once and record it here — until then this step is guesswork, which
-> is exactly what a runbook exists to eliminate.
+> **`$PORTAL_ROOT` = `/var/www/pathway-portal`** (verified 2026-09-23 from the
+> live nginx server block: `root /var/www/pathway-portal;` in
+> `/etc/nginx/sites-enabled/pathway.nuruplace.org` — the host nginx serves the
+> bundle directly; there is no Caddy in front of it any more). Fetch the
+> artifact with `gh run download <run id> -n portal-<full sha> -D /tmp/portal-new`
+> and rsync from there. The API side is scripted on the box:
+> `/usr/local/sbin/pathway-deploy-api.sh <short sha> [--migrate]` (pulls
+> `ghcr.io/…/pathway-backend:sha-<short>`, repins `BACKEND_IMAGE` in `.env`,
+> runs `migrate` with `-T` when asked, recreates api + worker with BOTH compose
+> files, prints image revisions + readyz).
 
 ---
 
