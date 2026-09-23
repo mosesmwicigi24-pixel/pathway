@@ -26,6 +26,7 @@ import { registerProgress } from "../modules/progress/index.js";
 import { registerAssessment } from "../modules/assessment/index.js";
 import { registerEngagement } from "../modules/engagement/index.js";
 import { registerFinancial } from "../modules/financial/index.js";
+import { registerDepartments } from "../modules/departments/index.js";
 import { registerWebsiteGiving } from "../modules/financial/website.js";
 import { registerNotifications } from "../modules/notifications/index.js";
 import { registerCertificates } from "../modules/certificates/index.js";
@@ -166,6 +167,7 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerAssessment(ctx));
   v1.use(registerEngagement(ctx));
   v1.use(registerFinancial(ctx));
+  v1.use(registerDepartments(ctx));
   // Website giving (migration 202). Mounted BEFORE nothing in particular — its
   // paths don't overlap — but it takes the rate-limit store, because the buckets
   // that stop a donate button being used to ring a stranger's phone must be the

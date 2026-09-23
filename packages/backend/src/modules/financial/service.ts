@@ -45,6 +45,8 @@ export class FinancialService {
     // attributed at the moment of giving, never re-derived. Must be the
     // caller's own active pledge.
     pledge_id: z.string().uuid().nullish(),
+    /** A gift to a department need (docs/PARTNERS_PROGRAMME.md §4): must be approved and open. */
+    need_id: z.string().uuid().nullish(),
     // "Named giving" (custom sheet, optional): a member-chosen label for the
     // gift — like an M-Pesa Paybill account name. Trimmed; empty → absent so
     // behavior is unchanged when the field isn't used. Sanitized separately
@@ -80,6 +82,7 @@ export class FinancialService {
     // Which pledge, if any, this gift counts toward: the caller's explicit
     // choice, else the pledge bound to the schedule that is charging.
     const pledgeId = await this.resolvePledgeId(userId, input.pledge_id ?? null, scheduleId ?? null);
+    const needId = await this.resolveNeedId(input.need_id ?? null);
     const key = input.idempotency_key ?? randomUUID();
 
     // Idempotent: the same client key returns the existing transaction.
@@ -120,10 +123,10 @@ export class FinancialService {
       });
       const txn = await one<{ transaction_id: string; status: string }>(
         this.pool,
-        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id)
-         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10)
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id)
+         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10, $11)
          RETURNING transaction_id, status`,
-        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null, input.account_name ?? null, pledgeId],
+        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId],
       );
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor,
@@ -147,10 +150,10 @@ export class FinancialService {
       const order = await this.paypalGw().createOrder({ amountMinor: input.amount_minor, reference: `${userId}:${input.fund}` });
       const txn = await one<{ transaction_id: string; status: string }>(
         this.pool,
-        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id)
-         VALUES ($1, $2, $3, 'USD', 'processing', 'paypal', $4, $5, $6, $7, $8)
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id)
+         VALUES ($1, $2, $3, 'USD', 'processing', 'paypal', $4, $5, $6, $7, $8, $9)
          RETURNING transaction_id, status`,
-        [userId, fund.fund_id, input.amount_minor, order.orderId, key, scheduleId ?? null, input.account_name ?? null, pledgeId],
+        [userId, fund.fund_id, input.amount_minor, order.orderId, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId],
       );
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor, currency: "USD", fund: input.fund, method: "paypal", account_name: input.account_name ?? null,
@@ -174,10 +177,10 @@ export class FinancialService {
 
     const txn = await one<{ transaction_id: string; status: string }>(
       this.pool,
-      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, stripe_payment_intent, idempotency_key, schedule_id, account_name, pledge_id)
-       VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9)
+      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, stripe_payment_intent, idempotency_key, schedule_id, account_name, pledge_id, need_id)
+       VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10)
        RETURNING transaction_id, status`,
-      [userId, fund.fund_id, input.amount_minor, currency, intent.id, key, scheduleId ?? null, input.account_name ?? null, pledgeId],
+      [userId, fund.fund_id, input.amount_minor, currency, intent.id, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId],
     );
     await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
       amount_minor: input.amount_minor,
@@ -810,6 +813,16 @@ export class FinancialService {
       return bound?.pledge_id ?? null;
     }
     return null;
+  }
+
+  /** A department need a gift goes to: approved and still open (422 otherwise). */
+  private async resolveNeedId(explicit: string | null): Promise<string | null> {
+    if (!explicit) return null;
+    const open = await maybeOne<{ need_id: string }>(
+      this.pool, `SELECT need_id FROM department_needs WHERE need_id = $1 AND status = 'approved'`, [explicit],
+    );
+    if (!open) throw new ApiError("UNPROCESSABLE", "That need is not open for giving");
+    return open.need_id;
   }
 
   private static nextRun(from: Date, frequency: "weekly" | "monthly"): Date {

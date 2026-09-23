@@ -89,12 +89,16 @@ technical spec where they apply.
 - `department_posts` (department, author, body, image_url, created_at):
   leader or admin posts; members read them on the department page; a new
   post can nudge department members.
-- `department_needs` (department, title, why, target_minor, currency,
-  deadline, status draft|pending|approved|closed, campaign_id): a leader
-  submits a need; the office approves; approval creates a **campaign** row
-  (existing machinery: goal, progress, match) so "Give to this need" opens
-  Give with the target preset and progress shows on the department page. A
-  pledge may target a need.
+- `department_needs` (department, submitted_by, title, why, target_minor,
+  currency, deadline, status pending|approved|rejected|closed): a leader
+  submits a need; the office approves. **An approved need is its own giving
+  target** — `transactions.need_id` (a gift started from "Give to this
+  need") and `pledges.need_id` are written at giving time, so progress is
+  exact and never double-counts other gifts to the same fund. (Revised
+  2026-09-23 from "approval creates a campaign": a campaign's progress is
+  fund-wide since its start date.) Members see only approved needs; the
+  leader also sees pending and closed ones. `POST /giving/intents` accepts
+  `need_id` (approved and open, 422 otherwise).
 - "A good fit for you": departments whose `gift_keys` intersect the member's
   top gifts (reuse `serving_tracks.gift_keys` mapping) are flagged.
 
@@ -110,10 +114,20 @@ technical spec where they apply.
 - `POST /giving/intents` gains optional `pledge_id`, `cover_fee`
 - `POST /giving/schedules` gains optional `pledge_id`
 - `GET /giving/statements?year=` → by year/by pledge summary (JSON; PDF stays)
-- Departments: `GET /departments`, `GET /departments/:id` (posts, needs,
-  members, fit), `POST /departments/:id/serve` , `GET /me/departments`
-- Admin: `/admin/partners` (list, detail, remind, claims confirm),
-  `/admin/departments` CRUD + `/posts`, `/needs` approve, `/serve-requests`.
+- Departments (member): `GET /departments` (fit, my_status, counts, latest
+  post), `GET /me/departments`, `GET /departments/:id` (posts, members,
+  needs with raised/percent), `POST|DELETE /departments/:id/serve`. Leader
+  (checked in the service): `POST /departments/:id/posts`, `DELETE
+  .../posts/:postId`, `POST /departments/:id/needs`, `POST
+  /departments/:id/serve-requests/:userId/approve|decline`.
+- Admin (`departments:view|manage`): `GET|POST /admin/departments`, `PATCH
+  /admin/departments/:id` (incl. status archived), `POST|DELETE .../posts`,
+  `POST .../needs`, `GET /admin/departments/serve-requests?status=`, `POST
+  /admin/departments/:id/serve-requests/:userId/:decision`, `GET
+  /admin/departments/needs?status=`, `POST
+  /admin/departments/needs/:needId/approve|reject|close`.
+- Admin partners: `/admin/partners` (list, detail), `/:userId/remind`,
+  `/remind-behind`, `/claims`, `/claims/:id/confirm|reject`.
 
 ## 6. Phases
 

@@ -147,6 +147,15 @@ const PUSH_TEMPLATE_COPY: Record<
   }),
   // A recurring gift that didn't go through. Never scolding — the giver's
   // intent is not in question, only the collection.
+  // Departments (docs/PARTNERS_PROGRAMME.md §4).
+  serve_request_received: (p) => ({ title: `${str(p.name) ?? "Someone"} wants to serve in ${str(p.department) ?? "your department"}`, body: "Open the portal to welcome them in." }),
+  serve_request_approved: (p) => ({ title: `Welcome to ${str(p.department) ?? "the department"}`, body: "Your request to serve was approved. Open Departments to see what's next." }),
+  serve_request_declined: (p) => ({ title: `About ${str(p.department) ?? "the department"}`, body: "The leader couldn't take you on right now. Other departments would love your hands — open Departments." }),
+  department_post: (p) => ({ title: str(p.department) ?? "Your department", body: str(p.preview) ?? "A new post from your department." }),
+  department_need_open: (p) => ({ title: `${str(p.title) ?? "A need"} — giving is open`, body: "Your department has a need you can help carry. Open Departments to give." }),
+  department_need_approved: (p) => ({ title: "Your need was approved", body: `${str(p.title) ?? "The need"} is open for giving.` }),
+  department_need_rejected: (p) => ({ title: "About the need you submitted", body: str(p.note) ?? `${str(p.title) ?? "The need"} was not approved this time.` }),
+  department_need_closed: (p) => ({ title: "Need closed", body: `${str(p.title) ?? "The need"} has been closed. Thank you.` }),
   // Partners programme (docs/PARTNERS_PROGRAMME.md §3). Warm, never shaming.
   pledge_due_soon: (p) => {
     const days = num(p.days_away);

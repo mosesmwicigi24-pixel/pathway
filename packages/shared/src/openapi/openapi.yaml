@@ -2966,6 +2966,211 @@ paths:
         "200": { description: Partner detail }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { description: Not a partner }
+  /departments:
+    get:
+      tags: [community]
+      summary: Member. Departments in my congregation — leader, members, my status, gift fit, open needs, latest post.
+      responses:
+        "200": { description: Departments }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /me/departments:
+    get:
+      tags: [community]
+      summary: Member. Departments I serve in or have asked to join.
+      responses:
+        "200": { description: Departments }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /departments/{id}:
+    get:
+      tags: [community]
+      summary: Member. One department — posts, members, open needs with progress (leaders also see pending and closed needs).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Department }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Not found }
+  /departments/{id}/serve:
+    post:
+      tags: [community]
+      summary: Member. "I'd like to serve here" — the leader decides.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "201": { description: Request status }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { description: Not taking new members }
+    delete:
+      tags: [community]
+      summary: Member. Leave a department or withdraw a request.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Left }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /departments/{id}/posts:
+    post:
+      tags: [community]
+      summary: Leader. Post to the department; active members are notified.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string }
+                image_url: { type: [string, "null"] }
+      responses:
+        "201": { description: Post }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /departments/{id}/posts/{postId}:
+    delete:
+      tags: [community]
+      summary: Leader. Remove a post.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: postId, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /departments/{id}/needs:
+    post:
+      tags: [community]
+      summary: Leader. Submit a financial need; the office approves before members can give to it.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, why, target_minor]
+              properties:
+                title: { type: string }
+                why: { type: string }
+                target_minor: { type: integer }
+                currency: { type: string, default: KES }
+                deadline: { type: [string, "null"], format: date }
+      responses:
+        "201": { description: Need (pending) }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /departments/{id}/serve-requests/{userId}/{decision}:
+    post:
+      tags: [community]
+      summary: Leader. Approve or decline a request to serve.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: userId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: decision, required: true, schema: { type: string, enum: [approve, decline] } }
+      responses:
+        "200": { description: Status }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: No pending request }
+  /admin/departments:
+    get:
+      tags: [system]
+      summary: Admin. Departments with counts (members, pending requests, pending and open needs).
+      responses:
+        "200": { description: Departments }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [system]
+      summary: Admin. Create a department.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DepartmentUpsert" }
+      responses:
+        "201": { description: Department }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/departments/{id}:
+    patch:
+      tags: [system]
+      summary: Admin. Edit or archive a department.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DepartmentUpsert" }
+      responses:
+        "200": { description: Department }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/departments/{id}/posts:
+    post:
+      tags: [system]
+      summary: Admin. Post to a department on the office's behalf.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "201": { description: Post }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/departments/{id}/posts/{postId}:
+    delete:
+      tags: [system]
+      summary: Admin. Remove a post.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: postId, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/departments/{id}/needs:
+    post:
+      tags: [system]
+      summary: Admin. Submit a need on a department's behalf.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "201": { description: Need }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/departments/serve-requests:
+    get:
+      tags: [system]
+      summary: Admin. Requests to serve, by status.
+      parameters:
+        - { in: query, name: status, required: false, schema: { type: string, enum: [requested, active, declined, left] } }
+      responses:
+        "200": { description: Requests }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/departments/{id}/serve-requests/{userId}/{decision}:
+    post:
+      tags: [system]
+      summary: Admin. Approve or decline a request to serve.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: userId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: decision, required: true, schema: { type: string, enum: [approve, decline] } }
+      responses:
+        "200": { description: Status }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/departments/needs:
+    get:
+      tags: [system]
+      summary: Admin. Department needs by status, with raised so far.
+      parameters:
+        - { in: query, name: status, required: false, schema: { type: string, enum: [pending, approved, rejected, closed] } }
+      responses:
+        "200": { description: Needs }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/departments/needs/{needId}/{decision}:
+    post:
+      tags: [system]
+      summary: Admin. Approve (opens giving), reject, or close a need.
+      parameters:
+        - { in: path, name: needId, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: decision, required: true, schema: { type: string, enum: [approve, reject, close] } }
+      responses:
+        "200": { description: Status }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { description: Already decided }
   /giving/partnership:
     get:
       tags: [financial]
@@ -8898,6 +9103,18 @@ components:
         note: { type: [string, "null"] }
         title: { type: string }
         created_at: { type: string }
+    DepartmentUpsert:
+      type: object
+      properties:
+        name: { type: string }
+        purpose: { type: string }
+        leader_user_id: { type: [string, "null"], format: uuid }
+        meets: { type: [string, "null"] }
+        image_url: { type: [string, "null"] }
+        fund_code: { type: [string, "null"] }
+        gift_keys: { type: array, items: { type: string } }
+        is_open_to_join: { type: boolean }
+        status: { type: string, enum: [active, archived] }
     AudioUploadResult:
       type: object
       description: Bare result of POST /admin/media/audio/upload (no media_assets row).
