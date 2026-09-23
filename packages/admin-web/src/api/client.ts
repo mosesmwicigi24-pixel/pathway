@@ -2111,6 +2111,122 @@ export const ConfigApi = {
     api.get<{ data: AuditRow[]; next_cursor: number | null }>("/admin/audit", { params: q }).then((r) => r.data),
 };
 
+// ---- Partners programme (docs/PARTNERS_PROGRAMME.md §5, admin mirror) ----
+// Phase 1 is READ-ONLY: list + detail. The phase-2 actions (remind, claims
+// confirm) are deliberately not declared here yet — the page renders their
+// buttons disabled so nothing can call an endpoint that does not exist.
+// Wire shapes are snake_case exactly as the backend emits them; every money
+// field is integer minor units and every progress value is server-computed.
+export type PartnerMembershipStatus = "active" | "paused" | "left";
+/** `status=` on GET /admin/partners ("all" = omit the param). */
+export type PartnerStatusFilter = "all" | "active" | "paused" | "behind" | "left";
+/** `sort=` on GET /admin/partners. */
+export type PartnerSort = "recent" | "committed" | "behind";
+
+export interface PartnerRow {
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  phone: string | null;
+  email: string | null;
+  cell_name: string | null;
+  membership: { status: PartnerMembershipStatus; joined_at: string } | null;
+  tier: { name: string; monthly_minor: number } | null;
+  pledges_active: number;
+  committed_monthly_minor: number;
+  given_year_minor: number;
+  last_gift_at: string | null;
+  behind: boolean;
+  next_due_on: string | null;
+}
+
+export interface PartnersSummary {
+  partners: number;
+  active_pledges: number;
+  committed_monthly_minor: number;
+  behind: number;
+  given_year_minor: number;
+}
+
+export type PledgeShape = "monthly" | "total";
+export type PledgeStatus = "active" | "paused" | "fulfilled" | "cancelled";
+
+export interface PartnerPledge {
+  pledge_id: string;
+  shape: PledgeShape;
+  /** monthly pledges carry amount_minor; total pledges carry target_minor. */
+  amount_minor: number | null;
+  target_minor: number | null;
+  currency: string;
+  due_day: number | null;
+  due_on: string | null;
+  fund: { code: string; name: string } | null;
+  campaign: { campaign_id: string; title: string } | null;
+  status: PledgeStatus;
+  /** Computed on the server, never stored (§1 "Progress"). */
+  progress: { paid_minor: number; period_paid_minor: number; label: string; next_due: string | null };
+  schedule_id: string | null;
+  reminders_enabled: boolean;
+  created_at: string;
+}
+
+/** Row of GET /admin/finance/schedules (financial/service.ts listSchedulesAdmin). */
+export interface AdminScheduleRow {
+  schedule_id: string;
+  user_id: string;
+  full_name: string | null;
+  phone_number: string | null;
+  fund: string;
+  amount_minor: number;
+  currency: string;
+  frequency: string;
+  method: string | null;
+  status: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  consecutive_failures: number;
+  last_error: string | null;
+  last_failed_at: string | null;
+  paused_at: string | null;
+  created_at: string;
+  needs_attention: boolean;
+}
+
+export interface PartnerPayment {
+  transaction_id: string;
+  amount_minor: number;
+  currency: string;
+  at: string;
+  fund: string;
+  pledge_id: string | null;
+  receipt_code: string | null;
+}
+
+export interface PartnerReminder {
+  pledge_id: string;
+  due_on: string;
+  sequence: number;
+  channel: string;
+  sent_at: string;
+  /** null = sent by the notification worker, not a person. */
+  sent_by: string | null;
+}
+
+export interface PartnerDetail {
+  member: PartnerRow;
+  pledges: PartnerPledge[];
+  schedules: AdminScheduleRow[];
+  payments: PartnerPayment[];
+  reminders: PartnerReminder[];
+}
+
+export const PartnersApi = {
+  list: (q: { q?: string; status?: PartnerStatusFilter; sort?: PartnerSort } = {}) =>
+    api.get<{ data: PartnerRow[]; summary: PartnersSummary }>("/admin/partners", { params: q }).then((r) => r.data),
+  detail: (userId: string) =>
+    api.get<PartnerDetail>(`/admin/partners/${encodeURIComponent(userId)}`).then((r) => r.data),
+};
+
 // ---- Video Library (W2; Features v2 §V) ----
 export type MediaStatus = "uploading" | "transcoding" | "ready" | "failed";
 // cloudinary = hosted/transcoded; the rest are externally-hosted, best-effort gated.

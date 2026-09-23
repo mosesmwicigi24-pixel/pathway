@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
   TrendingUp, MessageSquare, MessageSquareText, MessagesSquare, Video, Star, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
-  Radio, SlidersVertical, ListMusic, UserCheck, UserRoundCheck, HeartHandshake, HeartPulse, Megaphone, QrCode,
+  Radio, SlidersVertical, ListMusic, UserCheck, UserRoundCheck, HeartHandshake, HeartPulse, Megaphone, QrCode, HandHeart,
   Inbox,
   type LucideIcon,
 } from "lucide-react";
@@ -80,6 +80,10 @@ export const navGroups: NavGroup[] = [
       { path: "/level-reviews", label: "Level reviews", icon: UserCheck },
       { path: "/events", label: "Events", icon: CalendarDays },
       { path: "/finance", label: "Finance", icon: Wallet, permission: "finance:view" },
+      // Partners programme (docs/PARTNERS_PROGRAMME.md): same `finance` module
+      // as the ledger — finance:view to see, finance:manage to act. HandHeart
+      // rather than HeartHandshake so it does not read as Discipleship Hub.
+      { path: "/partners", label: "Partners", icon: HandHeart, permission: "finance:view" },
       { path: "/certificates", label: "Certificates", icon: Award, permission: "certificates:view" },
       { path: "/badges", label: "Badges", icon: Star, permission: "badges:view" },
     ],
@@ -195,6 +199,7 @@ export const pageTitles: Record<string, string> = {
   "/sms": "SMS Center",
   "/events": "Events & Attendance",
   "/finance": "Finance",
+  "/partners": "Partners",
   "/certificates": "Certificates & Badges",
   "/badges": "Badges Catalog",
   "/radio": "Radio Studio",
