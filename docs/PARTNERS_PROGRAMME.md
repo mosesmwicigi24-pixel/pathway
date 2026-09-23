@@ -101,6 +101,16 @@ technical spec where they apply.
   `need_id` (approved and open, 422 otherwise).
 - "A good fit for you": departments whose `gift_keys` intersect the member's
   top gifts (reuse `serving_tracks.gift_keys` mapping) are flagged.
+- **A need's fund is server-authoritative.** A gift, a pledge schedule or a
+  confirmed claim that names a need lands in the need's department `fund_code`
+  when that names an active fund; otherwise the gift's own fund (or the
+  programme default for pledges). Clients never decide where need money goes,
+  so a need can never split across funds by platform.
+- **The office is bounded by its congregation (§5.4).** Every admin read and
+  write on departments — list, queues, edits, posts, needs, decisions — is
+  scoped to the principal's congregation; a principal with no congregation
+  (SuperAdmin) sees all. Out of scope = `403 FORBIDDEN_SCOPE`, never a silent
+  success.
 
 ## 5. Contract (member API; admin API mirrors under /admin)
 

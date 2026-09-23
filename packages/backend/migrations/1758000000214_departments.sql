@@ -27,6 +27,7 @@ CREATE TABLE departments (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX departments_congregation_idx ON departments (congregation_id, status);
+CREATE INDEX departments_leader_idx ON departments (leader_user_id) WHERE leader_user_id IS NOT NULL;
 
 CREATE TABLE department_members (
   department_id  UUID NOT NULL REFERENCES departments(department_id) ON DELETE CASCADE,
@@ -69,8 +70,10 @@ CREATE TABLE department_needs (
   closed_at      TIMESTAMPTZ
 );
 CREATE INDEX department_needs_status_idx ON department_needs (status, created_at DESC);
+CREATE INDEX department_needs_dept_idx ON department_needs (department_id, status);
 
 ALTER TABLE pledges ADD CONSTRAINT pledges_need_fk FOREIGN KEY (need_id) REFERENCES department_needs(need_id) ON DELETE SET NULL;
+CREATE INDEX pledges_need_idx ON pledges (need_id) WHERE need_id IS NOT NULL;
 ALTER TABLE transactions ADD COLUMN need_id UUID REFERENCES department_needs(need_id) ON DELETE SET NULL;
 CREATE INDEX transactions_need_idx ON transactions (need_id) WHERE need_id IS NOT NULL;
 
@@ -78,6 +81,7 @@ CREATE INDEX transactions_need_idx ON transactions (need_id) WHERE need_id IS NO
 
 DROP INDEX IF EXISTS transactions_need_idx;
 ALTER TABLE transactions DROP COLUMN IF EXISTS need_id;
+DROP INDEX IF EXISTS pledges_need_idx;
 ALTER TABLE pledges DROP CONSTRAINT IF EXISTS pledges_need_fk;
 DROP TABLE IF EXISTS department_needs;
 DROP TABLE IF EXISTS department_posts;

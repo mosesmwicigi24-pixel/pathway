@@ -58,34 +58,40 @@ export function registerDepartments(ctx: AppContext): Router {
   }));
   r.patch("/admin/departments/:id", auth, perm("departments", "manage"), handler(async (req, res) => {
     const patch = parseBody(DepartmentsService.Update, req.body ?? {});
-    res.json(await svc.update(requirePrincipal(req).userId, Id.parse(req.params.id), patch));
+    const p = requirePrincipal(req);
+    res.json(await svc.update(p.userId, Id.parse(req.params.id), patch, p.congregationId ?? null));
   }));
   r.post("/admin/departments/:id/posts", auth, perm("departments", "manage"), handler(async (req, res) => {
-    res.status(201).json(await svc.createPost(requirePrincipal(req).userId, Id.parse(req.params.id), parseBody(DepartmentsService.Post, req.body ?? {}), { office: true }));
+    const p = requirePrincipal(req);
+    res.status(201).json(await svc.createPost(p.userId, Id.parse(req.params.id), parseBody(DepartmentsService.Post, req.body ?? {}), { office: true, congregationId: p.congregationId ?? null }));
   }));
   r.delete("/admin/departments/:id/posts/:postId", auth, perm("departments", "manage"), handler(async (req, res) => {
-    await svc.deletePost(requirePrincipal(req).userId, Id.parse(req.params.id), Id.parse(req.params.postId), { office: true });
+    const p = requirePrincipal(req);
+    await svc.deletePost(p.userId, Id.parse(req.params.id), Id.parse(req.params.postId), { office: true, congregationId: p.congregationId ?? null });
     res.status(204).end();
   }));
   r.post("/admin/departments/:id/needs", auth, perm("departments", "manage"), handler(async (req, res) => {
-    res.status(201).json(await svc.submitNeed(requirePrincipal(req).userId, Id.parse(req.params.id), parseBody(DepartmentsService.Need, req.body ?? {}), { office: true }));
+    const p = requirePrincipal(req);
+    res.status(201).json(await svc.submitNeed(p.userId, Id.parse(req.params.id), parseBody(DepartmentsService.Need, req.body ?? {}), { office: true, congregationId: p.congregationId ?? null }));
   }));
   r.get("/admin/departments/serve-requests", auth, perm("departments", "view"), handler(async (req, res) => {
     const status = z.enum(["requested", "active", "declined", "left"]).default("requested").parse(req.query.status ?? "requested");
-    res.json({ data: await svc.serveRequests(status) });
+    res.json({ data: await svc.serveRequests(status, requirePrincipal(req).congregationId ?? null) });
   }));
   r.post("/admin/departments/:id/serve-requests/:userId/:decision", auth, perm("departments", "manage"), handler(async (req, res) => {
     const decision = z.enum(["approve", "decline"]).parse(req.params.decision);
-    res.json(await svc.decideServe(requirePrincipal(req).userId, Id.parse(req.params.id), Id.parse(req.params.userId), decision, { office: true }));
+    const p = requirePrincipal(req);
+    res.json(await svc.decideServe(p.userId, Id.parse(req.params.id), Id.parse(req.params.userId), decision, { office: true, congregationId: p.congregationId ?? null }));
   }));
   r.get("/admin/departments/needs", auth, perm("departments", "view"), handler(async (req, res) => {
     const status = z.enum(["pending", "approved", "rejected", "closed"]).default("pending").parse(req.query.status ?? "pending");
-    res.json({ data: await svc.needs(status) });
+    res.json({ data: await svc.needs(status, requirePrincipal(req).congregationId ?? null) });
   }));
   r.post("/admin/departments/needs/:needId/:decision", auth, perm("departments", "manage"), handler(async (req, res) => {
     const decision = z.enum(["approve", "reject", "close"]).parse(req.params.decision);
     const body = parseBody(z.object({ note: z.string().trim().max(300).nullish() }), req.body ?? {});
-    res.json(await svc.decideNeed(requirePrincipal(req).userId, Id.parse(req.params.needId), decision, body.note ?? null));
+    const p = requirePrincipal(req);
+    res.json(await svc.decideNeed(p.userId, Id.parse(req.params.needId), decision, body.note ?? null, p.congregationId ?? null));
   }));
   return r;
 }

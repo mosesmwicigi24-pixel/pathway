@@ -77,7 +77,7 @@ describe("departments", () => {
   });
 
   it("a need is pending until the office approves; then gifts and pledges count toward it exactly", async () => {
-    const d = await svc.create(admin, cong, { name: "Building", purpose: "The roof", leader_user_id: leader, gift_keys: [], fund_code: "offering", is_open_to_join: true });
+    const d = await svc.create(admin, cong, { name: "Building", purpose: "The roof", leader_user_id: leader, gift_keys: [], fund_code: "general", is_open_to_join: true });
     const need = await svc.submitNeed(leader, String(d.department_id), { title: "Roof sheets", why: "The rains are coming and the hall leaks.", target_minor: 200_000, currency: "KES" });
     expect(need.status).toBe("pending");
     // members cannot give to a pending need
@@ -92,6 +92,11 @@ describe("departments", () => {
     const b = await financial.createGivingIntent(member, { fund: "offering", amount_minor: 30_000, currency: "KES", method: "card", pledge_id: String(pledge.pledge_id) } as never);
     const c = await financial.createGivingIntent(member, { fund: "offering", amount_minor: 999_000, currency: "KES", method: "card" } as never);
     await testPool().query(`UPDATE transactions SET status = 'succeeded', settled_at = now() WHERE transaction_id = ANY($1::uuid[])`, [[a.transaction_id, b.transaction_id, c.transaction_id]]);
+    // server-authoritative fund: the need gift landed in the department's fund, not the "offering" chip the client sent; the plain offering stayed put
+    const funds = await testPool().query(`SELECT t.transaction_id, f.code FROM transactions t JOIN funds f ON f.fund_id = t.fund_id WHERE t.transaction_id = ANY($1::uuid[])`, [[a.transaction_id, c.transaction_id]]);
+    const fundOf = Object.fromEntries(funds.rows.map((r: { transaction_id: string; code: string }) => [r.transaction_id, r.code]));
+    expect(fundOf[String(a.transaction_id)]).toBe("general");
+    expect(fundOf[String(c.transaction_id)]).toBe("offering");
     const detail = await svc.get(member, String(d.department_id));
     const n = (detail.needs as Array<{ raised_minor: number; percent: number; reached: boolean }>)[0]!;
     expect(n.raised_minor).toBe(80_000);
@@ -100,5 +105,32 @@ describe("departments", () => {
     await expect(svc.decideNeed(admin, String(need.need_id), "approve")).rejects.toMatchObject({ code: "UNPROCESSABLE" });
     await svc.decideNeed(admin, String(need.need_id), "close");
     expect((await svc.needs("closed")).length).toBe(1);
+  });
+  it("the office is bounded by its congregation (§5.4): another congregation's departments are invisible and untouchable", async () => {
+    const cong2 = await createCongregation();
+    const admin2 = (await createUser({ congregationId: cong2 })).user_id;
+    const leader2 = (await createUser({ congregationId: cong2 })).user_id;
+    const member2 = (await createUser({ congregationId: cong2 })).user_id;
+    const far = await svc.create(admin2, cong2, { name: "Choir", purpose: "Lead the singing", leader_user_id: leader2, gift_keys: [], is_open_to_join: true });
+    const farId = String(far.department_id);
+    await svc.requestToServe(member2, farId);
+    const need = await svc.submitNeed(leader2, farId, { title: "Robes", why: "The choir needs robes before the carol service.", target_minor: 50_000, currency: "KES" });
+    // reads: an admin attached to `cong` sees none of it; an office with no congregation sees everything
+    expect((await svc.adminList(cong)).map((d) => d.department_id)).not.toContain(far.department_id);
+    expect((await svc.serveRequests("requested", cong)).length).toBe(0);
+    expect((await svc.needs("pending", cong)).length).toBe(0);
+    expect((await svc.serveRequests("requested", null)).length).toBe(1);
+    expect((await svc.needs("pending", null)).length).toBe(1);
+    // writes: refused out of scope with FORBIDDEN_SCOPE, never a silent success
+    const scope = { office: true, congregationId: cong };
+    await expect(svc.update(admin, farId, { name: "Ours now" }, cong)).rejects.toMatchObject({ code: "FORBIDDEN_SCOPE" });
+    await expect(svc.createPost(admin, farId, { body: "Rehearsal moved to Saturday." }, scope)).rejects.toMatchObject({ code: "FORBIDDEN_SCOPE" });
+    await expect(svc.submitNeed(admin, farId, { title: "Hymnals", why: "The old ones are falling apart.", target_minor: 1_000, currency: "KES" }, scope)).rejects.toMatchObject({ code: "FORBIDDEN_SCOPE" });
+    await expect(svc.decideServe(admin, farId, member2, "approve", scope)).rejects.toMatchObject({ code: "FORBIDDEN_SCOPE" });
+    await expect(svc.decideNeed(admin, String(need.need_id), "approve", null, cong)).rejects.toMatchObject({ code: "FORBIDDEN_SCOPE" });
+    // and allowed inside the right congregation
+    expect((await svc.decideServe(admin2, farId, member2, "approve", { office: true, congregationId: cong2 })).status).toBe("active");
+    expect((await svc.decideNeed(admin2, String(need.need_id), "approve", null, cong2)).status).toBe("approved");
+    expect((await svc.update(admin2, farId, { meets: "Thursdays 6pm" }, cong2)).meets).toBe("Thursdays 6pm");
   });
 });

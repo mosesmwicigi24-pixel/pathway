@@ -83,6 +83,9 @@ export class FinancialService {
     // choice, else the pledge bound to the schedule that is charging.
     const pledgeId = await this.resolvePledgeId(userId, input.pledge_id ?? null, scheduleId ?? null);
     const needId = await this.resolveNeedId(input.need_id ?? null);
+    // Server-authoritative (§1.1): a gift to a need lands in that department's
+    // fund when it has one, whatever fund chip the client happened to show.
+    const fundCode = (needId && (await this.needFundCode(needId))) || input.fund;
     const key = input.idempotency_key ?? randomUUID();
 
     // Idempotent: the same client key returns the existing transaction.
@@ -98,7 +101,7 @@ export class FinancialService {
     const fund = await maybeOne<{ fund_id: string }>(
       this.pool,
       `SELECT fund_id FROM funds WHERE code = $1 AND is_active`,
-      [input.fund],
+      [fundCode],
     );
     if (!fund) throw new ApiError("VALIDATION_FAILED", "Unknown or inactive fund");
 
@@ -816,6 +819,24 @@ export class FinancialService {
   }
 
   /** A department need a gift goes to: approved and still open (422 otherwise). */
+  /** The fund a need's money belongs to: its department's `fund_code`, when
+   *  that names an active fund. Null means "no opinion" — callers fall back
+   *  to the gift's own fund or the programme default. One rule for gifts,
+   *  pledge schedules and confirmed claims, so a need never splits across funds
+   *  by client. */
+  async needFundCode(needId: string | null): Promise<string | null> {
+    if (!needId) return null;
+    const r = await maybeOne<{ code: string }>(
+      this.pool,
+      `SELECT f.code FROM department_needs n
+         JOIN departments d ON d.department_id = n.department_id
+         JOIN funds f ON f.code = d.fund_code AND f.is_active
+        WHERE n.need_id = $1`,
+      [needId],
+    );
+    return r?.code ?? null;
+  }
+
   private async resolveNeedId(explicit: string | null): Promise<string | null> {
     if (!explicit) return null;
     const open = await maybeOne<{ need_id: string }>(

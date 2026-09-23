@@ -8,6 +8,10 @@ import { many, maybeOne, one, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import type { NotificationService } from "../notifications/service.js";
 
+/** `office` = acting under departments:manage rather than as the leader; the
+ *  principal's congregation (null = all) bounds what the office may touch. */
+type OfficeOpts = { office?: boolean; congregationId?: string | null };
+
 export class DepartmentsService {
   constructor(private readonly pool: Pool, private readonly notifications: NotificationService) {}
 
@@ -36,6 +40,15 @@ export class DepartmentsService {
   private async congregationOf(userId: string): Promise<string | null> {
     const r = await maybeOne<{ congregation_id: string | null }>(this.pool, `SELECT congregation_id FROM users WHERE user_id = $1`, [userId]);
     return r?.congregation_id ?? null;
+  }
+
+  /** Office scope (§5.4): a congregation-attached admin acts only inside their
+   *  congregation; a principal with no congregation (SuperAdmin) sees all.
+   *  Same rule `adminList` applies to reads, enforced here on every write. */
+  private async assertScope(departmentId: string, congregationId: string | null): Promise<void> {
+    const d = await maybeOne<{ congregation_id: string }>(this.pool, `SELECT congregation_id FROM departments WHERE department_id = $1`, [departmentId]);
+    if (!d) throw new ApiError("NOT_FOUND", "Department not found");
+    if (congregationId && d.congregation_id !== congregationId) throw new ApiError("FORBIDDEN_SCOPE", "Department outside your congregation");
   }
 
   private async topGifts(userId: string): Promise<string[]> {
@@ -173,8 +186,9 @@ export class DepartmentsService {
 
   // ── leader or office ─────────────────────────────────────────────────
 
-  async createPost(actorId: string, departmentId: string, input: z.infer<typeof DepartmentsService.Post>, opts: { office?: boolean } = {}): Promise<Record<string, unknown>> {
+  async createPost(actorId: string, departmentId: string, input: z.infer<typeof DepartmentsService.Post>, opts: OfficeOpts = {}): Promise<Record<string, unknown>> {
     if (!opts.office && !(await this.isLeader(actorId, departmentId))) throw new ApiError("FORBIDDEN_SCOPE", "Only the department's leader can post");
+    if (opts.office) await this.assertScope(departmentId, opts.congregationId ?? null);
     const d = await maybeOne<{ name: string }>(this.pool, `SELECT name FROM departments WHERE department_id = $1 AND status = 'active'`, [departmentId]);
     if (!d) throw new ApiError("NOT_FOUND", "Department not found");
     const row = await one<{ post_id: string; created_at: string }>(
@@ -191,13 +205,15 @@ export class DepartmentsService {
     return { post_id: row.post_id, created_at: row.created_at, body: input.body, image_url: input.image_url ?? null };
   }
 
-  async deletePost(actorId: string, departmentId: string, postId: string, opts: { office?: boolean } = {}): Promise<void> {
+  async deletePost(actorId: string, departmentId: string, postId: string, opts: OfficeOpts = {}): Promise<void> {
     if (!opts.office && !(await this.isLeader(actorId, departmentId))) throw new ApiError("FORBIDDEN_SCOPE", "Only the department's leader can remove posts");
+    if (opts.office) await this.assertScope(departmentId, opts.congregationId ?? null);
     await this.pool.query(`UPDATE department_posts SET deleted_at = now() WHERE post_id = $1 AND department_id = $2 AND deleted_at IS NULL`, [postId, departmentId]);
   }
 
-  async submitNeed(actorId: string, departmentId: string, input: z.infer<typeof DepartmentsService.Need>, opts: { office?: boolean } = {}): Promise<Record<string, unknown>> {
+  async submitNeed(actorId: string, departmentId: string, input: z.infer<typeof DepartmentsService.Need>, opts: OfficeOpts = {}): Promise<Record<string, unknown>> {
     if (!opts.office && !(await this.isLeader(actorId, departmentId))) throw new ApiError("FORBIDDEN_SCOPE", "Only the department's leader can submit a need");
+    if (opts.office) await this.assertScope(departmentId, opts.congregationId ?? null);
     const d = await maybeOne<{ name: string; congregation_id: string }>(this.pool, `SELECT name, congregation_id FROM departments WHERE department_id = $1 AND status = 'active'`, [departmentId]);
     if (!d) throw new ApiError("NOT_FOUND", "Department not found");
     const row = await one<{ need_id: string; status: string; created_at: string }>(
@@ -253,9 +269,9 @@ export class DepartmentsService {
     );
   }
 
-  async update(adminId: string, departmentId: string, input: z.infer<typeof DepartmentsService.Update>): Promise<Record<string, unknown>> {
-    const d = await maybeOne<{ congregation_id: string }>(this.pool, `SELECT congregation_id FROM departments WHERE department_id = $1`, [departmentId]);
-    if (!d) throw new ApiError("NOT_FOUND", "Department not found");
+  async update(adminId: string, departmentId: string, input: z.infer<typeof DepartmentsService.Update>, congregationId: string | null = null): Promise<Record<string, unknown>> {
+    await this.assertScope(departmentId, congregationId);
+    const d = await one<{ congregation_id: string }>(this.pool, `SELECT congregation_id FROM departments WHERE department_id = $1`, [departmentId]);
     const sets: string[] = ["updated_at = now()"]; const params: unknown[] = [];
     const push = (col: string, v: unknown): void => { params.push(v); sets.push(`${col} = $${params.length}`); };
     for (const k of ["name", "purpose", "leader_user_id", "meets", "image_url", "fund_code", "gift_keys", "is_open_to_join", "status"] as const) {
@@ -268,18 +284,19 @@ export class DepartmentsService {
     return (await this.adminList(d.congregation_id)).find((x) => x.department_id === departmentId) ?? {};
   }
 
-  async serveRequests(status: "requested" | "active" | "declined" | "left" = "requested"): Promise<Record<string, unknown>[]> {
+  async serveRequests(status: "requested" | "active" | "declined" | "left" = "requested", congregationId: string | null = null): Promise<Record<string, unknown>[]> {
     return many(
       this.pool,
       `SELECT m.department_id, d.name AS department, m.user_id, u.full_name, u.avatar_url, u.phone_number, m.status, m.role, m.requested_at::text, m.decided_at::text
          FROM department_members m JOIN departments d ON d.department_id = m.department_id JOIN users u ON u.user_id = m.user_id
-        WHERE m.status = $1 ORDER BY m.requested_at ASC`,
-      [status],
+        WHERE m.status = $1 AND ($2::uuid IS NULL OR d.congregation_id = $2) ORDER BY m.requested_at ASC`,
+      [status, congregationId],
     );
   }
 
-  async decideServe(actorId: string, departmentId: string, userId: string, decision: "approve" | "decline", opts: { office?: boolean } = {}): Promise<{ status: string }> {
+  async decideServe(actorId: string, departmentId: string, userId: string, decision: "approve" | "decline", opts: OfficeOpts = {}): Promise<{ status: string }> {
     if (!opts.office && !(await this.isLeader(actorId, departmentId))) throw new ApiError("FORBIDDEN_SCOPE", "Only the department's leader can decide");
+    if (opts.office) await this.assertScope(departmentId, opts.congregationId ?? null);
     const status = decision === "approve" ? "active" : "declined";
     const r = await this.pool.query(
       `UPDATE department_members SET status = $3, decided_by = $4, decided_at = now() WHERE department_id = $1 AND user_id = $2 AND status = 'requested'`,
@@ -292,13 +309,13 @@ export class DepartmentsService {
     return { status };
   }
 
-  async needs(status: "pending" | "approved" | "rejected" | "closed" = "pending"): Promise<Record<string, unknown>[]> {
+  async needs(status: "pending" | "approved" | "rejected" | "closed" = "pending", congregationId: string | null = null): Promise<Record<string, unknown>[]> {
     const rows = await many<{ need_id: string; department_id: string; department: string; title: string; why: string; target_minor: string; currency: string; deadline: string | null; status: string; created_at: string; submitted_name: string }>(
       this.pool,
       `SELECT n.need_id, n.department_id, d.name AS department, n.title, n.why, n.target_minor::text, n.currency, n.deadline::text, n.status, n.created_at::text, u.full_name AS submitted_name
          FROM department_needs n JOIN departments d ON d.department_id = n.department_id JOIN users u ON u.user_id = n.submitted_by
-        WHERE n.status = $1 ORDER BY n.created_at ASC`,
-      [status],
+        WHERE n.status = $1 AND ($2::uuid IS NULL OR d.congregation_id = $2) ORDER BY n.created_at ASC`,
+      [status, congregationId],
     );
     const out: Record<string, unknown>[] = [];
     for (const n of rows) {
@@ -308,9 +325,14 @@ export class DepartmentsService {
     return out;
   }
 
-  async decideNeed(adminId: string, needId: string, decision: "approve" | "reject" | "close", note?: string | null): Promise<{ status: string }> {
-    const n = await maybeOne<{ status: string; department_id: string; submitted_by: string; title: string }>(this.pool, `SELECT status, department_id, submitted_by, title FROM department_needs WHERE need_id = $1`, [needId]);
+  async decideNeed(adminId: string, needId: string, decision: "approve" | "reject" | "close", note?: string | null, congregationId: string | null = null): Promise<{ status: string }> {
+    const n = await maybeOne<{ status: string; department_id: string; submitted_by: string; title: string; congregation_id: string }>(
+      this.pool,
+      `SELECT n.status, n.department_id, n.submitted_by, n.title, d.congregation_id FROM department_needs n JOIN departments d ON d.department_id = n.department_id WHERE n.need_id = $1`,
+      [needId],
+    );
     if (!n) throw new ApiError("NOT_FOUND", "Need not found");
+    if (congregationId && n.congregation_id !== congregationId) throw new ApiError("FORBIDDEN_SCOPE", "Department outside your congregation");
     const next = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "closed";
     if (decision !== "close" && n.status !== "pending") throw new ApiError("UNPROCESSABLE", `Need already ${n.status}`);
     if (decision === "close" && n.status !== "approved") throw new ApiError("UNPROCESSABLE", "Only an open need can be closed");
