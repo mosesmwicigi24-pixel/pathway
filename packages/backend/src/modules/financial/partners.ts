@@ -746,8 +746,9 @@ export class PartnersService {
     );
     const reminders = await many(
       this.pool,
-      `SELECT r.pledge_id, r.due_on::text, r.sequence, r.channel, r.sent_at::text, r.sent_by
-         FROM pledge_reminders r JOIN pledges p ON p.pledge_id = r.pledge_id WHERE p.user_id = $1 ORDER BY r.sent_at DESC LIMIT 100`,
+      `SELECT r.pledge_id, r.due_on::text, r.sequence, r.kind, r.channel, r.sent_at::text, r.sent_by, s.full_name AS sent_by_name
+         FROM pledge_reminders r JOIN pledges p ON p.pledge_id = r.pledge_id LEFT JOIN users s ON s.user_id = r.sent_by
+        WHERE p.user_id = $1 ORDER BY r.sent_at DESC LIMIT 100`,
       [userId],
     );
     return { member, pledges: p.pledges, schedules, payments, reminders };

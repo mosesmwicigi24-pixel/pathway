@@ -5,9 +5,18 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser } from "./helpers/factories.js";
+import { FinancialService } from "../src/modules/financial/service.js";
 import { PartnersService } from "../src/modules/financial/partners.js";
+import type { PaymentGateway } from "../src/modules/financial/gateway.js";
 import { NotificationService } from "../src/modules/notifications/service.js";
 import { PledgeReminderScanner } from "../src/workers/pledgeReminderScanner.js";
+
+// The admin detail (portal drawer) reads standing through FinancialService;
+// nothing here charges a card.
+class FakeGateway implements PaymentGateway {
+  async createIntent(): Promise<{ id: string; client_secret: string }> { return { id: "pi_test", client_secret: "cs_test" }; }
+  verifyWebhook(): never { throw new Error("not used in these tests"); }
+}
 
 const H = 3_600_000;
 /** Nairobi noon on a calendar date, as an instant. */
@@ -27,7 +36,7 @@ describe("pledge reminders", () => {
     user = (await createUser({ congregationId: cong })).user_id;
     admin = (await createUser({ congregationId: cong })).user_id;
     clock = noon("2030-03-10");
-    partners = new PartnersService(testPool());
+    partners = new PartnersService(testPool(), new FinancialService(testPool(), new FakeGateway()));
     notifications = new NotificationService(testPool(), () => clock);
     scanner = new PledgeReminderScanner(testPool(), notifications);
   });
@@ -95,6 +104,11 @@ describe("pledge reminders", () => {
     expect(third.reminded).toBe(1);
     const log = await testPool().query(`SELECT kind, sent_by FROM pledge_reminders WHERE pledge_id = $1`, [pledge.pledge_id]);
     expect(log.rows.every((r: { kind: string; sent_by: string }) => r.kind === "manual" && r.sent_by === admin)).toBe(true);
+    // The portal's reminders log shows the kind and who in the office sent it.
+    const detail = await partners.adminDetail(user);
+    const shown = detail.reminders as { kind: string; sent_by: string | null; sent_by_name: string | null }[];
+    expect(shown.length).toBe(2);
+    expect(shown.every((r) => r.kind === "manual" && r.sent_by === admin && typeof r.sent_by_name === "string" && r.sent_by_name.length > 0)).toBe(true);
   });
 
   it("a confirmed 'I paid another way' is a real manual gift: attributed, ledger-posted, receipted", async () => {
