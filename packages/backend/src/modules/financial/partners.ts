@@ -9,7 +9,8 @@
 //   · Dates are the church's day (Africa/Nairobi, UTC+3, no DST).
 import type { Pool } from "pg";
 import { z } from "zod";
-import { many, maybeOne, one, audit, type Queryable } from "../../db/db.js";
+import { many, maybeOne, one, audit, tx, enqueueOutbox, type Queryable } from "../../db/db.js";
+import type { NotificationService } from "../notifications/service.js";
 import { ApiError } from "../../http/errors.js";
 import type { FinancialService } from "./service.js";
 import { givingTiers } from "./tiers.js";
@@ -59,7 +60,14 @@ function dueDateInMonth(ref: string, dueDay: number, months: number): string {
 }
 
 export class PartnersService {
-  constructor(private readonly pool: Pool, private readonly financial: FinancialService) {}
+  /** `financial` is needed for creating pledges with a schedule and for the
+   *  portal payload; the reminder scanner constructs this without it. */
+  constructor(private readonly pool: Pool, private readonly financial?: FinancialService) {}
+
+  private get fin(): FinancialService {
+    if (!this.financial) throw new Error("PartnersService: FinancialService required for this call");
+    return this.financial;
+  }
 
   static readonly CreatePledge = z
     .object({
@@ -265,7 +273,7 @@ export class PartnersService {
     // "Charge me automatically": a schedule bound to this pledge.
     if (input.auto_schedule && input.shape === "monthly" && input.amount_minor) {
       const fundCode = input.fund ?? (await this.campaignFundCode(input.campaign_id ?? null)) ?? DEFAULT_PLEDGE_FUND;
-      await this.financial.createSchedule(userId, {
+      await this.fin.createSchedule(userId, {
         fund: fundCode,
         amount_minor: input.amount_minor,
         currency: input.currency.toUpperCase(),
@@ -353,7 +361,7 @@ export class PartnersService {
   }
 
   async partnership(userId: string, now = new Date()): Promise<Record<string, unknown>> {
-    const base = (await this.financial.partnership(userId)) as Record<string, unknown>;
+    const base = (await this.fin.partnership(userId)) as Record<string, unknown>;
     const membership = await this.membership(userId);
     const pledges = await this.listPledges(userId, now);
     const committedMonthly = pledges
@@ -433,6 +441,223 @@ export class PartnersService {
       by_fund: [...byFund.values()],
       payments: rows.map((r) => ({ transaction_id: r.transaction_id, amount_minor: Number(r.amount_minor), currency: r.currency, at: r.at, receipt_code: r.receipt_code, fund: r.fund, pledge_id: r.pledge_id, pledge_title: r.pledge_title })),
     };
+  }
+
+
+  // ── phase 2: reminders ────────────────────────────────────────────────
+
+  static readonly DUE_SOON_DAYS = 3;
+  static readonly FOLLOW_UP_HOURS = 12;
+  static readonly FOLLOW_UPS = 3;
+
+  /** Every open pledge whose owner still wants reminders, with progress. */
+  async reminderCandidates(now = new Date()): Promise<Array<{ row: PledgeRow; progress: PledgeProgress; timezone: string }>> {
+    const rows = await many<PledgeRow & { timezone: string | null }>(
+      this.pool,
+      `${PartnersService.PLEDGE_SELECT.replace("FROM pledges p", "FROM pledges p JOIN users u ON u.user_id = p.user_id LEFT JOIN partner_memberships pm ON pm.user_id = p.user_id")}
+        WHERE p.status = 'active' AND p.reminders_enabled AND COALESCE(pm.reminders_enabled, TRUE)`.replace("p.note, p.created_at::text", "p.note, u.timezone, p.created_at::text"),
+      [],
+    );
+    const out: Array<{ row: PledgeRow; progress: PledgeProgress; timezone: string }> = [];
+    for (const r of rows) out.push({ row: r, progress: await this.progress(r, now), timezone: r.timezone ?? "Africa/Nairobi" });
+    return out;
+  }
+
+  private async lastReminderAt(pledgeId: string): Promise<Date | null> {
+    const r = await maybeOne<{ sent_at: string }>(this.pool, `SELECT max(sent_at)::text AS sent_at FROM pledge_reminders WHERE pledge_id = $1`, [pledgeId]);
+    return r?.sent_at ? new Date(r.sent_at) : null;
+  }
+
+  private async autoSent(pledgeId: string, dueOn: string, sequence: number): Promise<boolean> {
+    const r = await maybeOne(this.pool, `SELECT 1 FROM pledge_reminders WHERE pledge_id = $1 AND due_on = $2 AND sequence = $3 AND kind = 'auto'`, [pledgeId, dueOn, sequence]);
+    return r !== null;
+  }
+
+  /** Fan one reminder out on every channel; the notification service applies
+   *  the member's preferences, quiet hours and daily cap per channel. */
+  private async fanOut(notifications: NotificationService, userId: string, template: string, payload: Record<string, unknown>, timezone: string): Promise<string[]> {
+    const sent: string[] = [];
+    for (const channel of ["push", "sms", "email"] as const) {
+      const r = await notifications.schedule({ userId, channel, template, payload, timezone });
+      if (r.status !== "suppressed") sent.push(channel);
+    }
+    return sent;
+  }
+
+  /** One pass: due-soon notices and overdue follow-ups. Idempotent. */
+  async sendDueReminders(notifications: NotificationService, now = new Date()): Promise<{ due_soon: number; follow_ups: number }> {
+    let dueSoon = 0, followUps = 0;
+    const today = nairobiDate(now);
+    for (const { row, progress, timezone } of await this.reminderCandidates(now)) {
+      if (!progress.next_due || progress.label === "fulfilled" || progress.label === "paused") continue;
+      const dueOn = progress.next_due;
+      const amount = row.shape === "monthly" ? Number(row.amount_minor) : Math.max(0, Number(row.target_minor) - progress.paid_minor);
+      const payload = { pledge_id: row.pledge_id, title: PartnersService.title(row), amount_minor: amount, currency: row.currency, due_on: dueOn };
+
+      if (!progress.overdue_since) {
+        // Due soon: once, within the window before the due date.
+        const daysAway = Math.round((nairobiStart(dueOn).getTime() - nairobiStart(today).getTime()) / 86_400_000);
+        if (daysAway < 0 || daysAway > PartnersService.DUE_SOON_DAYS) continue;
+        if (await this.autoSent(row.pledge_id, dueOn, 0)) continue;
+        const channels = await this.fanOut(notifications, row.user_id, "pledge_due_soon", { ...payload, days_away: daysAway }, timezone);
+        await this.pool.query(`INSERT INTO pledge_reminders (pledge_id, due_on, sequence, kind, channel, sent_at) VALUES ($1, $2, 0, 'auto', $3, $4) ON CONFLICT DO NOTHING`, [row.pledge_id, dueOn, channels.join(",") || "none", now.toISOString()]);
+        dueSoon += 1;
+        continue;
+      }
+
+      // Overdue: follow-ups at +12 h, +24 h, +36 h after the due day ends, then silence.
+      const dueEnd = nairobiStart(dueOn).getTime() + 86_400_000;
+      for (let seq = 1; seq <= PartnersService.FOLLOW_UPS; seq++) {
+        const at = dueEnd + seq * PartnersService.FOLLOW_UP_HOURS * 3_600_000;
+        if (now.getTime() < at) break;
+        if (await this.autoSent(row.pledge_id, dueOn, seq)) continue;
+        const last = await this.lastReminderAt(row.pledge_id);
+        if (last && now.getTime() - last.getTime() < PartnersService.FOLLOW_UP_HOURS * 3_600_000) break; // spacing against ANY reminder
+        const channels = await this.fanOut(notifications, row.user_id, "pledge_overdue", { ...payload, sequence: seq, of: PartnersService.FOLLOW_UPS }, timezone);
+        await this.pool.query(`INSERT INTO pledge_reminders (pledge_id, due_on, sequence, kind, channel, sent_at) VALUES ($1, $2, $3, 'auto', $4, $5) ON CONFLICT DO NOTHING`, [row.pledge_id, dueOn, seq, channels.join(",") || "none", now.toISOString()]);
+        followUps += 1;
+        break; // one step per pass; the next pass sends the next step
+      }
+    }
+    return { due_soon: dueSoon, follow_ups: followUps };
+  }
+
+  /** Total pledges that reached their target flip to fulfilled, once, with a thank-you. */
+  async fulfilCompleted(notifications: NotificationService, now = new Date()): Promise<number> {
+    const rows = await this.pledgeRows(this.pool, `WHERE p.status = 'active' AND p.shape = 'total'`, []);
+    let n = 0;
+    for (const r of rows) {
+      const pr = await this.progress(r, now);
+      if (pr.label !== "fulfilled") continue;
+      const done = await this.pool.query(`UPDATE pledges SET status = 'fulfilled', fulfilled_at = now(), updated_at = now() WHERE pledge_id = $1 AND status = 'active'`, [r.pledge_id]);
+      if (!done.rowCount) continue;
+      await this.fanOut(notifications, r.user_id, "pledge_fulfilled", { pledge_id: r.pledge_id, title: PartnersService.title(r), target_minor: Number(r.target_minor), currency: r.currency }, "Africa/Nairobi");
+      await audit(this.pool, r.user_id, "pledge.fulfilled", "pledges", r.pledge_id, {});
+      n += 1;
+    }
+    return n;
+  }
+
+  /** The office reminds one partner (optionally one pledge). Spaced 12 h from ANY reminder. */
+  async adminRemind(adminId: string, userId: string, notifications: NotificationService, opts: { pledge_id?: string | null | undefined; message?: string | null | undefined } = {}, now = new Date()): Promise<{ reminded: number; skipped: number }> {
+    const where = opts.pledge_id ? `WHERE p.user_id = $1 AND p.pledge_id = $2 AND p.status = 'active'` : `WHERE p.user_id = $1 AND p.status = 'active'`;
+    const rows = await this.pledgeRows(this.pool, where, opts.pledge_id ? [userId, opts.pledge_id] : [userId]);
+    if (rows.length === 0) throw new ApiError("NOT_FOUND", "No open pledge to remind about");
+    let reminded = 0, skipped = 0;
+    for (const r of rows) {
+      const last = await this.lastReminderAt(r.pledge_id);
+      if (last && now.getTime() - last.getTime() < PartnersService.FOLLOW_UP_HOURS * 3_600_000) { skipped += 1; continue; }
+      const pr = await this.progress(r, now);
+      const payload = { pledge_id: r.pledge_id, title: PartnersService.title(r), amount_minor: r.shape === "monthly" ? Number(r.amount_minor) : Math.max(0, Number(r.target_minor) - pr.paid_minor), currency: r.currency, due_on: pr.next_due, message: opts.message ?? null };
+      const channels = await this.fanOut(notifications, r.user_id, "pledge_reminder_manual", payload, "Africa/Nairobi");
+      await this.pool.query(`INSERT INTO pledge_reminders (pledge_id, due_on, sequence, kind, channel, sent_by, sent_at) VALUES ($1, $2, 0, 'manual', $3, $4, $5)`, [r.pledge_id, pr.next_due ?? nairobiDate(now), channels.join(",") || "none", adminId, now.toISOString()]);
+      await audit(this.pool, adminId, "pledge.reminded", "pledges", r.pledge_id, { manual: true });
+      reminded += 1;
+    }
+    return { reminded, skipped };
+  }
+
+  /** Everyone with a pledge that is behind. */
+  async remindBehind(adminId: string, notifications: NotificationService, now = new Date()): Promise<{ partners: number; reminded: number; skipped: number }> {
+    const list = await this.adminList({ status: "behind", sort: "behind" });
+    let reminded = 0, skipped = 0;
+    for (const d of list.data as { user_id: string }[]) {
+      const r = await this.adminRemind(adminId, d.user_id, notifications, {}, now).catch(() => ({ reminded: 0, skipped: 0 }));
+      reminded += r.reminded; skipped += r.skipped;
+    }
+    return { partners: (list.data as unknown[]).length, reminded, skipped };
+  }
+
+  // ── phase 2: "I paid another way" ─────────────────────────────────────
+
+  static readonly CreateClaim = z.object({
+    amount_minor: z.number().int().positive(),
+    currency: z.string().length(3).default("KES"),
+    paid_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    note: z.string().trim().max(300).nullish(),
+  });
+
+  async createClaim(userId: string, pledgeId: string, input: z.infer<typeof PartnersService.CreateClaim>): Promise<Record<string, unknown>> {
+    const [p] = await this.pledgeRows(this.pool, `WHERE p.pledge_id = $1 AND p.user_id = $2 AND p.status IN ('active','paused')`, [pledgeId, userId]);
+    if (!p) throw new ApiError("NOT_FOUND", "Pledge not found");
+    const row = await one<{ claim_id: string; status: string; created_at: string }>(
+      this.pool,
+      `INSERT INTO pledge_claims (pledge_id, user_id, amount_minor, currency, paid_on, note)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING claim_id, status, created_at::text`,
+      [pledgeId, userId, input.amount_minor, input.currency.toUpperCase(), input.paid_on, input.note ?? null],
+    );
+    await audit(this.pool, userId, "pledge.claim_created", "pledge_claims", row.claim_id, { amount_minor: input.amount_minor });
+    return { claim_id: row.claim_id, pledge_id: pledgeId, status: row.status, amount_minor: input.amount_minor, currency: input.currency.toUpperCase(), paid_on: input.paid_on, note: input.note ?? null, created_at: row.created_at };
+  }
+
+  async listClaims(userId: string, pledgeId: string): Promise<Record<string, unknown>[]> {
+    return many(
+      this.pool,
+      `SELECT c.claim_id, c.pledge_id, c.amount_minor::text, c.currency, c.paid_on::text, c.note, c.status, c.decided_at::text, c.transaction_id, c.created_at::text
+         FROM pledge_claims c WHERE c.pledge_id = $1 AND c.user_id = $2 ORDER BY c.created_at DESC`,
+      [pledgeId, userId],
+    );
+  }
+
+  async pendingClaims(): Promise<Record<string, unknown>[]> {
+    return many(
+      this.pool,
+      `SELECT c.claim_id, c.pledge_id, c.user_id, u.full_name, c.amount_minor::text, c.currency, c.paid_on::text, c.note, c.status, c.created_at::text,
+              COALESCE(cm.title, f.name, 'Partnership') AS pledge_title
+         FROM pledge_claims c
+         JOIN users u ON u.user_id = c.user_id
+         JOIN pledges p ON p.pledge_id = c.pledge_id
+         LEFT JOIN funds f ON f.fund_id = p.fund_id
+         LEFT JOIN campaigns cm ON cm.campaign_id = p.campaign_id
+        WHERE c.status = 'pending' ORDER BY c.created_at ASC`,
+      [],
+    );
+  }
+
+  /** Confirm → a real, succeeded, manual transaction attributed to the pledge,
+   *  posted to the ledger like any other gift (debit cash:manual, credit the
+   *  fund), with a receipt. Reject → the member is told. */
+  async decideClaim(adminId: string, claimId: string, decision: "confirm" | "reject", notifications: NotificationService): Promise<Record<string, unknown>> {
+    return tx(this.pool, async (c) => {
+      const claim = await maybeOne<{ claim_id: string; pledge_id: string; user_id: string; amount_minor: string; currency: string; paid_on: string; status: string }>(
+        c, `SELECT claim_id, pledge_id, user_id, amount_minor::text, currency, paid_on::text, status FROM pledge_claims WHERE claim_id = $1 FOR UPDATE`, [claimId],
+      );
+      if (!claim) throw new ApiError("NOT_FOUND", "Claim not found");
+      if (claim.status !== "pending") throw new ApiError("UNPROCESSABLE", `Claim already ${claim.status}`);
+      const [p] = await this.pledgeRows(c, `WHERE p.pledge_id = $1`, [claim.pledge_id]);
+      if (!p) throw new ApiError("NOT_FOUND", "Pledge not found");
+
+      if (decision === "reject") {
+        await c.query(`UPDATE pledge_claims SET status = 'rejected', decided_by = $2, decided_at = now() WHERE claim_id = $1`, [claimId, adminId]);
+        await audit(c, adminId, "pledge.claim_rejected", "pledge_claims", claimId, {});
+        await notifications.schedule({ userId: claim.user_id, channel: "push", template: "pledge_claim_rejected", payload: { pledge_id: p.pledge_id, title: PartnersService.title(p), amount_minor: Number(claim.amount_minor), currency: claim.currency } });
+        return { claim_id: claimId, status: "rejected" };
+      }
+
+      // The fund the money went to: the pledge's, its campaign's, or the programme default.
+      let fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT f.fund_id, f.code FROM funds f WHERE f.fund_id = $1`, [p.fund_id]);
+      if (!fund && p.campaign_id) fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT f.fund_id, f.code FROM campaigns cm JOIN funds f ON f.fund_id = cm.fund_id WHERE cm.campaign_id = $1`, [p.campaign_id]);
+      if (!fund) fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT fund_id, code FROM funds WHERE code = $1 AND is_active`, [DEFAULT_PLEDGE_FUND]);
+      if (!fund) fund = await one<{ fund_id: string; code: string }>(c, `SELECT fund_id, code FROM funds WHERE is_active ORDER BY code LIMIT 1`, []);
+
+      const txn = await one<{ transaction_id: string }>(
+        c,
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, pledge_id, settled_at, created_at)
+         VALUES ($1, $2, $3, $4, 'succeeded', 'manual', $5, $6, $7, now(), $8::date + interval '12 hours')
+         RETURNING transaction_id`,
+        [claim.user_id, fund.fund_id, claim.amount_minor, claim.currency, `claim:${claimId}`, `claim:${claimId}`, claim.pledge_id, claim.paid_on],
+      );
+      await c.query(
+        `INSERT INTO ledger_entries (transaction_id, account, side, amount_minor, currency)
+         VALUES ($1, 'cash:manual', 'debit', $2, $3), ($1, $4, 'credit', $2, $3)`,
+        [txn.transaction_id, claim.amount_minor, claim.currency, `fund:${fund.code}`],
+      );
+      await c.query(`UPDATE pledge_claims SET status = 'confirmed', decided_by = $2, decided_at = now(), transaction_id = $3 WHERE claim_id = $1`, [claimId, adminId, txn.transaction_id]);
+      await audit(c, adminId, "pledge.claim_confirmed", "pledge_claims", claimId, { transaction_id: txn.transaction_id });
+      await enqueueOutbox(c, "giving.receipt", { transaction_id: txn.transaction_id, user_id: claim.user_id });
+      await notifications.schedule({ userId: claim.user_id, channel: "push", template: "pledge_claim_confirmed", payload: { pledge_id: p.pledge_id, title: PartnersService.title(p), amount_minor: Number(claim.amount_minor), currency: claim.currency } });
+      return { claim_id: claimId, status: "confirmed", transaction_id: txn.transaction_id };
+    });
   }
 
   // ── admin ─────────────────────────────────────────────────────────────

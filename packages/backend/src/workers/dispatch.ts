@@ -27,6 +27,14 @@ export interface DispatchProvider {
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
+/** "KSh 1,000" from a payload's amount_minor + currency. */
+function money(p: Record<string, unknown>): string {
+  const minor = num(p.amount_minor) ?? 0;
+  const cur = str(p.currency) ?? "KES";
+  const major = Math.round(minor / 100);
+  return `${cur === "KES" ? "KSh" : cur} ${major.toLocaleString("en-KE")}`;
+}
+
 function num(v: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
@@ -139,6 +147,34 @@ const PUSH_TEMPLATE_COPY: Record<
   }),
   // A recurring gift that didn't go through. Never scolding — the giver's
   // intent is not in question, only the collection.
+  // Partners programme (docs/PARTNERS_PROGRAMME.md §3). Warm, never shaming.
+  pledge_due_soon: (p) => {
+    const days = num(p.days_away);
+    return {
+      title: `${str(p.title) ?? "Your pledge"} — ${days === 0 ? "due today" : days === 1 ? "due tomorrow" : `due in ${days} days`}`,
+      body: `${money(p)} toward your pledge. Open Partners to give, or to pause it if this month is tight.`,
+    };
+  },
+  pledge_overdue: (p) => ({
+    title: `A gentle nudge on ${str(p.title) ?? "your pledge"}`,
+    body: `${money(p)} was due on ${str(p.due_on) ?? "the due date"}. No pressure — give when you can, or tell us if you paid another way.`,
+  }),
+  pledge_reminder_manual: (p) => ({
+    title: `From the church office: ${str(p.title) ?? "your pledge"}`,
+    body: str(p.message) ?? `A reminder that ${money(p)} toward your pledge is waiting. Thank you for standing with us.`,
+  }),
+  pledge_fulfilled: (p) => ({
+    title: "Pledge fulfilled — thank you",
+    body: `You completed your ${str(p.title) ?? "pledge"}. Every shilling carried someone further. Open Partners to see it.`,
+  }),
+  pledge_claim_confirmed: (p) => ({
+    title: "Your payment is recorded",
+    body: `${money(p)} toward ${str(p.title) ?? "your pledge"} has been confirmed by the office. Thank you.`,
+  }),
+  pledge_claim_rejected: (p) => ({
+    title: "We couldn't match that payment",
+    body: `The office could not find ${money(p)} toward ${str(p.title) ?? "your pledge"}. Reply in Community or give again from Partners.`,
+  }),
   giving_schedule_failed: () => ({
     title: "Your recurring gift didn't go through",
     body: "We couldn't collect it this time — we'll try again shortly. Open Give to check your number or method.",
@@ -560,6 +596,10 @@ const SMS_TEMPLATE_COPY: Record<string, (p: Record<string, unknown>) => string> 
     return renderGivingReceiptSms(p);
   },
   check_in_welcome: (p) => renderCheckInWelcome(p),
+  // Partners programme — one short segment each (≤ 140 GSM-7).
+  pledge_due_soon: (p) => `Nuru Pathway: ${money(p)} toward your pledge is due ${num(p.days_away) === 0 ? "today" : num(p.days_away) === 1 ? "tomorrow" : `in ${num(p.days_away)} days`}. Open the app > Give > Partners. Thank you.`,
+  pledge_overdue: (p) => `Nuru Pathway: a gentle reminder — ${money(p)} toward your pledge was due ${str(p.due_on) ?? ""}. Give when you can, or tell us if you paid another way.`,
+  pledge_reminder_manual: (p) => (str(p.message) ? `Nuru Pathway: ${str(p.message)}` : `Nuru Pathway: a reminder that ${money(p)} toward your pledge is waiting. Thank you for standing with us.`),
 };
 
 /** One segment. The owner asked for 140; GSM-7 allows 160, so this sits inside it. */

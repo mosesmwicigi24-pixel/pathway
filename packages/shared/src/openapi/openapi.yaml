@@ -2851,6 +2851,91 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: Not found }
         "422": { description: Cancelled pledges cannot change }
+  /giving/pledges/{id}/claims:
+    get:
+      tags: [giving]
+      summary: Member. My "I paid another way" claims on a pledge.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Claims }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [giving]
+      summary: Member. "I paid another way" — the office confirms before it counts.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_minor, paid_on]
+              properties:
+                amount_minor: { type: integer }
+                currency: { type: string, default: KES }
+                paid_on: { type: string, format: date }
+                note: { type: [string, "null"] }
+      responses:
+        "201": { description: Claim (pending) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Pledge not found }
+  /admin/partners/claims:
+    get:
+      tags: [system]
+      summary: Admin. Pending "I paid another way" claims.
+      responses:
+        "200": { description: Claims }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/partners/claims/{id}/confirm:
+    post:
+      tags: [system]
+      summary: Admin. Confirm a claim — records a succeeded manual gift attributed to the pledge, posts the ledger, sends a receipt.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Confirmed }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: Not found }
+        "422": { description: Already decided }
+  /admin/partners/claims/{id}/reject:
+    post:
+      tags: [system]
+      summary: Admin. Reject a claim; the member is told.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Rejected }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: Not found }
+        "422": { description: Already decided }
+  /admin/partners/remind-behind:
+    post:
+      tags: [system]
+      summary: Admin. Remind every partner with a pledge that is behind — spaced 12 h from any other reminder.
+      responses:
+        "200": { description: Counts }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/partners/{userId}/remind:
+    post:
+      tags: [system]
+      summary: Admin. Remind one partner (optionally one pledge, optional message) — spaced 12 h from any other reminder.
+      parameters:
+        - { in: path, name: userId, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pledge_id: { type: [string, "null"], format: uuid }
+                message: { type: [string, "null"] }
+      responses:
+        "200": { description: Counts (reminded / skipped) }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: No open pledge }
   /giving/statements:
     get:
       tags: [giving]

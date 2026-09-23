@@ -82,11 +82,15 @@ CREATE TABLE pledge_reminders (
   pledge_id    UUID NOT NULL REFERENCES pledges(pledge_id) ON DELETE CASCADE,
   due_on       DATE NOT NULL,
   sequence     SMALLINT NOT NULL CHECK (sequence BETWEEN 0 AND 3),
+  kind         TEXT NOT NULL DEFAULT 'auto' CHECK (kind IN ('auto','manual')),
   channel      TEXT NOT NULL,
   sent_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  sent_by      UUID REFERENCES users(user_id),
-  UNIQUE (pledge_id, due_on, sequence)
+  sent_by      UUID REFERENCES users(user_id)
 );
+-- Automatic reminders: one per (pledge, due date, step) — never twice for the
+-- same due date. Manual ones are spaced by time (12 h), not by uniqueness.
+CREATE UNIQUE INDEX pledge_reminders_auto_once ON pledge_reminders (pledge_id, due_on, sequence) WHERE kind = 'auto';
+CREATE INDEX pledge_reminders_pledge_sent_idx ON pledge_reminders (pledge_id, sent_at DESC);
 
 -- Down Migration
 
