@@ -57,6 +57,7 @@ CREATE INDEX pledges_user_idx ON pledges (user_id, status);
 
 ALTER TABLE giving_schedules ADD COLUMN pledge_id UUID REFERENCES pledges(pledge_id) ON DELETE SET NULL;
 ALTER TABLE pledges ADD COLUMN schedule_id UUID REFERENCES giving_schedules(schedule_id) ON DELETE SET NULL;
+CREATE INDEX pledges_schedule_idx ON pledges (schedule_id) WHERE schedule_id IS NOT NULL;
 ALTER TABLE transactions ADD COLUMN pledge_id UUID REFERENCES pledges(pledge_id) ON DELETE SET NULL;
 CREATE INDEX transactions_pledge_idx ON transactions (pledge_id) WHERE pledge_id IS NOT NULL;
 CREATE INDEX giving_schedules_pledge_idx ON giving_schedules (pledge_id) WHERE pledge_id IS NOT NULL;
@@ -76,6 +77,9 @@ CREATE TABLE pledge_claims (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX pledge_claims_pending_idx ON pledge_claims (status) WHERE status = 'pending';
+-- FK support (the fk-index-coverage guard): cascades and SET NULLs must not scan.
+CREATE INDEX pledge_claims_pledge_idx ON pledge_claims (pledge_id);
+CREATE INDEX pledge_claims_user_idx ON pledge_claims (user_id);
 
 CREATE TABLE pledge_reminders (
   reminder_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -99,6 +103,7 @@ DROP TABLE IF EXISTS pledge_claims;
 DROP INDEX IF EXISTS transactions_pledge_idx;
 ALTER TABLE transactions DROP COLUMN IF EXISTS pledge_id;
 DROP INDEX IF EXISTS giving_schedules_pledge_idx;
+DROP INDEX IF EXISTS pledges_schedule_idx;
 ALTER TABLE pledges DROP COLUMN IF EXISTS schedule_id;
 ALTER TABLE giving_schedules DROP COLUMN IF EXISTS pledge_id;
 DROP TABLE IF EXISTS pledges;
