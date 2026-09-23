@@ -111,8 +111,8 @@ Legend: ✅ present · ⚠️ present but drift · ❌ missing · N/A not applic
 | **Intelligence** | Both: **`/admin/analytics/intelligence`** | ✅ | ✅ | ~~D-05~~ **RESOLVED** 2026-06-30 — iPad rebuilt on the canonical endpoint; devices/app-area/activity/location now real |
 | Users | /admin/users | ✅ | ✅ | Parity |
 | Roles & Permissions | /admin/roles (+permissions) | ✅ | ✅ | Parity |
-| Partners (programme) | /admin/partners, /admin/partners/{userId} (+remind), /admin/partners/claims/{id}/confirm\|reject, /admin/partners/remind-behind | ✅ | ⚠️ | **2026-09-23** (pathway #482): every partner, their pledges + due commitments + statements, send reminder (12 h spacing), remind everyone behind, "I paid another way" claims queue. iPad (native SwiftUI) page in progress on pathwayforipad `feat/partners-departments` — see D-12. |
-| Departments | /admin/departments (+{id}), serve-requests, needs (+{needId}/approve\|reject\|close), office posts | ✅ | ⚠️ | **2026-09-23** (pathway #483): CRUD, leader, gift keys, requests-to-serve queue, financial-needs queue (approved need = first-class giving target via `need_id`). Office bounded by congregation (§5.4). iPad (native SwiftUI) page in progress on pathwayforipad `feat/partners-departments` — see D-12. |
+| Partners (programme) | /admin/partners, /admin/partners/{userId} (+remind), /admin/partners/claims/{id}/confirm\|reject, /admin/partners/remind-behind | ✅ | ✅ | **2026-09-23** (pathway #482): every partner, their pledges + due commitments + statements, send reminder (12 h spacing), remind everyone behind, "I paid another way" claims queue. iPad native page: pathwayforipad #9 (2026-09-24, `PartnersView` rail + detail, Claims panel). |
+| Departments | /admin/departments (+{id}), serve-requests, needs (+{needId}/approve\|reject\|close), office posts | ✅ | ✅ | **2026-09-23** (pathway #483): CRUD, leader, gift keys, requests-to-serve queue, financial-needs queue (approved need = first-class giving target via `need_id`). Office bounded by congregation (§5.4). iPad native page: pathwayforipad #9 (2026-09-24, `DepartmentsView` + Requests/Needs panels). |
 | Congregations | /admin/congregations | ✅ | ✅ | Parity |
 | Countries | /admin/countries | ✅ | ✅ | Parity (no delete either side) |
 | Languages | /admin/languages | ✅ | ✅ | Parity |
@@ -174,7 +174,7 @@ Shares with admin surfaces: the backend, `@nuru/shared`, and `tokens.ts`.
 | D-12 | Android has a dead `CommunityHubScreen` at `composable("community")` — no inbound caller (shortcuts land on `prayer-room?tab=corporate`; `routeFor` never returns it; the MainShell comments list it as a *caller* of `chat`/`give`, not a target). iOS has no equivalent. Found while auditing Phase 3. | Android | Low | Remove in its own PR after Phase 3 lands — not in the restructuring PR, which must stay revertible in one commit. Verify nothing external (FCM payload, App Link) names `community` first. |
 | ~~D-11~~ | ~~Discipleship Hub not on iPad~~ | iPad | ~~Med~~ | **DONE 2026-07-04** — DisciplesView.swift (roster + dossier + actions) under Operations. Bonus: found + fixed the web usher advancement-id 404. Open follow-up: usher scope ignores relationship_tree edges (backend) |
 
-| D-12 | Partners + Departments admin pages not on iPad | iPad | Med | **OPEN 2026-09-23** — native SwiftUI pages being built on pathwayforipad `feat/partners-departments` (Operations group; gated `finance:view` / `departments:view`). Close when that PR merges. |
+| ~~D-12~~ | ~~Partners + Departments admin pages not on iPad~~ | iPad | ~~Med~~ | **DONE 2026-09-24** — pathwayforipad #9 merged (main da04a97): `Features/Partners/PartnersView.swift`, `Features/Departments/DepartmentsView.swift` under Operations, gated `finance:view` / `departments:view`; `@LooseInt` for `BIGINT::text` money. Not yet smoke-tested on a device. |
 ---
 
 ## 6. The rules (governance)
