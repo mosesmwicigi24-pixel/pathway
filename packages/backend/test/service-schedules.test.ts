@@ -13,9 +13,21 @@ afterAll(async () => {
   await closeTestPool();
 });
 
-/** Tomorrow's EXTRACT(DOW), so every materialize test has an occurrence inside the horizon. */
-function tomorrowDow(): number {
-  return (new Date().getDay() + 1) % 7;
+/** "Tomorrow" exactly as the materializer sees it: `current_date + 1` in the
+ *  DATABASE session, its EXTRACT(DOW), and 09:00 of that day in the
+ *  congregation's timezone. Derived from Postgres, never from the Node clock —
+ *  a local `getDay()` and a UTC `toISOString()` disagree for three hours every
+ *  night on a UTC+3 machine (21:00–24:00 UTC), which made this file flake. */
+async function tomorrow(): Promise<{ date: string; dow: number; startsAt: string }> {
+  const { rows } = await testPool().query<{ date: string; dow: string; starts_at: string }>(
+    `SELECT (current_date + 1)::text AS date,
+            EXTRACT(DOW FROM current_date + 1)::text AS dow,
+            (((current_date + 1)::text || ' 09:00')::timestamp AT TIME ZONE 'Africa/Nairobi')::text AS starts_at`,
+  );
+  return { date: rows[0]!.date, dow: Number(rows[0]!.dow), startsAt: rows[0]!.starts_at };
+}
+async function tomorrowDow(): Promise<number> {
+  return (await tomorrow()).dow;
 }
 
 async function leaderToken(cong: string): Promise<string> {
@@ -30,7 +42,7 @@ describe("declaring a rhythm", () => {
 
     const res = await agent().post("/v1/admin/service-schedules").set("Authorization", tok).send({
       title: "Sunday Service",
-      day_of_week: tomorrowDow(),
+      day_of_week: await tomorrowDow(),
       starts_time: "09:00",
     });
     expect(res.status).toBe(201);
@@ -54,7 +66,7 @@ describe("declaring a rhythm", () => {
   it("declaring the same rhythm twice is a named conflict", async () => {
     const cong = await createCongregation();
     const tok = await leaderToken(cong);
-    const body = { title: "Sunday Service", day_of_week: tomorrowDow(), starts_time: "09:00" };
+    const body = { title: "Sunday Service", day_of_week: await tomorrowDow(), starts_time: "09:00" };
     await agent().post("/v1/admin/service-schedules").set("Authorization", tok).send(body);
     const dup = await agent().post("/v1/admin/service-schedules").set("Authorization", tok).send(body);
     expect(dup.status).toBe(409);
@@ -67,7 +79,7 @@ describe("materialization is idempotent and respectful of humans", () => {
     const tok = await leaderToken(cong);
     await agent().post("/v1/admin/service-schedules").set("Authorization", tok).send({
       title: "Sunday Service",
-      day_of_week: tomorrowDow(),
+      day_of_week: await tomorrowDow(),
       starts_time: "09:00",
     });
 
@@ -84,19 +96,19 @@ describe("materialization is idempotent and respectful of humans", () => {
 
   it("a hand-created service IS that week's occurrence — the schedule steps aside", async () => {
     const cong = await createCongregation();
-    const tomorrow = new Date(Date.now() + 86_400_000);
+    const next = await tomorrow();
     // The human got there first, with their own times and their own secret.
     await createChurchService(cong, {
       title: "Sunday Service",
-      serviceDate: tomorrow.toISOString().slice(0, 10),
-      startsAt: tomorrow.toISOString(),
+      serviceDate: next.date,
+      startsAt: next.startsAt,
       qrSecret: "hand-made-secret",
     });
 
     const tok = await leaderToken(cong);
     await agent().post("/v1/admin/service-schedules").set("Authorization", tok).send({
       title: "Sunday Service",
-      day_of_week: tomorrow.getDay(),
+      day_of_week: next.dow,
       starts_time: "09:00",
     });
 
@@ -113,7 +125,7 @@ describe("materialization is idempotent and respectful of humans", () => {
     const tok = await leaderToken(cong);
     const created = await agent().post("/v1/admin/service-schedules").set("Authorization", tok).send({
       title: "Sunday Service",
-      day_of_week: tomorrowDow(),
+      day_of_week: await tomorrowDow(),
       starts_time: "09:00",
     });
     await agent()
@@ -138,7 +150,7 @@ describe("materialization is idempotent and respectful of humans", () => {
     const tok = await leaderToken(cong);
     await agent().post("/v1/admin/service-schedules").set("Authorization", tok).send({
       title: "Sunday Service",
-      day_of_week: tomorrowDow(),
+      day_of_week: await tomorrowDow(),
       starts_time: "09:00",
       checkin_opens_minutes: 45,
       checkin_closes_minutes: 240,
