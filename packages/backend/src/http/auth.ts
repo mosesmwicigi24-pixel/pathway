@@ -86,6 +86,12 @@ export const PERM_MODULES = [
   // here for the reason above: a module missing from this array is invisible
   // to SuperAdmin no matter what the database says.
   "website",
+  // Departments (docs/PARTNERS_PROGRAMME.md §4, migration 214): where members
+  // serve, department posts and needs. Same rule as above — the routes are
+  // gated on departments:view|manage, and without this entry the console item
+  // is invisible to SuperAdmin/Admin (their /me grid is built from THIS list)
+  // and no role can be granted the module (system/index.ts validates against it).
+  "departments",
 ] as const;
 // `go`/`manage` are Nuru Live's (module `live`) capability pair — broadcast
 // start vs. end-anyone's-stream oversight (docs/LIVE_STREAMING.md). They ride
