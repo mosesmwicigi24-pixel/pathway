@@ -9556,6 +9556,8 @@ components:
             rides the STK push AccountReference so it shows on the church's
             M-Pesa statement; absent falls back to the existing default reference.
         idempotency_key: { type: string, minLength: 8, maxLength: 255, description: Client-supplied; replays return the same transaction }
+        pledge_id: { type: [string, "null"], format: uuid, description: "Count this gift toward one of the member's open pledges (own pledge only, else 422). Omitted on a scheduled charge = the pledge bound to that schedule." }
+        need_id: { type: [string, "null"], format: uuid, description: "Give to an approved department need (else 422). Server-authoritative fund: when the need's department names an active fund, the gift lands there regardless of `fund`, so a need never splits across funds by client." }
     GivingIntentResult:
       type: object
       required: [transaction_id, status, idempotency_key, reused]
