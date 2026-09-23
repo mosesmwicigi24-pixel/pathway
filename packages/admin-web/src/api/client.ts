@@ -2111,6 +2111,173 @@ export const ConfigApi = {
     api.get<{ data: AuditRow[]; next_cursor: number | null }>("/admin/audit", { params: q }).then((r) => r.data),
 };
 
+// ---- Partners programme (docs/PARTNERS_PROGRAMME.md §1, §3, §5; admin mirror) ----
+// List + detail (phase 1) and the office's actions (phase 2): remind one
+// partner or everyone behind, and confirm / reject "I paid another way" claims.
+// Wire shapes are snake_case exactly as the backend emits them; every money
+// field is integer minor units and every progress value is server-computed.
+export type PartnerMembershipStatus = "active" | "paused" | "left";
+/** `status=` on GET /admin/partners ("all" = omit the param). */
+export type PartnerStatusFilter = "all" | "active" | "paused" | "behind" | "left";
+/** `sort=` on GET /admin/partners. */
+export type PartnerSort = "recent" | "committed" | "behind";
+
+export interface PartnerRow {
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  phone: string | null;
+  email: string | null;
+  cell_name: string | null;
+  membership: { status: PartnerMembershipStatus; joined_at: string } | null;
+  tier: { name: string; monthly_minor: number } | null;
+  pledges_active: number;
+  committed_monthly_minor: number;
+  given_year_minor: number;
+  last_gift_at: string | null;
+  behind: boolean;
+  next_due_on: string | null;
+}
+
+export interface PartnersSummary {
+  partners: number;
+  active_pledges: number;
+  committed_monthly_minor: number;
+  behind: number;
+  given_year_minor: number;
+}
+
+export type PledgeShape = "monthly" | "total";
+export type PledgeStatus = "active" | "paused" | "fulfilled" | "cancelled";
+
+export interface PartnerPledge {
+  pledge_id: string;
+  shape: PledgeShape;
+  /** monthly pledges carry amount_minor; total pledges carry target_minor. */
+  amount_minor: number | null;
+  target_minor: number | null;
+  currency: string;
+  due_day: number | null;
+  due_on: string | null;
+  fund: { code: string; name: string } | null;
+  campaign: { campaign_id: string; title: string } | null;
+  status: PledgeStatus;
+  /** Computed on the server, never stored (§1 "Progress"). */
+  progress: { paid_minor: number; period_paid_minor: number; label: string; next_due: string | null };
+  schedule_id: string | null;
+  reminders_enabled: boolean;
+  created_at: string;
+}
+
+/** Row of GET /admin/finance/schedules (financial/service.ts listSchedulesAdmin). */
+export interface AdminScheduleRow {
+  schedule_id: string;
+  user_id: string;
+  full_name: string | null;
+  phone_number: string | null;
+  fund: string;
+  amount_minor: number;
+  currency: string;
+  frequency: string;
+  method: string | null;
+  status: string;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  consecutive_failures: number;
+  last_error: string | null;
+  last_failed_at: string | null;
+  paused_at: string | null;
+  created_at: string;
+  needs_attention: boolean;
+}
+
+export interface PartnerPayment {
+  transaction_id: string;
+  amount_minor: number;
+  currency: string;
+  at: string;
+  fund: string;
+  pledge_id: string | null;
+  receipt_code: string | null;
+}
+
+export type ReminderKind = "auto" | "manual";
+export interface PartnerReminder {
+  pledge_id: string;
+  due_on: string;
+  sequence: number;
+  channel: string;
+  sent_at: string;
+  /** "auto" = the notification worker on the §3 schedule; "manual" = the office.
+   *  Optional so a detail payload that predates the column still renders —
+   *  every manual reminder is written with sent_by, every automatic one without. */
+  kind?: ReminderKind;
+  /** null = sent by the notification worker, not a person. */
+  sent_by: string | null;
+  /** The sender's name when the server resolves sent_by (manual reminders). */
+  sent_by_name?: string | null;
+}
+
+export interface PartnerDetail {
+  member: PartnerRow;
+  pledges: PartnerPledge[];
+  schedules: AdminScheduleRow[];
+  payments: PartnerPayment[];
+  reminders: PartnerReminder[];
+}
+
+/** POST /admin/partners/:userId/remind and /remind-behind. Counts are per
+ *  pledge; `skipped` = a reminder (automatic or manual) already went out in
+ *  the last 12 hours, so the server left that pledge alone (§3). */
+export interface RemindResult {
+  reminded: number;
+  skipped: number;
+}
+export interface RemindBehindResult extends RemindResult {
+  /** Partners that were behind when the run started. */
+  partners: number;
+}
+
+export type ClaimStatus = "pending" | "confirmed" | "rejected";
+/** Row of GET /admin/partners/claims (financial/partners.ts pendingClaims). */
+export interface PledgeClaimRow {
+  claim_id: string;
+  pledge_id: string;
+  user_id: string;
+  full_name: string;
+  /** BIGINT serialised as text by the server — Number() it for display only. */
+  amount_minor: string;
+  currency: string;
+  paid_on: string;
+  note: string | null;
+  status: ClaimStatus;
+  created_at: string;
+  /** The pledge's campaign title, fund name, or "Partnership". */
+  pledge_title: string;
+}
+
+export const PartnersApi = {
+  list: (q: { q?: string; status?: PartnerStatusFilter; sort?: PartnerSort } = {}) =>
+    api.get<{ data: PartnerRow[]; summary: PartnersSummary }>("/admin/partners", { params: q }).then((r) => r.data),
+  detail: (userId: string) =>
+    api.get<PartnerDetail>(`/admin/partners/${encodeURIComponent(userId)}`).then((r) => r.data),
+  /** finance:manage. One partner — every open pledge, or one; note ≤ 200 chars. 404 = no open pledge. */
+  remind: (userId: string, body: { pledge_id?: string | null; message?: string | null } = {}) =>
+    api.post<RemindResult>(`/admin/partners/${encodeURIComponent(userId)}/remind`, body).then((r) => r.data),
+  /** finance:manage. Every partner with a pledge that is behind. */
+  remindBehind: () => api.post<RemindBehindResult>("/admin/partners/remind-behind", {}).then((r) => r.data),
+  /** finance:view. Pending claims, oldest first. */
+  claims: () => api.get<{ data: PledgeClaimRow[] }>("/admin/partners/claims").then((r) => r.data.data),
+  /** finance:manage. Records a succeeded manual gift attributed to the pledge. 422 = already decided. */
+  confirmClaim: (claimId: string) =>
+    api
+      .post<{ claim_id: string; status: "confirmed"; transaction_id: string }>(`/admin/partners/claims/${encodeURIComponent(claimId)}/confirm`, {})
+      .then((r) => r.data),
+  /** finance:manage. The member is told. 422 = already decided. */
+  rejectClaim: (claimId: string) =>
+    api.post<{ claim_id: string; status: "rejected" }>(`/admin/partners/claims/${encodeURIComponent(claimId)}/reject`, {}).then((r) => r.data),
+};
+
 // ---- Video Library (W2; Features v2 §V) ----
 export type MediaStatus = "uploading" | "transcoding" | "ready" | "failed";
 // cloudinary = hosted/transcoded; the rest are externally-hosted, best-effort gated.

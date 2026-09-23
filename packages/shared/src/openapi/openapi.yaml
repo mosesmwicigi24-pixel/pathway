@@ -2786,6 +2786,186 @@ paths:
         "204": { description: Recorded }
         "422": { $ref: "#/components/responses/Unprocessable" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /giving/partners/join:
+    post:
+      tags: [giving]
+      summary: Member. Join the Partners programme — no fund, campaign or money required (docs/PARTNERS_PROGRAMME.md §1).
+      responses:
+        "201": { description: Membership }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /giving/pledges:
+    get:
+      tags: [giving]
+      summary: Member. My pledges with computed progress (never stored).
+      responses:
+        "200": { description: Pledges }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [giving]
+      summary: Member. Make a pledge — monthly amount or a total by a date; optionally aimed at one fund, campaign or department need; optionally with a schedule bound to it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePledgeBody" }
+      responses:
+        "201":
+          description: The pledge
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pledge" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Unknown fund or campaign }
+  /giving/pledges/{id}:
+    get:
+      tags: [giving]
+      summary: Member. One pledge with its payments and reminder log.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Pledge detail }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Not found }
+    patch:
+      tags: [giving]
+      summary: Member. Pause, resume, cancel or edit a pledge; a bound schedule follows.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [active, paused, cancelled] }
+                amount_minor: { type: integer }
+                target_minor: { type: integer }
+                due_day: { type: integer, minimum: 1, maximum: 28 }
+                due_on: { type: string, format: date }
+                reminders_enabled: { type: boolean }
+                note: { type: [string, "null"] }
+      responses:
+        "200": { description: Updated pledge }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Not found }
+        "422": { description: Cancelled pledges cannot change }
+  /giving/pledges/{id}/claims:
+    get:
+      tags: [giving]
+      summary: Member. My "I paid another way" claims on a pledge.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Claims }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [giving]
+      summary: Member. "I paid another way" — the office confirms before it counts.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_minor, paid_on]
+              properties:
+                amount_minor: { type: integer }
+                currency: { type: string, default: KES }
+                paid_on: { type: string, format: date }
+                note: { type: [string, "null"] }
+      responses:
+        "201": { description: Claim (pending) }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Pledge not found }
+  /admin/partners/claims:
+    get:
+      tags: [system]
+      summary: Admin. Pending "I paid another way" claims.
+      responses:
+        "200": { description: Claims }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/partners/claims/{id}/confirm:
+    post:
+      tags: [system]
+      summary: Admin. Confirm a claim — records a succeeded manual gift attributed to the pledge, posts the ledger, sends a receipt.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Confirmed }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: Not found }
+        "422": { description: Already decided }
+  /admin/partners/claims/{id}/reject:
+    post:
+      tags: [system]
+      summary: Admin. Reject a claim; the member is told.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Rejected }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: Not found }
+        "422": { description: Already decided }
+  /admin/partners/remind-behind:
+    post:
+      tags: [system]
+      summary: Admin. Remind every partner with a pledge that is behind — spaced 12 h from any other reminder.
+      responses:
+        "200": { description: Counts }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/partners/{userId}/remind:
+    post:
+      tags: [system]
+      summary: Admin. Remind one partner (optionally one pledge, optional message) — spaced 12 h from any other reminder.
+      parameters:
+        - { in: path, name: userId, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pledge_id: { type: [string, "null"], format: uuid }
+                message: { type: [string, "null"] }
+      responses:
+        "200": { description: Counts (reminded / skipped) }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: No open pledge }
+  /giving/statements:
+    get:
+      tags: [giving]
+      summary: Member. Giving statement for a year — totals by pledge and by fund, every payment.
+      parameters:
+        - { in: query, name: year, required: false, schema: { type: integer } }
+      responses:
+        "200": { description: Statement }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /admin/partners:
+    get:
+      tags: [system]
+      summary: Admin. Every partner — membership, tier, commitment, given this year, behind.
+      parameters:
+        - { in: query, name: q, required: false, schema: { type: string } }
+        - { in: query, name: status, required: false, schema: { type: string, enum: [all, active, paused, behind, left] } }
+        - { in: query, name: sort, required: false, schema: { type: string, enum: [recent, committed, behind] } }
+      responses:
+        "200": { description: Partners list + summary }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/partners/{userId}:
+    get:
+      tags: [system]
+      summary: Admin. One partner — pledges, schedules, payments, reminders.
+      parameters:
+        - { in: path, name: userId, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Partner detail }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: Not a partner }
   /giving/partnership:
     get:
       tags: [financial]
@@ -8667,6 +8847,57 @@ components:
         accent: { type: string, enum: [gold, navy, success, steady] }
         priority: { type: integer }
         due: { type: [string, "null"], enum: [today, tomorrow, null] }
+    CreatePledgeBody:
+      type: object
+      required: [shape]
+      properties:
+        shape: { type: string, enum: [monthly, total] }
+        amount_minor: { type: integer, description: "monthly: every month" }
+        target_minor: { type: integer, description: "total: by due_on" }
+        currency: { type: string, default: KES }
+        due_day: { type: integer, minimum: 1, maximum: 28 }
+        due_on: { type: string, format: date }
+        until_on: { type: [string, "null"], format: date }
+        fund: { type: [string, "null"] }
+        campaign_id: { type: [string, "null"], format: uuid }
+        need_id: { type: [string, "null"], format: uuid }
+        note: { type: [string, "null"] }
+        reminders_enabled: { type: boolean, default: true }
+        auto_schedule:
+          type: [object, "null"]
+          properties:
+            method: { type: string, enum: [mpesa, airtel] }
+            frequency: { type: string, enum: [weekly, monthly], default: monthly }
+    Pledge:
+      type: object
+      required: [pledge_id, shape, currency, status, progress, title]
+      properties:
+        pledge_id: { type: string, format: uuid }
+        shape: { type: string, enum: [monthly, total] }
+        amount_minor: { type: [integer, "null"] }
+        target_minor: { type: [integer, "null"] }
+        currency: { type: string }
+        due_day: { type: [integer, "null"] }
+        due_on: { type: [string, "null"] }
+        until_on: { type: [string, "null"] }
+        fund: { type: [object, "null"], properties: { code: { type: string }, name: { type: string } } }
+        campaign: { type: [object, "null"], properties: { campaign_id: { type: string }, title: { type: string } } }
+        need_id: { type: [string, "null"] }
+        status: { type: string, enum: [active, paused, fulfilled, cancelled] }
+        progress:
+          type: object
+          required: [paid_minor, label]
+          properties:
+            paid_minor: { type: integer }
+            period_paid_minor: { type: [integer, "null"] }
+            label: { type: string, enum: [on_track, behind, fulfilled, paused] }
+            next_due: { type: [string, "null"] }
+            overdue_since: { type: [string, "null"] }
+        schedule_id: { type: [string, "null"] }
+        reminders_enabled: { type: boolean }
+        note: { type: [string, "null"] }
+        title: { type: string }
+        created_at: { type: string }
     AudioUploadResult:
       type: object
       description: Bare result of POST /admin/media/audio/upload (no media_assets row).

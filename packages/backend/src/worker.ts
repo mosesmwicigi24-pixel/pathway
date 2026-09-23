@@ -15,6 +15,7 @@ import { buildOutboxHandlers } from "./workers/handlers.js";
 import { NotificationWorker } from "./workers/notificationWorker.js";
 import { buildDispatchProvider } from "./workers/dispatch.js";
 import { NudgeScanner } from "./workers/nudgeScanner.js";
+import { PledgeReminderScanner } from "./workers/pledgeReminderScanner.js";
 import { NotificationService } from "./modules/notifications/service.js";
 import { EngagementService } from "./modules/engagement/service.js";
 import { PartitionMaintenance, refreshMinorFlags } from "./jobs/maintenance.js";
@@ -52,6 +53,7 @@ function main(): void {
     new OutboxWorker(db.primary, buildOutboxHandlers(ctx), log).start(5_000),
     new NotificationWorker(db.primary, buildDispatchProvider(env, log), log).start(10_000),
     new NudgeScanner(db.primary, new NotificationService(db.primary), log).start(60 * 60 * 1000),
+    new PledgeReminderScanner(db.primary, new NotificationService(db.primary), log).start(15 * 60 * 1000),
   ];
 
   // Scheduled announcements: dispatch any whose send time has arrived (B5).

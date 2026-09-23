@@ -6,6 +6,8 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requirePermission } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { FinancialService } from "./service.js";
+import { PartnersService } from "./partners.js";
+import { NotificationService } from "../notifications/service.js";
 import { invitationFor, recordShown, recordOutcome } from "./invitation.js";
 import { CampaignService, CampaignInput } from "./campaigns.js";
 import { buildPaymentGateway, type PaymentGateway } from "./gateway.js";
@@ -26,6 +28,8 @@ export function registerFinancial(
   const mobileMoney = mobileMoneyOverride ?? buildMobileMoneyProviders(ctx.env);
   const paypal = paypalOverride ?? buildPayPalGateway(ctx.env);
   const svc = new FinancialService(ctx.db.primary, gateway, mobileMoney, paypal);
+  const partners = new PartnersService(ctx.db.primary, svc);
+  const notifications = new NotificationService(ctx.db.primary);
   const auth = authenticate(ctx.env);
   const r = financialRouter;
 
@@ -167,9 +171,40 @@ export function registerFinancial(
     "/giving/partnership",
     auth,
     handler(async (req, res) => {
-      res.json(await svc.partnership(requirePrincipal(req).userId));
+      res.json(await partners.partnership(requirePrincipal(req).userId));
     }),
   );
+
+  // ── The Partners programme (docs/PARTNERS_PROGRAMME.md §2, §5) ──────────
+  r.post("/giving/partners/join", auth, handler(async (req, res) => {
+    res.status(201).json(await partners.join(requirePrincipal(req).userId));
+  }));
+  r.get("/giving/pledges", auth, handler(async (req, res) => {
+    res.json({ data: await partners.listPledges(requirePrincipal(req).userId) });
+  }));
+  r.post("/giving/pledges", auth, handler(async (req, res) => {
+    const input = parseBody(PartnersService.CreatePledge, req.body ?? {});
+    res.status(201).json(await partners.createPledge(requirePrincipal(req).userId, input));
+  }));
+  r.get("/giving/pledges/:id", auth, handler(async (req, res) => {
+    res.json(await partners.getPledge(requirePrincipal(req).userId, String(req.params.id)));
+  }));
+  r.patch("/giving/pledges/:id", auth, handler(async (req, res) => {
+    const patch = parseBody(PartnersService.UpdatePledge, req.body ?? {});
+    res.json(await partners.updatePledge(requirePrincipal(req).userId, String(req.params.id), patch));
+  }));
+  r.post("/giving/pledges/:id/claims", auth, handler(async (req, res) => {
+    const input = parseBody(PartnersService.CreateClaim, req.body ?? {});
+    res.status(201).json(await partners.createClaim(requirePrincipal(req).userId, String(req.params.id), input));
+  }));
+  r.get("/giving/pledges/:id/claims", auth, handler(async (req, res) => {
+    res.json({ data: await partners.listClaims(requirePrincipal(req).userId, String(req.params.id)) });
+  }));
+  r.get("/giving/statements", auth, handler(async (req, res) => {
+    const y = req.query.year ? Number(req.query.year) : undefined;
+    res.json(await partners.statements(requirePrincipal(req).userId, Number.isFinite(y) ? y : undefined));
+  }));
+
 
   r.post(
     "/giving/schedules/:id/cancel",
@@ -336,6 +371,31 @@ export function registerFinancial(
       res.json({ received: true, ...result });
     }),
   );
+
+  // Partners, admin side (docs/PARTNERS_PROGRAMME.md §5).
+  r.get("/admin/partners", auth, perm("finance", "view"), handler(async (req, res) => {
+    const q = parseBody(PartnersService.AdminListQuery, req.query ?? {});
+    res.json(await partners.adminList(q));
+  }));
+  r.get("/admin/partners/claims", auth, perm("finance", "view"), handler(async (_req, res) => {
+    res.json({ data: await partners.pendingClaims() });
+  }));
+  r.post("/admin/partners/claims/:id/confirm", auth, perm("finance", "manage"), handler(async (req, res) => {
+    res.json(await partners.decideClaim(requirePrincipal(req).userId, String(req.params.id), "confirm", notifications));
+  }));
+  r.post("/admin/partners/claims/:id/reject", auth, perm("finance", "manage"), handler(async (req, res) => {
+    res.json(await partners.decideClaim(requirePrincipal(req).userId, String(req.params.id), "reject", notifications));
+  }));
+  r.post("/admin/partners/remind-behind", auth, perm("finance", "manage"), handler(async (req, res) => {
+    res.json(await partners.remindBehind(requirePrincipal(req).userId, notifications));
+  }));
+  r.post("/admin/partners/:userId/remind", auth, perm("finance", "manage"), handler(async (req, res) => {
+    const body = parseBody(z.object({ pledge_id: z.string().uuid().nullish(), message: z.string().trim().max(200).nullish() }), req.body ?? {});
+    res.json(await partners.adminRemind(requirePrincipal(req).userId, String(req.params.userId), notifications, body));
+  }));
+  r.get("/admin/partners/:userId", auth, perm("finance", "view"), handler(async (req, res) => {
+    res.json(await partners.adminDetail(String(req.params.userId)));
+  }));
 
   return r;
 }

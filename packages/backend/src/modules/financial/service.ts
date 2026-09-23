@@ -41,6 +41,10 @@ export class FinancialService {
     // nullish, not optional: Android's kotlinx Json sends "phone_number": null
     // for non-mobile-money methods. Mobile money; defaults to the profile phone.
     phone_number: z.string().min(7).max(32).nullish(),
+    // A gift started from a pledge's "Pay now" (docs/PARTNERS_PROGRAMME.md §1):
+    // attributed at the moment of giving, never re-derived. Must be the
+    // caller's own active pledge.
+    pledge_id: z.string().uuid().nullish(),
     // "Named giving" (custom sheet, optional): a member-chosen label for the
     // gift — like an M-Pesa Paybill account name. Trimmed; empty → absent so
     // behavior is unchanged when the field isn't used. Sanitized separately
@@ -73,6 +77,9 @@ export class FinancialService {
     input: z.infer<typeof FinancialService.GivingIntent>,
     scheduleId?: string,
   ): Promise<Record<string, unknown>> {
+    // Which pledge, if any, this gift counts toward: the caller's explicit
+    // choice, else the pledge bound to the schedule that is charging.
+    const pledgeId = await this.resolvePledgeId(userId, input.pledge_id ?? null, scheduleId ?? null);
     const key = input.idempotency_key ?? randomUUID();
 
     // Idempotent: the same client key returns the existing transaction.
@@ -113,10 +120,10 @@ export class FinancialService {
       });
       const txn = await one<{ transaction_id: string; status: string }>(
         this.pool,
-        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name)
-         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9)
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id)
+         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10)
          RETURNING transaction_id, status`,
-        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null, input.account_name ?? null],
+        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null, input.account_name ?? null, pledgeId],
       );
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor,
@@ -140,10 +147,10 @@ export class FinancialService {
       const order = await this.paypalGw().createOrder({ amountMinor: input.amount_minor, reference: `${userId}:${input.fund}` });
       const txn = await one<{ transaction_id: string; status: string }>(
         this.pool,
-        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name)
-         VALUES ($1, $2, $3, 'USD', 'processing', 'paypal', $4, $5, $6, $7)
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id)
+         VALUES ($1, $2, $3, 'USD', 'processing', 'paypal', $4, $5, $6, $7, $8)
          RETURNING transaction_id, status`,
-        [userId, fund.fund_id, input.amount_minor, order.orderId, key, scheduleId ?? null, input.account_name ?? null],
+        [userId, fund.fund_id, input.amount_minor, order.orderId, key, scheduleId ?? null, input.account_name ?? null, pledgeId],
       );
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor, currency: "USD", fund: input.fund, method: "paypal", account_name: input.account_name ?? null,
@@ -167,10 +174,10 @@ export class FinancialService {
 
     const txn = await one<{ transaction_id: string; status: string }>(
       this.pool,
-      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, stripe_payment_intent, idempotency_key, schedule_id, account_name)
-       VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8)
+      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, stripe_payment_intent, idempotency_key, schedule_id, account_name, pledge_id)
+       VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9)
        RETURNING transaction_id, status`,
-      [userId, fund.fund_id, input.amount_minor, currency, intent.id, key, scheduleId ?? null, input.account_name ?? null],
+      [userId, fund.fund_id, input.amount_minor, currency, intent.id, key, scheduleId ?? null, input.account_name ?? null, pledgeId],
     );
     await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
       amount_minor: input.amount_minor,
@@ -780,7 +787,30 @@ export class FinancialService {
     frequency: z.enum(["weekly", "monthly"]),
     method: z.enum(["card", "mpesa", "airtel", "paypal"]).default("card"),
     idempotency_key: z.string().min(8).max(255).optional(),
+    /** Bind this schedule to a pledge: every charge it makes is attributed. */
+    pledge_id: z.string().uuid().nullish(),
   });
+
+  /** The pledge a gift counts toward. An explicit pledge must be the caller's
+   *  own and active (422 otherwise); a charging schedule passes its binding. */
+  private async resolvePledgeId(userId: string, explicit: string | null, scheduleId: string | null): Promise<string | null> {
+    if (explicit) {
+      const own = await maybeOne<{ pledge_id: string }>(
+        this.pool,
+        `SELECT pledge_id FROM pledges WHERE pledge_id = $1 AND user_id = $2 AND status IN ('active','paused')`,
+        [explicit, userId],
+      );
+      if (!own) throw new ApiError("UNPROCESSABLE", "That pledge is not yours or is no longer open");
+      return own.pledge_id;
+    }
+    if (scheduleId) {
+      const bound = await maybeOne<{ pledge_id: string | null }>(
+        this.pool, `SELECT pledge_id FROM giving_schedules WHERE schedule_id = $1`, [scheduleId],
+      );
+      return bound?.pledge_id ?? null;
+    }
+    return null;
+  }
 
   private static nextRun(from: Date, frequency: "weekly" | "monthly"): Date {
     const next = new Date(from);
@@ -810,12 +840,14 @@ export class FinancialService {
 
     // First charge on the next cycle boundary; give now if you want to give now.
     const firstRun = FinancialService.nextRun(new Date(), input.frequency);
+    // A schedule started for a pledge is bound to it (ownership checked).
+    const boundPledge = await this.resolvePledgeId(userId, input.pledge_id ?? null, null);
     const row = await one<{ schedule_id: string; next_run_at: string }>(
       this.pool,
-      `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key, pledge_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING schedule_id, next_run_at`,
-      [userId, fund.fund_id, input.amount_minor, input.currency.toUpperCase(), input.frequency, input.method, firstRun.toISOString(), key],
+      [userId, fund.fund_id, input.amount_minor, input.currency.toUpperCase(), input.frequency, input.method, firstRun.toISOString(), key, boundPledge],
     );
     await audit(this.pool, userId, "giving.schedule_created", "giving_schedules", row.schedule_id, {
       fund: input.fund,
@@ -823,6 +855,9 @@ export class FinancialService {
       frequency: input.frequency,
       method: input.method,
     });
+    if (boundPledge) {
+      await this.pool.query(`UPDATE pledges SET schedule_id = $1, updated_at = now() WHERE pledge_id = $2 AND schedule_id IS NULL`, [row.schedule_id, boundPledge]);
+    }
     return { schedule_id: row.schedule_id, status: "active", next_run_at: row.next_run_at, reused: false };
   }
 
