@@ -272,7 +272,7 @@ export class PartnersService {
 
     // "Charge me automatically": a schedule bound to this pledge.
     if (input.auto_schedule && input.shape === "monthly" && input.amount_minor) {
-      const fundCode = input.fund ?? (await this.campaignFundCode(input.campaign_id ?? null)) ?? DEFAULT_PLEDGE_FUND;
+      const fundCode = input.fund ?? (await this.campaignFundCode(input.campaign_id ?? null)) ?? (await this.fin.needFundCode(input.need_id ?? null)) ?? DEFAULT_PLEDGE_FUND;
       await this.fin.createSchedule(userId, {
         fund: fundCode,
         amount_minor: input.amount_minor,
@@ -634,9 +634,10 @@ export class PartnersService {
         return { claim_id: claimId, status: "rejected" };
       }
 
-      // The fund the money went to: the pledge's, its campaign's, or the programme default.
+      // The fund the money went to: the pledge's, its campaign's, its need's department's, or the programme default.
       let fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT f.fund_id, f.code FROM funds f WHERE f.fund_id = $1`, [p.fund_id]);
       if (!fund && p.campaign_id) fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT f.fund_id, f.code FROM campaigns cm JOIN funds f ON f.fund_id = cm.fund_id WHERE cm.campaign_id = $1`, [p.campaign_id]);
+      if (!fund && p.need_id) fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT f.fund_id, f.code FROM department_needs n JOIN departments d ON d.department_id = n.department_id JOIN funds f ON f.code = d.fund_code AND f.is_active WHERE n.need_id = $1`, [p.need_id]);
       if (!fund) fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT fund_id, code FROM funds WHERE code = $1 AND is_active`, [DEFAULT_PLEDGE_FUND]);
       if (!fund) fund = await one<{ fund_id: string; code: string }>(c, `SELECT fund_id, code FROM funds WHERE is_active ORDER BY code LIMIT 1`, []);
 

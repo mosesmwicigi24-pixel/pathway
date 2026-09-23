@@ -5,7 +5,7 @@ import {
   TrendingUp, MessageSquare, MessageSquareText, MessagesSquare, Video, Star, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
   Radio, SlidersVertical, ListMusic, UserCheck, UserRoundCheck, HeartHandshake, HeartPulse, Megaphone, QrCode, HandHeart,
-  Inbox,
+  HandHelping, Inbox,
   type LucideIcon,
 } from "lucide-react";
 
@@ -84,6 +84,11 @@ export const navGroups: NavGroup[] = [
       // as the ledger — finance:view to see, finance:manage to act. HandHeart
       // rather than HeartHandshake so it does not read as Discipleship Hub.
       { path: "/partners", label: "Partners", icon: HandHeart, permission: "finance:view" },
+      // Departments (docs/PARTNERS_PROGRAMME.md §4): where members serve, what a
+      // department posts, and its needs as giving targets. Its own `departments`
+      // module — departments:view to see, departments:manage to act. HandHelping:
+      // an offered hand, distinct from Partners (HandHeart) and the Hub.
+      { path: "/departments", label: "Departments", icon: HandHelping, permission: "departments:view" },
       { path: "/certificates", label: "Certificates", icon: Award, permission: "certificates:view" },
       { path: "/badges", label: "Badges", icon: Star, permission: "badges:view" },
     ],
@@ -200,6 +205,7 @@ export const pageTitles: Record<string, string> = {
   "/events": "Events & Attendance",
   "/finance": "Finance",
   "/partners": "Partners",
+  "/departments": "Departments",
   "/certificates": "Certificates & Badges",
   "/badges": "Badges Catalog",
   "/radio": "Radio Studio",

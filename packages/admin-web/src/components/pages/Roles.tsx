@@ -25,6 +25,8 @@ const PERM_MODULES: PermModule[] = [
   { id: "finance", label: "Finance", group: "Operations" },
   { id: "certificates", label: "Certificates", group: "Operations" },
   { id: "badges", label: "Badges", group: "Operations" },
+  // Departments (docs/PARTNERS_PROGRAMME.md §4): mirrors backend PERM_MODULES.
+  { id: "departments", label: "Departments (serving, posts & needs)", group: "Operations" },
   { id: "users", label: "Users", group: "System" },
   { id: "rolesAdmin", label: "Roles & Permissions", group: "System" },
   { id: "countries", label: "Countries", group: "System" },

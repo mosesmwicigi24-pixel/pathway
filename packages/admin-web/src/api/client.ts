@@ -2278,6 +2278,173 @@ export const PartnersApi = {
     api.post<{ claim_id: string; status: "rejected" }>(`/admin/partners/claims/${encodeURIComponent(claimId)}/reject`, {}).then((r) => r.data),
 };
 
+// ---- Departments (docs/PARTNERS_PROGRAMME.md §4; admin mirror under /admin) ----
+// Where members serve. The office (departments:view | departments:manage)
+// creates and archives departments, posts on a department's behalf, submits
+// needs, and works two queues: requests to serve and needs awaiting approval.
+// An APPROVED need is its own giving target (transactions.need_id /
+// pledges.need_id are written at giving time), so `raised_minor` is exact.
+// Wire shapes are snake_case exactly as the backend emits them; money is
+// integer minor units + ISO currency and every count comes from the server.
+export type DepartmentStatus = "active" | "archived";
+
+/** One row of GET /admin/departments — every count is server-computed. */
+export interface DepartmentRow {
+  department_id: string;
+  name: string;
+  purpose: string;
+  meets: string | null;
+  image_url: string | null;
+  /** funds.code the department's gifts land in (validated server-side). */
+  fund_code: string | null;
+  /** Free-form keys matched against members' top gifts ("a good fit for you"). */
+  gift_keys: string[];
+  is_open_to_join: boolean;
+  status: DepartmentStatus;
+  leader_user_id: string | null;
+  leader_name: string | null;
+  /** Active members. */
+  member_count: number;
+  /** Requests to serve still awaiting a decision. */
+  pending_requests: number;
+  /** Needs awaiting the office's approval. */
+  pending_needs: number;
+  /** Approved needs — giving is open. */
+  open_needs: number;
+  created_at: string;
+}
+
+/** Body of POST /admin/departments (all but `name` optional) and PATCH (partial + status). */
+export interface DepartmentUpsert {
+  name?: string;
+  purpose?: string;
+  leader_user_id?: string | null;
+  meets?: string | null;
+  image_url?: string | null;
+  fund_code?: string | null;
+  gift_keys?: string[];
+  is_open_to_join?: boolean;
+  status?: DepartmentStatus;
+}
+
+export interface DepartmentPost {
+  post_id: string;
+  body: string;
+  image_url: string | null;
+  created_at: string;
+  author_name?: string | null;
+  author_avatar?: string | null;
+}
+
+export interface DepartmentMemberRow {
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  role: "leader" | "member";
+}
+
+/**
+ * GET /departments/:id — the member-facing page (auth only; no admin mirror
+ * exists for reading posts). The console reads posts + active members from it.
+ * Active departments only: an archived one 404s, and the console says so.
+ */
+export interface DepartmentPage {
+  department_id: string;
+  name: string;
+  posts: DepartmentPost[];
+  members: DepartmentMemberRow[];
+}
+
+export type ServeRequestStatus = "requested" | "active" | "declined" | "left";
+
+/** One row of GET /admin/departments/serve-requests?status= */
+export interface ServeRequestRow {
+  department_id: string;
+  department: string;
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+  phone_number: string | null;
+  status: ServeRequestStatus;
+  role: "leader" | "member";
+  requested_at: string;
+  decided_at: string | null;
+}
+
+export type NeedStatus = "pending" | "approved" | "rejected" | "closed";
+
+/** One row of GET /admin/departments/needs?status= — `raised_minor` is exact (need_id attribution). */
+export interface DepartmentNeedRow {
+  need_id: string;
+  department_id: string;
+  department: string;
+  title: string;
+  why: string;
+  target_minor: number;
+  currency: string;
+  deadline: string | null;
+  status: NeedStatus;
+  created_at: string;
+  submitted_name: string;
+  raised_minor: number;
+}
+
+/** Body of POST /admin/departments/:id/needs. */
+export interface DepartmentNeedCreate {
+  title: string;
+  why: string;
+  target_minor: number;
+  currency: string;
+  deadline?: string | null;
+}
+
+/**
+ * The seven gift keys of the gifts assessment (backend growth/service.ts
+ * GIFT_AXES). The server accepts any key (a department may add its own, e.g.
+ * "music"); these are offered as presets so the "good fit" match lines up with
+ * what the assessment can actually produce.
+ */
+export const GIFT_KEYS = ["leadership", "teaching", "service", "mercy", "evangelism", "giving", "hospitality"] as const;
+
+export const DepartmentsApi = {
+  /** departments:view. Every department of the caller's congregation (all, when unscoped), archived last. */
+  list: () => api.get<{ data: DepartmentRow[] }>("/admin/departments").then((r) => r.data.data),
+  /** departments:manage. 404 = unknown fund_code. */
+  create: (body: DepartmentUpsert) => api.post<DepartmentRow>("/admin/departments", body).then((r) => r.data),
+  /** departments:manage. Partial; `status: "archived"` archives, `"active"` restores. */
+  update: (id: string, body: DepartmentUpsert) =>
+    api.patch<DepartmentRow>(`/admin/departments/${encodeURIComponent(id)}`, body).then((r) => r.data),
+  /** Member-facing read (auth only) — the only route that returns posts. 404 when archived. */
+  page: (id: string) => api.get<DepartmentPage>(`/departments/${encodeURIComponent(id)}`).then((r) => r.data),
+  /** departments:manage. Posts as the office; active members are nudged. */
+  createPost: (id: string, body: { body: string; image_url?: string | null }) =>
+    api.post<DepartmentPost>(`/admin/departments/${encodeURIComponent(id)}/posts`, body).then((r) => r.data),
+  /** departments:manage. Soft-delete. */
+  deletePost: (id: string, postId: string) =>
+    api.delete(`/admin/departments/${encodeURIComponent(id)}/posts/${encodeURIComponent(postId)}`).then(() => undefined),
+  /** departments:manage. Enters the needs queue as pending. */
+  createNeed: (id: string, body: DepartmentNeedCreate) =>
+    api.post<{ need_id: string; status: NeedStatus; created_at: string }>(`/admin/departments/${encodeURIComponent(id)}/needs`, body).then((r) => r.data),
+  /** departments:view. Oldest first. */
+  serveRequests: (status: ServeRequestStatus = "requested") =>
+    api.get<{ data: ServeRequestRow[] }>("/admin/departments/serve-requests", { params: { status } }).then((r) => r.data.data),
+  /** departments:manage. 404 = no pending request (decided elsewhere). The member is told. */
+  decideServe: (id: string, userId: string, decision: "approve" | "decline") =>
+    api
+      .post<{ status: ServeRequestStatus }>(`/admin/departments/${encodeURIComponent(id)}/serve-requests/${encodeURIComponent(userId)}/${decision}`, {})
+      .then((r) => r.data),
+  /** departments:view. Oldest first, with raised so far. */
+  needs: (status: NeedStatus = "pending") =>
+    api.get<{ data: DepartmentNeedRow[] }>("/admin/departments/needs", { params: { status } }).then((r) => r.data.data),
+  /**
+   * departments:manage. approve = giving opens (the department is told);
+   * reject = the submitter is told; close = only an approved need. 422 = already
+   * decided. `note` (≤ 300) is kept as the decision note and sent to the submitter.
+   */
+  decideNeed: (needId: string, decision: "approve" | "reject" | "close", note?: string | null) =>
+    api.post<{ status: NeedStatus }>(`/admin/departments/needs/${encodeURIComponent(needId)}/${decision}`, { note: note ?? null }).then((r) => r.data),
+};
+
 // ---- Video Library (W2; Features v2 §V) ----
 export type MediaStatus = "uploading" | "transcoding" | "ready" | "failed";
 // cloudinary = hosted/transcoded; the rest are externally-hosted, best-effort gated.

@@ -32,6 +32,7 @@ import { EventsHub } from "./components/events/EventsHub";
 import { SeriesCommandCenter } from "./components/events/SeriesCommandCenter";
 import { Finance } from "./components/pages/Finance";
 import { Partners } from "./components/pages/Partners";
+import { Departments } from "./components/pages/Departments";
 import { Certificates } from "./components/pages/Certificates";
 import { Badges } from "./components/pages/Badges";
 import { MemberProfile } from "./components/pages/MemberProfile";
@@ -128,6 +129,7 @@ const router = createBrowserRouter([
       { path: "events/series/:id", element: <Guarded><SeriesCommandCenter /></Guarded> },
       { path: "finance", element: <Guarded><Finance /></Guarded> },
       { path: "partners", element: <Guarded><Partners /></Guarded> },
+      { path: "departments", element: <Guarded><Departments /></Guarded> },
       { path: "certificates", element: <Guarded><Certificates /></Guarded> },
       { path: "badges", element: <Guarded><Badges /></Guarded> },
       { path: "radio", element: <Guarded><RadioStudio /></Guarded> },
