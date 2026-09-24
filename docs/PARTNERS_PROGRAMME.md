@@ -78,6 +78,39 @@ technical spec where they apply.
   twice. Logged in `pledge_reminders` with `sent_by`.
 - `pledge_fulfilled`: a thank-you the moment a total pledge completes.
 
+## 3a. Member UI v2 — Give header + Partners screen (owner-approved 2026-09-24)
+
+Both apps, one rule each; the portal drawer follows the same vocabulary later.
+
+- **One header band.** The Give tab paints ONE cream band: a full-width
+  two-segment control (GIVE | PARTNERS, uppercase, selected half navy with gold
+  text, no icons) as the first row, then the segment's own title. Give: "Sow
+  into the Kingdom" + "Generosity is worship — a quiet, joyful act." + the year
+  pill ("KSh N given this year", tap → statement) with an eye button that masks
+  the amount ("KSh ••••"), persisted per device (`give.hideYearTotal`, default
+  visible). Partners: "Walk with the church" + "Decide in advance. The church
+  can plan." Nothing else in the band. No "GIVE"/"PARTNERS" eyebrows.
+- **Button roles.** Gold fill + navy text = the ONE primary action on a screen
+  ("Make a pledge", "Join the programme"). Navy fill + white = money actions
+  ("Pay", "Resume"). Navy outline = secondary ("Statement"). Chips carry state
+  only: green On track / Fulfilled, gold Behind, grey Paused.
+- **Partners screen order.** Standing card (partner since · kept · tier chip ·
+  Make a pledge + Statement) → DUE rows (only when due) → MY PLEDGES cards
+  (title, state chip, target line, gold progress bar, "N of M kept this year"
+  or "paid · to go", next due) → STATEMENT (year chips; Pledged / Paid /
+  Remaining; pledge-tied payments only; Full statement and PDF link).
+  "Your rhythm" moves to the Give segment under the amount field (one row,
+  only when a schedule exists); "Since you began" leaves the Partners tab;
+  no explanatory paragraphs anywhere on the tab.
+- **Partner-only statement rule (both clients, from server facts):**
+  Paid = Σ statement `payments[].amount_minor` where `pledge_id` is set.
+  Pledged = Σ over pledges not cancelled: monthly → `amount_minor` × number of
+  `due_day` dates in that year from max(pledge `created_at`, 1 Jan) through
+  31 Dec; total → `target_minor` if `due_on` falls in that year, else 0.
+  Remaining = max(Pledged − Paid, 0). Gifts without a pledge are never shown
+  on the Partners tab (they stay in the full statement). If the server ever
+  exposes these totals, it must implement exactly this rule.
+
 ## 4. Departments
 
 - `departments` (congregation, name, purpose, leader_user_id, meets, photo,
