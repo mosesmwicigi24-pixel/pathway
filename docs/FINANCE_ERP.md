@@ -102,6 +102,26 @@ Postings (every one balanced: one debit, one credit, same amount + currency):
   refunds are out of scope). Approved expenses are voided by a reversing
   journal; recorded-but-unapproved expenses are simply voided.
 
+### 2a. Dates and bases (so every page foots)
+- Every ledger leg carries the **economic date** of what it records, in
+  `ledger_entries.created_at`: an office gift at its received date (12:00
+  EAT); a reversal at the date of the gift it corrects (a correction restates
+  the day it corrects, so Sunday's takings stay right); expense legs and their
+  void at `spent_on`; a transfer at `occurred_on`. When a row was actually
+  entered lives on the owning row (`reversed_at`, `approved_at`, `voided_at`,
+  `journals.created_at`) and in the audit log.
+- Transaction-based views (Overview income, Transactions, Reports income,
+  Statements, Pledges, budget income actuals, campaign raised) bucket by
+  `transactions.created_at` in Africa/Nairobi — the basis the member
+  statements already use — counting `succeeded` rows only.
+- Ledger-based views (Ledger, Trial balance, fund movements, daily settlement)
+  bucket by `ledger_entries.created_at` in Africa/Nairobi.
+- Expense views bucket by `expenses.spent_on`.
+- Online gifts post at settlement time while their transaction is dated at
+  initiation; the two differ by seconds (M-Pesa) to minutes (card), so only a
+  gift started before midnight at a month end and settled after it can sit in
+  different months on the two kinds of view. All-time totals always agree.
+
 ## 3. Data model (migration 216, additive)
 - `ledger_entries`: `transaction_id` DROP NOT NULL; ADD `journal_id uuid`
   REFERENCES journals; CHECK `num_nonnulls(transaction_id, journal_id) = 1`;
