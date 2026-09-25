@@ -110,6 +110,11 @@ Both apps, one rule each; the portal drawer follows the same vocabulary later.
   Remaining = max(Pledged − Paid, 0). Gifts without a pledge are never shown
   on the Partners tab (they stay in the full statement). If the server ever
   exposes these totals, it must implement exactly this rule.
+  **The server does (2026-09-25, §3c):** the rule lives in
+  `packages/backend/src/modules/financial/partnerStatementMath.ts`, pinned by
+  `test/partners-statement.test.ts` with the same cases as Android's
+  `PartnerStatementMathTest`; per pledge it also reports `kept` (payments this
+  year, a raw count) and `due_count` (due dates elapsed through today).
 
 ## 3b. Pledge names + server-routed pledge money (owner-approved 2026-09-25)
 
@@ -136,6 +141,25 @@ Both apps, one rule each; the portal drawer follows the same vocabulary later.
   idempotent replay). Clients render "Enter your PIN to complete KSh 1,000
   toward your <title> pledge." or "… to <fund name>", and fall back to the
   chip label only when the result carries no fund.
+
+## 3c. Two statements, not one (owner-approved 2026-09-25)
+
+- **Partners statement** — the partnership only. Screen + PDF
+  (`GET /giving/partners/statement.pdf?year=`; 404 for a member who never
+  partnered): standing (partner since · tier), Pledged / Paid / Remaining for
+  the year (the §3a rule, now also computed server-side and returned on
+  `GET /giving/statements` as `pledged_minor`, `paid_minor`, `remaining_minor`
+  with a per-pledge `pledges[]` breakdown — clients prefer the server's numbers
+  and fall back to local math on older servers), one row per pledge, and
+  pledge-tied payments by month with subtotals and a year total. Gifts outside a
+  pledge never appear here.
+- **Giving statement** — the complete record (every gift, every fund), as
+  before, with pledge payments tagged "<pledge> pledge" (history rows carry
+  `pledge_id` / `pledge_title`).
+- **Wiring.** On the Partners tab, "Statement" and "Partners statement and
+  PDF" open the Partners statement; a "Giving statement" button on that screen
+  keeps the complete record one tap away. The Give tab's "View statement" is
+  unchanged.
 
 ## 4. Departments
 
@@ -182,7 +206,10 @@ Both apps, one rule each; the portal drawer follows the same vocabulary later.
 - `POST /giving/pledges/:id/claims` `{amount_minor, paid_on, note}` → claim
 - `POST /giving/intents` gains optional `pledge_id`, `cover_fee`
 - `POST /giving/schedules` gains optional `pledge_id`
-- `GET /giving/statements?year=` → by year/by pledge summary (JSON; PDF stays)
+- `GET /giving/statements?year=` → by year/by pledge summary + the §3a partner
+  view (`pledged_minor`, `paid_minor`, `remaining_minor`, `pledges[]`)
+- `GET /giving/partners/statement.pdf?year=` → the partner-only PDF (§3a);
+  `GET /giving/statement.pdf` stays the full Give statement
 - Departments (member): `GET /departments` (fit, my_status, counts, latest
   post), `GET /me/departments`, `GET /departments/:id` (posts, members,
   needs with raised/percent), `POST|DELETE /departments/:id/serve`. Leader

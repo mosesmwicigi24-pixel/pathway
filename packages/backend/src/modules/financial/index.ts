@@ -1,6 +1,6 @@
 // Module: financial (spec §1.5, §1.10, §3.5, §5.6)
 // Owns: giving, Stripe orchestration, the double-entry ledger, idempotent webhooks.
-import express, { Router } from "express";
+import express, { Router, type Request } from "express";
 import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
 import { authenticate, requirePermission } from "../../http/auth.js";
@@ -17,6 +17,17 @@ import { verifyAccessToken } from "../identity/tokens.js";
 import { ApiError } from "../../http/errors.js";
 
 export const financialRouter: Router = Router();
+
+/** The access token for a download route. These PDFs are opened via the OS
+ *  browser/viewer (Linking.openURL), which cannot attach a bearer header, so
+ *  they accept a `?token=` access JWT beside the Authorization header. */
+function accessTokenOf(req: Request): string {
+  const header = req.header("authorization");
+  const bearer = header?.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : null;
+  const token = bearer ?? (typeof req.query.token === "string" ? req.query.token : null);
+  if (!token) throw new ApiError("AUTH_REQUIRED", "Access token required");
+  return token;
+}
 
 export function registerFinancial(
   ctx: AppContext,
@@ -76,14 +87,27 @@ export function registerFinancial(
   r.get(
     "/giving/statement.pdf",
     handler(async (req, res) => {
-      const header = req.header("authorization");
-      const bearer = header?.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : null;
-      const token = bearer ?? (typeof req.query.token === "string" ? req.query.token : null);
-      if (!token) throw new ApiError("AUTH_REQUIRED", "Access token required");
-      const claims = verifyAccessToken(ctx.env, token);
+      const claims = verifyAccessToken(ctx.env, accessTokenOf(req));
       const pdf = await svc.statementPdf(claims.sub);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", 'attachment; filename="nuru-giving-statement.pdf"');
+      res.send(pdf);
+    }),
+  );
+
+  // The Partners statement for one year as a PDF (docs/PARTNERS_PROGRAMME.md
+  // §3a): Pledged / Paid / Remaining, a block per pledge, then the pledge-tied
+  // payments by month. Gifts outside a pledge are the giving statement's.
+  // Same `?token=` fallback; default year = the current Nairobi year; 404 for
+  // a member who has never been a partner.
+  r.get(
+    "/giving/partners/statement.pdf",
+    handler(async (req, res) => {
+      const claims = verifyAccessToken(ctx.env, accessTokenOf(req));
+      const q = parseBody(z.object({ year: z.coerce.number().int().min(2000).max(2999).optional() }), req.query);
+      const { year, pdf } = await partners.partnersStatementPdf(claims.sub, q.year);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="nuru-partners-statement-${year}.pdf"`);
       res.send(pdf);
     }),
   );
@@ -94,11 +118,7 @@ export function registerFinancial(
     "/giving/transactions/:id/receipt.pdf",
     handler(async (req, res) => {
       const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
-      const header = req.header("authorization");
-      const bearer = header?.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : null;
-      const token = bearer ?? (typeof req.query.token === "string" ? req.query.token : null);
-      if (!token) throw new ApiError("AUTH_REQUIRED", "Access token required");
-      const claims = verifyAccessToken(ctx.env, token);
+      const claims = verifyAccessToken(ctx.env, accessTokenOf(req));
       const pdf = await svc.receiptPdf(claims.sub, id);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", 'attachment; filename="nuru-giving-receipt.pdf"');

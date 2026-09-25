@@ -2934,11 +2934,21 @@ paths:
   /giving/statements:
     get:
       tags: [giving]
-      summary: Member. Giving statement for a year — totals by pledge and by fund, every payment.
+      summary: Member. Giving statement for a year — totals by pledge and by fund, every payment — plus the partner view (Pledged / Paid / Remaining and a row per pledge) derived server-side by the §3a rule.
+      description: >
+        Every succeeded gift in the year is in `payments[]` (the Give statement
+        reads them all); the partner figures count only the rows with a
+        `pledge_id`, by the rule in docs/PARTNERS_PROGRAMME.md §3a, so no client
+        ever has to derive them. The partner-only PDF is
+        `/giving/partners/statement.pdf`.
       parameters:
-        - { in: query, name: year, required: false, schema: { type: integer } }
+        - { in: query, name: year, required: false, schema: { type: integer }, description: "Default: the latest year with a succeeded gift, else the current Nairobi year" }
       responses:
-        "200": { description: Statement }
+        "200":
+          description: Statement
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PartnerStatement" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /admin/partners:
     get:
@@ -3262,6 +3272,30 @@ paths:
             application/pdf:
               schema: { type: string, format: binary }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /giving/partners/statement.pdf:
+    get:
+      tags: [giving]
+      summary: The caller's Partners statement for one year as a downloadable PDF — Pledged / Paid / Remaining, a block per pledge, the pledge-tied payments by month. Gifts outside a pledge are not on it (they are the giving statement's).
+      description: >
+        Separate from `/giving/statement.pdf` (owner, 2026-09-25: partners and
+        Give statements are separate documents). Rendered server-side and
+        opened in the OS browser/viewer, so it accepts the access token either
+        as a Bearer header or a `token` query parameter (the browser can't
+        attach an Authorization header). Default year is the current Nairobi
+        year. Content-Disposition names the file
+        `nuru-partners-statement-<year>.pdf`. The numbers are the same
+        `/giving/statements` reports for that year.
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 } }
+        - { name: token, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: PDF document
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: "NOT_FOUND: the member has never been a partner (no programme membership, no pledge, never a recurring gift)" }
   /products:
     get:
       tags: [giving]
@@ -9198,6 +9232,83 @@ components:
         note: { type: [string, "null"] }
         title: { type: string, description: "What to show: custom_title when set, else derived (campaign title → fund name → \"A department need\" → \"Partnership\")." }
         custom_title: { type: [string, "null"], description: "The member's own name for the pledge, or null when they never gave one" }
+    StatementPayment:
+      type: object
+      description: One succeeded gift in the statement's year — pledge-tied or not. The Give statement lists them all; the Partners view keeps only the rows with a pledge_id.
+      required: [transaction_id, amount_minor, currency, at, receipt_code, fund, fund_name, method, pledge_id, pledge_title]
+      properties:
+        transaction_id: { type: string, format: uuid }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        at: { type: string, description: When the gift was made (timestamp) }
+        receipt_code: { type: [string, "null"] }
+        fund: { type: string, description: "The fund the gift landed in (code)" }
+        fund_name: { type: string }
+        method: { type: string, description: "card | mpesa | airtel | paypal | manual — provider 'stripe' reads as 'card'; not a closed enum" }
+        pledge_id: { type: [string, "null"], format: uuid, description: The pledge this gift counted toward; null off-pledge }
+        pledge_title: { type: [string, "null"], description: "That pledge's title under the words its card shows; null off-pledge" }
+    PartnerStatementPledge:
+      type: object
+      description: One pledge on the year's statement — its terms, plus what the §3a rule says it pledged and received in that year.
+      required: [pledge_id, title, shape, amount_minor, target_minor, currency, status, due_day, due_on, created_at, pledged_minor, paid_minor, kept, due_count]
+      properties:
+        pledge_id: { type: string, format: uuid }
+        title: { type: string, description: "custom_title when set, else the derived title — the same words the pledge card shows" }
+        shape: { type: string, enum: [monthly, total] }
+        amount_minor: { type: [integer, "null"], format: int64, description: Monthly instalment (monthly only) }
+        target_minor: { type: [integer, "null"], format: int64, description: The total promised (total only) }
+        currency: { type: string }
+        status: { type: string, enum: [active, paused, fulfilled, cancelled] }
+        due_day: { type: [integer, "null"], description: "1–28; meaningful for a monthly pledge only (a total pledge carries the stored default, as on Pledge)" }
+        due_on: { type: [string, "null"], format: date, description: (total only) }
+        created_at: { type: string }
+        pledged_minor: { type: integer, format: int64, description: "This pledge's share of the year's Pledged: monthly → amount_minor × its due_day dates in the year from max(created_at, 1 Jan) through 31 Dec; total → target_minor when due_on falls in the year, else 0; cancelled → 0" }
+        paid_minor: { type: integer, format: int64, description: Σ this year's payments attributed to this pledge }
+        kept: { type: integer, description: "How many of this year's payments were attributed to this pledge — a raw count (an early or doubled gift is still a gift kept)" }
+        due_count: { type: integer, description: "Monthly: its due dates in the year elapsed through today (0 for a year still ahead, all of them for a year gone by) — the M in \"N of M kept\"; total: 0" }
+    PartnerStatement:
+      type: object
+      description: >-
+        GET /giving/statements — the giving statement for one year (every
+        succeeded gift, by pledge and by fund) plus the partner view derived
+        server-side by the rule in docs/PARTNERS_PROGRAMME.md §3a. The numbers
+        foot: Σ pledges[].pledged_minor = pledged_minor and Σ pledges[].paid_minor
+        = paid_minor.
+      required: [years, year, total_minor, currency, pledged_minor, paid_minor, remaining_minor, by_pledge, by_fund, pledges, payments]
+      properties:
+        years: { type: array, items: { type: integer }, description: "Years with a succeeded gift, newest first" }
+        year: { type: integer }
+        total_minor: { type: integer, format: int64, description: "Every succeeded gift in the year, pledge-tied or not" }
+        currency: { type: string }
+        pledged_minor: { type: integer, format: int64, description: "Σ over pledges not cancelled: monthly → amount_minor × due_day dates in the year from max(created_at, 1 Jan) through 31 Dec; total → target_minor if due_on falls in the year" }
+        paid_minor: { type: integer, format: int64, description: "Σ payments[].amount_minor where pledge_id is set" }
+        remaining_minor: { type: integer, format: int64, description: "max(pledged_minor − paid_minor, 0)" }
+        by_pledge:
+          type: array
+          items:
+            type: object
+            required: [pledge_id, title, total_minor]
+            properties:
+              pledge_id: { type: [string, "null"], format: uuid, description: "null for the \"Gifts outside a pledge\" row" }
+              title: { type: string }
+              total_minor: { type: integer, format: int64 }
+        by_fund:
+          type: array
+          items:
+            type: object
+            required: [code, name, total_minor]
+            properties:
+              code: { type: string }
+              name: { type: string }
+              total_minor: { type: integer, format: int64 }
+        pledges:
+          type: array
+          description: Every pledge not cancelled, plus any cancelled pledge that still received a payment this year (so every pledge-tied payment has a row); newest first.
+          items: { $ref: "#/components/schemas/PartnerStatementPledge" }
+        payments:
+          type: array
+          description: Every succeeded gift in the year, newest first.
+          items: { $ref: "#/components/schemas/StatementPayment" }
         created_at: { type: string }
     DepartmentUpsert:
       type: object
@@ -9699,15 +9810,19 @@ components:
         idempotency_key: { type: string, minLength: 8, maxLength: 255 }
     GivingRecord:
       type: object
-      required: [transaction_id, amount_minor, currency, status]
+      required: [transaction_id, amount_minor, currency, status, pledge_id, pledge_title]
       properties:
         transaction_id: { type: string, format: uuid }
         amount_minor: { type: integer, format: int64 }
         currency: { type: string }
         status: { type: string }
         fund: { type: [string, "null"] }
+        method: { type: string, description: "card | mpesa | airtel | paypal | manual — provider 'stripe' reads as 'card'. Not a closed enum: a provider added later arrives as its raw key." }
+        provider_ref: { type: [string, "null"], description: "Mobile-money checkout reference, else the Stripe payment-intent id" }
         receipt_code: { type: [string, "null"], description: M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL); null for older or non-mobile-money gifts }
         account_name: { type: [string, "null"], description: "Named giving: the member's own label for this gift, as entered; null when not used" }
+        pledge_id: { type: [string, "null"], format: uuid, description: The pledge this gift counted toward; null for a gift outside a pledge }
+        pledge_title: { type: [string, "null"], description: "That pledge's title under the words its card shows (the member's own name for it, else the derived one) — so the Give statement can label pledge payments; null off-pledge" }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
 
