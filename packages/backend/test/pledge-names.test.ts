@@ -94,8 +94,11 @@ describe("pledge names + pledge money routing", () => {
     const got = await partners.getPledge(user, String(created.pledge_id));
     expect(got.title).toBe("School fees for Amani");
     expect(got.custom_title).toBe("School fees for Amani");
-    // The DUE list on the partnership payload carries the same words.
-    const due = (await partners.partnership(user)).due as { id: string; title: string }[];
+    // The DUE list on the partnership payload carries the same words. (A
+    // monthly pledge is listed when its next instalment is overdue, due today
+    // or due within the week — pin the clock so it is: first due 15 Jan, unpaid.)
+    await testPool().query(`UPDATE pledges SET created_at = '2026-01-01 08:00:00+00' WHERE pledge_id = $1`, [created.pledge_id]);
+    const due = (await partners.partnership(user, new Date("2026-09-14T09:00:00Z"))).due as { id: string; title: string }[];
     expect(due.find((d) => d.id === created.pledge_id)?.title).toBe("School fees for Amani");
 
     // null clears it → the derived name (the fund's) returns.
@@ -110,7 +113,7 @@ describe("pledge names + pledge money routing", () => {
     expect(untouched.custom_title).toBe("Amani");
     // A pledge that was never named derives as before.
     const unnamed = await partners.createPledge(user, { shape: "total", target_minor: 10_000, currency: "KES", due_on: "2099-01-01", reminders_enabled: true });
-    expect(unnamed.title).toBe("Partnership");
+    expect(unnamed.title).toBe("General partnership");
     expect(unnamed.custom_title).toBeNull();
   });
 
