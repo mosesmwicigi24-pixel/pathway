@@ -2682,6 +2682,7 @@ paths:
         "200": { description: Cancelled }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  # ── Finance ERP · reports (overview, registers, ledger, reconciliation, reports, statements) — docs/FINANCE_ERP.md §4. Add paths below this line. ──
   /admin/campaigns:
     get:
       tags: [financial]
@@ -4771,6 +4772,7 @@ paths:
         "200": { description: Revoked }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  # ── Finance ERP · books (writes, expenses, budgets, funds admin) — docs/FINANCE_ERP.md §4. Add paths below this line. ──
   /admin/finance/summary:
     get:
       tags: [giving]
@@ -9231,6 +9233,7 @@ components:
           type: array
           description: "Ordered: general, then active funds by name, then campaigns live today in the member's congregation, then that congregation's approved department needs."
           items: { $ref: "#/components/schemas/PledgeOption" }
+    # ── Finance ERP · books schemas — add below this line. ──
     Pledge:
       type: object
       required: [pledge_id, shape, currency, status, progress, title, custom_title, pays_to]
@@ -9958,6 +9961,7 @@ components:
         frequency: { type: string, enum: [weekly, monthly] }
         method: { type: string, enum: [card, mpesa, airtel], default: card }
         idempotency_key: { type: string, minLength: 8, maxLength: 255 }
+    # ── Finance ERP · reports schemas — add below this line. ──
     GivingRecord:
       type: object
       required: [transaction_id, amount_minor, currency, status, pledge_id, pledge_title, need_id]
