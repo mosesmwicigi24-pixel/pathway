@@ -25,6 +25,22 @@ export const API_ERROR_CODES = {
   RATE_LIMITED: 429,
   INTERNAL: 500,
   UPSTREAM_UNAVAILABLE: 503,
+  // Finance books (docs/FINANCE_ERP.md §2, §4) — named so a client can tell
+  // the office exactly what to do, not just that something failed.
+  /** That M-Pesa code is already on a succeeded transaction (online or office). */
+  DUPLICATE_RECEIPT: 409,
+  /** The payment reference is not in the shape its channel requires (e.g. an M-Pesa code). */
+  INVALID_REFERENCE: 422,
+  /** A money date outside the books' window: after today, or more than 366 days ago (EAT). */
+  INVALID_DATE: 422,
+  /** A gift's currency differs from the pledge's or need's currency it counts toward. */
+  CURRENCY_MISMATCH: 422,
+  /** Only an office gift / manual claim that succeeded can be reversed here. */
+  NOT_REVERSIBLE: 422,
+  /** The transaction was reversed already — reversing twice is refused. */
+  ALREADY_REVERSED: 422,
+  /** Maker-checker: the person who recorded or edited an expense cannot approve it. */
+  SAME_PERSON: 403,
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERROR_CODES;
