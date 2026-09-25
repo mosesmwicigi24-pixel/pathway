@@ -97,6 +97,19 @@ export interface PledgeProgress {
   overdue_since: string | null;
 }
 
+/** What progressDetail knows beyond the wire `progress`: what the next due
+ *  date asks for (`owed_minor` — the uncovered part of the earliest
+ *  incomplete instalment; a total pledge's target − paid) and the arrears as
+ *  of today — Σ uncovered of every incomplete instalment due on or before
+ *  today (the catch-up amount), how many of those are overdue (their day has
+ *  ended) and since when. */
+interface ProgressDetail {
+  progress: PledgeProgress;
+  owed_minor: number | null;
+  arrears: { owed_by_today_minor: number; overdue_count: number; overdue_since: string | null };
+}
+const NO_ARREARS: ProgressDetail["arrears"] = { owed_by_today_minor: 0, overdue_count: 0, overdue_since: null };
+
 /** Start of a Nairobi calendar date, as an instant. (`nairobiDate` — the
  *  inverse — lives in partnerStatementMath.ts so there is ONE church calendar.) */
 function nairobiStart(ymd: string): Date {
@@ -358,23 +371,32 @@ export class PartnersService {
    *  unchanged. Paused / cancelled read "paused" with nothing due (pause
    *  history is not recorded — a known limit: past due dates of a pledge that
    *  was paused for a while are still evaluated once it is active again). */
-  private async progressDetail(p: PledgeRow, now: Date = new Date()): Promise<{ progress: PledgeProgress; owed_minor: number | null }> {
+  private async progressDetail(p: PledgeRow, now: Date = new Date()): Promise<ProgressDetail> {
     const today = nairobiDate(now);
     if (p.shape === "monthly") {
       const history = await this.pledgeHistoryWhere(`t.pledge_id = $1`, [p.pledge_id]);
       const paid = history.reduce((a, x) => a + x.amount_minor, 0);
       if (p.status === "paused" || p.status === "cancelled") {
-        return { progress: { paid_minor: paid, period_paid_minor: null, label: "paused", next_due: null, overdue_since: null }, owed_minor: null };
+        return { progress: { paid_minor: paid, period_paid_minor: null, label: "paused", next_due: null, overdue_since: null }, owed_minor: null, arrears: NO_ARREARS };
       }
       const ledger = allocateInstalments(PartnersService.statementInput(p), history, today);
       const thisMonth = ledger.find((i) => i.due.slice(0, 7) === today.slice(0, 7));
       const periodPaid = thisMonth?.covered_minor ?? 0;
       if (p.until_on && today > p.until_on) {
-        return { progress: { paid_minor: paid, period_paid_minor: periodPaid, label: "fulfilled", next_due: null, overdue_since: null }, owed_minor: null };
+        return { progress: { paid_minor: paid, period_paid_minor: periodPaid, label: "fulfilled", next_due: null, overdue_since: null }, owed_minor: null, arrears: NO_ARREARS };
       }
       const next = ledger.find((i) => i.completed_on === null) ?? null;
       const missed = ledger.find((i) => i.status === "missed") ?? null;
+      // Everything owed by today: every incomplete instalment due on or before
+      // it (the oldest may be part-covered — the ledger fills oldest-first).
+      const owedByToday = ledger.filter((i) => i.completed_on === null && i.due <= today);
+      const overdue = owedByToday.filter((i) => i.due < today);
       return {
+        arrears: {
+          owed_by_today_minor: owedByToday.reduce((a, i) => a + (i.amount_minor - i.covered_minor), 0),
+          overdue_count: overdue.length,
+          overdue_since: overdue[0]?.due ?? null,
+        },
         progress: {
           paid_minor: paid,
           period_paid_minor: periodPaid,
@@ -388,16 +410,23 @@ export class PartnersService {
 
     const paid = await this.paidBetween(p.pledge_id, null, null);
     if (p.status === "paused" || p.status === "cancelled") {
-      return { progress: { paid_minor: paid, period_paid_minor: null, label: "paused", next_due: null, overdue_since: null }, owed_minor: null };
+      return { progress: { paid_minor: paid, period_paid_minor: null, label: "paused", next_due: null, overdue_since: null }, owed_minor: null, arrears: NO_ARREARS };
     }
     const target = Number(p.target_minor ?? 0);
     if (p.status === "fulfilled" || paid >= target) {
-      return { progress: { paid_minor: paid, period_paid_minor: null, label: "fulfilled", next_due: null, overdue_since: null }, owed_minor: null };
+      return { progress: { paid_minor: paid, period_paid_minor: null, label: "fulfilled", next_due: null, overdue_since: null }, owed_minor: null, arrears: NO_ARREARS };
     }
+    // A total pledge is one instalment: the rest of the target, due on due_on.
     const behind = p.due_on !== null && today > p.due_on;
+    const owed = Math.max(0, target - paid);
     return {
       progress: { paid_minor: paid, period_paid_minor: null, label: behind ? "behind" : "on_track", next_due: p.due_on, overdue_since: behind ? p.due_on : null },
-      owed_minor: Math.max(0, target - paid),
+      owed_minor: owed,
+      arrears: {
+        owed_by_today_minor: p.due_on !== null && p.due_on <= today ? owed : 0,
+        overdue_count: behind ? 1 : 0,
+        overdue_since: behind ? p.due_on : null,
+      },
     };
   }
 
@@ -629,14 +658,23 @@ export class PartnersService {
     const pledges: Record<string, unknown>[] = [];
     const due: Record<string, unknown>[] = [];
     for (const r of await this.pledgeRows(this.pool, `WHERE p.user_id = $1 AND p.status <> 'cancelled'`, [userId])) {
-      const { progress: pr, owed_minor } = await this.progressDetail(r, now);
+      const { progress: pr, owed_minor, arrears } = await this.progressDetail(r, now);
       const shaped = this.shapeRow(r, pr);
       pledges.push(shaped);
       if (r.status !== "active" || !pr.next_due) continue;
-      if (r.shape === "monthly" && pr.next_due > window) continue;
+      // Overdue or due today → the row asks for the whole catch-up (every
+      // incomplete instalment due by today, so one payment brings the member
+      // level); otherwise the next instalment, within the week, as before.
+      const dueNow = pr.next_due <= today;
+      if (r.shape === "monthly" && !dueNow && pr.next_due > window) continue;
       due.push({
-        kind: "pledge", id: r.pledge_id, title: shaped.title, amount_minor: owed_minor, currency: r.currency, due_on: pr.next_due,
-        action: "pay", overdue: pr.overdue_since !== null, pays_to: shaped.pays_to,
+        kind: "pledge", id: r.pledge_id, title: shaped.title, currency: r.currency,
+        amount_minor: dueNow ? arrears.owed_by_today_minor : owed_minor,
+        due_on: pr.next_due,
+        action: "pay", overdue: arrears.overdue_count > 0,
+        overdue_count: arrears.overdue_count,
+        overdue_since: arrears.overdue_since,
+        pays_to: shaped.pays_to,
         // A payment toward it still in its checkout window: clients show
         // "Processing" instead of Pay while this covers amount_minor.
         pending_minor: inFlight.get(r.pledge_id) ?? 0,

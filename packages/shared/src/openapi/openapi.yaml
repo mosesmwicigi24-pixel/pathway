@@ -9203,10 +9203,14 @@ components:
             Sorted by due_on. `title` is the pledge's title (custom name when
             set). A MONTHLY pledge is listed only when its earliest incomplete
             instalment is overdue, due today, or due within the next 7 days
-            (EAT), with amount_minor = what is still uncovered on that
-            instalment (a partial payment reduces it) — so a pledge the member
-            has just paid leaves the list. A total pledge is listed until
-            fulfilled, for target − paid. The recurring-gift row is unchanged.
+            (EAT) — so a pledge the member has just paid leaves the list. When
+            it is overdue or due today, amount_minor is the CATCH-UP: Σ what is
+            still uncovered on every incomplete instalment due on or before
+            today (one payment brings the member level; a smaller one settles
+            the oldest first), due_on the earliest of them. Otherwise it is the
+            next instalment's uncovered remainder. A total pledge is listed
+            until fulfilled, for target − paid. The recurring-gift row is
+            unchanged.
           items:
             type: object
             required: [kind, id, title, currency, due_on, action, overdue]
@@ -9214,11 +9218,13 @@ components:
               kind: { type: string, enum: [pledge, schedule] }
               id: { type: string, format: uuid }
               title: { type: string }
-              amount_minor: { type: [integer, "null"], format: int64 }
+              amount_minor: { type: [integer, "null"], format: int64, description: "kind pledge: overdue or due today → the catch-up (Σ uncovered of every incomplete instalment due on or before today); else the next instalment's uncovered remainder; a total pledge → target − paid" }
               currency: { type: string }
               due_on: { type: string, format: date }
               action: { type: string, enum: [pay, resume] }
-              overdue: { type: boolean }
+              overdue: { type: boolean, description: "overdue_count > 0 (schedule rows: false)" }
+              overdue_count: { type: integer, description: "kind pledge only — incomplete instalments whose due date's day has ended (a total pledge past due_on: 1); 0 when nothing is overdue" }
+              overdue_since: { type: [string, "null"], format: date, description: "kind pledge only — the earliest of those overdue due dates; null when overdue_count is 0" }
               pays_to: { $ref: "#/components/schemas/PledgePaysTo", description: "kind pledge only — where the money will be booked" }
               pending_minor: { type: integer, format: int64, description: "kind pledge only — Σ amount of THIS pledge's payments still processing or requiring action that were started in the last 15 minutes (the STK push / checkout window; deliberately shorter than the statement's 48 h pending[], so an abandoned checkout never blocks paying another way). 0 when none. Clients show \"Processing\" instead of Pay while pending_minor ≥ amount_minor." }
         pledge_options:
@@ -9954,7 +9960,7 @@ components:
         idempotency_key: { type: string, minLength: 8, maxLength: 255 }
     GivingRecord:
       type: object
-      required: [transaction_id, amount_minor, currency, status, pledge_id, pledge_title]
+      required: [transaction_id, amount_minor, currency, status, pledge_id, pledge_title, need_id]
       properties:
         transaction_id: { type: string, format: uuid }
         amount_minor: { type: integer, format: int64 }
@@ -9967,6 +9973,7 @@ components:
         account_name: { type: [string, "null"], description: "Named giving: the member's own label for this gift, as entered; null when not used" }
         pledge_id: { type: [string, "null"], format: uuid, description: The pledge this gift counted toward; null for a gift outside a pledge }
         pledge_title: { type: [string, "null"], description: "That pledge's title under the words its card shows (the member's own name for it, else the derived one) — so the Give statement can label pledge payments; null off-pledge" }
+        need_id: { type: [string, "null"], format: uuid, description: "The department need this gift was given to (\"Give to this need\"); null otherwise. With pledge_id, what the apps' \"Repeat last gift\" checks to skip pledge and need gifts." }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
 

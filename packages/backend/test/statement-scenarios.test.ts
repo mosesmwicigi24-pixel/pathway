@@ -485,4 +485,34 @@ describe("the member's statement right after money moves (real paths, no cache)"
     expect(await row()).toBeUndefined();
     expect((await statement()).pending.map((x) => x.transaction_id)).not.toContain(push.transaction_id);
   });
+
+  // ── (p) ──
+  it("(p) two instalments behind: the DUE row asks for the whole catch-up; each smaller payment settles the oldest first; caught up, the row waits for the next week", async () => {
+    const p = await pledge({ shape: "monthly", amount_minor: 50_000, due_day: 10, title: "Choir" }, "2026-08-01 08:00:00+00"); // due 10 Aug, 10 Sep, 10 Oct…
+    const rowAt = async (at: Date) => ((await partners.partnership(user, at)).due as Record<string, unknown>[]).find((d) => d.id === p.pledge_id);
+    // 20 Sep: 10 Aug and 10 Sep both unpaid → KSh 1,000 to catch up, two overdue, since 10 Aug.
+    expect(await rowAt(now)).toMatchObject({ amount_minor: 100_000, due_on: "2026-08-10", overdue: true, overdue_count: 2, overdue_since: "2026-08-10", pending_minor: 0 });
+    // Pay KSh 500: it settles August (the oldest) → KSh 500 left, one overdue, since 10 Sep.
+    await paid({ amount_minor: 50_000, pledge_id: p.pledge_id }, "2026-09-20 07:00:00+00");
+    expect(await rowAt(now)).toMatchObject({ amount_minor: 50_000, due_on: "2026-09-10", overdue: true, overdue_count: 1, overdue_since: "2026-09-10" });
+    // Pay KSh 500 more: caught up → no row until the week before 10 Oct.
+    await paid({ amount_minor: 50_000, pledge_id: p.pledge_id }, "2026-09-20 07:10:00+00");
+    expect(await rowAt(now)).toBeUndefined();
+    expect(await rowAt(new Date("2026-10-02T09:00:00Z"))).toBeUndefined();
+    expect(await rowAt(new Date("2026-10-03T09:00:00Z"))).toMatchObject({ amount_minor: 50_000, due_on: "2026-10-10", overdue: false, overdue_count: 0, overdue_since: null });
+    // The statement tells the same story: August and September both settled late.
+    expect((await statement()).months.slice(7, 9).map((m) => [m.status, m.paid_minor])).toEqual([["late", 50_000], ["late", 50_000]]);
+  });
+
+  it("(p′) the catch-up counts a part-paid oldest instalment's remainder and an instalment due today (not yet overdue)", async () => {
+    const p = await pledge({ shape: "monthly", amount_minor: 50_000, due_day: 10 }, "2026-08-01 08:00:00+00");
+    const oct10 = new Date("2026-10-10T09:00:00Z"); // 10 Oct, 12:00 in Nairobi: October's instalment is due today
+    const rowAt = async () => ((await partners.partnership(user, oct10)).due as Record<string, unknown>[]).find((d) => d.id === p.pledge_id);
+    expect(await rowAt()).toMatchObject({ amount_minor: 150_000, due_on: "2026-08-10", overdue_count: 2, overdue_since: "2026-08-10" });
+    await paid({ amount_minor: 30_000, pledge_id: p.pledge_id }, "2026-10-10 06:00:00+00"); // part of August
+    expect(await rowAt()).toMatchObject({ amount_minor: 120_000, due_on: "2026-08-10", overdue_count: 2, overdue_since: "2026-08-10" });
+    await paid({ amount_minor: 70_000, pledge_id: p.pledge_id }, "2026-10-10 06:30:00+00"); // the rest of August + September
+    // Only today's instalment is left: due, not overdue.
+    expect(await rowAt()).toMatchObject({ amount_minor: 50_000, due_on: "2026-10-10", overdue: false, overdue_count: 0, overdue_since: null });
+  });
 });
