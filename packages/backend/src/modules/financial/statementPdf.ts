@@ -80,6 +80,69 @@ export function renderReceiptPdf(f: ReceiptFacts): Buffer {
   return renderLinesPdf(lines);
 }
 
+/** One pledge's block on the Partners statement — labels prepared by the
+ *  service (PartnersService.partnersStatementPdf), laid out here. */
+export interface PartnersStatementPledgeBlock {
+  title: string;              // "Kenya trip"
+  termsLabel: string;         // "KSh 2,000 monthly · due on the 5th" | "KSh 50,000 by 15 Jan 2027"
+  statusLabel: string;        // "Active"
+  paidLabel: string;          // "Paid this year KSh 6,000"
+  keptLabel: string | null;   // "3 of 6 kept" (monthly) | null (total)
+}
+
+export interface PartnersStatementFacts {
+  year: number;
+  congregation: string;
+  member: string;
+  sinceLabel: string | null;  // "Partner since Mar 2026"
+  tierName: string | null;
+  pledgedLabel: string;
+  paidLabel: string;
+  remainingLabel: string;
+  pledges: PartnersStatementPledgeBlock[];
+  /** Pledge-tied payments by month, January first — a year reads top-down. */
+  groups: StatementGroup[];
+  totalLabel: string;
+  count: number;
+  generatedAt: string;
+}
+
+/** The Partners statement for one year (docs/PARTNERS_PROGRAMME.md §3a):
+ *  the Pledged / Paid / Remaining summary, one block per pledge, then the
+ *  pledge-tied payments by month with subtotals and a year total. Gifts
+ *  outside a pledge are NOT here — they are the giving statement's. Same
+ *  dep-free writer and style as that statement. */
+export function renderPartnersStatementPdf(f: PartnersStatementFacts): Buffer {
+  const lines: string[] = [
+    `Partners statement · ${f.year}`,
+    f.congregation,
+    f.member,
+    ...(f.sinceLabel || f.tierName ? [[f.sinceLabel, f.tierName].filter(Boolean).join(" · ")] : []),
+    "",
+    "SUMMARY",
+    `   Pledged     ${f.pledgedLabel}`,
+    `   Paid        ${f.paidLabel}`,
+    `   Remaining   ${f.remainingLabel}`,
+    "",
+    "PLEDGES",
+  ];
+  if (f.pledges.length === 0) lines.push(`   No pledges in ${f.year}.`);
+  for (const p of f.pledges) {
+    lines.push(`   ${p.title}`);
+    lines.push(`      ${p.termsLabel}   -   ${p.statusLabel}`);
+    lines.push(`      ${p.paidLabel}${p.keptLabel ? `   -   ${p.keptLabel}` : ""}`);
+  }
+  lines.push("", "PLEDGE PAYMENTS");
+  if (f.groups.length === 0) lines.push(`   No pledge payments in ${f.year}.`);
+  for (const g of f.groups) {
+    lines.push(`${g.label}   ${g.totalLabel}`);
+    for (const r of g.rows) lines.push(`   ${r}`);
+  }
+  lines.push("", `Year total: ${f.totalLabel}   (${f.count} payment${f.count === 1 ? "" : "s"})`);
+  lines.push("", `Generated ${f.generatedAt} · Nuru Place`);
+  return renderLinesPdf(lines);
+}
+
 export function renderStatementPdf(facts: StatementFacts): Buffer {
   const lines: string[] = [
     "NURU PATHWAY - GIVING STATEMENT",
@@ -115,7 +178,9 @@ function renderLinesPdf(lines: string[]): Buffer {
     "<</Type/Catalog/Pages 2 0 R>>",
     "<</Type/Pages/Kids[3 0 R]/Count 1>>",
     "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Resources<</Font<</F1 4 0 R>>>>/Contents 5 0 R>>",
-    "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    // WinAnsi so the latin1 bytes we write render as themselves — the middle
+    // dot (0xB7) the Partners statement uses is a bullet in StandardEncoding.
+    "<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>",
     `<</Length ${Buffer.byteLength(content, "latin1")}>>\nstream\n${content}\nendstream`,
   ];
 

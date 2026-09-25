@@ -14,11 +14,13 @@ import type { NotificationService } from "../notifications/service.js";
 import { ApiError } from "../../http/errors.js";
 import type { FinancialService } from "./service.js";
 import { givingTiers } from "./tiers.js";
-
-const TZ_OFFSET_MS = 3 * 60 * 60 * 1000; // Africa/Nairobi
+import { methodLabel } from "./constants.js";
+import { NAIROBI_OFFSET_MS, nairobiDate, keptInYear, pledgedInYear, statementSummary, type StatementPledgeInput } from "./partnerStatementMath.js";
+import { renderPartnersStatementPdf, type PartnersStatementPledgeBlock, type StatementGroup } from "./statementPdf.js";
 
 export type PledgeShape = "monthly" | "total";
 export type PledgeLabel = "on_track" | "behind" | "fulfilled" | "paused";
+export type PledgeStatus = "active" | "paused" | "fulfilled" | "cancelled";
 
 interface PledgeRow {
   pledge_id: string; user_id: string; shape: PledgeShape;
@@ -26,7 +28,7 @@ interface PledgeRow {
   due_day: number | null; due_on: string | null; until_on: string | null;
   fund_id: string | null; fund_code: string | null; fund_name: string | null;
   campaign_id: string | null; campaign_title: string | null; need_id: string | null;
-  status: "active" | "paused" | "fulfilled" | "cancelled";
+  status: PledgeStatus;
   schedule_id: string | null; reminders_enabled: boolean;
   /** The member's own name for the pledge (migration 215); null = derived. */
   title: string | null;
@@ -56,6 +58,19 @@ const PLEDGE_SELECT = `
       LEFT JOIN funds f ON f.fund_id = p.fund_id
       LEFT JOIN campaigns c ON c.campaign_id = p.campaign_id`;
 
+/** `PartnersService.title` as a SQL expression, for reads that join a pledge
+ *  onto something else (a transaction, a claim) and want its title in the same
+ *  query: the member's own name → the campaign's title → the fund's name →
+ *  "A department need" → "Partnership"; NULL when there is no pledge (the
+ *  pledge alias is LEFT JOINed and absent). Pass the aliases the caller's
+ *  FROM clause uses for the pledges row, its fund and its campaign. */
+export function pledgeTitleSql(a: { pledge: string; fund: string; campaign: string }): string {
+  return `COALESCE(${a.pledge}.title, ${a.campaign}.title, ${a.fund}.name,
+                   CASE WHEN ${a.pledge}.pledge_id IS NULL THEN NULL
+                        WHEN ${a.pledge}.need_id IS NOT NULL THEN 'A department need'
+                        ELSE 'Partnership' END)`;
+}
+
 /** The title a pledge shows — the member's own name, else the derived one.
  *  Used by the giving intent so the receipt-side of a "Pay" carries the same
  *  words the pledge card does. Null when the pledge does not exist. */
@@ -72,13 +87,10 @@ export interface PledgeProgress {
   overdue_since: string | null;
 }
 
-/** Nairobi calendar date (YYYY-MM-DD) of an instant. */
-function nairobiDate(d: Date): string {
-  return new Date(d.getTime() + TZ_OFFSET_MS).toISOString().slice(0, 10);
-}
-/** Start of a Nairobi calendar date, as an instant. */
+/** Start of a Nairobi calendar date, as an instant. (`nairobiDate` — the
+ *  inverse — lives in partnerStatementMath.ts so there is ONE church calendar.) */
 function nairobiStart(ymd: string): Date {
-  return new Date(new Date(`${ymd}T00:00:00Z`).getTime() - TZ_OFFSET_MS);
+  return new Date(new Date(`${ymd}T00:00:00Z`).getTime() - NAIROBI_OFFSET_MS);
 }
 function ymd(y: number, m: number, d: number): string {
   return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -89,6 +101,79 @@ function dueDateInMonth(ref: string, dueDay: number, months: number): string {
   const m = Number(ref.slice(5, 7));
   const total = (y * 12 + (m - 1)) + months;
   return ymd(Math.floor(total / 12), (total % 12) + 1, dueDay);
+}
+
+/** One row of a statement's `payments[]`: a succeeded gift in the year,
+ *  pledge-tied or not. The Give statement lists them all; the Partners view
+ *  keeps only the rows with a `pledge_id` (docs/PARTNERS_PROGRAMME.md §3a). */
+export interface StatementPayment {
+  transaction_id: string;
+  amount_minor: number;
+  currency: string;
+  /** When the gift was made (timestamptz text). */
+  at: string;
+  receipt_code: string | null;
+  /** The fund the gift landed in — code and display name. */
+  fund: string;
+  fund_name: string;
+  /** card | mpesa | airtel | paypal | manual — provider 'stripe' reads as 'card'. */
+  method: string;
+  pledge_id: string | null;
+  /** The pledge's title under the words its card shows; null off-pledge. */
+  pledge_title: string | null;
+}
+
+/** One pledge on the year's statement: its terms, plus what the §3a rule
+ *  says it pledged and received in that year. */
+export interface PartnerStatementPledge {
+  pledge_id: string;
+  title: string;
+  shape: PledgeShape;
+  amount_minor: number | null;
+  target_minor: number | null;
+  currency: string;
+  status: PledgeStatus;
+  due_day: number | null;
+  due_on: string | null;
+  created_at: string;
+  pledged_minor: number;
+  paid_minor: number;
+  /** This year's payments attributed to the pledge — a raw count. */
+  kept: number;
+  /** Monthly: due dates in the year elapsed through today; total: 0. */
+  due_count: number;
+}
+
+/** GET /giving/statements: the giving statement for one year plus the partner
+ *  view. Σ pledges[].pledged_minor = pledged_minor; Σ pledges[].paid_minor =
+ *  paid_minor — the numbers foot by construction. */
+export interface PartnerStatement {
+  years: number[];
+  year: number;
+  /** Every succeeded gift in the year, pledge-tied or not. */
+  total_minor: number;
+  currency: string;
+  pledged_minor: number;
+  paid_minor: number;
+  remaining_minor: number;
+  by_pledge: { pledge_id: string | null; title: string; total_minor: number }[];
+  by_fund: { code: string; name: string; total_minor: number }[];
+  pledges: PartnerStatementPledge[];
+  payments: StatementPayment[];
+}
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"] as const;
+
+/** The church-calendar parts of an instant (or a bare YYYY-MM-DD, taken as
+ *  the day it names). Formatting is done by hand from these so a PDF reads
+ *  the same on every server, whatever its locale data or zone. */
+function churchParts(v: string | Date): { y: number; m: number; d: number } {
+  const ymd = typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : nairobiDate(new Date(v));
+  return { y: Number(ymd.slice(0, 4)), m: Number(ymd.slice(5, 7)), d: Number(ymd.slice(8, 10)) };
+}
+function monthName(m: number, short = false): string {
+  const name = MONTH_NAMES[m - 1] ?? "";
+  return short ? name.slice(0, 3) : name;
 }
 
 export class PartnersService {
@@ -459,7 +544,13 @@ export class PartnersService {
 
   // ── statements ────────────────────────────────────────────────────────
 
-  async statements(userId: string, year?: number): Promise<Record<string, unknown>> {
+  /** The giving statement for one year with the partner view on top of it
+   *  (docs/PARTNERS_PROGRAMME.md §3a): every succeeded gift (`payments`, by
+   *  pledge and by fund) as before, plus Pledged / Paid / Remaining and a row
+   *  per pledge — computed here by the same pure rule both apps implement
+   *  (partnerStatementMath.ts), so no client ever has to derive them. `now`
+   *  is injectable for tests: "due dates elapsed" reads the church's today. */
+  async statements(userId: string, year?: number, now: Date = new Date()): Promise<PartnerStatement> {
     const years = await many<{ y: number }>(
       this.pool,
       `SELECT DISTINCT extract(year from created_at AT TIME ZONE 'Africa/Nairobi')::int AS y
@@ -467,11 +558,11 @@ export class PartnersService {
       [userId],
     );
     const ys = years.map((r) => r.y);
-    const y = year ?? ys[0] ?? Number(nairobiDate(new Date()).slice(0, 4));
-    const rows = await many<{ transaction_id: string; amount_minor: string; currency: string; at: string; receipt_code: string | null; fund: string; fund_name: string; pledge_id: string | null; pledge_title: string | null }>(
+    const y = year ?? ys[0] ?? Number(nairobiDate(now).slice(0, 4));
+    const rows = await many<{ transaction_id: string; amount_minor: string; currency: string; at: string; receipt_code: string | null; fund: string; fund_name: string; provider: string | null; pledge_id: string | null; pledge_title: string | null }>(
       this.pool,
       `SELECT t.transaction_id, t.amount_minor::text, t.currency, t.created_at::text AS at, t.receipt_code, f.code AS fund, f.name AS fund_name,
-              t.pledge_id, COALESCE(p.title, c.title, pf.name, CASE WHEN p.pledge_id IS NULL THEN NULL ELSE 'Partnership' END) AS pledge_title
+              t.provider, t.pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "c" })} AS pledge_title
          FROM transactions t
          JOIN funds f ON f.fund_id = t.fund_id
          LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
@@ -482,26 +573,192 @@ export class PartnersService {
         ORDER BY t.created_at DESC`,
       [userId, y],
     );
+    // `provider` is 'stripe' for cards; the wire says 'card' — one rule with
+    // listGiving and givingDetail.
+    const payments: StatementPayment[] = rows.map((r) => {
+      const provider = r.provider ?? "stripe";
+      return {
+        transaction_id: r.transaction_id, amount_minor: Number(r.amount_minor), currency: r.currency, at: r.at,
+        receipt_code: r.receipt_code, fund: r.fund, fund_name: r.fund_name,
+        method: provider === "stripe" ? "card" : provider,
+        pledge_id: r.pledge_id, pledge_title: r.pledge_title,
+      };
+    });
     const byPledge = new Map<string, { pledge_id: string | null; title: string; total_minor: number }>();
     const byFund = new Map<string, { code: string; name: string; total_minor: number }>();
     let total = 0;
-    for (const r of rows) {
-      const amt = Number(r.amount_minor); total += amt;
+    for (const r of payments) {
+      total += r.amount_minor;
       const pk = r.pledge_id ?? "none";
       const pe = byPledge.get(pk) ?? { pledge_id: r.pledge_id, title: r.pledge_title ?? "Gifts outside a pledge", total_minor: 0 };
-      pe.total_minor += amt; byPledge.set(pk, pe);
+      pe.total_minor += r.amount_minor; byPledge.set(pk, pe);
       const fe = byFund.get(r.fund) ?? { code: r.fund, name: r.fund_name, total_minor: 0 };
-      fe.total_minor += amt; byFund.set(r.fund, fe);
+      fe.total_minor += r.amount_minor; byFund.set(r.fund, fe);
     }
+
+    // The pledges this year's statement is about: every one not cancelled
+    // (the rule reads them all — a paused or fulfilled pledge still counts),
+    // plus any cancelled pledge that still received a payment this year, so
+    // every pledge-tied payment has a row and Σ pledges[].paid_minor foots to
+    // paid_minor exactly. Newest first, like the pledge list.
+    const paidPledgeIds = [...new Set(payments.flatMap((x) => (x.pledge_id ? [x.pledge_id] : [])))];
+    const pledgeRows = await this.pledgeRows(
+      this.pool,
+      `WHERE p.user_id = $1 AND (p.status <> 'cancelled' OR p.pledge_id = ANY($2::uuid[]))`,
+      [userId, paidPledgeIds],
+    );
+    const today = nairobiDate(now);
+    const inputs = pledgeRows.map(PartnersService.statementInput);
+    const pledges: PartnerStatementPledge[] = pledgeRows.map((p, i) => {
+      const input = inputs[i]!;
+      const { kept, due_count } = keptInYear(input, payments, y, today);
+      return {
+        pledge_id: p.pledge_id,
+        title: PartnersService.title(p),
+        shape: p.shape,
+        amount_minor: input.amount_minor,
+        target_minor: input.target_minor,
+        currency: p.currency,
+        status: p.status,
+        due_day: p.due_day,
+        due_on: p.due_on,
+        created_at: p.created_at,
+        pledged_minor: pledgedInYear(input, y),
+        paid_minor: payments.filter((x) => x.pledge_id === p.pledge_id).reduce((a, x) => a + x.amount_minor, 0),
+        kept,
+        due_count,
+      };
+    });
+    const summary = statementSummary(y, inputs, payments);
     return {
       years: ys,
       year: y,
       total_minor: total,
-      currency: rows[0]?.currency ?? "KES",
+      currency: payments[0]?.currency ?? "KES",
+      pledged_minor: summary.pledged_minor,
+      paid_minor: summary.paid_minor,
+      remaining_minor: summary.remaining_minor,
       by_pledge: [...byPledge.values()],
       by_fund: [...byFund.values()],
-      payments: rows.map((r) => ({ transaction_id: r.transaction_id, amount_minor: Number(r.amount_minor), currency: r.currency, at: r.at, receipt_code: r.receipt_code, fund: r.fund, pledge_id: r.pledge_id, pledge_title: r.pledge_title })),
+      pledges,
+      payments,
     };
+  }
+
+  /** A pledge row as the statement rule reads it (numbers, not text). */
+  private static statementInput(p: PledgeRow): StatementPledgeInput {
+    return {
+      pledge_id: p.pledge_id,
+      shape: p.shape,
+      amount_minor: p.amount_minor === null ? null : Number(p.amount_minor),
+      target_minor: p.target_minor === null ? null : Number(p.target_minor),
+      status: p.status,
+      due_day: p.due_day,
+      due_on: p.due_on,
+      created_at: p.created_at,
+    };
+  }
+
+  /** Has this member EVER been a partner, in any sense the product has used:
+   *  a programme membership (any status), a pledge (any status), or a
+   *  recurring gift (phase 1's meaning — active, paused or cancelled)? */
+  private async everPartnered(userId: string): Promise<boolean> {
+    const r = await one<{ member: boolean; pledged: boolean; scheduled: boolean }>(
+      this.pool,
+      `SELECT EXISTS (SELECT 1 FROM partner_memberships WHERE user_id = $1) AS member,
+              EXISTS (SELECT 1 FROM pledges WHERE user_id = $1) AS pledged,
+              EXISTS (SELECT 1 FROM giving_schedules WHERE user_id = $1) AS scheduled`,
+      [userId],
+    );
+    return r.member || r.pledged || r.scheduled;
+  }
+
+  /** The Partners statement for `year` as a PDF (docs/PARTNERS_PROGRAMME.md
+   *  §3a): the summary, one block per pledge, the pledge-tied payments by
+   *  month. Gifts outside a pledge are not on it — the giving statement has
+   *  them. Default year = the current Nairobi year. NOT_FOUND for a member
+   *  who has never been a partner (everPartnered): there is nothing to state,
+   *  and the route answers 404 rather than an empty page. */
+  async partnersStatementPdf(userId: string, year?: number, now: Date = new Date()): Promise<{ year: number; pdf: Buffer }> {
+    if (!(await this.everPartnered(userId))) throw new ApiError("NOT_FOUND", "Not a partner");
+    const y = year ?? Number(nairobiDate(now).slice(0, 4));
+    const me = await maybeOne<{ full_name: string; congregation: string | null }>(
+      this.pool,
+      `SELECT u.full_name, c.name AS congregation FROM users u LEFT JOIN congregations c ON c.congregation_id = u.congregation_id WHERE u.user_id = $1`,
+      [userId],
+    );
+    const standing = await this.partnership(userId, now);
+    const st = await this.statements(userId, y, now);
+
+    const money = (minor: number, currency: string): string =>
+      `${currency === "KES" ? "KSh" : currency} ${(minor / 100).toLocaleString("en-US")}`;
+    const ordinal = (n: number): string => {
+      const s = ["th", "st", "nd", "rd"] as const;
+      const v = n % 100;
+      return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
+    };
+    // "15 Dec" inside the statement year, "15 Jan 2027" outside it.
+    const dayLabel = (v: string): string => {
+      const { y: yy, m, d } = churchParts(v);
+      return yy === y ? `${d} ${monthName(m, true)}` : `${d} ${monthName(m, true)} ${yy}`;
+    };
+    const cap = (s: string): string => (s[0]?.toUpperCase() ?? "") + s.slice(1);
+
+    // "Partner since Mar 2026": the programme membership's join date, else the
+    // recurring gift's start — the same words both apps print.
+    const membership = standing.membership as { joined_at: string } | null;
+    const sinceAt = (membership?.joined_at ?? standing.since ?? null) as string | Date | null;
+    const tier = standing.tier as { name: string } | null;
+
+    const pledges: PartnersStatementPledgeBlock[] = st.pledges.map((p) => ({
+      title: p.title,
+      termsLabel: p.shape === "monthly"
+        ? `${money(p.amount_minor ?? 0, p.currency)} monthly · due on the ${ordinal(p.due_day ?? 1)}`
+        : `${money(p.target_minor ?? 0, p.currency)} by ${p.due_on ? dayLabel(p.due_on) : "-"}`,
+      statusLabel: cap(p.status),
+      paidLabel: `Paid this year ${money(p.paid_minor, p.currency)}`,
+      keptLabel: p.shape === "monthly" ? (p.due_count > 0 ? `${p.kept} of ${p.due_count} kept` : "Nothing due yet this year") : null,
+    }));
+
+    // Pledge-tied payments only, by month, January first — a year reads top-down.
+    const tied = st.payments.filter((x) => x.pledge_id !== null);
+    const byMonth = new Map<string, StatementPayment[]>();
+    for (const x of tied) {
+      const k = nairobiDate(new Date(x.at)).slice(0, 7); // YYYY-MM
+      (byMonth.get(k) ?? byMonth.set(k, []).get(k)!).push(x);
+    }
+    const groups: StatementGroup[] = [...byMonth.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([, recs]) => {
+        const asc = [...recs].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+        const first = churchParts(asc[0]!.at);
+        return {
+          label: `${monthName(first.m).toUpperCase()} ${first.y}`,
+          totalLabel: money(asc.reduce((s, r) => s + r.amount_minor, 0), asc[0]!.currency),
+          rows: asc.map((r) => {
+            const ref = (r.receipt_code ?? "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+            return `${dayLabel(r.at)}  ${r.pledge_title ?? "Pledge"}  ${methodLabel(r.method)}${ref ? `  Ref ${ref}` : ""}  ${money(r.amount_minor, r.currency)}`;
+          }),
+        };
+      });
+
+    const gen = churchParts(now);
+    const pdf = renderPartnersStatementPdf({
+      year: y,
+      congregation: me?.congregation ?? "Nuru Place Church",
+      member: me?.full_name ?? "",
+      sinceLabel: sinceAt ? `Partner since ${monthName(churchParts(sinceAt).m, true)} ${churchParts(sinceAt).y}` : null,
+      tierName: tier?.name ?? null,
+      pledgedLabel: money(st.pledged_minor, st.currency),
+      paidLabel: money(st.paid_minor, st.currency),
+      remainingLabel: money(st.remaining_minor, st.currency),
+      pledges,
+      groups,
+      totalLabel: money(st.paid_minor, st.currency),
+      count: tied.length,
+      generatedAt: `${gen.d} ${monthName(gen.m)} ${gen.y}`,
+    });
+    return { year: y, pdf };
   }
 
 
@@ -664,7 +921,7 @@ export class PartnersService {
     return many(
       this.pool,
       `SELECT c.claim_id, c.pledge_id, c.user_id, u.full_name, c.amount_minor::text, c.currency, c.paid_on::text, c.note, c.status, c.created_at::text,
-              COALESCE(p.title, cm.title, f.name, 'Partnership') AS pledge_title
+              ${pledgeTitleSql({ pledge: "p", fund: "f", campaign: "cm" })} AS pledge_title
          FROM pledge_claims c
          JOIN users u ON u.user_id = c.user_id
          JOIN pledges p ON p.pledge_id = c.pledge_id

@@ -14,20 +14,15 @@ import type { PaymentGateway } from "./gateway.js";
 import { sanitizeAccountReference, type MobileMoneyKey, type MobileMoneyProviders } from "./providers.js";
 import type { PayPalGateway } from "./paypal.js";
 import { renderStatementPdf, renderReceiptPdf } from "./statementPdf.js";
-import { DEFAULT_PLEDGE_FUND } from "./constants.js";
+import { DEFAULT_PLEDGE_FUND, methodLabel } from "./constants.js";
 // partners.ts imports FinancialService as a TYPE only, so this is not a cycle.
-import { pledgeTitleFor } from "./partners.js";
+import { pledgeTitleFor, pledgeTitleSql } from "./partners.js";
+
+// Defined in constants.ts (so partners.ts can print it too); still exported
+// from here for the callers and tests that always imported it from the service.
+export { methodLabel };
 
 const sha256 = (b: Buffer | string): string => createHash("sha256").update(b).digest("hex");
-
-/** The words a payment method shows — on the detail payload (`method_label`),
- *  the receipt and the statement, so the apps never keep their own copy of
- *  this map. `manual` is a pledge claim the office confirmed (partners.ts):
- *  cash or a bank transfer recorded by hand. An unknown provider falls
- *  through as-is so a new gateway never renders blank. */
-export function methodLabel(method: string): string {
-  return ({ mpesa: "M-Pesa", airtel: "Airtel Money", card: "Card", paypal: "PayPal", manual: "Manual" } as Record<string, string>)[method] ?? method;
-}
 
 export class FinancialService {
   constructor(
@@ -683,7 +678,10 @@ export class FinancialService {
   /** A member's giving history (§3.3). Includes the payment method + a short
    *  provider reference so the mobile statement can show "via M-Pesa · Ref …".
    *  `provider` is 'stripe' for cards; we surface that as method 'card' and fall
-   *  back to the Stripe payment-intent id when there's no mobile-money ref. */
+   *  back to the Stripe payment-intent id when there's no mobile-money ref.
+   *  Each row also names the pledge it counted toward (`pledge_id`,
+   *  `pledge_title` under the pledge card's own words; both null off-pledge)
+   *  so the Give statement can label pledge payments without a second call. */
   async listGiving(userId: string): Promise<unknown[]> {
     const rows = await many<Record<string, unknown>>(
       this.pool,
@@ -691,8 +689,13 @@ export class FinancialService {
               t.provider,
               COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref,
               t.receipt_code, t.account_name,
-              t.created_at, t.settled_at
-         FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
+              t.created_at, t.settled_at,
+              t.pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "c" })} AS pledge_title
+         FROM transactions t
+         LEFT JOIN funds f ON f.fund_id = t.fund_id
+         LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
+         LEFT JOIN funds pf ON pf.fund_id = p.fund_id
+         LEFT JOIN campaigns c ON c.campaign_id = p.campaign_id
         WHERE t.user_id = $1 ORDER BY t.created_at DESC`,
       [userId],
     );
