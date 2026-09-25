@@ -64,6 +64,8 @@ Postings (every one balanced: one debit, one credit, same amount + currency):
 | Expense approved (NEW) | fund:<code> | cash:<channel> | journal kind `expense` |
 | Approved expense voided (NEW) | cash:<channel> | fund:<code> | journal kind `expense_void` |
 | Fund transfer (NEW) | fund:<from> | fund:<to> | journal kind `transfer` |
+| Opening balance (NEW) | cash:<channel> | fund:<code> | journal kind `opening` |
+| Transfer / opening reversed (NEW) | mirror of the original | mirror | journal kind `reversal` (`reversal_of`) |
 
 - **Journals**: ledger entries gain a nullable `journal_id`; `transaction_id`
   becomes nullable; CHECK exactly one of them is set. Readers that join
@@ -126,8 +128,9 @@ Postings (every one balanced: one debit, one credit, same amount + currency):
 - `ledger_entries`: `transaction_id` DROP NOT NULL; ADD `journal_id uuid`
   REFERENCES journals; CHECK `num_nonnulls(transaction_id, journal_id) = 1`;
   index on journal_id; index on (account, created_at).
-- `journals(journal_id, kind CHECK in (expense, expense_void, transfer), memo,
-  occurred_on date, ref_id uuid, created_by, created_at)`.
+- `journals(journal_id, kind CHECK in (expense, expense_void, transfer, opening,
+  reversal), memo, occurred_on date, ref_id uuid, reversal_of uuid (unique —
+  a journal is reversed at most once), created_by, created_at)`.
 - `transactions`: ADD `office_channel text CHECK in (onhand, bank, cheque,
   mpesa, other)`, `office_reference text`, `recorded_by uuid`, `reversed_at`,
   `reversed_by`, `reversal_reason text`; partial unique index on
@@ -196,6 +199,13 @@ Reads (finance:view):
   per currency + totals; `GET /reports/expenses?year&by(category|fund)`;
   `GET /reports/pledges?year` → per month pledged / paid / kept / missed /
   behind count; each with `.csv`.
+- `GET /reports/financial-position?as_of` → per currency: cash account balances
+  (assets), fund balances, other (sales:media), totals, `balanced`; `.csv`.
+  `GET /reports/income-expenditure?from&to` → per currency: income by fund
+  (gifts net of reversals) + other income, expenses by category (approved, by
+  spent_on), surplus; transfers/openings excluded; `.csv`.
+- `GET /journals?kind&from&to&cursor` and `GET /journals/:id` → journals with
+  legs and reversal links.
 - `GET /statements?year&q&cursor` → members who gave in the year: total per
   currency, gifts count, by fund, pledge paid; `.csv`.
   `GET /statements/:userId/giving.pdf?year` and `/partners.pdf?year` (the
@@ -235,6 +245,10 @@ Writes (idempotent where money is created; every write audited `finance.*`):
   unless SuperAdmin) → journal; `POST /expenses/:id/void` (finance:manage)
   `{ reason }` → void (+ reversing journal if approved).
 - `POST /expense-categories`, `PATCH /expense-categories/:id` (finance:manage).
+- `POST /opening-balances` (finance:approve) `{ idempotency_key, channel, fund,
+  amount_minor, currency, as_of, memo }` → journal `opening`.
+- `POST /journals/:id/reverse` (finance:approve) `{ reason }` — transfers and
+  opening balances only (an expense is corrected by voiding it); once.
 - `POST /budgets` / `PATCH /budgets/:id` / `PUT /budgets/:id/lines` (manage,
   draft only) ; `POST /budgets/:id/approve` (finance:approve).
 - Existing writes unchanged (claims confirm/reject, reminders, campaigns).
@@ -262,11 +276,13 @@ Writes (idempotent where money is created; every write audited `finance.*`):
 - **Expenses**: list + record + approve (maker-checker) + void; totals; CSV.
 - **Budgets**: year budget, lines editor (12 months), approve, budget vs actual
   with variance.
-- **Funds**: balances, activity, create/edit/deactivate, transfer between funds.
-- **Ledger**: Journal (postings) and Trial balance tabs; CSV.
+- **Funds**: balances, activity, create/edit/deactivate, transfer between funds,
+  opening balances.
+- **Ledger**: Postings, Journals (reverse a transfer/opening) and Trial balance
+  tabs; CSV.
 - **Reconciliation**: Daily settlement, Exceptions, Integrity tabs.
 - **Reports**: Income (by fund/channel/source), Expenses (by category/fund),
-  Pledges; year picker; CSV.
+  Pledges, Income & expenditure, Financial position; year/period picker; CSV.
 - **Statements**: year-end giver list with totals + per-member PDFs.
 - **Audit**: filterable finance audit trail.
 - **Settings**: expense categories, providers status, receipt counter, tiers,
@@ -276,7 +292,7 @@ Writes (idempotent where money is created; every write audited `finance.*`):
 - finance:view — every Finance page. finance:export — CSV. finance:manage —
   record/reverse gifts, funds, categories, record/void expenses, budgets (draft),
   campaigns, claims, reminders. finance:approve — approve expenses and budgets,
-  post fund transfers. Admin/SuperAdmin bypass as today.
+  post fund transfers and opening balances, reverse journals. Admin/SuperAdmin bypass as today.
 - Role editors (web Roles + Users, iPad Roles) render modules and capabilities
   from `/admin/permissions/catalog`, so saving never strips grants the editor
   did not show (today: manage/go/live/departments are silently removed).
