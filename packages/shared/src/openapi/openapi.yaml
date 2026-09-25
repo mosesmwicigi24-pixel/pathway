@@ -2934,13 +2934,18 @@ paths:
   /giving/statements:
     get:
       tags: [giving]
-      summary: Member. Giving statement for a year — totals by pledge and by fund, every payment — plus the partner view (Pledged / Paid / Remaining and a row per pledge) derived server-side by the §3a rule.
+      summary: Member. Giving statement for a year — totals by pledge and by fund, every payment — plus the partner view (Pledged / Paid / Remaining, a row per pledge, impact, the twelve-month strip, faithfulness, season) derived server-side by the §3a/§3d rules.
       description: >
         Every succeeded gift in the year is in `payments[]` (the Give statement
         reads them all); the partner figures count only the rows with a
         `pledge_id`, by the rule in docs/PARTNERS_PROGRAMME.md §3a, so no client
-        ever has to derive them. The partner-only PDF is
-        `/giving/partners/statement.pdf`.
+        ever has to derive them. Statement v2 (§3d, additive) adds `impact`
+        (disciples carried at the tiers.ts costing, rounded down), `months`
+        (kept · late · missed · upcoming · none, monthly pledges only),
+        `faithfulness` (counts read off `months`), `season` (the church-wide
+        `since_you_began` line from /giving/partnership) and, per pledge,
+        `remaining_year_minor` and `church_progress_percent`. The partner-only
+        PDF is `/giving/partners/statement.pdf`.
       parameters:
         - { in: query, name: year, required: false, schema: { type: integer }, description: "Default: the latest year with a succeeded gift, else the current Nairobi year" }
       responses:
@@ -2964,7 +2969,7 @@ paths:
   /admin/partners/{userId}:
     get:
       tags: [system]
-      summary: Admin. One partner — pledges, schedules, payments, reminders.
+      summary: Admin. One partner — pledges (each the Pledge shape, with pays_to), schedules, payments, reminders.
       parameters:
         - { in: path, name: userId, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -3258,11 +3263,17 @@ paths:
   /giving/statement.pdf:
     get:
       tags: [giving]
-      summary: The caller's giving statement as a downloadable PDF.
+      summary: The caller's giving statement as a downloadable PDF — the complete record, every gift and every fund, with pledge money separated (never dropped).
       description: >
         Rendered server-side and opened in the OS browser/viewer. Accepts the
         access token either as a Bearer header or a `token` query parameter
-        (the browser can't attach an Authorization header).
+        (the browser can't attach an Authorization header). Layout
+        (docs/PARTNERS_PROGRAMME.md §3d): header "Gifts X · Partner pledges Y ·
+        Total X+Y" (settled amounts; the total foots) — just "Total given X"
+        when Y = 0, as both apps' hero does — the day groups list
+        gifts outside a pledge only, then a PARTNER PLEDGES section lists the
+        pledge-tied payments under their pledge's title with a subtotal. Long
+        histories continue onto further pages.
       parameters:
         - { name: token, in: query, required: false, schema: { type: string } }
       responses:
@@ -3275,7 +3286,7 @@ paths:
   /giving/partners/statement.pdf:
     get:
       tags: [giving]
-      summary: The caller's Partners statement for one year as a downloadable PDF — Pledged / Paid / Remaining, a block per pledge, the pledge-tied payments by month. Gifts outside a pledge are not on it (they are the giving statement's).
+      summary: The caller's Partners statement for one year as a downloadable two-page PDF — page 1 impact (thank-you, disciples carried, kept N of M, given, the month strip, commitments with remaining this year), page 2 the ledger (Pledged / Paid / Remaining, a block per pledge, the pledge-tied payments by month). Gifts outside a pledge are not on it (they are the giving statement's).
       description: >
         Separate from `/giving/statement.pdf` (owner, 2026-09-25: partners and
         Give statements are separate documents). Rendered server-side and
@@ -3284,7 +3295,10 @@ paths:
         attach an Authorization header). Default year is the current Nairobi
         year. Content-Disposition names the file
         `nuru-partners-statement-<year>.pdf`. The numbers are the same
-        `/giving/statements` reports for that year.
+        `/giving/statements` reports for that year. Below the first disciple
+        carried it prints progress toward it ("KSh x of 20,000 toward carrying
+        one disciple through a level"), never "0 disciples". A ledger longer
+        than a page continues onto a further page.
       parameters:
         - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 } }
         - { name: token, in: query, required: false, schema: { type: string } }
@@ -9101,7 +9115,7 @@ components:
         fund: { type: [string, "null"] }
         campaign_id: { type: [string, "null"], format: uuid }
         need_id: { type: [string, "null"], format: uuid }
-        title: { type: [string, "null"], minLength: 2, maxLength: 60, description: "The member's own name for the pledge (trimmed). Absent or null = the derived title (campaign → fund → need → \"Partnership\")." }
+        title: { type: [string, "null"], minLength: 2, maxLength: 60, description: "The member's own name for the pledge (trimmed). Absent or null = the derived title (campaign → fund → need → \"General partnership\")." }
         note: { type: [string, "null"] }
         reminders_enabled: { type: boolean, default: true }
         auto_schedule:
@@ -9185,7 +9199,14 @@ components:
           items: { $ref: "#/components/schemas/Pledge" }
         due:
           type: array
-          description: Sorted by due_on. `title` is the pledge's title (custom name when set).
+          description: >-
+            Sorted by due_on. `title` is the pledge's title (custom name when
+            set). A MONTHLY pledge is listed only when its earliest incomplete
+            instalment is overdue, due today, or due within the next 7 days
+            (EAT), with amount_minor = what is still uncovered on that
+            instalment (a partial payment reduces it) — so a pledge the member
+            has just paid leaves the list. A total pledge is listed until
+            fulfilled, for target − paid. The recurring-gift row is unchanged.
           items:
             type: object
             required: [kind, id, title, currency, due_on, action, overdue]
@@ -9198,13 +9219,15 @@ components:
               due_on: { type: string, format: date }
               action: { type: string, enum: [pay, resume] }
               overdue: { type: boolean }
+              pays_to: { $ref: "#/components/schemas/PledgePaysTo", description: "kind pledge only — where the money will be booked" }
+              pending_minor: { type: integer, format: int64, description: "kind pledge only — Σ amount of THIS pledge's payments still processing or requiring action that were started in the last 15 minutes (the STK push / checkout window; deliberately shorter than the statement's 48 h pending[], so an abandoned checkout never blocks paying another way). 0 when none. Clients show \"Processing\" instead of Pay while pending_minor ≥ amount_minor." }
         pledge_options:
           type: array
           description: "Ordered: general, then active funds by name, then campaigns live today in the member's congregation, then that congregation's approved department needs."
           items: { $ref: "#/components/schemas/PledgeOption" }
     Pledge:
       type: object
-      required: [pledge_id, shape, currency, status, progress, title, custom_title]
+      required: [pledge_id, shape, currency, status, progress, title, custom_title, pays_to]
       properties:
         pledge_id: { type: string, format: uuid }
         shape: { type: string, enum: [monthly, total] }
@@ -9220,18 +9243,63 @@ components:
         status: { type: string, enum: [active, paused, fulfilled, cancelled] }
         progress:
           type: object
+          description: >-
+            A MONTHLY pledge's progress is read from its instalment ledger
+            (owner-delegated 2026-09-25): its succeeded payments over its whole
+            history — gifts, scheduled charges, confirmed claims — fill its
+            instalments (its due dates from creation on) oldest-first; a payment
+            larger than one instalment spills into the next, money beyond
+            everything due pre-pays future ones. The statement's kept / months /
+            faithfulness, the DUE list, the reminders and the office's "behind"
+            read the same ledger. A total pledge is unchanged.
           required: [paid_minor, label]
           properties:
-            paid_minor: { type: integer }
-            period_paid_minor: { type: [integer, "null"] }
-            label: { type: string, enum: [on_track, behind, fulfilled, paused] }
-            next_due: { type: [string, "null"] }
-            overdue_since: { type: [string, "null"] }
+            paid_minor: { type: integer, description: "Every succeeded payment toward the pledge, all time" }
+            period_paid_minor: { type: [integer, "null"], description: "Monthly: what the ledger has allocated to the instalment due in the CURRENT calendar month (EAT) — 0 when none falls this month; the card's \"KSh x of y this month\". A late payment that settles last month does not fill this one. Total: null." }
+            label: { type: string, enum: [on_track, behind, fulfilled, paused], description: "Monthly: behind when any instalment is missed (its due date's day has ended and it is not complete), else on_track; paused / fulfilled as before. Total: unchanged." }
+            next_due: { type: [string, "null"], description: "Monthly: the due date of the earliest incomplete instalment (overdue, today or ahead) — it moves on the moment that instalment is completed. Total: due_on until fulfilled." }
+            overdue_since: { type: [string, "null"], description: "Monthly: the earliest missed instalment's due date, else null. Total: due_on once it has passed short of target." }
         schedule_id: { type: [string, "null"] }
         reminders_enabled: { type: boolean }
         note: { type: [string, "null"] }
-        title: { type: string, description: "What to show: custom_title when set, else derived (campaign title → fund name → \"A department need\" → \"Partnership\")." }
+        title: { type: string, description: "What to show: custom_title when set, else derived (campaign title → fund name → \"A department need\" → \"General partnership\")." }
         custom_title: { type: [string, "null"], description: "The member's own name for the pledge, or null when they never gave one" }
+        pays_to: { $ref: "#/components/schemas/PledgePaysTo" }
+    PledgePaysTo:
+      type: [object, "null"]
+      description: >-
+        Where this pledge's money is booked — the fund FinancialService.pledgeFundCode
+        routes every gift, schedule charge and confirmed claim made from it to
+        (one SQL rule): the pledge's own fund, else its campaign's fund, else its
+        need's department's fund when active, else the programme default
+        (discipleship) when active, else the first active fund by code. Clients
+        show this, never a fund chip, for pledge money. Null only when no fund is
+        active at all (a gift toward it would be refused). Carried on every pledge
+        object (list, get, create, update, /giving/partnership pledges[] and due[]
+        kind pledge, the admin partner detail, /giving/statements pledges[]).
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+    StatementPendingPayment:
+      type: object
+      description: >-
+        A pledge-tied payment of the statement's year still in flight — status
+        processing or requires_action (txn_status's non-final values) — started
+        within the 48 hours before the request. Shown as pending; NOT counted in
+        paid_minor, pledged/remaining, months, faithfulness or impact. Once its
+        callback lands it moves to payments[] (succeeded) or disappears (failed).
+      required: [transaction_id, amount_minor, currency, at, status, method, receipt_code, pledge_id, pledge_title]
+      properties:
+        transaction_id: { type: string, format: uuid }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        at: { type: string, description: When the payment was started (timestamp) }
+        status: { type: string, enum: [processing, requires_action] }
+        method: { type: string, description: "card | mpesa | airtel | paypal — provider 'stripe' reads as 'card'" }
+        receipt_code: { type: [string, "null"] }
+        pledge_id: { type: string, format: uuid }
+        pledge_title: { type: string, description: "The pledge's title under the words its card shows" }
     StatementPayment:
       type: object
       description: One succeeded gift in the statement's year — pledge-tied or not. The Give statement lists them all; the Partners view keeps only the rows with a pledge_id.
@@ -9250,7 +9318,7 @@ components:
     PartnerStatementPledge:
       type: object
       description: One pledge on the year's statement — its terms, plus what the §3a rule says it pledged and received in that year.
-      required: [pledge_id, title, shape, amount_minor, target_minor, currency, status, due_day, due_on, created_at, pledged_minor, paid_minor, kept, due_count]
+      required: [pledge_id, title, shape, amount_minor, target_minor, currency, status, due_day, due_on, created_at, pledged_minor, paid_minor, kept, due_count, remaining_year_minor, church_progress_percent, pays_to]
       properties:
         pledge_id: { type: string, format: uuid }
         title: { type: string, description: "custom_title when set, else the derived title — the same words the pledge card shows" }
@@ -9264,8 +9332,67 @@ components:
         created_at: { type: string }
         pledged_minor: { type: integer, format: int64, description: "This pledge's share of the year's Pledged: monthly → amount_minor × its due_day dates in the year from max(created_at, 1 Jan) through 31 Dec; total → target_minor when due_on falls in the year, else 0; cancelled → 0" }
         paid_minor: { type: integer, format: int64, description: Σ this year's payments attributed to this pledge }
-        kept: { type: integer, description: "How many of this year's payments were attributed to this pledge — a raw count (an early or doubled gift is still a gift kept)" }
-        due_count: { type: integer, description: "Monthly: its due dates in the year elapsed through today (0 for a year still ahead, all of them for a year gone by) — the M in \"N of M kept\"; total: 0" }
+        kept: { type: integer, description: "Monthly: its instalments due in the year that its ledger completed — on time or late (one definition of kept); a month paid in two payments counts once, one payment covering two months counts twice. = this pledge's kept_on_time + late. Total: 0." }
+        due_count: { type: integer, description: "Monthly: its instalments due in the year that are resolved — kept, late or missed; the M in \"N of M kept\". An instalment due today and not yet complete is not counted until its day ends (a due day never reads like a miss); one pre-paid ahead of a due date still to come counts (kept). Total: 0." }
+        remaining_year_minor: { type: integer, format: int64, description: "max(pledged_minor − paid_minor, 0) — what is left of this year's promise (statement v2, §3d)" }
+        church_progress_percent: { type: [integer, "null"], minimum: 0, maximum: 100, description: "A pledge toward a department need: floor(raised ÷ target × 100), capped at 100, where raised is the need's church-wide figure the department page shows (gifts to the need plus gifts under any pledge to it). Null for every other pledge (statement v2, §3d)." }
+        pays_to: { $ref: "#/components/schemas/PledgePaysTo" }
+    PartnerStatementImpact:
+      type: object
+      description: "What the year's pledge money comes to at the owner's costing (tiers.ts: KSh 20,000 carries one disciple through one level). Rounded DOWN, never up. Clients never print \"0 disciples\": below the first, show toward_next_minor of per_disciple_minor."
+      required: [paid_minor, per_disciple_minor, disciples_carried, toward_next_minor]
+      properties:
+        paid_minor: { type: integer, format: int64, description: "The statement's paid_minor — the year's pledge-tied payments" }
+        per_disciple_minor: { type: integer, format: int64, description: "The costing constant (2000000 = KSh 20,000)" }
+        disciples_carried: { type: integer, description: "floor(paid_minor ÷ per_disciple_minor)" }
+        toward_next_minor: { type: integer, format: int64, description: "paid_minor mod per_disciple_minor" }
+    PartnerStatementMonth:
+      type: object
+      description: >-
+        One month of the strip, from the instalment ledgers of the year's
+        MONTHLY pledges not cancelled (total pledges never drive it). Each
+        pledge's succeeded payments over its whole history fill its
+        instalments oldest-first (spill-over into the next; surplus pre-pays).
+        due_minor = Σ the instalments due that month; paid_minor = Σ what the
+        ledger allocated to them — a late payment shows under the month it
+        settled, not the month it arrived. An instalment is kept (completed on
+        or before its due date, EAT — including pre-paid), late (completed
+        after it), missed (its day has ended, not complete), due (today, not
+        complete) or upcoming (ahead, not complete). The month's status is none
+        when nothing is due, else the worst of its instalments: missed, then
+        due/upcoming (both read "upcoming" here), then late, then kept — with
+        one monthly pledge, that instalment's status.
+      required: [month, status, due_minor, paid_minor]
+      properties:
+        month: { type: integer, minimum: 1, maximum: 12 }
+        status: { type: string, enum: [kept, late, missed, upcoming, none] }
+        due_minor: { type: integer, format: int64 }
+        paid_minor: { type: integer, format: int64 }
+    PartnerStatementFaithfulness:
+      type: object
+      description: >-
+        Counted per instalment — one monthly pledge's (not cancelled) due date
+        in the year — over the resolved ones (kept, late or missed), from the
+        same ledgers `months` reads. It foots with `pledges[]`: kept_on_time +
+        late = Σ pledges[].kept and due_count = Σ pledges[].due_count over the
+        monthly pledges not cancelled. "Kept N of M" = kept_on_time + late of
+        due_count (kept includes late). Two pledges due in one month contribute
+        two instalments.
+      required: [kept_on_time, late, missed, due_count]
+      properties:
+        kept_on_time: { type: integer, description: "Instalments completed on or before their due date (including pre-paid ones)" }
+        late: { type: integer, description: Instalments completed after their due date }
+        missed: { type: integer, description: "Instalments whose due date's day has ended and that are not complete" }
+        due_count: { type: integer, description: "kept_on_time + late + missed. An instalment due today and not yet complete is not counted until its day ends." }
+    PartnerStatementSeason:
+      type: object
+      description: "What the WHOLE CHURCH did since the partner began — never attributed to this member's money. A partner with a recurring gift: exactly `since_you_began` from GET /giving/partnership. A partner without one (membership / pledges only): `from` = the earliest of the membership's joined_at and any schedule they ever started, with the same church-wide counts."
+      required: [from, levels_completed, modules_completed, plans_finished]
+      properties:
+        from: { type: string, format: date-time }
+        levels_completed: { type: integer }
+        modules_completed: { type: integer }
+        plans_finished: { type: integer }
     PartnerStatement:
       type: object
       description: >-
@@ -9274,7 +9401,7 @@ components:
         server-side by the rule in docs/PARTNERS_PROGRAMME.md §3a. The numbers
         foot: Σ pledges[].pledged_minor = pledged_minor and Σ pledges[].paid_minor
         = paid_minor.
-      required: [years, year, total_minor, currency, pledged_minor, paid_minor, remaining_minor, by_pledge, by_fund, pledges, payments]
+      required: [years, year, total_minor, currency, pledged_minor, paid_minor, remaining_minor, by_pledge, by_fund, pledges, payments, impact, months, faithfulness, season, pending]
       properties:
         years: { type: array, items: { type: integer }, description: "Years with a succeeded gift, newest first" }
         year: { type: integer }
@@ -9309,6 +9436,23 @@ components:
           type: array
           description: Every succeeded gift in the year, newest first.
           items: { $ref: "#/components/schemas/StatementPayment" }
+        impact: { $ref: "#/components/schemas/PartnerStatementImpact" }
+        months:
+          type: array
+          description: Exactly twelve, January first.
+          minItems: 12
+          maxItems: 12
+          items: { $ref: "#/components/schemas/PartnerStatementMonth" }
+        faithfulness: { $ref: "#/components/schemas/PartnerStatementFaithfulness" }
+        season:
+          description: "Null only for a member who is not a partner (/giving/partnership's is_partner: an active/paused recurring gift or an active programme membership)."
+          oneOf:
+            - { $ref: "#/components/schemas/PartnerStatementSeason" }
+            - { type: "null" }
+        pending:
+          type: array
+          description: "Pledge-tied payments of the year still processing / requiring action, started in the last 48 hours, newest first — never counted in the figures."
+          items: { $ref: "#/components/schemas/StatementPendingPayment" }
         created_at: { type: string }
     DepartmentUpsert:
       type: object

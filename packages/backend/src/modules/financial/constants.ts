@@ -4,9 +4,36 @@
 // which is what lets service.ts import from partners.ts without a cycle.
 
 /** The fund a pledge with no target of its own is booked to: the programme
- *  carries disciples. `FinancialService.pledgeFundCode` falls past it to the
- *  first active fund when this code is not an active fund. */
+ *  carries disciples. The pledge fund rule (below) falls past it to the first
+ *  active fund when this code is not an active fund. */
 export const DEFAULT_PLEDGE_FUND = "discipleship";
+
+// ── where a pledge's money is booked — ONE rule, as SQL ─────────────────────
+// `FinancialService.pledgeFundCode` (which routes every gift, schedule and
+// confirmed claim made from a pledge) and every pledge object's `pays_to`
+// read these same fragments, so what the apps show a pledge "pays to" can
+// never differ from the fund its money actually lands in. The rule: the
+// pledge's own fund, else its campaign's fund, else its need's department's
+// fund when that is active, else DEFAULT_PLEDGE_FUND when active, else the
+// first active fund by code. Append PLEDGE_PAYS_TO_JOINS to a FROM clause
+// whose pledges row is aliased `p`; the aliases it adds all start `pt_`.
+const DEFAULT_PLEDGE_FUND_SQL = `'${DEFAULT_PLEDGE_FUND.replace(/'/g, "''")}'`;
+export const PLEDGE_PAYS_TO_JOINS = `
+      LEFT JOIN funds pt_own ON pt_own.fund_id = p.fund_id
+      LEFT JOIN campaigns pt_c ON pt_c.campaign_id = p.campaign_id
+      LEFT JOIN funds pt_cf ON pt_cf.fund_id = pt_c.fund_id
+      LEFT JOIN department_needs pt_n ON pt_n.need_id = p.need_id
+      LEFT JOIN departments pt_d ON pt_d.department_id = pt_n.department_id
+      LEFT JOIN funds pt_nf ON pt_nf.code = pt_d.fund_code AND pt_nf.is_active
+      LEFT JOIN (SELECT code, name FROM funds WHERE is_active
+                  ORDER BY (code = ${DEFAULT_PLEDGE_FUND_SQL}) DESC, code LIMIT 1) pt_def ON TRUE`;
+/** The booked fund's code; NULL only when no fund is active at all. */
+export const PLEDGE_PAYS_TO_CODE = `COALESCE(pt_own.code, pt_cf.code, pt_nf.code, pt_def.code)`;
+/** That fund's display name. */
+export const PLEDGE_PAYS_TO_NAME = `CASE WHEN pt_own.code IS NOT NULL THEN pt_own.name
+              WHEN pt_cf.code IS NOT NULL THEN pt_cf.name
+              WHEN pt_nf.code IS NOT NULL THEN pt_nf.name
+              ELSE pt_def.name END`;
 
 /** The words a payment method shows — on the detail payload (`method_label`),
  *  the receipt and both statements, so the apps never keep their own copy of

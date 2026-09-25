@@ -161,6 +161,67 @@ Both apps, one rule each; the portal drawer follows the same vocabulary later.
   keeps the complete record one tap away. The Give tab's "View statement" is
   unchanged.
 
+## 3d. Statement v2 — impact-led Partners statement; complete-but-separate Giving statement (owner-delegated decision 2026-09-25)
+
+- **Partners statement leads with what the partnership did.** `GET
+  /giving/statements` gains `impact` (paid toward pledges; `disciples_carried`
+  = floor(paid ÷ KSh 20,000, the tier costing in `tiers.ts`); `toward_next`),
+  `months[12]` (kept · late · missed · upcoming · none, from monthly pledges'
+  due dates vs pledge-tied payments), `faithfulness` counts, `season` (the
+  church-wide "since you began" line) and, per pledge, `remaining_year_minor`
+  and `church_progress_percent` for department needs. Clients render a navy
+  hero (thank-you, disciples carried, kept N of M, given), a twelve-month
+  strip, commitments with remaining, the season card, then the ledger.
+  **Never show "0 disciples":** below the first, show progress toward it.
+  The Partners PDF is two pages: impact, then ledger.
+- **Giving statement stays complete but stops interleaving.** A giving
+  statement is a financial record and must reconcile with the member's bank
+  and the church ledger, so pledge money is never excluded — it is separated:
+  header "Gifts X · Partner pledges Y · Total X+Y", BY FUND and the day list
+  show gifts only, and pledge payments sit in one collapsed PARTNER PLEDGES
+  group with its total and a link to the Partners statement. The giving PDF
+  carries a separate PARTNER PLEDGES section; the grand total must foot.
+
+## 3e. One instalment ledger; nothing paid ever looks unpaid (owner-delegated 2026-09-26)
+
+Found live (2026-09-25 23:51 EAT): a KSh 1,000 pledge payment succeeded, was tied
+to its pledge and booked to its fund, yet the apps still showed the pledge as
+due. Two causes, both fixed:
+
+- **Server — one ledger for every monthly pledge** (`allocateInstalments`,
+  partnerStatementMath.ts). A pledge's succeeded payments over its whole history
+  (gifts, schedule charges, confirmed claims), oldest first, fill its due dates
+  oldest first; larger payments spill into the next instalment, surplus pre-pays
+  future ones, partials stay partial. Each instalment is kept (complete by its
+  due date, EAT), late (completed after), missed (its day ended incomplete),
+  due (today) or upcoming. Everything reads this one evaluation: the card
+  (`next_due` = earliest incomplete; behind iff any missed; `period_paid_minor`
+  = this calendar month's instalment), `due[]` (only when overdue, due today or
+  within 7 days, for the uncovered remainder), reminders (only while that
+  instalment is incomplete), the office's behind / remind-behind, and the
+  statement (`kept` = kept + late, `due_count` = resolved instalments — due today
+  and unpaid is not counted; `months[]` and `faithfulness` from the same
+  statuses; `months[].paid_minor` is what the ledger allocated to that month).
+  Known limits: pause history is not recorded; `until_on` is not applied.
+- **Clients — never stale.** Partners and the Partners statement refetch on
+  appear, on segment switch and on return to the foreground (keeping what is on
+  screen), and reload on an app-wide "giving changed" signal after any gift
+  starts or resolves and after schedule/pledge changes.
+- **Money in flight is visible, never doubled.** `GET /giving/statements`
+  returns `pending[]` (pledge payments processing or awaiting action, last 48 h,
+  never counted) shown as "Processing" rows and polled every 10 s for 2 min.
+  `due[]` pledge items carry `pending_minor` (last 15 minutes only, so an
+  abandoned PayPal checkout never blocks paying another way); a row whose
+  instalment is covered shows "Processing" instead of Pay. A pledge/need
+  binding on the Give form is spent the moment an intent answers (a failure
+  keeps it for retry), and the idempotency key is reused only when the previous
+  attempt got no answer at all.
+- **Paying a pledge looks like paying a pledge.** Every pledge (and pledge due
+  item) carries `pays_to {code, name}` — the fund the server will book. In
+  pledge-pay mode the Give screen replaces the fund chooser with "Paying your
+  pledge · goes to the <fund> fund" and the button reads "Pay KSh X toward
+  <title>". An untargeted pledge is named "General partnership".
+
 ## 4. Departments
 
 - `departments` (congregation, name, purpose, leader_user_id, meets, photo,

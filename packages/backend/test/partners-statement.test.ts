@@ -84,20 +84,32 @@ describe("partner statement rule (§3a, pure)", () => {
     expect(statementSummary(2026, pl, [pay(900_000, "m1")])).toEqual({ pledged_minor: 600_000, paid_minor: 900_000, remaining_minor: 0 });
   });
 
-  it("kept counts this pledge's payments; due_count is its due dates elapsed through today", () => {
+  it("kept counts this pledge's instalments completed in the year — on time or late, a split month once; due_count counts the resolved ones", () => {
+    // One definition of kept (owner-delegated 2026-09-25): the pledge's
+    // instalment ledger — its payments over its whole history fill its
+    // instalments oldest-first — not a count of payments. due_count = kept +
+    // late + missed; an instalment due today and unpaid waits for its day to end.
     const pl = monthly({ created_at: "2026-01-10T00:00:00Z" }); // first due 5 Feb
-    const payments = [pay(200_000, "m1"), pay(200_000, "m1"), pay(200_000, "other"), pay(200_000, null)];
-    // 20 Sep: due dates elapsed = Feb..Sep = 8; two of them kept.
-    expect(keptInYear(pl, payments, 2026, "2026-09-20")).toEqual({ kept: 2, due_count: 8 });
-    // Before the first due date nothing has elapsed.
-    expect(keptInYear(pl, payments, 2026, "2026-02-04")).toEqual({ kept: 2, due_count: 0 });
+    const at = (amount: number, pledge: string | null, on: string) => ({ ...pay(amount, pledge), at: on });
+    const payments = [
+      at(200_000, "m1", "2026-02-05"),                                   // Feb: on time → kept
+      at(100_000, "m1", "2026-03-02"), at(100_000, "m1", "2026-03-04"),  // Mar: two instalments → kept ONCE
+      at(200_000, "m1", "2026-04-09"),                                   // Apr: late → still kept
+      at(150_000, "m1", "2026-05-05"),                                   // May: part → not kept
+      at(200_000, "other", "2026-06-05"), at(200_000, null, "2026-07-05"), // not this pledge's
+    ];
+    // 20 Sep: Feb, Mar kept, Apr late (all kept); May part-paid and Jun–Sep
+    // unpaid → missed. Resolved: Feb..Sep = 8.
+    expect(keptInYear(pl, payments, 2026, "2026-09-20")).toEqual({ kept: 3, due_count: 8 });
+    // On 4 Feb — before the first due date, nothing paid yet — nothing is resolved.
+    expect(keptInYear(pl, payments.filter((x) => x.at <= "2026-02-04"), 2026, "2026-02-04")).toEqual({ kept: 0, due_count: 0 });
     // A year gone by has all its due dates (from its creation on: created 10
     // Jan, due on the 5th → Feb..Dec = 11); a year still ahead has none.
     expect(keptInYear(monthly({ created_at: "2025-01-10T00:00:00Z" }), [], 2025, "2026-09-20").due_count).toBe(11);
     expect(keptInYear(monthly({ created_at: "2024-11-20T00:00:00Z" }), [], 2025, "2026-09-20").due_count).toBe(12);
     expect(keptInYear(pl, [], 2027, "2026-09-20").due_count).toBe(0);
-    // A total pledge has no instalments: kept is still its payments, due_count 0.
-    expect(keptInYear(total(), [pay(1, "t1"), pay(1, "t1")], 2026, "2026-09-20")).toEqual({ kept: 2, due_count: 0 });
+    // A total pledge has no instalments: nothing due, nothing kept.
+    expect(keptInYear(total(), [{ ...pay(1, "t1"), at: "2026-03-01" }], 2026, "2026-09-20")).toEqual({ kept: 0, due_count: 0 });
   });
 
   it("dates are the church's day: late on the 4th UTC is the 5th in Nairobi; a bare date passes through", () => {
@@ -196,7 +208,7 @@ describe("the Partners statement on the wire", () => {
     });
     expect(m.created_at).toMatch(/^2026-03-15/);
     expect(st.pledges.find((p) => p.pledge_id === totalPledge.pledge_id)).toMatchObject({
-      title: "Partnership", shape: "total", amount_minor: null, target_minor: 5_000_000, status: "active",
+      title: "General partnership", shape: "total", amount_minor: null, target_minor: 5_000_000, status: "active",
       due_day: 1, // createPledge stores 1 for a total pledge; the wire passes the row through, as Pledge does
       due_on: "2027-01-15", pledged_minor: 0, paid_minor: 0, kept: 0, due_count: 0,
     });
@@ -288,6 +300,7 @@ describe("the Partners statement on the wire", () => {
     // Paid in February, cancelled since: its money still counts as paid, its
     // promise no longer counts as pledged — and it keeps its row so the sums foot.
     const old = await partners.createPledge(user, { shape: "monthly", amount_minor: 100_000, currency: "KES", due_day: 1, title: "Old promise", reminders_enabled: true });
+    await testPool().query(`UPDATE pledges SET created_at = '2026-01-10 08:00:00+00' WHERE pledge_id = $1`, [old.pledge_id]); // first due 1 Feb
     await settled({ fund: "tithe", amount_minor: 100_000, pledge_id: old.pledge_id }, "2026-02-01 09:00:00+00", "OLD00001");
     await partners.updatePledge(user, String(old.pledge_id), { status: "cancelled" });
     // A pledge toward an approved department need, due this year.
@@ -304,8 +317,12 @@ describe("the Partners statement on the wire", () => {
     expect(st.pledged_minor).toBe(300_000);
     expect(st.paid_minor).toBe(150_000);
     expect(st.remaining_minor).toBe(150_000);
-    expect(st.pledges.find((p) => p.pledge_id === old.pledge_id)).toMatchObject({ title: "Old promise", status: "cancelled", pledged_minor: 0, paid_minor: 100_000, kept: 1 });
-    expect(st.pledges.find((p) => p.pledge_id === need.pledge_id)).toMatchObject({ title: "A department need", status: "active", pledged_minor: 300_000, paid_minor: 50_000, kept: 1, due_count: 0 });
+    // Kept counts instalments kept, not payments: the cancelled pledge's 1 Feb
+    // instalment was paid on the day (kept) and Mar..Sep went unpaid (its
+    // ledger is still read through today — cancellation does not rewrite it);
+    // a total pledge has no instalments, so 0 and 0 whatever it received.
+    expect(st.pledges.find((p) => p.pledge_id === old.pledge_id)).toMatchObject({ title: "Old promise", status: "cancelled", pledged_minor: 0, paid_minor: 100_000, kept: 1, due_count: 8 });
+    expect(st.pledges.find((p) => p.pledge_id === need.pledge_id)).toMatchObject({ title: "A department need", status: "active", pledged_minor: 300_000, paid_minor: 50_000, kept: 0, due_count: 0 });
     expect(st.pledges.reduce((a, p) => a + p.pledged_minor, 0)).toBe(st.pledged_minor);
     expect(st.pledges.reduce((a, p) => a + p.paid_minor, 0)).toBe(st.paid_minor);
     expect(st.payments.find((x) => x.transaction_id === needGift)?.pledge_title).toBe("A department need");

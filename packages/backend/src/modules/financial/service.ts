@@ -14,7 +14,7 @@ import type { PaymentGateway } from "./gateway.js";
 import { sanitizeAccountReference, type MobileMoneyKey, type MobileMoneyProviders } from "./providers.js";
 import type { PayPalGateway } from "./paypal.js";
 import { renderStatementPdf, renderReceiptPdf } from "./statementPdf.js";
-import { DEFAULT_PLEDGE_FUND, methodLabel } from "./constants.js";
+import { PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, methodLabel } from "./constants.js";
 // partners.ts imports FinancialService as a TYPE only, so this is not a cycle.
 import { pledgeTitleFor, pledgeTitleSql } from "./partners.js";
 
@@ -758,25 +758,43 @@ export class FinancialService {
     };
   }
 
-  /** Render the caller's giving statement as a PDF (dep-free), grouped by month
-   *  with settled-only totals — what the mobile "Download" action saves. */
+  /** Render the caller's giving statement as a PDF (dep-free) — the complete
+   *  record, every gift and every fund, with settled-only totals; what the
+   *  mobile "Download" action saves. Pledge money is separated, never dropped
+   *  (docs/PARTNERS_PROGRAMME.md §3d): the header reads "Gifts X · Partner
+   *  pledges Y · Total X+Y" (just "Total given X" when Y = 0, as both apps'
+   *  hero does), the day groups list gifts outside a pledge only,
+   *  and the pledge-tied payments sit in one PARTNER PLEDGES section under
+   *  their pledge's title with a subtotal — so the total still foots with the
+   *  member's bank and the church ledger. */
   async statementPdf(userId: string): Promise<Buffer> {
-    const rows = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string }>;
+    const rows = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string; pledge_id: string | null; pledge_title: string | null }>;
     const me = await maybeOne<{ full_name: string; congregation: string | null }>(
       this.pool,
       `SELECT u.full_name, c.name AS congregation FROM users u LEFT JOIN congregations c ON c.congregation_id = u.congregation_id WHERE u.user_id = $1`,
       [userId],
     );
     const settled = (s: string): boolean => s === "succeeded" || s === "settled" || s === "completed";
+    const settledSum = (rs: typeof rows): number => rs.reduce((a, r) => a + (settled(r.status) ? r.amount_minor : 0), 0);
     const ksh = (m: number): string => `KSh ${(m / 100).toLocaleString("en-US")}`;
     const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v)); // pg returns timestamps as Date
     const dayKey = (v: unknown): string => iso(v).slice(0, 10); // YYYY-MM-DD
     const dayLabel = (v: unknown): string => new Date(iso(v)).toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
     const timeLabel = (v: unknown): string => new Date(iso(v)).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    // Prefer the real M-Pesa receipt code when present; fall back to the
+    // trimmed provider_ref for older/non-mobile-money gifts.
+    const refOf = (r: (typeof rows)[number]): string => r.receipt_code
+      ? r.receipt_code.replace(/[^a-zA-Z0-9]/g, "").toUpperCase()
+      : (r.provider_ref ?? "").replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase();
+    const fundLabel = (r: (typeof rows)[number]): string => `${r.fund[0]!.toUpperCase()}${r.fund.slice(1)}`;
 
-    // Group by calendar day, newest first — mirrors the in-app statement layout.
+    const gifts = rows.filter((r) => !r.pledge_id);
+    const pledgeRows = rows.filter((r) => Boolean(r.pledge_id));
+
+    // Gifts outside a pledge, grouped by calendar day, newest first — mirrors
+    // the in-app statement layout.
     const byDay = new Map<string, typeof rows>();
-    for (const r of rows) {
+    for (const r of gifts) {
       const k = dayKey(r.created_at);
       (byDay.get(k) ?? byDay.set(k, []).get(k)!).push(r);
     }
@@ -784,24 +802,35 @@ export class FinancialService {
       .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([, recs]) => ({
         label: dayLabel(recs[0]!.created_at),
-        totalLabel: ksh(recs.reduce((s, r) => s + (settled(r.status) ? r.amount_minor : 0), 0)),
+        totalLabel: ksh(settledSum(recs)),
         rows: recs.map((r) => {
-          // Prefer the real M-Pesa receipt code when present; fall back to the
-          // trimmed provider_ref for older/non-mobile-money gifts.
-          const ref = r.receipt_code
-            ? r.receipt_code.replace(/[^a-zA-Z0-9]/g, "").toUpperCase()
-            : (r.provider_ref ?? "").replace(/[^a-zA-Z0-9]/g, "").slice(-8).toUpperCase();
-          return `${r.fund[0]!.toUpperCase()}${r.fund.slice(1)}  ${ksh(r.amount_minor)}  ${timeLabel(r.created_at)}  ${methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}${r.account_name ? `  "${r.account_name}"` : ""}`;
+          const ref = refOf(r);
+          return `${fundLabel(r)}  ${ksh(r.amount_minor)}  ${timeLabel(r.created_at)}  ${methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}${r.account_name ? `  "${r.account_name}"` : ""}`;
         }),
       }));
-    const total = rows.reduce((s, r) => s + (settled(r.status) ? r.amount_minor : 0), 0);
+    // Pledge-tied payments, newest first (listGiving's order), each dated and
+    // tagged "<title> pledge" as the in-app history tags them.
+    const pledges = pledgeRows.length === 0 ? null : {
+      totalLabel: ksh(settledSum(pledgeRows)),
+      rows: pledgeRows.map((r) => {
+        const ref = refOf(r);
+        return `${dayLabel(r.created_at)}  ${r.pledge_title ?? "General partnership"} pledge  ${fundLabel(r)}  ${ksh(r.amount_minor)}  ${methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}`;
+      }),
+    };
+    const giftsTotal = settledSum(gifts);
+    const pledgesTotal = settledSum(pledgeRows);
     return renderStatementPdf({
       congregation: me?.congregation ?? "Nuru Pathway",
       member: me?.full_name ?? "",
-      totalLabel: ksh(total),
-      count: rows.length,
+      giftsLabel: ksh(giftsTotal),
+      // No pledge money (Y = 0): the header is just "Total given KSh X".
+      pledgesLabel: pledgesTotal > 0 ? ksh(pledgesTotal) : null,
+      totalLabel: ksh(giftsTotal + pledgesTotal),
+      giftCount: gifts.length,
+      pledgeCount: pledgeRows.length,
       generatedAt: new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" }),
       groups,
+      pledges,
     });
   }
 
@@ -915,33 +944,20 @@ export class FinancialService {
   /** The fund a pledge's money belongs to — ONE rule for a gift made from a
    *  pledge, the schedule that charges it, and a confirmed "I paid another
    *  way" claim, so a pledge never splits across funds by client. The pledge's
-   *  own fund, else its campaign's, else its need's department's (active only,
-   *  via `needFundCode`), else the programme default when that is an active
-   *  fund, else the first active fund by code. Never throws for a missing
-   *  default; 404 only when the pledge itself does not exist. */
+   *  own fund, else its campaign's, else its need's department's (active only),
+   *  else the programme default when that is an active fund, else the first
+   *  active fund by code — the SQL rule in constants.ts that every pledge's
+   *  `pays_to` reads too, so what a pledge says it pays to is where its money
+   *  goes. 404 when the pledge does not exist; 422 when no fund is active. */
   async pledgeFundCode(pledgeId: string): Promise<string> {
-    const p = await maybeOne<{ fund_code: string | null; campaign_fund_code: string | null; need_id: string | null }>(
+    const p = await maybeOne<{ code: string | null }>(
       this.pool,
-      `SELECT f.code AS fund_code, cf.code AS campaign_fund_code, p.need_id
-         FROM pledges p
-         LEFT JOIN funds f ON f.fund_id = p.fund_id
-         LEFT JOIN campaigns c ON c.campaign_id = p.campaign_id
-         LEFT JOIN funds cf ON cf.fund_id = c.fund_id
-        WHERE p.pledge_id = $1`,
+      `SELECT ${PLEDGE_PAYS_TO_CODE} AS code FROM pledges p ${PLEDGE_PAYS_TO_JOINS} WHERE p.pledge_id = $1`,
       [pledgeId],
     );
     if (!p) throw new ApiError("NOT_FOUND", "Pledge not found");
-    return p.fund_code ?? p.campaign_fund_code ?? (await this.needFundCode(p.need_id)) ?? (await this.defaultPledgeFundCode());
-  }
-
-  /** `DEFAULT_PLEDGE_FUND` when it is an active fund, else the first active
-   *  fund by code — a general pledge must always have somewhere to land. */
-  private async defaultPledgeFundCode(): Promise<string> {
-    const preferred = await maybeOne<{ code: string }>(this.pool, `SELECT code FROM funds WHERE code = $1 AND is_active`, [DEFAULT_PLEDGE_FUND]);
-    if (preferred) return preferred.code;
-    const first = await maybeOne<{ code: string }>(this.pool, `SELECT code FROM funds WHERE is_active ORDER BY code LIMIT 1`, []);
-    if (!first) throw new ApiError("UNPROCESSABLE", "No active fund can receive pledge gifts");
-    return first.code;
+    if (!p.code) throw new ApiError("UNPROCESSABLE", "No active fund can receive pledge gifts");
+    return p.code;
   }
 
   private async resolveNeedId(explicit: string | null): Promise<string | null> {
@@ -1091,23 +1107,7 @@ export class FinancialService {
       [userId],
     );
 
-    // What the church did in their season. Aggregate and anonymous — counts of
-    // completions, never a name, never a ranking.
-    const together = await maybeOne<{
-      levels: number; modules: number; plans: number;
-    }>(
-      this.pool,
-      // Only one parameter here: the day they began. The member's own id is
-      // deliberately absent — these are church-wide counts, not their own.
-      `SELECT
-         (SELECT count(*)::int FROM enrollments
-           WHERE completed_at IS NOT NULL AND completed_at >= $1)                AS levels,
-         (SELECT count(*)::int FROM module_progress
-           WHERE is_completed AND completed_at >= $1)                            AS modules,
-         (SELECT count(*)::int FROM reading_plan_progress
-           WHERE completed_at IS NOT NULL AND completed_at >= $1)                AS plans`,
-      [standing.since],
-    );
+    const together = await this.churchSince(standing.since);
 
     const failing = standing.consecutive_failures > 0;
     return {
@@ -1139,11 +1139,34 @@ export class FinancialService {
         : null,
       since_you_began: {
         from: standing.since,
-        levels_completed: together?.levels ?? 0,
-        modules_completed: together?.modules ?? 0,
-        plans_finished: together?.plans ?? 0,
+        levels_completed: together.levels,
+        modules_completed: together.modules,
+        plans_finished: together.plans,
       },
     };
+  }
+
+  /** What the church did in a partner's season — `since_you_began`'s counts,
+   *  and the Partners statement's `season` for a partner without a recurring
+   *  gift (from their join date). Aggregate and anonymous — counts of
+   *  completions, never a name, never a ranking. */
+  async churchSince(since: Date | string): Promise<{ levels: number; modules: number; plans: number }> {
+    const together = await maybeOne<{
+      levels: number; modules: number; plans: number;
+    }>(
+      this.pool,
+      // Only one parameter here: the day they began. The member's own id is
+      // deliberately absent — these are church-wide counts, not their own.
+      `SELECT
+         (SELECT count(*)::int FROM enrollments
+           WHERE completed_at IS NOT NULL AND completed_at >= $1)                AS levels,
+         (SELECT count(*)::int FROM module_progress
+           WHERE is_completed AND completed_at >= $1)                            AS modules,
+         (SELECT count(*)::int FROM reading_plan_progress
+           WHERE completed_at IS NOT NULL AND completed_at >= $1)                AS plans`,
+      [since],
+    );
+    return { levels: together?.levels ?? 0, modules: together?.modules ?? 0, plans: together?.plans ?? 0 };
   }
 
   async cancelSchedule(userId: string, scheduleId: string): Promise<Record<string, unknown>> {

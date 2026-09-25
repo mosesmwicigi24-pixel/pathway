@@ -8,6 +8,20 @@ import { many, maybeOne, one, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import type { NotificationService } from "../notifications/service.js";
 
+/** Progress of a need: gifts attributed to it directly, plus gifts made under
+ *  a pledge that targets it. Exported so the Partners statement's
+ *  `church_progress_percent` reads the same raised figure this page does. */
+export async function needRaisedMinor(c: Queryable, needId: string): Promise<number> {
+  const r = await one<{ total: string | null }>(
+    c,
+    `SELECT sum(t.amount_minor)::text AS total FROM transactions t
+       LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
+      WHERE t.status = 'succeeded' AND (t.need_id = $1 OR p.need_id = $1)`,
+    [needId],
+  );
+  return Number(r.total ?? 0);
+}
+
 /** `office` = acting under departments:manage rather than as the leader; the
  *  principal's congregation (null = all) bounds what the office may touch. */
 type OfficeOpts = { office?: boolean; congregationId?: string | null };
@@ -69,16 +83,9 @@ export class DepartmentsService {
     return r !== null;
   }
 
-  /** Progress of a need: gifts attributed to it directly, plus gifts made under a pledge that targets it. */
+  /** Progress of a need — see `needRaisedMinor`. */
   private async needRaised(c: Queryable, needId: string): Promise<number> {
-    const r = await one<{ total: string | null }>(
-      c,
-      `SELECT sum(t.amount_minor)::text AS total FROM transactions t
-         LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
-        WHERE t.status = 'succeeded' AND (t.need_id = $1 OR p.need_id = $1)`,
-      [needId],
-    );
-    return Number(r.total ?? 0);
+    return needRaisedMinor(c, needId);
   }
 
   private async shapeNeeds(c: Queryable, departmentId: string, statuses: string[]): Promise<Record<string, unknown>[]> {
