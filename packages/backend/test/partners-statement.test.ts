@@ -288,10 +288,10 @@ describe("the Partners statement on the wire", () => {
     // ── GET /giving/history rows name their pledge ──
     const history = (await financial.listGiving(user)) as { transaction_id: string; pledge_id: string | null; pledge_title: string | null; method: string }[];
     expect(history.find((r) => r.transaction_id === p1)).toMatchObject({ pledge_id: monthlyPledge.pledge_id, pledge_title: "Kenya trip", method: "card" });
-    expect(history.find((r) => r.transaction_id === tithe)).toMatchObject({ pledge_id: null, pledge_title: null });
+    expect(history.find((r) => r.transaction_id === tithe)).toMatchObject({ pledge_id: null, pledge_title: null, need_id: null });
     // Nothing removed: every field that was there before is still there.
     expect(Object.keys(history[0]!).sort()).toEqual([
-      "account_name", "amount_minor", "created_at", "currency", "fund", "method", "pledge_id", "pledge_title",
+      "account_name", "amount_minor", "created_at", "currency", "fund", "method", "need_id", "pledge_id", "pledge_title",
       "provider_ref", "receipt_code", "settled_at", "status", "transaction_id",
     ]);
   });

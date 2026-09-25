@@ -681,7 +681,9 @@ export class FinancialService {
    *  back to the Stripe payment-intent id when there's no mobile-money ref.
    *  Each row also names the pledge it counted toward (`pledge_id`,
    *  `pledge_title` under the pledge card's own words; both null off-pledge)
-   *  so the Give statement can label pledge payments without a second call. */
+   *  so the Give statement can label pledge payments without a second call,
+   *  and the department need it was given to (`need_id`, null otherwise) — the
+   *  apps' "Repeat last gift" skips pledge and need gifts. */
   async listGiving(userId: string): Promise<unknown[]> {
     const rows = await many<Record<string, unknown>>(
       this.pool,
@@ -690,7 +692,8 @@ export class FinancialService {
               COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref,
               t.receipt_code, t.account_name,
               t.created_at, t.settled_at,
-              t.pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "c" })} AS pledge_title
+              t.pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "c" })} AS pledge_title,
+              t.need_id
          FROM transactions t
          LEFT JOIN funds f ON f.fund_id = t.fund_id
          LEFT JOIN pledges p ON p.pledge_id = t.pledge_id

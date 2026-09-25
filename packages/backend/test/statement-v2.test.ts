@@ -489,7 +489,9 @@ describe("statement v2 on the wire", () => {
     expect(st.pledges.find((p) => p.pledge_id === need.pledge_id)).toMatchObject({ pledged_minor: 300_000, paid_minor: 50_000, remaining_year_minor: 250_000, church_progress_percent: 16 });
     expect(st.pledges.find((p) => p.pledge_id === plain.pledge_id)?.church_progress_percent).toBeNull();
     // Someone else gives straight to the need: church-wide, so it moves too — 70,000 → 23.
-    await settled(other, { fund: "tithe", amount_minor: 20_000, need_id: needId }, "2026-07-01 09:00:00+00", "NEED0002");
+    const direct = await settled(other, { fund: "tithe", amount_minor: 20_000, need_id: needId }, "2026-07-01 09:00:00+00", "NEED0002");
+    // Their history row names the need (the apps' "Repeat last gift" skips need gifts).
+    expect(((await financial.listGiving(other)) as { transaction_id: string; need_id: string | null }[]).find((r) => r.transaction_id === direct)?.need_id).toBe(needId);
     st = await partners.statements(user, 2026, now);
     expect(st.pledges.find((p) => p.pledge_id === need.pledge_id)?.church_progress_percent).toBe(23);
     // The same raised figure the department page shows for the need.
