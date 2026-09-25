@@ -69,10 +69,29 @@ Postings (every one balanced: one debit, one credit, same amount + currency):
   becomes nullable; CHECK exactly one of them is set. Readers that join
   `transactions` keep working (they never saw journal rows); the Ledger, Trial
   balance, Funds and Reconciliation read both.
-- **Office receipts**: gapless per year, `OR-2026-00001` (row-locked counter).
-  Offline M-Pesa uses the M-Pesa code as its receipt and must be unique across
-  ALL transactions (409 `DUPLICATE_RECEIPT`) — the same payment can never be
-  recorded twice, online and by hand.
+- **Office receipts**: EVERY office gift (all channels) gets a gapless office
+  receipt `OR-<year>-<5 digits>` (row-locked counter, EAT year at recording
+  time; a rolled-back attempt leaves no gap). The M-Pesa code, cheque number or
+  bank reference goes in `office_reference` (M-Pesa codes trimmed, upper-cased,
+  `^[A-Z0-9]{8,12}$`). An offline M-Pesa code that is already the receipt of a
+  settled online payment, or of another live office M-Pesa entry, is refused
+  (409 `DUPLICATE_RECEIPT`; unique index on `upper(office_reference)` for live
+  office M-Pesa rows, so a reversed entry can be recorded again correctly).
+  Why not use the M-Pesa code as the receipt (the first draft): the STK
+  callback stores the provider's receipt inside the settlement transaction, and
+  a unique clash there would roll the settlement back on every retry. The
+  callback's receipt capture is savepoint-guarded so a display-only field can
+  never undo a settlement. The one race left — the office records a code and
+  the online confirmation for the same payment settles later — is flagged by
+  Reconciliation (`duplicate_receipt`) for the treasurer to reverse the office
+  row; nothing is auto-reversed.
+- **Memberless office gifts**: a walk-in (name and/or phone) or anonymous gift
+  (loose offering) has no member. Migration 202's checks allowed memberless rows
+  only from the website; 216 widens them to `source IN ('website','admin')`,
+  and an admin row is attributable through its office record (`office_channel`
+  is always set). App rows stay strictly member-owned.
+- **Currency**: a gift for a pledge or a department need must be in that
+  pledge's or need's currency (422 `CURRENCY_MISMATCH`).
 - **Dates**: an office gift's `created_at` and `settled_at` are the received
   date (12:00 EAT) so statements, pledge ledgers and reports put it in the right
   month; `received_on` ≤ today and ≥ today − 366 days.
@@ -179,9 +198,11 @@ Writes (idempotent where money is created; every write audited `finance.*`):
 - `POST /gifts` (finance:manage) `{ idempotency_key, user_id? | giver_name?,
   giver_phone?, anonymous?, fund, amount_minor, currency, channel, reference?,
   received_on, pledge_id?, need_id?, note? }` → the transaction (with receipt).
-  reference required for mpesa (the M-Pesa code), cheque, bank. pledge_id must
-  belong to user_id and be open; routing follows pledgeFundCode when pledged.
-  Member gifts queue the normal receipt (outbox).
+  reference required for mpesa (the M-Pesa code), cheque, bank — stored as
+  `office_reference`; the receipt is always the office number `OR-…`.
+  pledge_id must belong to user_id and be open; routing follows pledgeFundCode
+  when pledged; pledge/need currency must match. Member gifts queue the normal
+  receipt (outbox).
 - `POST /transactions/:id/reverse` (finance:manage) `{ reason (5–300) }` — only
   provider `manual`, status succeeded; 422 otherwise.
 - `POST /funds` / `PATCH /funds/:code` (finance:manage) — create (code slug
