@@ -20,6 +20,15 @@ import { pledgeTitleFor } from "./partners.js";
 
 const sha256 = (b: Buffer | string): string => createHash("sha256").update(b).digest("hex");
 
+/** The words a payment method shows — on the detail payload (`method_label`),
+ *  the receipt and the statement, so the apps never keep their own copy of
+ *  this map. `manual` is a pledge claim the office confirmed (partners.ts):
+ *  cash or a bank transfer recorded by hand. An unknown provider falls
+ *  through as-is so a new gateway never renders blank. */
+export function methodLabel(method: string): string {
+  return ({ mpesa: "M-Pesa", airtel: "Airtel Money", card: "Card", paypal: "PayPal", manual: "Manual" } as Record<string, string>)[method] ?? method;
+}
+
 export class FinancialService {
   constructor(
     private readonly pool: Pool,
@@ -696,15 +705,25 @@ export class FinancialService {
   }
 
   /** Full detail for ONE of the caller's gifts — every field plus the balanced
-   *  ledger trail (cash + fund accounts). Scoped to the owner (404 otherwise). */
+   *  ledger trail (cash + fund accounts). Scoped to the owner (404 otherwise).
+   *  Carries everything the in-app receipt prints so the apps render it from
+   *  this one payload: the fund's NAME beside its code, the pledge or department
+   *  need the gift counted toward (under the same words their cards show), the
+   *  method's display label, and who gave where. */
   async givingDetail(userId: string, transactionId: string): Promise<Record<string, unknown>> {
     const t = await maybeOne<Record<string, unknown>>(
       this.pool,
-      `SELECT t.transaction_id, t.amount_minor, t.currency, t.status, f.code AS fund,
+      `SELECT t.transaction_id, t.amount_minor, t.currency, t.status, f.code AS fund, f.name AS fund_name,
               t.provider, COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref,
               t.receipt_code, t.account_name,
-              t.schedule_id, t.created_at, t.settled_at
-         FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
+              t.schedule_id, t.created_at, t.settled_at,
+              t.pledge_id, t.need_id, n.title AS need_title,
+              u.full_name AS member_name, c.name AS congregation
+         FROM transactions t
+         LEFT JOIN funds f ON f.fund_id = t.fund_id
+         LEFT JOIN department_needs n ON n.need_id = t.need_id
+         JOIN users u ON u.user_id = t.user_id
+         LEFT JOIN congregations c ON c.congregation_id = u.congregation_id
         WHERE t.transaction_id = $1 AND t.user_id = $2`,
       [transactionId, userId],
     );
@@ -715,12 +734,23 @@ export class FinancialService {
       [transactionId],
     );
     const provider = (t.provider as string | null) ?? "stripe";
-    const { provider: _p, ...rest } = t;
-    void _p;
+    const method = provider === "stripe" ? "card" : provider;
+    // Same effective-title rule as the intent result (pledgeTitleFor): the
+    // member's own name for the pledge, else the derived one. A pledge_id whose
+    // row is gone (FK is ON DELETE SET NULL, so only mid-delete) reads as null.
+    const pledgeId = (t.pledge_id as string | null) ?? null;
+    const pledgeTitle = pledgeId ? await pledgeTitleFor(this.pool, pledgeId) : null;
+    const needId = (t.need_id as string | null) ?? null;
+    const needTitle = (t.need_title as string | null) ?? null;
+    const { provider: _p, pledge_id: _pl, need_id: _n, need_title: _nt, ...rest } = t;
+    void _p; void _pl; void _n; void _nt;
     return {
       ...rest,
       amount_minor: Number(t.amount_minor),
-      method: provider === "stripe" ? "card" : provider,
+      method,
+      method_label: methodLabel(method),
+      pledge: pledgeId && pledgeTitle ? { pledge_id: pledgeId, title: pledgeTitle } : null,
+      need: needId && needTitle ? { need_id: needId, title: needTitle } : null,
       ledger: ledger.map((l) => ({ ...l, amount_minor: Number(l.amount_minor) })),
     };
   }
@@ -740,7 +770,6 @@ export class FinancialService {
     const dayKey = (v: unknown): string => iso(v).slice(0, 10); // YYYY-MM-DD
     const dayLabel = (v: unknown): string => new Date(iso(v)).toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
     const timeLabel = (v: unknown): string => new Date(iso(v)).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-    const methodLabel = (m: string): string => ({ mpesa: "M-Pesa", airtel: "Airtel Money", card: "Card", paypal: "PayPal" } as Record<string, string>)[m] ?? m;
 
     // Group by calendar day, newest first — mirrors the in-app statement layout.
     const byDay = new Map<string, typeof rows>();
@@ -776,15 +805,20 @@ export class FinancialService {
   /** Render ONE of the caller's gifts as a downloadable receipt PDF (the in-app
    *  "Giving receipt"). Owner-scoped (404 otherwise). Money stays server-side. */
   async receiptPdf(userId: string, transactionId: string): Promise<Buffer> {
-    const t = await maybeOne<{ amount_minor: number; currency: string; status: string; fund: string | null; provider: string | null; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: unknown; settled_at: unknown }>(
+    const t = await maybeOne<{ amount_minor: number; currency: string; status: string; fund: string | null; fund_name: string | null; provider: string | null; provider_ref: string | null; receipt_code: string | null; account_name: string | null; pledge_id: string | null; need_title: string | null; created_at: unknown; settled_at: unknown }>(
       this.pool,
-      `SELECT t.amount_minor, t.currency, t.status, f.code AS fund, t.provider,
-              COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref, t.receipt_code, t.account_name, t.created_at, t.settled_at
-         FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
+      `SELECT t.amount_minor, t.currency, t.status, f.code AS fund, f.name AS fund_name, t.provider,
+              COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref, t.receipt_code, t.account_name,
+              t.pledge_id, n.title AS need_title, t.created_at, t.settled_at
+         FROM transactions t
+         LEFT JOIN funds f ON f.fund_id = t.fund_id
+         LEFT JOIN department_needs n ON n.need_id = t.need_id
         WHERE t.transaction_id = $1 AND t.user_id = $2`,
       [transactionId, userId],
     );
     if (!t) throw new ApiError("NOT_FOUND", "Gift not found");
+    // The same words the pledge card and the detail payload carry.
+    const pledgeTitle = t.pledge_id ? await pledgeTitleFor(this.pool, t.pledge_id) : null;
     const me = await maybeOne<{ full_name: string; congregation: string | null }>(
       this.pool,
       `SELECT u.full_name, c.name AS congregation FROM users u LEFT JOIN congregations c ON c.congregation_id = u.congregation_id WHERE u.user_id = $1`,
@@ -796,8 +830,9 @@ export class FinancialService {
     const settled = (s: string): boolean => s === "succeeded" || s === "settled" || s === "completed";
     const provider = (t.provider as string | null) ?? "stripe";
     const method = provider === "stripe" ? "card" : provider;
-    const methodLabel = ({ mpesa: "M-PESA", airtel: "Airtel Money", card: "Card", paypal: "PayPal" } as Record<string, string>)[method] ?? method;
-    const fund = t.fund ? t.fund[0]!.toUpperCase() + t.fund.slice(1) : "Gift";
+    // The fund's display name ("General Giving"), not its code; a code-only
+    // fund (name missing) still reads as a word, and no fund at all as "Gift".
+    const fund = t.fund_name ?? (t.fund ? t.fund[0]!.toUpperCase() + t.fund.slice(1) : "Gift");
     // Prefer the real M-Pesa receipt code; fall back to provider_ref otherwise.
     const ref = (t.receipt_code ?? t.provider_ref ?? "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
     return renderReceiptPdf({
@@ -807,7 +842,9 @@ export class FinancialService {
       amountLabel: ksh(Number(t.amount_minor)),
       fund,
       giftName: t.account_name,
-      methodLabel,
+      pledgeTitle,
+      needTitle: t.need_title,
+      methodLabel: methodLabel(method),
       statusLabel: settled(t.status) ? "Completed" : t.status[0]!.toUpperCase() + t.status.slice(1),
       feeLabel: ksh(0),
       totalLabel: ksh(Number(t.amount_minor)),

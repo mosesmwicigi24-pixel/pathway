@@ -9713,14 +9713,36 @@ components:
 
     GivingDetail:
       type: object
-      required: [transaction_id, amount_minor, currency, status, ledger]
+      description: >-
+        One gift, with everything the in-app receipt prints — the apps render the
+        receipt from this payload alone (owner asked 2026-09-25). Additive over the
+        earlier shape: every field that was here is still here.
+      required: [transaction_id, amount_minor, currency, status, ledger, fund_name, method, method_label, pledge, need, member_name, congregation]
       properties:
         transaction_id: { type: string, format: uuid }
         amount_minor: { type: integer, format: int64 }
         currency: { type: string }
         status: { type: string }
-        fund: { type: [string, "null"] }
-        method: { type: string }
+        fund: { type: [string, "null"], description: "The fund's code (e.g. tithe, general)" }
+        fund_name: { type: [string, "null"], description: "The fund's display name (e.g. \"General Giving\") — print this, not the code; null only when the fund row is gone" }
+        method: { type: string, description: "card | mpesa | airtel | paypal | manual (`manual` = a pledge claim the office confirmed: cash or a bank transfer recorded by hand). Not a closed enum: a provider added later arrives as its raw key." }
+        method_label: { type: string, description: "The words to print for `method`: Card | M-Pesa | Airtel Money | PayPal | Manual. Not a closed enum: an unknown provider falls through as its raw key, so print it as given." }
+        pledge:
+          type: [object, "null"]
+          description: The pledge this gift counted toward, under the words its card shows (the member's own name for it, else the derived title); null for a gift outside a pledge.
+          required: [pledge_id, title]
+          properties:
+            pledge_id: { type: string, format: uuid }
+            title: { type: string }
+        need:
+          type: [object, "null"]
+          description: The department need this gift went to; null for a gift outside a need.
+          required: [need_id, title]
+          properties:
+            need_id: { type: string, format: uuid }
+            title: { type: string }
+        member_name: { type: string, description: "The giver's full name, as on the receipt" }
+        congregation: { type: [string, "null"], description: The giver's congregation name; null when the member has none }
         provider_ref: { type: [string, "null"] }
         receipt_code: { type: [string, "null"], description: M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL); null for older or non-mobile-money gifts }
         account_name: { type: [string, "null"], description: "Named giving: the member's own label for this gift, as entered; null when not used" }
