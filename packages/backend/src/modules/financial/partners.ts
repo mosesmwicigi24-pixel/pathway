@@ -16,7 +16,6 @@ import type { FinancialService } from "./service.js";
 import { givingTiers } from "./tiers.js";
 
 const TZ_OFFSET_MS = 3 * 60 * 60 * 1000; // Africa/Nairobi
-const DEFAULT_PLEDGE_FUND = "discipleship"; // the programme carries disciples
 
 export type PledgeShape = "monthly" | "total";
 export type PledgeLabel = "on_track" | "behind" | "fulfilled" | "paused";
@@ -28,8 +27,41 @@ interface PledgeRow {
   fund_id: string | null; fund_code: string | null; fund_name: string | null;
   campaign_id: string | null; campaign_title: string | null; need_id: string | null;
   status: "active" | "paused" | "fulfilled" | "cancelled";
-  schedule_id: string | null; reminders_enabled: boolean; note: string | null;
+  schedule_id: string | null; reminders_enabled: boolean;
+  /** The member's own name for the pledge (migration 215); null = derived. */
+  title: string | null;
+  note: string | null;
   created_at: string; fulfilled_at: string | null; cancelled_at: string | null;
+}
+
+/** What the member may point a pledge at (GET /giving/partnership). */
+export interface PledgeOption {
+  key: string;
+  title: string;
+  kind: "general" | "fund" | "campaign" | "need";
+  fund?: string;
+  campaign_id?: string;
+  need_id?: string;
+}
+
+// Module-level (not a private static) so `pledgeTitleFor` below can share it.
+// `reminderCandidates` string-replaces into this: keep "FROM pledges p" and
+// "p.note, p.created_at::text" verbatim.
+const PLEDGE_SELECT = `
+    SELECT p.pledge_id, p.user_id, p.shape, p.amount_minor::text, p.target_minor::text, p.currency,
+           p.due_day, p.due_on::text, p.until_on::text, p.fund_id, f.code AS fund_code, f.name AS fund_name,
+           p.campaign_id, c.title AS campaign_title, p.need_id, p.status, p.schedule_id, p.reminders_enabled, p.title,
+           p.note, p.created_at::text, p.fulfilled_at::text, p.cancelled_at::text
+      FROM pledges p
+      LEFT JOIN funds f ON f.fund_id = p.fund_id
+      LEFT JOIN campaigns c ON c.campaign_id = p.campaign_id`;
+
+/** The title a pledge shows — the member's own name, else the derived one.
+ *  Used by the giving intent so the receipt-side of a "Pay" carries the same
+ *  words the pledge card does. Null when the pledge does not exist. */
+export async function pledgeTitleFor(q: Queryable, pledgeId: string): Promise<string | null> {
+  const row = await maybeOne<PledgeRow>(q, `${PLEDGE_SELECT} WHERE p.pledge_id = $1`, [pledgeId]);
+  return row ? PartnersService.title(row) : null;
 }
 
 export interface PledgeProgress {
@@ -81,6 +113,8 @@ export class PartnersService {
       fund: z.string().min(2).max(40).nullish(),
       campaign_id: z.string().uuid().nullish(),
       need_id: z.string().uuid().nullish(),
+      /** The member's own name for the pledge; absent/null = the derived title. */
+      title: z.string().trim().min(2).max(60).nullish(),
       note: z.string().trim().max(200).nullish(),
       reminders_enabled: z.boolean().default(true),
       auto_schedule: z
@@ -101,6 +135,8 @@ export class PartnersService {
     due_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     reminders_enabled: z.boolean().optional(),
     note: z.string().trim().max(200).nullish(),
+    /** null clears the custom name (the derived title returns). */
+    title: z.string().trim().min(2).max(60).nullable().optional(),
   });
 
   // ── membership ────────────────────────────────────────────────────────
@@ -128,17 +164,8 @@ export class PartnersService {
 
   // ── pledges ───────────────────────────────────────────────────────────
 
-  private static readonly PLEDGE_SELECT = `
-    SELECT p.pledge_id, p.user_id, p.shape, p.amount_minor::text, p.target_minor::text, p.currency,
-           p.due_day, p.due_on::text, p.until_on::text, p.fund_id, f.code AS fund_code, f.name AS fund_name,
-           p.campaign_id, c.title AS campaign_title, p.need_id, p.status, p.schedule_id, p.reminders_enabled,
-           p.note, p.created_at::text, p.fulfilled_at::text, p.cancelled_at::text
-      FROM pledges p
-      LEFT JOIN funds f ON f.fund_id = p.fund_id
-      LEFT JOIN campaigns c ON c.campaign_id = p.campaign_id`;
-
   private async pledgeRows(c: Queryable, where: string, params: unknown[]): Promise<PledgeRow[]> {
-    return many<PledgeRow>(c, `${PartnersService.PLEDGE_SELECT} ${where} ORDER BY p.created_at DESC`, params);
+    return many<PledgeRow>(c, `${PLEDGE_SELECT} ${where} ORDER BY p.created_at DESC`, params);
   }
 
   /** Sum of succeeded payments attributed to a pledge, optionally inside a window. */
@@ -220,10 +247,13 @@ export class PartnersService {
       fulfilled_at: p.fulfilled_at,
       cancelled_at: p.cancelled_at,
       title: PartnersService.title(p),
+      custom_title: p.title,
     };
   }
 
+  /** The member's own name when they gave one, else derived from the target. */
   static title(p: PledgeRow): string {
+    if (p.title) return p.title;
     if (p.campaign_title) return p.campaign_title;
     if (p.fund_name) return p.fund_name;
     if (p.need_id) return "A department need";
@@ -254,8 +284,8 @@ export class PartnersService {
     const dueDay = input.shape === "monthly" ? (input.due_day ?? Number(nairobiDate(new Date()).slice(8, 10)) ) : null;
     const row = await one<{ pledge_id: string }>(
       this.pool,
-      `INSERT INTO pledges (user_id, shape, amount_minor, target_minor, currency, due_day, due_on, until_on, fund_id, campaign_id, need_id, note, reminders_enabled)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING pledge_id`,
+      `INSERT INTO pledges (user_id, shape, amount_minor, target_minor, currency, due_day, due_on, until_on, fund_id, campaign_id, need_id, note, reminders_enabled, title)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING pledge_id`,
       [
         userId, input.shape,
         input.shape === "monthly" ? input.amount_minor : null,
@@ -266,13 +296,15 @@ export class PartnersService {
         input.until_on ?? null,
         fundId, input.campaign_id ?? null, input.need_id ?? null,
         input.note ?? null, input.reminders_enabled,
+        input.title ?? null,
       ],
     );
     await audit(this.pool, userId, "pledge.created", "pledges", row.pledge_id, { shape: input.shape });
 
-    // "Charge me automatically": a schedule bound to this pledge.
+    // "Charge me automatically": a schedule bound to this pledge. Its fund is
+    // the pledge's own (server-authoritative, one rule with gifts and claims).
     if (input.auto_schedule && input.shape === "monthly" && input.amount_minor) {
-      const fundCode = input.fund ?? (await this.campaignFundCode(input.campaign_id ?? null)) ?? (await this.fin.needFundCode(input.need_id ?? null)) ?? DEFAULT_PLEDGE_FUND;
+      const fundCode = await this.fin.pledgeFundCode(row.pledge_id);
       await this.fin.createSchedule(userId, {
         fund: fundCode,
         amount_minor: input.amount_minor,
@@ -285,14 +317,6 @@ export class PartnersService {
     }
     const [created] = await this.pledgeRows(this.pool, `WHERE p.pledge_id = $1`, [row.pledge_id]);
     return this.shape(created!);
-  }
-
-  private async campaignFundCode(campaignId: string | null): Promise<string | null> {
-    if (!campaignId) return null;
-    const r = await maybeOne<{ code: string }>(
-      this.pool, `SELECT f.code FROM campaigns c JOIN funds f ON f.fund_id = c.fund_id WHERE c.campaign_id = $1`, [campaignId],
-    );
-    return r?.code ?? null;
   }
 
   async getPledge(userId: string, pledgeId: string): Promise<Record<string, unknown>> {
@@ -329,6 +353,7 @@ export class PartnersService {
     if (patch.due_on !== undefined) push("due_on", patch.due_on);
     if (patch.reminders_enabled !== undefined) push("reminders_enabled", patch.reminders_enabled);
     if (patch.note !== undefined) push("note", patch.note);
+    if (patch.title !== undefined) push("title", patch.title); // null clears the custom name
     if (patch.status === "cancelled") { push("status", "cancelled"); sets.push("cancelled_at = now()"); }
     else if (patch.status === "paused") { push("status", "paused"); }
     else if (patch.status === "active") { push("status", "active"); }
@@ -360,10 +385,45 @@ export class PartnersService {
     return { name: top.meaning, monthly_minor: top.amount_minor, disciples_per_year: top.disciples_per_year };
   }
 
+  /** Everything a member may point a new pledge at, in the order the picker
+   *  shows it: general partnership, then active funds by name, then the
+   *  campaigns live today in their congregation (the same predicate the
+   *  invitation engine uses), then that congregation's approved department
+   *  needs. Keys are stable and client-parseable: `fund:<code>`,
+   *  `campaign:<id>`, `need:<id>`. */
+  async pledgeOptions(userId: string, now = new Date()): Promise<PledgeOption[]> {
+    const who = await one<{ congregation_id: string }>(this.pool, `SELECT congregation_id FROM users WHERE user_id = $1`, [userId]);
+    const today = nairobiDate(now);
+    const funds = await many<{ code: string; name: string }>(this.pool, `SELECT code, name FROM funds WHERE is_active ORDER BY name, code`, []);
+    const campaigns = await many<{ campaign_id: string; title: string }>(
+      this.pool,
+      `SELECT campaign_id, title FROM campaigns
+        WHERE congregation_id = $1 AND status = 'live'
+          AND starts_on <= $2::date AND ends_on >= $2::date
+        ORDER BY ends_on, title`,
+      [who.congregation_id, today],
+    );
+    const needs = await many<{ need_id: string; title: string }>(
+      this.pool,
+      `SELECT n.need_id, n.title FROM department_needs n
+         JOIN departments d ON d.department_id = n.department_id
+        WHERE n.status = 'approved' AND d.status = 'active' AND d.congregation_id = $1
+        ORDER BY n.created_at DESC`,
+      [who.congregation_id],
+    );
+    return [
+      { key: "general", title: "General partnership", kind: "general" },
+      ...funds.map((f): PledgeOption => ({ key: `fund:${f.code}`, title: f.name, kind: "fund", fund: f.code })),
+      ...campaigns.map((c): PledgeOption => ({ key: `campaign:${c.campaign_id}`, title: c.title, kind: "campaign", campaign_id: c.campaign_id })),
+      ...needs.map((n): PledgeOption => ({ key: `need:${n.need_id}`, title: n.title, kind: "need", need_id: n.need_id })),
+    ];
+  }
+
   async partnership(userId: string, now = new Date()): Promise<Record<string, unknown>> {
     const base = (await this.fin.partnership(userId)) as Record<string, unknown>;
     const membership = await this.membership(userId);
     const pledges = await this.listPledges(userId, now);
+    const pledgeOptions = await this.pledgeOptions(userId, now);
     const committedMonthly = pledges
       .filter((p) => p.shape === "monthly" && p.status === "active")
       .reduce((a, p) => a + Number(p.amount_minor ?? 0), 0);
@@ -393,6 +453,7 @@ export class PartnersService {
       committed_monthly_minor: monthly,
       pledges,
       due,
+      pledge_options: pledgeOptions,
     };
   }
 
@@ -410,7 +471,7 @@ export class PartnersService {
     const rows = await many<{ transaction_id: string; amount_minor: string; currency: string; at: string; receipt_code: string | null; fund: string; fund_name: string; pledge_id: string | null; pledge_title: string | null }>(
       this.pool,
       `SELECT t.transaction_id, t.amount_minor::text, t.currency, t.created_at::text AS at, t.receipt_code, f.code AS fund, f.name AS fund_name,
-              t.pledge_id, COALESCE(c.title, pf.name, CASE WHEN p.pledge_id IS NULL THEN NULL ELSE 'Partnership' END) AS pledge_title
+              t.pledge_id, COALESCE(p.title, c.title, pf.name, CASE WHEN p.pledge_id IS NULL THEN NULL ELSE 'Partnership' END) AS pledge_title
          FROM transactions t
          JOIN funds f ON f.fund_id = t.fund_id
          LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
@@ -454,7 +515,7 @@ export class PartnersService {
   async reminderCandidates(now = new Date()): Promise<Array<{ row: PledgeRow; progress: PledgeProgress; timezone: string }>> {
     const rows = await many<PledgeRow & { timezone: string | null }>(
       this.pool,
-      `${PartnersService.PLEDGE_SELECT.replace("FROM pledges p", "FROM pledges p JOIN users u ON u.user_id = p.user_id LEFT JOIN partner_memberships pm ON pm.user_id = p.user_id")}
+      `${PLEDGE_SELECT.replace("FROM pledges p", "FROM pledges p JOIN users u ON u.user_id = p.user_id LEFT JOIN partner_memberships pm ON pm.user_id = p.user_id")}
         WHERE p.status = 'active' AND p.reminders_enabled AND COALESCE(pm.reminders_enabled, TRUE)`.replace("p.note, p.created_at::text", "p.note, u.timezone, p.created_at::text"),
       [],
     );
@@ -603,7 +664,7 @@ export class PartnersService {
     return many(
       this.pool,
       `SELECT c.claim_id, c.pledge_id, c.user_id, u.full_name, c.amount_minor::text, c.currency, c.paid_on::text, c.note, c.status, c.created_at::text,
-              COALESCE(cm.title, f.name, 'Partnership') AS pledge_title
+              COALESCE(p.title, cm.title, f.name, 'Partnership') AS pledge_title
          FROM pledge_claims c
          JOIN users u ON u.user_id = c.user_id
          JOIN pledges p ON p.pledge_id = c.pledge_id
@@ -634,12 +695,11 @@ export class PartnersService {
         return { claim_id: claimId, status: "rejected" };
       }
 
-      // The fund the money went to: the pledge's, its campaign's, its need's department's, or the programme default.
-      let fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT f.fund_id, f.code FROM funds f WHERE f.fund_id = $1`, [p.fund_id]);
-      if (!fund && p.campaign_id) fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT f.fund_id, f.code FROM campaigns cm JOIN funds f ON f.fund_id = cm.fund_id WHERE cm.campaign_id = $1`, [p.campaign_id]);
-      if (!fund && p.need_id) fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT f.fund_id, f.code FROM department_needs n JOIN departments d ON d.department_id = n.department_id JOIN funds f ON f.code = d.fund_code AND f.is_active WHERE n.need_id = $1`, [p.need_id]);
-      if (!fund) fund = await maybeOne<{ fund_id: string; code: string }>(c, `SELECT fund_id, code FROM funds WHERE code = $1 AND is_active`, [DEFAULT_PLEDGE_FUND]);
-      if (!fund) fund = await one<{ fund_id: string; code: string }>(c, `SELECT fund_id, code FROM funds WHERE is_active ORDER BY code LIMIT 1`, []);
+      // The fund the money went to: one rule with gifts and pledge schedules
+      // (FinancialService.pledgeFundCode) — the pledge's own, its campaign's,
+      // its need's department's, or the programme default.
+      const fundCode = await this.fin.pledgeFundCode(p.pledge_id);
+      const fund = await one<{ fund_id: string; code: string }>(c, `SELECT fund_id, code FROM funds WHERE code = $1`, [fundCode]);
 
       const txn = await one<{ transaction_id: string }>(
         c,

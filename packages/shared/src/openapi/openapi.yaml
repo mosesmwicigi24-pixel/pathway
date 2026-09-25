@@ -2829,25 +2829,20 @@ paths:
         "404": { description: Not found }
     patch:
       tags: [giving]
-      summary: Member. Pause, resume, cancel or edit a pledge; a bound schedule follows.
+      summary: Member. Pause, resume, cancel, rename or edit a pledge; a bound schedule follows.
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              properties:
-                status: { type: string, enum: [active, paused, cancelled] }
-                amount_minor: { type: integer }
-                target_minor: { type: integer }
-                due_day: { type: integer, minimum: 1, maximum: 28 }
-                due_on: { type: string, format: date }
-                reminders_enabled: { type: boolean }
-                note: { type: [string, "null"] }
+            schema: { $ref: "#/components/schemas/UpdatePledgeBody" }
       responses:
-        "200": { description: Updated pledge }
+        "200":
+          description: Updated pledge
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pledge" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: Not found }
         "422": { description: Cancelled pledges cannot change }
@@ -3174,14 +3169,20 @@ paths:
   /giving/partnership:
     get:
       tags: [financial]
-      summary: The caller's standing as a partner — derived from their giving schedule
+      summary: The caller's standing as a partner — derived from their giving schedule — plus their pledges, what is due, and what a new pledge may point at
       description: >-
         Recognition rather than receipts. `kept` counts cycles actually collected,
         never cycles scheduled. `since_you_began` is what the whole church did during
         the partnership and is NOT attributed to this member's money.
+        `pledge_options` is present in every state (including not-yet-partner) so the
+        "make a pledge" picker never needs a second call.
       security: [{ bearerAuth: [] }]
       responses:
-        "200": { description: "Partner standing — is_partner, since, kept, rhythm, trouble, since_you_began" }
+        "200":
+          description: "Partner standing — is_partner, since, kept, rhythm, trouble, since_you_began, membership, tier, pledges, due, pledge_options"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Partnership" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /giving/schedules/{id}/resume:
     post:
@@ -9066,6 +9067,7 @@ components:
         fund: { type: [string, "null"] }
         campaign_id: { type: [string, "null"], format: uuid }
         need_id: { type: [string, "null"], format: uuid }
+        title: { type: [string, "null"], minLength: 2, maxLength: 60, description: "The member's own name for the pledge (trimmed). Absent or null = the derived title (campaign → fund → need → \"Partnership\")." }
         note: { type: [string, "null"] }
         reminders_enabled: { type: boolean, default: true }
         auto_schedule:
@@ -9073,9 +9075,102 @@ components:
           properties:
             method: { type: string, enum: [mpesa, airtel] }
             frequency: { type: string, enum: [weekly, monthly], default: monthly }
+    UpdatePledgeBody:
+      type: object
+      properties:
+        status: { type: string, enum: [active, paused, cancelled] }
+        amount_minor: { type: integer }
+        target_minor: { type: integer }
+        due_day: { type: integer, minimum: 1, maximum: 28 }
+        due_on: { type: string, format: date }
+        reminders_enabled: { type: boolean }
+        note: { type: [string, "null"] }
+        title: { type: [string, "null"], minLength: 2, maxLength: 60, description: "Rename the pledge; null clears the custom name and the derived title returns." }
+    PledgeOption:
+      type: object
+      description: One thing a new pledge may point at. Exactly one of fund / campaign_id / need_id is present, by kind; none for general.
+      required: [key, title, kind]
+      properties:
+        key: { type: string, description: "Stable, client-parseable: general | fund:<code> | campaign:<id> | need:<id>" }
+        title: { type: string }
+        kind: { type: string, enum: [general, fund, campaign, need] }
+        fund: { type: string, description: Fund code (kind = fund) }
+        campaign_id: { type: string, format: uuid, description: (kind = campaign) }
+        need_id: { type: string, format: uuid, description: (kind = need) }
+    Partnership:
+      type: object
+      description: GET /giving/partnership. Standing (from the giving schedule) + programme membership + pledges with progress + what is due + pledge_options.
+      required: [is_partner, ever_partnered, kept, pledges, due, pledge_options, committed_monthly_minor]
+      properties:
+        is_partner: { type: boolean, description: An active/paused giving schedule OR an active programme membership }
+        ever_partnered: { type: boolean }
+        schedule_id: { type: string, format: uuid, description: Partner with a schedule only }
+        status: { type: string, enum: [active, paused], description: The schedule's status (partner with a schedule only) }
+        since: { type: [string, "null"], format: date-time }
+        kept: { type: integer, description: Cycles actually collected — never cycles scheduled }
+        given_minor: { type: integer, format: int64, description: Partner with a schedule only }
+        currency: { type: string }
+        rhythm:
+          type: [object, "null"]
+          properties:
+            frequency: { type: string, enum: [weekly, monthly] }
+            method: { type: string }
+            amount_minor: { type: integer, format: int64 }
+            fund: { type: string }
+            next_run_at: { type: [string, "null"], format: date-time }
+        trouble:
+          type: [object, "null"]
+          description: Present only when there is something to say
+          properties:
+            paused: { type: boolean }
+            consecutive_failures: { type: integer }
+            last_failed_at: { type: [string, "null"], format: date-time }
+        since_you_began:
+          type: [object, "null"]
+          description: What the WHOLE CHURCH did during the partnership — never attributed to this member's money
+          properties:
+            from: { type: string, format: date-time }
+            levels_completed: { type: integer }
+            modules_completed: { type: integer }
+            plans_finished: { type: integer }
+        membership:
+          type: [object, "null"]
+          properties:
+            status: { type: string, enum: [active, paused, left] }
+            joined_at: { type: string }
+            reminders_enabled: { type: boolean }
+        tier:
+          type: [object, "null"]
+          properties:
+            name: { type: string }
+            monthly_minor: { type: integer, format: int64 }
+            disciples_per_year: { type: integer }
+        committed_monthly_minor: { type: integer, format: int64 }
+        pledges:
+          type: array
+          items: { $ref: "#/components/schemas/Pledge" }
+        due:
+          type: array
+          description: Sorted by due_on. `title` is the pledge's title (custom name when set).
+          items:
+            type: object
+            required: [kind, id, title, currency, due_on, action, overdue]
+            properties:
+              kind: { type: string, enum: [pledge, schedule] }
+              id: { type: string, format: uuid }
+              title: { type: string }
+              amount_minor: { type: [integer, "null"], format: int64 }
+              currency: { type: string }
+              due_on: { type: string, format: date }
+              action: { type: string, enum: [pay, resume] }
+              overdue: { type: boolean }
+        pledge_options:
+          type: array
+          description: "Ordered: general, then active funds by name, then campaigns live today in the member's congregation, then that congregation's approved department needs."
+          items: { $ref: "#/components/schemas/PledgeOption" }
     Pledge:
       type: object
-      required: [pledge_id, shape, currency, status, progress, title]
+      required: [pledge_id, shape, currency, status, progress, title, custom_title]
       properties:
         pledge_id: { type: string, format: uuid }
         shape: { type: string, enum: [monthly, total] }
@@ -9101,7 +9196,8 @@ components:
         schedule_id: { type: [string, "null"] }
         reminders_enabled: { type: boolean }
         note: { type: [string, "null"] }
-        title: { type: string }
+        title: { type: string, description: "What to show: custom_title when set, else derived (campaign title → fund name → \"A department need\" → \"Partnership\")." }
+        custom_title: { type: [string, "null"], description: "The member's own name for the pledge, or null when they never gave one" }
         created_at: { type: string }
     DepartmentUpsert:
       type: object
@@ -9540,7 +9636,15 @@ components:
       type: object
       required: [fund, amount_minor, currency]
       properties:
-        fund: { type: string, description: "Fund code from the funds table (tithe, offering, general, media, mission, gift, …)" }
+        fund:
+          type: string
+          description: >-
+            Fund code from the funds table (tithe, offering, general, media, mission,
+            gift, …). IGNORED for a pledge-attributed gift: when `pledge_id` is sent
+            (or the charging schedule is bound to a pledge) the server routes the money
+            by the pledge — its own fund, else its campaign's, else its need's
+            department's, else the programme default — and the result's `fund` says
+            where it landed. Also overridden for `need_id` (see there). Still required.
         amount_minor: { type: integer, format: int64, description: "Minor units, never floats" }
         currency: { type: string, minLength: 3, maxLength: 3 }
         method: { type: string, enum: [card, mpesa, airtel], default: card }
@@ -9569,6 +9673,20 @@ components:
         status: { type: string, enum: [processing, succeeded, failed, requires_action, refunded] }
         idempotency_key: { type: string }
         reused: { type: boolean }
+        fund:
+          type: object
+          description: "The fund the gift was BOOKED to (server-authoritative; may differ from the `fund` sent). Present on POST /giving/intents, including a reused intent; absent on a media purchase."
+          required: [code, name]
+          properties:
+            code: { type: string }
+            name: { type: string }
+        pledge:
+          type: [object, "null"]
+          description: "The pledge this gift counts toward, under the words its card shows; null for a gift outside a pledge. Present on POST /giving/intents, including a reused intent."
+          required: [pledge_id, title]
+          properties:
+            pledge_id: { type: string, format: uuid }
+            title: { type: string }
     GivingScheduleCreate:
       type: object
       required: [fund, amount_minor, currency, frequency]
