@@ -111,6 +111,32 @@ Both apps, one rule each; the portal drawer follows the same vocabulary later.
   on the Partners tab (they stay in the full statement). If the server ever
   exposes these totals, it must implement exactly this rule.
 
+## 3b. Pledge names + server-routed pledge money (owner-approved 2026-09-25)
+
+- **A pledge has a name.** `pledges.title` (migration 215, 2–60 chars,
+  optional). The wire `title` is the custom name when set, else the derived
+  one (campaign → fund → need → "Partnership"); `custom_title` says which.
+  Create accepts `title`; PATCH `title: null` clears it. Portal and iPad
+  show `title` and need no change.
+- **"What is this pledge for?"** — `GET /giving/partnership` carries
+  `pledge_options` (General partnership · active funds · live campaigns ·
+  approved department needs, in that order, keys `general`, `fund:<code>`,
+  `campaign:<id>`, `need:<id>`). Picking one sets the target AND the name;
+  "Custom name…" sends a title only and no target. Both apps render the same
+  picker; a client with no options falls back to General + the funds.
+- **Pledge money is routed by the server, never the chip.** One helper,
+  `FinancialService.pledgeFundCode`: the pledge's fund → its campaign's fund
+  → its need's department fund → `discipleship` if active → the first active
+  fund. Used by gift intents (a `pledge_id` overrides the request's `fund`;
+  a need alone still overrides; pledge wins over need), by the pledge's
+  auto-schedule and by any schedule bound to a pledge, and by confirmed
+  claims. Audit rows and provider metadata record the booked fund.
+- **The ceremony tells the truth.** `POST /giving/intents` returns
+  `fund {code, name}` and `pledge {pledge_id, title} | null` (also on an
+  idempotent replay). Clients render "Enter your PIN to complete KSh 1,000
+  toward your <title> pledge." or "… to <fund name>", and fall back to the
+  chip label only when the result carries no fund.
+
 ## 4. Departments
 
 - `departments` (congregation, name, purpose, leader_user_id, meets, photo,

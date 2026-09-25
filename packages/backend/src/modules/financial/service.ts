@@ -14,6 +14,9 @@ import type { PaymentGateway } from "./gateway.js";
 import { sanitizeAccountReference, type MobileMoneyKey, type MobileMoneyProviders } from "./providers.js";
 import type { PayPalGateway } from "./paypal.js";
 import { renderStatementPdf, renderReceiptPdf } from "./statementPdf.js";
+import { DEFAULT_PLEDGE_FUND } from "./constants.js";
+// partners.ts imports FinancialService as a TYPE only, so this is not a cycle.
+import { pledgeTitleFor } from "./partners.js";
 
 const sha256 = (b: Buffer | string): string => createHash("sha256").update(b).digest("hex");
 
@@ -83,27 +86,45 @@ export class FinancialService {
     // choice, else the pledge bound to the schedule that is charging.
     const pledgeId = await this.resolvePledgeId(userId, input.pledge_id ?? null, scheduleId ?? null);
     const needId = await this.resolveNeedId(input.need_id ?? null);
-    // Server-authoritative (§1.1): a gift to a need lands in that department's
-    // fund when it has one, whatever fund chip the client happened to show.
-    const fundCode = (needId && (await this.needFundCode(needId))) || input.fund;
     const key = input.idempotency_key ?? randomUUID();
 
-    // Idempotent: the same client key returns the existing transaction.
-    const existing = await maybeOne<{ transaction_id: string; status: string }>(
+    // Idempotent: the same client key returns the existing transaction — with
+    // the fund and pledge it was BOOKED to, never what this replay asked for.
+    const existing = await maybeOne<{ transaction_id: string; status: string; pledge_id: string | null; fund_code: string | null; fund_name: string | null }>(
       this.pool,
-      `SELECT transaction_id, status FROM transactions WHERE idempotency_key = $1 AND user_id = $2`,
+      `SELECT t.transaction_id, t.status, t.pledge_id, f.code AS fund_code, f.name AS fund_name
+         FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
+        WHERE t.idempotency_key = $1 AND t.user_id = $2`,
       [key, userId],
     );
     if (existing) {
-      return { transaction_id: existing.transaction_id, status: existing.status, idempotency_key: key, reused: true };
+      return {
+        transaction_id: existing.transaction_id,
+        status: existing.status,
+        idempotency_key: key,
+        reused: true,
+        ...(await this.intentAttribution(
+          existing.fund_code && existing.fund_name ? { code: existing.fund_code, name: existing.fund_name } : null,
+          existing.pledge_id,
+        )),
+      };
     }
 
-    const fund = await maybeOne<{ fund_id: string }>(
+    // Server-authoritative (§1.1): money follows the promise, not the fund chip
+    // the client happened to show. A pledge-attributed gift lands in the
+    // pledge's own fund (pledge → campaign → need → programme default); a gift
+    // to a need lands in that department's fund. Only a plain gift keeps
+    // `input.fund`. When both are sent, the pledge wins.
+    const fundCode = pledgeId
+      ? await this.pledgeFundCode(pledgeId)
+      : (needId && (await this.needFundCode(needId))) || input.fund;
+    const fund = await maybeOne<{ fund_id: string; code: string; name: string }>(
       this.pool,
-      `SELECT fund_id FROM funds WHERE code = $1 AND is_active`,
+      `SELECT fund_id, code, name FROM funds WHERE code = $1 AND is_active`,
       [fundCode],
     );
     if (!fund) throw new ApiError("VALIDATION_FAILED", "Unknown or inactive fund");
+    const attribution = await this.intentAttribution({ code: fund.code, name: fund.name }, pledgeId);
 
     const currency = input.currency.toUpperCase();
 
@@ -118,7 +139,7 @@ export class FinancialService {
         phoneNumber: phone,
         metadata: {
           user_id: userId,
-          fund: input.fund,
+          fund: fund.code, // the fund actually booked — it is the M-Pesa statement's fallback reference
           // Named giving: only set `reference` when the member entered a name —
           // absent, the provider falls back to its existing fund/default ref.
           ...(input.account_name ? { reference: input.account_name } : {}),
@@ -134,7 +155,7 @@ export class FinancialService {
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor,
         currency,
-        fund: input.fund,
+        fund: fund.code,
         method: input.method,
         account_name: input.account_name ?? null,
       });
@@ -145,12 +166,13 @@ export class FinancialService {
         status: txn.status,
         idempotency_key: key,
         reused: false,
+        ...attribution,
       };
     }
 
     if (input.method === "paypal") {
       // PayPal can't transact KES — gifts settle in USD (amount treated as USD).
-      const order = await this.paypalGw().createOrder({ amountMinor: input.amount_minor, reference: `${userId}:${input.fund}` });
+      const order = await this.paypalGw().createOrder({ amountMinor: input.amount_minor, reference: `${userId}:${fund.code}` });
       const txn = await one<{ transaction_id: string; status: string }>(
         this.pool,
         `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id)
@@ -159,7 +181,7 @@ export class FinancialService {
         [userId, fund.fund_id, input.amount_minor, order.orderId, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId],
       );
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
-        amount_minor: input.amount_minor, currency: "USD", fund: input.fund, method: "paypal", account_name: input.account_name ?? null,
+        amount_minor: input.amount_minor, currency: "USD", fund: fund.code, method: "paypal", account_name: input.account_name ?? null,
       });
       return {
         transaction_id: txn.transaction_id,
@@ -169,13 +191,14 @@ export class FinancialService {
         status: txn.status,
         idempotency_key: key,
         reused: false,
+        ...attribution,
       };
     }
 
     const intent = await this.gateway.createIntent({
       amountMinor: input.amount_minor,
       currency,
-      metadata: { user_id: userId, fund: input.fund },
+      metadata: { user_id: userId, fund: fund.code },
     });
 
     const txn = await one<{ transaction_id: string; status: string }>(
@@ -188,7 +211,7 @@ export class FinancialService {
     await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
       amount_minor: input.amount_minor,
       currency,
-      fund: input.fund,
+      fund: fund.code,
       method: "card",
       account_name: input.account_name ?? null,
     });
@@ -198,7 +221,19 @@ export class FinancialService {
       status: txn.status,
       idempotency_key: key,
       reused: false,
+      ...attribution,
     };
+  }
+
+  /** What the client shows after "Pay": the fund the gift was actually booked
+   *  to (server-authoritative — may differ from the chip that was tapped) and
+   *  the pledge it counts toward, under the same words its card carries. */
+  private async intentAttribution(
+    fund: { code: string; name: string } | null,
+    pledgeId: string | null,
+  ): Promise<{ fund: { code: string; name: string } | null; pledge: { pledge_id: string; title: string } | null }> {
+    const title = pledgeId ? await pledgeTitleFor(this.pool, pledgeId) : null;
+    return { fund, pledge: pledgeId && title ? { pledge_id: pledgeId, title } : null };
   }
 
   // ==========================================================================
@@ -837,6 +872,38 @@ export class FinancialService {
     return r?.code ?? null;
   }
 
+  /** The fund a pledge's money belongs to — ONE rule for a gift made from a
+   *  pledge, the schedule that charges it, and a confirmed "I paid another
+   *  way" claim, so a pledge never splits across funds by client. The pledge's
+   *  own fund, else its campaign's, else its need's department's (active only,
+   *  via `needFundCode`), else the programme default when that is an active
+   *  fund, else the first active fund by code. Never throws for a missing
+   *  default; 404 only when the pledge itself does not exist. */
+  async pledgeFundCode(pledgeId: string): Promise<string> {
+    const p = await maybeOne<{ fund_code: string | null; campaign_fund_code: string | null; need_id: string | null }>(
+      this.pool,
+      `SELECT f.code AS fund_code, cf.code AS campaign_fund_code, p.need_id
+         FROM pledges p
+         LEFT JOIN funds f ON f.fund_id = p.fund_id
+         LEFT JOIN campaigns c ON c.campaign_id = p.campaign_id
+         LEFT JOIN funds cf ON cf.fund_id = c.fund_id
+        WHERE p.pledge_id = $1`,
+      [pledgeId],
+    );
+    if (!p) throw new ApiError("NOT_FOUND", "Pledge not found");
+    return p.fund_code ?? p.campaign_fund_code ?? (await this.needFundCode(p.need_id)) ?? (await this.defaultPledgeFundCode());
+  }
+
+  /** `DEFAULT_PLEDGE_FUND` when it is an active fund, else the first active
+   *  fund by code — a general pledge must always have somewhere to land. */
+  private async defaultPledgeFundCode(): Promise<string> {
+    const preferred = await maybeOne<{ code: string }>(this.pool, `SELECT code FROM funds WHERE code = $1 AND is_active`, [DEFAULT_PLEDGE_FUND]);
+    if (preferred) return preferred.code;
+    const first = await maybeOne<{ code: string }>(this.pool, `SELECT code FROM funds WHERE is_active ORDER BY code LIMIT 1`, []);
+    if (!first) throw new ApiError("UNPROCESSABLE", "No active fund can receive pledge gifts");
+    return first.code;
+  }
+
   private async resolveNeedId(explicit: string | null): Promise<string | null> {
     if (!explicit) return null;
     const open = await maybeOne<{ need_id: string }>(
@@ -865,17 +932,22 @@ export class FinancialService {
     );
     if (existing) return { ...existing, reused: true };
 
+    // A schedule started for a pledge is bound to it (ownership checked), and
+    // is STORED on the pledge's fund — the same one every charge it makes
+    // lands in (createGivingIntent routes by the binding) — so the schedules
+    // rail and the schedule detail never show a fund the money does not go to.
+    // Without a pledge, the client's fund stands.
+    const boundPledge = await this.resolvePledgeId(userId, input.pledge_id ?? null, null);
+    const fundCode = boundPledge ? await this.pledgeFundCode(boundPledge) : input.fund;
     const fund = await maybeOne<{ fund_id: string }>(
       this.pool,
       `SELECT fund_id FROM funds WHERE code = $1 AND is_active`,
-      [input.fund],
+      [fundCode],
     );
     if (!fund) throw new ApiError("VALIDATION_FAILED", "Unknown or inactive fund");
 
     // First charge on the next cycle boundary; give now if you want to give now.
     const firstRun = FinancialService.nextRun(new Date(), input.frequency);
-    // A schedule started for a pledge is bound to it (ownership checked).
-    const boundPledge = await this.resolvePledgeId(userId, input.pledge_id ?? null, null);
     const row = await one<{ schedule_id: string; next_run_at: string }>(
       this.pool,
       `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key, pledge_id)
@@ -884,7 +956,7 @@ export class FinancialService {
       [userId, fund.fund_id, input.amount_minor, input.currency.toUpperCase(), input.frequency, input.method, firstRun.toISOString(), key, boundPledge],
     );
     await audit(this.pool, userId, "giving.schedule_created", "giving_schedules", row.schedule_id, {
-      fund: input.fund,
+      fund: fundCode,
       amount_minor: input.amount_minor,
       frequency: input.frequency,
       method: input.method,
