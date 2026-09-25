@@ -625,7 +625,7 @@ export function Partners(): ReactElement {
       <div style={{ background: "var(--nuru-dark)", padding: "22px clamp(16px,4vw,48px) 24px" }}>
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-1.5" style={{ fontSize: 11, color: "rgba(232,239,245,0.55)", letterSpacing: "0.04em" }}>
-            <span>Operations</span>
+            <span>Finance</span>
             <ChevronRight size={10} />
             <span style={{ color: "#fff", fontWeight: 600 }}>Partners</span>
           </div>
