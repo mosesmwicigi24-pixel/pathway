@@ -39,6 +39,8 @@ export const API_ERROR_CODES = {
   NOT_REVERSIBLE: 422,
   /** The transaction was reversed already — reversing twice is refused. */
   ALREADY_REVERSED: 422,
+  /** An expense journal is undone by voiding its expense, not by reversing the journal. */
+  USE_EXPENSE_VOID: 422,
   /** Maker-checker: the person who recorded or edited an expense cannot approve it. */
   SAME_PERSON: 403,
 } as const;

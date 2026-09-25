@@ -4781,8 +4781,9 @@ paths:
   # office needs to know exactly what happened: DUPLICATE_RECEIPT (409),
   # INVALID_DATE (422: received_on / spent_on / occurred_on outside
   # [today − 366 days, today], Africa/Nairobi), INVALID_REFERENCE (422),
-  # CURRENCY_MISMATCH (422), NOT_REVERSIBLE / ALREADY_REVERSED (422),
-  # SAME_PERSON (403). Every error body is the common Error envelope.
+  # CURRENCY_MISMATCH (422), NOT_REVERSIBLE / ALREADY_REVERSED /
+  # USE_EXPENSE_VOID (422), SAME_PERSON (403). Every error body is the common
+  # Error envelope.
   # Dates: every posting's ledger legs carry the ECONOMIC date at 12:00
   # Africa/Nairobi (received_on / spent_on / occurred_on; a reversal carries its
   # gift's own date, a void its expense's spent_on) so period reads over
@@ -4926,7 +4927,8 @@ paths:
         below zero unless allow_negative is true (the UI warns). Transfers from
         the same fund are serialised (row lock), so two at once cannot both
         spend the same balance. The to-fund must be active; the from-fund may be
-        inactive (emptying a retired fund).
+        inactive (emptying a retired fund). Optional idempotency_key: a replay
+        returns the transfer as posted (200, reused true) and posts nothing.
       requestBody:
         required: true
         content:
@@ -4935,6 +4937,11 @@ paths:
       responses:
         "201":
           description: Posted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksTransfer" }
+        "200":
+          description: Replay of an idempotency_key already posted — reused true.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/BooksTransfer" }
@@ -5271,6 +5278,103 @@ paths:
               schema: { $ref: "#/components/schemas/BooksBudgetActuals" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /admin/finance/opening-balances:
+    post:
+      tags: [giving]
+      operationId: financeBooksPostOpeningBalance
+      summary: "finance:approve. Bring a fund's balance in from before the system — journal kind opening (debit cash:<channel account>, credit fund:<code>), legs at as_of 12:00 EAT. Idempotent. Audited journal.opening_posted."
+      description: >
+        Without opening balances every fund starts at zero and the first
+        expenses drive it negative. One journal per (channel, fund, currency)
+        amount; post several for several accounts. Channel → cash account as for
+        gifts (other → cash:manual). A wrong opening balance is corrected by
+        reversing it (POST /admin/finance/journals/{id}/reverse) and posting the
+        right one. A replay of the same idempotency_key returns the journal as
+        posted (200, reused true) and posts nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksOpeningBalanceInput" }
+      responses:
+        "201":
+          description: Posted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksJournalResult" }
+        "200":
+          description: Replay of an idempotency_key already posted — reused true.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksJournalResult" }
+        "400": { description: "VALIDATION_FAILED — a field out of bounds or as_of not a date." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { description: "CONFLICT — the idempotency_key belongs to a journal that is not an opening balance." }
+        "422": { description: "INVALID_DATE — as_of after today or more than 3660 days ago (EAT); UNPROCESSABLE — unknown or inactive fund." }
+  /admin/finance/journals:
+    get:
+      tags: [giving]
+      operationId: financeBooksListJournals
+      summary: "finance:view. Journals (postings that are not giving transactions) — newest occurred_on first, with their legs; totals for the WHOLE filtered set."
+      parameters:
+        - { name: kind, in: query, schema: { type: string }, description: "One kind or a comma list of expense|expense_void|transfer|opening|reversal." }
+        - { name: from, in: query, schema: { type: string, format: date }, description: "occurred_on ≥ from (inclusive)." }
+        - { name: to, in: query, schema: { type: string, format: date }, description: "occurred_on ≤ to (inclusive)." }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of journals.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksJournalList" }
+        "400": { description: "VALIDATION_FAILED — unknown kind, bad date or cursor." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/journals/{id}:
+    get:
+      tags: [giving]
+      operationId: financeBooksGetJournal
+      summary: "finance:view. One journal with its legs."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: The journal.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksJournal" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/finance/journals/{id}/reverse:
+    post:
+      tags: [giving]
+      operationId: financeBooksReverseJournal
+      summary: "finance:approve. Reverse a transfer or opening journal — journal kind reversal (reversal_of = it), mirrored legs dated at the original's leg timestamp. Once per journal. Audited journal.reversed."
+      description: >
+        Expense journals are undone by voiding the expense (422
+        USE_EXPENSE_VOID); a reversal is never itself reversed (422
+        NOT_REVERSIBLE — post the right journal instead); a journal already
+        reversed → 422 ALREADY_REVERSED. The fund the reversal debits (a
+        transfer's receiving fund; an opening balance's fund) may not go below
+        zero in that currency unless allow_negative is true (422 details.reason
+        NEGATIVE_BALANCE).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksJournalReverseInput" }
+      responses:
+        "201":
+          description: The reversal journal.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksJournal" }
+        "400": { description: "VALIDATION_FAILED — reason not 5–300 characters." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "USE_EXPENSE_VOID — an expense or expense_void journal; NOT_REVERSIBLE — a reversal journal; ALREADY_REVERSED; UNPROCESSABLE with details.reason NEGATIVE_BALANCE (details.balance_minor, details.balance_after_minor)." }
   /admin/permissions/catalog:
     get:
       tags: [portal]
@@ -9903,9 +10007,10 @@ components:
         occurred_on: { type: string, format: date, description: "Within [today − 366 days, today] (EAT), else 422 INVALID_DATE. The journal's legs are dated occurred_on 12:00 EAT." }
         memo: { type: string, minLength: 3, maxLength: 300 }
         allow_negative: { type: boolean, default: false, description: "Post even if the from-fund's balance in this currency goes below zero." }
+        idempotency_key: { type: [string, "null"], minLength: 8, maxLength: 255, description: "Optional; a retry with the same key is a replay, never a second transfer." }
     BooksTransfer:
       type: object
-      required: [transfer_id, journal_id, from_fund, to_fund, amount_minor, currency, occurred_on, memo, created_by, created_at, from_balance_after_minor, ledger]
+      required: [transfer_id, journal_id, from_fund, to_fund, amount_minor, currency, occurred_on, memo, created_by, created_at, from_balance_after_minor, reversed_by_journal_id, reused, ledger]
       properties:
         transfer_id: { type: string, format: uuid }
         journal_id: { type: string, format: uuid }
@@ -9917,7 +10022,9 @@ components:
         memo: { type: string }
         created_by: { type: [string, "null"], format: uuid }
         created_at: { type: string, format: date-time }
-        from_balance_after_minor: { type: integer, format: int64, description: "The from-fund's balance in this currency after the transfer (may be negative when allow_negative)." }
+        from_balance_after_minor: { type: integer, format: int64, description: "The from-fund's balance in this currency right after the transfer was posted (may be negative when allow_negative). On a replay: the balance now." }
+        reversed_by_journal_id: { type: [string, "null"], format: uuid, description: "Set once the transfer's journal has been reversed." }
+        reused: { type: boolean, description: "true = a replay of the idempotency_key." }
         ledger: { type: array, items: { $ref: "#/components/schemas/BooksLedgerLeg" } }
     BooksExpense:
       type: object
@@ -10126,6 +10233,61 @@ components:
                   kind: { type: string, enum: [income, expense] }
                   unbudgeted_minor: { type: array, minItems: 12, maxItems: 12, items: { type: integer, format: int64 } }
                   unbudgeted_total_minor: { type: integer, format: int64 }
+    BooksOpeningBalanceInput:
+      type: object
+      required: [idempotency_key, channel, fund, amount_minor, currency, as_of, memo]
+      properties:
+        idempotency_key: { type: string, minLength: 8, maxLength: 255 }
+        channel: { type: string, enum: [onhand, bank, cheque, mpesa, other], description: "Where the money sits: cash:<onhand|bank|cheque|mpesa>, other → cash:manual." }
+        fund: { type: string, description: Active fund code. }
+        amount_minor: { type: integer, format: int64, minimum: 1, maximum: 1000000000000 }
+        currency: { type: string, enum: [KES, USD] }
+        as_of: { type: string, format: date, description: "The balance date — within [today − 3660 days, today] (EAT), else 422 INVALID_DATE. Legs are dated as_of 12:00 EAT." }
+        memo: { type: string, minLength: 3, maxLength: 300 }
+    BooksJournalReverseInput:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 5, maxLength: 300, description: "Why — becomes the reversal journal's memo and is audited (trimmed)." }
+        allow_negative: { type: boolean, default: false, description: "Reverse even if the debited fund's balance in this currency goes below zero." }
+    BooksJournal:
+      type: object
+      required: [journal_id, kind, memo, occurred_on, created_at, created_by, created_by_name, ref_id, reversal_of, reversed_by_journal_id, legs, totals]
+      properties:
+        journal_id: { type: string, format: uuid }
+        kind: { type: string, enum: [expense, expense_void, transfer, opening, reversal] }
+        memo: { type: [string, "null"] }
+        occurred_on: { type: string, format: date, description: The economic date; the legs are dated occurred_on 12:00 EAT (a reversal restates its original's timestamp). }
+        created_at: { type: string, format: date-time, description: When it was entered. }
+        created_by: { type: [string, "null"], format: uuid }
+        created_by_name: { type: [string, "null"] }
+        ref_id: { type: [string, "null"], format: uuid, description: "expense / expense_void → expense_id; transfer → transfer_id; reversal → its original's ref_id; opening → null." }
+        reversal_of: { type: [string, "null"], format: uuid, description: "kind reversal: the journal it mirrors." }
+        reversed_by_journal_id: { type: [string, "null"], format: uuid, description: "The reversal journal that undid this one, if any." }
+        legs: { type: array, items: { $ref: "#/components/schemas/BooksLedgerLeg" }, description: Debit first. }
+        totals:
+          type: array
+          description: The journal's amount per currency (Σ debit legs = Σ credit legs).
+          items:
+            type: object
+            required: [currency, amount_minor]
+            properties:
+              currency: { type: string }
+              amount_minor: { type: integer, format: int64 }
+    BooksJournalResult:
+      allOf:
+        - $ref: "#/components/schemas/BooksJournal"
+        - type: object
+          required: [reused]
+          properties:
+            reused: { type: boolean, description: "true = a replay of the idempotency_key; nothing new was posted." }
+    BooksJournalList:
+      type: object
+      required: [data, next_cursor, totals]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/BooksJournal" } }
+        next_cursor: { type: [string, "null"] }
+        totals: { type: array, items: { $ref: "#/components/schemas/BooksCurrencyTotal" }, description: "Per currency over the WHOLE filtered set: amount = Σ debit legs, count = journals." }
     PermissionCatalog:
       type: object
       required: [modules, capabilities]

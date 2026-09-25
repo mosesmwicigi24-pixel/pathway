@@ -5,17 +5,29 @@
 
 -- Up Migration
 
+-- kind: expense / expense_void (an expense's approval and its undoing),
+-- transfer (fund → fund), opening (a fund's balance brought in from before the
+-- system: debit cash, credit fund), reversal (the mirror of a transfer or an
+-- opening journal — reversal_of names it, and a journal is reversed at most
+-- once). idempotency_key makes a retried money-moving POST a replay, not a
+-- second posting.
 CREATE TABLE journals (
-  journal_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  kind        TEXT NOT NULL CHECK (kind IN ('expense', 'expense_void', 'transfer')),
-  memo        TEXT,
-  occurred_on DATE NOT NULL,
-  ref_id      UUID,
-  created_by  UUID REFERENCES users(user_id) ON DELETE SET NULL,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  journal_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind            TEXT NOT NULL CHECK (kind IN ('expense', 'expense_void', 'transfer', 'opening', 'reversal')),
+  memo            TEXT,
+  occurred_on     DATE NOT NULL,
+  ref_id          UUID,
+  reversal_of     UUID REFERENCES journals(journal_id),
+  idempotency_key TEXT,
+  created_by      UUID REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT journals_reversal_names_original CHECK ((kind = 'reversal') = (reversal_of IS NOT NULL))
 );
 CREATE INDEX journals_ref_idx ON journals (ref_id) WHERE ref_id IS NOT NULL;
 CREATE INDEX journals_created_by_idx ON journals (created_by) WHERE created_by IS NOT NULL;
+CREATE UNIQUE INDEX journals_one_reversal ON journals (reversal_of) WHERE reversal_of IS NOT NULL;
+CREATE UNIQUE INDEX journals_idempotency_key_uniq ON journals (idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX journals_kind_occurred_idx ON journals (kind, occurred_on DESC);
 
 ALTER TABLE ledger_entries ALTER COLUMN transaction_id DROP NOT NULL;
 ALTER TABLE ledger_entries ADD COLUMN journal_id UUID REFERENCES journals(journal_id);
