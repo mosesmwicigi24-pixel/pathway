@@ -11910,7 +11910,12 @@ components:
             name: { type: string }
     FinancePledgeTotal:
       type: object
-      required: [currency, amount_minor, count, pledged_minor, paid_minor, remaining_minor]
+      description: >-
+        Per currency over the whole filtered register. Row by row, paid =
+        toward + beyond and pledged = toward + remaining, so the totals foot:
+        pledged_minor = paid_toward_minor + remaining_minor and paid_minor =
+        paid_toward_minor + paid_beyond_minor.
+      required: [currency, amount_minor, count, pledged_minor, paid_minor, remaining_minor, paid_toward_minor, paid_beyond_minor]
       properties:
         currency: { type: string }
         amount_minor: { type: integer, format: int64, description: "= pledged_minor (the common totals shape)." }
@@ -11918,6 +11923,8 @@ components:
         pledged_minor: { type: integer, format: int64 }
         paid_minor: { type: integer, format: int64 }
         remaining_minor: { type: integer, format: int64 }
+        paid_toward_minor: { type: integer, format: int64, description: "Σ min(paid, pledged) per pledge — what was paid toward this year's promises." }
+        paid_beyond_minor: { type: integer, format: int64, description: "Σ max(paid − pledged, 0) per pledge — paid above this year's promise: payments to a pledge since cancelled, or paid ahead." }
     FinancePledgesPage:
       type: object
       required: [year, data, next_cursor, totals]

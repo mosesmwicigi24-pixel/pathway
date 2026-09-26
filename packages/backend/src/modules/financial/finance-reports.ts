@@ -1119,6 +1119,12 @@ export class FinanceReportsService {
         pledged_minor: pledged,
         paid_minor: mine.reduce((a, r) => a + r.paid_year_minor, 0),
         remaining_minor: mine.reduce((a, r) => a + r.remaining_year_minor, 0),
+        // paid = toward + beyond, and pledged = toward + remaining, row by row.
+        // "Beyond" is money paid to a pledge above this year's promise — a
+        // cancelled pledge's payments (its promise this year is 0) or a pledge
+        // paid ahead. Without the split the three totals above cannot foot.
+        paid_toward_minor: mine.reduce((a, r) => a + Math.min(r.paid_year_minor, r.pledged_year_minor), 0),
+        paid_beyond_minor: mine.reduce((a, r) => a + Math.max(r.paid_year_minor - r.pledged_year_minor, 0), 0),
       };
     });
     // Newest pledge first.

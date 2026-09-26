@@ -559,7 +559,13 @@ describe("finance reports — the clean books of a small church year", () => {
     expect(byId(ids.pDalia)).toMatchObject({ standing: "paused", pledged_year_minor: 160000, paid_year_minor: 20000, kept: 1, due_count: 8 });
     expect(byId(ids.pFaith)).toMatchObject({ standing: "on_track", pledged_year_minor: 0, paid_year_minor: 100000, remaining_year_minor: 0 });
     expect(byId(ids.pAmina).overdue_since).toBe("2025-04-05");
-    expect(reg.totals).toEqual([{ currency: "KES", amount_minor: 1060000, count: 4, pledged_minor: 1060000, paid_minor: 570000, remaining_minor: 590000 }]);
+    expect(reg.totals).toEqual([{ currency: "KES", amount_minor: 1060000, count: 4, pledged_minor: 1060000, paid_minor: 570000, remaining_minor: 590000, paid_toward_minor: 470000, paid_beyond_minor: 100000 }]);
+    // The totals foot: Faith's 100,000 has no promise this year (pledged 0), so
+    // it is paid "beyond" — without the split, pledged − paid ≠ remaining.
+    for (const t of reg.totals as any[]) {
+      expect(t.paid_toward_minor + t.remaining_minor).toBe(t.pledged_minor);
+      expect(t.paid_toward_minor + t.paid_beyond_minor).toBe(t.paid_minor);
+    }
     // Standings as the partner card shows them — and the same through the route.
     const behind = (await get("/admin/finance/pledges?year=2025&standing=behind")).body;
     expect(behind.data.map((r: any) => r.pledge_id)).toEqual([ids.pAmina]);
