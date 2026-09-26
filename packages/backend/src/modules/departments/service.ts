@@ -12,14 +12,21 @@ import type { NotificationService } from "../notifications/service.js";
  *  a pledge that targets it. Exported so the Partners statement's
  *  `church_progress_percent` reads the same raised figure this page does. */
 export async function needRaisedMinor(c: Queryable, needId: string): Promise<number> {
-  const r = await one<{ total: string | null }>(
+  return (await needGiving(c, needId)).raised_minor;
+}
+
+/** The need's raised figure (needRaisedMinor) and how many gifts made it —
+ *  ONE predicate, so Finance → Department needs, the department page and the
+ *  Partners statement can never count a need differently. */
+export async function needGiving(c: Queryable, needId: string): Promise<{ raised_minor: number; gifts: number }> {
+  const r = await one<{ total: string | null; gifts: number }>(
     c,
-    `SELECT sum(t.amount_minor)::text AS total FROM transactions t
+    `SELECT sum(t.amount_minor)::text AS total, count(*)::int AS gifts FROM transactions t
        LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
       WHERE t.status = 'succeeded' AND (t.need_id = $1 OR p.need_id = $1)`,
     [needId],
   );
-  return Number(r.total ?? 0);
+  return { raised_minor: Number(r.total ?? 0), gifts: r.gifts };
 }
 
 /** `office` = acting under departments:manage rather than as the leader; the

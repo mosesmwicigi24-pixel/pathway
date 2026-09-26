@@ -56,10 +56,15 @@ export class CampaignService {
       `SELECT c.campaign_id, c.title, c.blurb, c.image_url, c.goal_minor, c.currency,
               c.starts_on::text AS starts_on, c.ends_on::text AS ends_on, c.status,
               c.match_minor, c.match_pledger, f.code AS fund, c.created_at,
-              -- Raised so far: succeeded gifts to this fund inside the window.
+              -- Raised: succeeded gifts to this fund, in the campaign's
+              -- currency (never KES + USD), inside the window — starts_on
+              -- through ends_on as church (EAT) days. A gift after the
+              -- campaign ended is not the campaign's (docs/FINANCE_ERP.md §4).
               (SELECT coalesce(sum(t.amount_minor), 0) FROM transactions t
-                WHERE t.fund_id = c.fund_id AND t.status = 'succeeded'
-                  AND t.created_at >= c.starts_on::timestamptz)          AS raised_minor,
+                WHERE t.fund_id = c.fund_id AND t.status = 'succeeded' AND t.currency = c.currency
+                  AND t.created_at >= (c.starts_on::timestamp AT TIME ZONE 'Africa/Nairobi')
+                  AND (c.ends_on IS NULL
+                       OR t.created_at < ((c.ends_on + 1)::timestamp AT TIME ZONE 'Africa/Nairobi'))) AS raised_minor,
               -- Who has been asked, and what came of it. This is the honest
               -- answer to "why did nobody give?" — it distinguishes a campaign
               -- nobody saw from one people saw and declined.

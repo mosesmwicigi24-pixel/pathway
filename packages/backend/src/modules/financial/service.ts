@@ -17,6 +17,15 @@ import { renderStatementPdf, renderReceiptPdf } from "./statementPdf.js";
 import { PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, methodLabel } from "./constants.js";
 // partners.ts imports FinancialService as a TYPE only, so this is not a cycle.
 import { pledgeTitleFor, pledgeTitleSql } from "./partners.js";
+import { nairobiDate } from "./partnerStatementMath.js";
+// The Finance ERP read side (docs/FINANCE_ERP.md §4) owns the admin registers;
+// the methods below that the older routes and tests call delegate to it, so
+// there is one implementation of each.
+import {
+  TransactionsQuery, listFinanceTransactions, financeTransactionDetail, financeTrendByCurrency,
+  FinanceAuditQuery, financeAuditPage, listLedgerPage,
+  type TransactionsQueryInput, type FinanceAuditQueryInput, type FinanceTransactionRow, type CurrencyTotal, type TrendPoint,
+} from "./finance-reports.js";
 
 // Defined in constants.ts (so partners.ts can print it too); still exported
 // from here for the callers and tests that always imported it from the service.
@@ -770,8 +779,14 @@ export class FinancialService {
    *  and the pledge-tied payments sit in one PARTNER PLEDGES section under
    *  their pledge's title with a subtotal — so the total still foots with the
    *  member's bank and the church ledger. */
-  async statementPdf(userId: string): Promise<Buffer> {
-    const rows = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string; pledge_id: string | null; pledge_title: string | null }>;
+  async statementPdf(userId: string, year?: number): Promise<Buffer> {
+    const all = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string; pledge_id: string | null; pledge_title: string | null }>;
+    // One church year (EAT, by created_at — the statements' own year rule)
+    // when the office asks for one; otherwise the complete record.
+    const rows = year === undefined
+      ? all
+      // pg hands created_at back as a Date (typed text above); both parse.
+      : all.filter((r) => nairobiDate(new Date(r.created_at as string | Date)).startsWith(`${year}-`));
     const me = await maybeOne<{ full_name: string; congregation: string | null }>(
       this.pool,
       `SELECT u.full_name, c.name AS congregation FROM users u LEFT JOIN congregations c ON c.congregation_id = u.congregation_id WHERE u.user_id = $1`,
@@ -825,6 +840,7 @@ export class FinancialService {
     return renderStatementPdf({
       congregation: me?.congregation ?? "Nuru Pathway",
       member: me?.full_name ?? "",
+      ...(year === undefined ? {} : { periodLabel: `Year ${year}` }),
       giftsLabel: ksh(giftsTotal),
       // No pledge money (Y = 0): the header is just "Total given KSh X".
       pledgesLabel: pledgesTotal > 0 ? ksh(pledgesTotal) : null,
@@ -1430,7 +1446,7 @@ export class FinancialService {
    * was invisible to the church. `needs_attention` first: paused, then the most
    * failures, then soonest due.
    */
-  async listSchedulesAdmin(opts: { status?: string | undefined; limit?: number | undefined } = {}): Promise<{ data: unknown[] }> {
+  async listSchedulesAdmin(opts: { status?: string | undefined; attention?: boolean | undefined; limit?: number | undefined } = {}): Promise<{ data: unknown[] }> {
     const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
     const params: unknown[] = [limit];
     let where = `WHERE s.status <> 'cancelled'`;
@@ -1438,6 +1454,9 @@ export class FinancialService {
       params.push(opts.status);
       where = `WHERE s.status = $${params.length}`;
     }
+    // Only the ones needing attention — the needs_attention rule below, never
+    // a cancelled schedule (Finance → Recurring gifts, Overview alert).
+    if (opts.attention) where += ` AND s.status <> 'cancelled' AND (s.status = 'paused' OR s.consecutive_failures > 0)`;
     const rows = await many<Record<string, unknown>>(
       this.pool,
       `SELECT s.schedule_id, s.user_id, u.full_name, u.phone_number,
@@ -1467,8 +1486,11 @@ export class FinancialService {
       this.pool,
       `SELECT f.code, f.name, t.currency,
               COALESCE(sum(t.amount_minor) FILTER (WHERE t.status = 'succeeded'), 0)::bigint AS total_minor,
+              -- This month = the church's (EAT) month by created_at — the
+              -- Finance Overview's basis, so the Dashboard card foots with it.
               COALESCE(sum(t.amount_minor) FILTER (
-                WHERE t.status = 'succeeded' AND t.settled_at >= date_trunc('month', now())), 0)::bigint AS month_minor,
+                WHERE t.status = 'succeeded'
+                  AND t.created_at >= (date_trunc('month', now() AT TIME ZONE 'Africa/Nairobi') AT TIME ZONE 'Africa/Nairobi')), 0)::bigint AS month_minor,
               count(t.transaction_id) FILTER (WHERE t.status = 'succeeded')::int AS gift_count
          FROM funds f
          LEFT JOIN transactions t ON t.fund_id = f.fund_id
@@ -1480,143 +1502,42 @@ export class FinancialService {
     };
   }
 
-  static readonly ListTransactions = z.object({
-    fund: z.string().max(40).optional(),
-    status: z.enum(["requires_action", "processing", "succeeded", "failed", "refunded"]).optional(),
-    limit: z.coerce.number().int().min(1).max(200).default(50),
-    before: z.string().optional(), // keyset on created_at ISO
-  });
+  /** The transactions register's query (finance-reports.ts TransactionsQuery):
+   *  from/to, fund, status, channel, source, q, pledged, need, cursor — and
+   *  the earlier `before` / `limit`. */
+  static readonly ListTransactions = TransactionsQuery;
 
+  /** The transactions register — one keyset page plus per-currency totals
+   *  over the whole filtered set (finance-reports.ts). */
   async listTransactions(
-    q: z.infer<typeof FinancialService.ListTransactions>,
-  ): Promise<{ data: unknown[]; next_cursor: string | null }> {
-    const params: unknown[] = [];
-    const where: string[] = ["TRUE"];
-    if (q.fund) {
-      params.push(q.fund);
-      where.push(`f.code = $${params.length}`);
-    }
-    if (q.status) {
-      params.push(q.status);
-      where.push(`t.status = $${params.length}::txn_status`);
-    }
-    if (q.before) {
-      params.push(q.before);
-      where.push(`t.created_at < $${params.length}`);
-    }
-    params.push(q.limit + 1);
-    const rows = await many<Record<string, unknown>>(
-      this.pool,
-      `SELECT t.transaction_id, u.full_name, t.amount_minor, t.currency, t.status,
-              f.code AS fund, t.account_name, t.created_at, t.settled_at,
-              COALESCE(t.provider, CASE WHEN t.stripe_payment_intent IS NOT NULL THEN 'card' END) AS method
-         FROM transactions t
-         LEFT JOIN funds f ON f.fund_id = t.fund_id
-         LEFT JOIN users u ON u.user_id = t.user_id
-        WHERE ${where.join(" AND ")}
-        ORDER BY t.created_at DESC
-        LIMIT $${params.length}`,
-      params,
-    );
-    const hasMore = rows.length > q.limit;
-    const page = hasMore ? rows.slice(0, q.limit) : rows;
-    const last = page[page.length - 1];
-    return {
-      data: page.map((r) => ({ ...r, amount_minor: Number(r.amount_minor) })),
-      next_cursor: hasMore && last ? String(last.created_at) : null,
-    };
+    q: TransactionsQueryInput,
+  ): Promise<{ data: FinanceTransactionRow[]; next_cursor: string | null; totals: CurrencyTotal[] }> {
+    return listFinanceTransactions(this.pool, q);
   }
 
-  /** Recent double-entry ledger postings (always balanced, §5.6). */
+  /** Recent double-entry ledger postings — transaction AND journal — newest
+   *  first (always balanced, §5.6). */
   async listLedger(limit = 100): Promise<unknown[]> {
-    const rows = await many<Record<string, unknown>>(
-      this.pool,
-      `SELECT le.entry_id, le.transaction_id, le.account, le.side::text, le.amount_minor,
-              le.currency, le.created_at
-         FROM ledger_entries le
-        ORDER BY le.created_at DESC
-        LIMIT $1`,
-      [Math.min(Math.max(limit, 1), 500)],
-    );
-    return rows.map((r) => ({ ...r, amount_minor: Number(r.amount_minor) }));
+    return (await listLedgerPage(this.pool, { limit: Math.min(Math.max(limit, 1), 500) })).data;
   }
 
-  /** Settled giving totals per month for the overview trend chart (oldest → newest). */
-  async financeTrend(months = 6): Promise<{ data: { m: string; month: string; total_minor: number }[] }> {
-    const n = Math.min(Math.max(months, 1), 24);
-    const rows = await many<Record<string, unknown>>(
-      this.pool,
-      `SELECT to_char(gs.m, 'Mon') AS m, gs.m AS month,
-              COALESCE(sum(t.amount_minor) FILTER (WHERE t.status = 'succeeded'), 0)::bigint AS total_minor
-         FROM generate_series(
-                date_trunc('month', now()) - (($1::int - 1) * interval '1 month'),
-                date_trunc('month', now()),
-                interval '1 month') gs(m)
-         LEFT JOIN transactions t ON date_trunc('month', t.settled_at) = gs.m
-        GROUP BY gs.m
-        ORDER BY gs.m`,
-      [n],
-    );
-    return {
-      data: rows.map((r) => ({ m: String(r.m), month: String(r.month), total_minor: Number(r.total_minor) })),
-    };
+  /** Succeeded giving per EAT month, per currency (`data` = the KES series). */
+  async financeTrend(months = 6): Promise<{ data: TrendPoint[]; currency: string; series: { currency: string; points: TrendPoint[] }[] }> {
+    return financeTrendByCurrency(this.pool, months);
   }
 
-  static readonly ListFinanceAudit = z.object({
-    actor: z.enum(["All", "System", "Admin"]).default("All"),
-    limit: z.coerce.number().int().min(1).max(200).default(50),
-  });
+  static readonly ListFinanceAudit = FinanceAuditQuery;
 
   /** Finance-scoped slice of the append-only audit trail (§5.10) — the money paper trail. */
   async financeAudit(
-    q: z.infer<typeof FinancialService.ListFinanceAudit>,
-  ): Promise<{ data: unknown[] }> {
-    const params: unknown[] = [];
-    const where: string[] = [
-      "(a.action LIKE 'giving.%' OR a.action LIKE 'purchase.%' OR a.action LIKE 'finance.%' OR a.action LIKE 'webhook.%')",
-    ];
-    if (q.actor === "System") where.push("a.actor_id IS NULL");
-    else if (q.actor === "Admin") where.push("a.actor_id IS NOT NULL");
-    params.push(q.limit);
-    const rows = await many<Record<string, unknown>>(
-      this.pool,
-      `SELECT a.audit_id, a.actor_id, u.full_name AS actor_name, a.action, a.entity,
-              a.entity_id, a.metadata, a.occurred_at,
-              CASE WHEN a.actor_id IS NULL THEN 'System' ELSE 'Admin' END AS actor_type
-         FROM audit_log a LEFT JOIN users u ON u.user_id = a.actor_id
-        WHERE ${where.join(" AND ")}
-        ORDER BY a.audit_id DESC
-        LIMIT $${params.length}`,
-      params,
-    );
-    return { data: rows };
+    q: FinanceAuditQueryInput,
+  ): Promise<{ data: unknown[]; next_cursor: string | null }> {
+    return financeAuditPage(this.pool, q);
   }
 
-  /** A single transaction plus its balanced ledger postings (for the detail drawer). */
+  /** A single transaction plus EVERY ledger posting it owns (the detail drawer). */
   async transactionDetail(id: string): Promise<Record<string, unknown> | null> {
-    const txn = await maybeOne<Record<string, unknown>>(
-      this.pool,
-      `SELECT t.transaction_id, u.full_name, t.amount_minor, t.currency, t.status,
-              f.code AS fund, f.name AS fund_name, t.account_name, t.created_at, t.settled_at,
-              COALESCE(t.provider, CASE WHEN t.stripe_payment_intent IS NOT NULL THEN 'card' END) AS method,
-              t.provider_ref, t.stripe_payment_intent, t.idempotency_key
-         FROM transactions t
-         LEFT JOIN funds f ON f.fund_id = t.fund_id
-         LEFT JOIN users u ON u.user_id = t.user_id
-        WHERE t.transaction_id = $1`,
-      [id],
-    );
-    if (!txn) return null;
-    const entries = await many<Record<string, unknown>>(
-      this.pool,
-      `SELECT entry_id, account, side::text AS side, amount_minor, currency, created_at
-         FROM ledger_entries WHERE transaction_id = $1 ORDER BY side DESC`,
-      [id],
-    );
-    return {
-      transaction: { ...txn, amount_minor: Number(txn.amount_minor) },
-      ledger_entries: entries.map((e) => ({ ...e, amount_minor: Number(e.amount_minor) })),
-    };
+    return financeTransactionDetail(this.pool, id);
   }
 
   /** Read-only configuration view: funds + which payment providers are wired.

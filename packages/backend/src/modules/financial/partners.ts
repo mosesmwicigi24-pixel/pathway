@@ -16,9 +16,10 @@ import type { FinancialService } from "./service.js";
 import { givingTiers } from "./tiers.js";
 import { methodLabel, PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, PLEDGE_PAYS_TO_NAME } from "./constants.js";
 import {
-  NAIROBI_OFFSET_MS, nairobiDate, keptInYear, pledgedInYear, statementSummary,
-  statementImpact, statementMonths, statementFaithfulness, allocateInstalments,
+  NAIROBI_OFFSET_MS, nairobiDate, partnerDate, keptInYear, pledgedInYear, statementSummary,
+  statementImpact, statementMonths, statementFaithfulness, allocateInstalments, instalmentsInYear,
   type StatementPledgeInput, type StatementImpact, type StatementMonth, type StatementFaithfulness, type LedgerPaymentInput,
+  type Instalment,
 } from "./partnerStatementMath.js";
 import { renderPartnersStatementPdf, type PartnersStatementPledgeBlock, type PartnersStatementCommitment, type StatementGroup } from "./statementPdf.js";
 import { needRaisedMinor } from "../departments/service.js";
@@ -186,6 +187,48 @@ export interface StatementPending {
   receipt_code: string | null;
   pledge_id: string;
   pledge_title: string;
+}
+
+/** One pledge in the office's register (docs/FINANCE_ERP.md §4, GET
+ *  /admin/finance/pledges): the member statement's per-pledge numbers for
+ *  `year` (pledged / paid / remaining / kept of due_count — the §3a rule and
+ *  the instalment ledger, exactly as `statements` computes them) and, as of
+ *  today, the pledge card's standing, next due date and overdue_since. */
+export interface PledgeRegisterRow {
+  pledge_id: string;
+  user_id: string;
+  member_name: string;
+  member_phone: string | null;
+  /** The member's account is deleted — the Partners page leaves them out. */
+  member_deleted: boolean;
+  title: string;
+  shape: PledgeShape;
+  amount_minor: number | null;
+  target_minor: number | null;
+  currency: string;
+  status: PledgeStatus;
+  standing: PledgeLabel;
+  year: number;
+  pledged_year_minor: number;
+  paid_year_minor: number;
+  remaining_year_minor: number;
+  paid_total_minor: number;
+  kept: number;
+  due_count: number;
+  next_due: string | null;
+  overdue_since: string | null;
+  due_day: number | null;
+  due_on: string | null;
+  created_at: string;
+  pays_to: { code: string; name: string } | null;
+}
+
+/** A register row with what it was computed from: its instalments due in the
+ *  year (monthly; [] for a total pledge) and its succeeded payments, all time. */
+export interface PledgeRegisterEntry {
+  row: PledgeRegisterRow;
+  instalments: Instalment[];
+  payments: LedgerPaymentInput[];
 }
 
 /** The church-wide "since you began" line — exactly `since_you_began` from
@@ -370,11 +413,15 @@ export class PartnersService {
    *  settles last month does not also fill this one. A total pledge is
    *  unchanged. Paused / cancelled read "paused" with nothing due (pause
    *  history is not recorded — a known limit: past due dates of a pledge that
-   *  was paused for a while are still evaluated once it is active again). */
-  private async progressDetail(p: PledgeRow, now: Date = new Date()): Promise<ProgressDetail> {
+   *  was paused for a while are still evaluated once it is active again).
+   *  `preloaded` = the succeeded pledge payments already read in one query
+   *  (the office register evaluates every pledge at once); only this
+   *  pledge's are used — the same rows its own query would return. */
+  private async progressDetail(p: PledgeRow, now: Date = new Date(), preloaded?: LedgerPaymentInput[]): Promise<ProgressDetail> {
     const today = nairobiDate(now);
+    const own = preloaded?.filter((x) => x.pledge_id === p.pledge_id);
     if (p.shape === "monthly") {
-      const history = await this.pledgeHistoryWhere(`t.pledge_id = $1`, [p.pledge_id]);
+      const history = own ?? await this.pledgeHistoryWhere(`t.pledge_id = $1`, [p.pledge_id]);
       const paid = history.reduce((a, x) => a + x.amount_minor, 0);
       if (p.status === "paused" || p.status === "cancelled") {
         return { progress: { paid_minor: paid, period_paid_minor: null, label: "paused", next_due: null, overdue_since: null }, owed_minor: null, arrears: NO_ARREARS };
@@ -408,7 +455,7 @@ export class PartnersService {
       };
     }
 
-    const paid = await this.paidBetween(p.pledge_id, null, null);
+    const paid = own ? own.reduce((a, x) => a + x.amount_minor, 0) : await this.paidBetween(p.pledge_id, null, null);
     if (p.status === "paused" || p.status === "cancelled") {
       return { progress: { paid_minor: paid, period_paid_minor: null, label: "paused", next_due: null, overdue_since: null }, owed_minor: null, arrears: NO_ARREARS };
     }
@@ -1418,5 +1465,76 @@ export class PartnersService {
       [userId],
     );
     return { member, pledges: p.pledges, schedules, payments, reminders };
+  }
+
+  // ── the office's pledge register (docs/FINANCE_ERP.md §4) ─────────────
+
+  /** Every pledge (any status, newest first), evaluated for `year` by the
+   *  rules `statements` applies to one member — pledgedInYear, the year's
+   *  succeeded payments, keptInYear over the WHOLE-history instalment ledger
+   *  — and, as of `now`, by the pledge card's own progress (progressDetail).
+   *  One query for every pledge's payments instead of one per pledge; the
+   *  numbers are the member statement's, row for row. */
+  async pledgeRegister(year: number, now: Date = new Date()): Promise<PledgeRegisterEntry[]> {
+    const today = nairobiDate(now);
+    const rows = await this.pledgeRows(this.pool, "", []);
+    const history = await this.pledgeHistoryWhere("TRUE", []);
+    const byPledge = new Map<string, LedgerPaymentInput[]>();
+    for (const h of history) {
+      const k = h.pledge_id ?? "";
+      (byPledge.get(k) ?? byPledge.set(k, []).get(k)!).push(h);
+    }
+    const ids = [...new Set(rows.map((r) => r.user_id))];
+    const people = ids.length === 0 ? [] : await many<{ user_id: string; full_name: string; phone_number: string | null; deleted: boolean }>(
+      this.pool,
+      `SELECT user_id, full_name, phone_number, deleted_at IS NOT NULL AS deleted FROM users WHERE user_id = ANY($1::uuid[])`,
+      [ids],
+    );
+    const who = new Map(people.map((p) => [p.user_id, p]));
+    const prefix = `${year}-`;
+    const out: PledgeRegisterEntry[] = [];
+    for (const p of rows) {
+      const input = PartnersService.statementInput(p);
+      const mine = byPledge.get(p.pledge_id) ?? [];
+      const { kept, due_count } = keptInYear(input, mine, year, today);
+      const pledged = pledgedInYear(input, year);
+      // The statement's paid: this year's succeeded payments to the pledge,
+      // by the church's calendar date of created_at.
+      const paidYear = mine.filter((x) => (partnerDate(x.at) ?? "").startsWith(prefix)).reduce((a, x) => a + x.amount_minor, 0);
+      const { progress } = await this.progressDetail(p, now, mine);
+      const person = who.get(p.user_id);
+      out.push({
+        row: {
+          pledge_id: p.pledge_id,
+          user_id: p.user_id,
+          member_name: person?.full_name ?? "",
+          member_phone: person?.phone_number ?? null,
+          member_deleted: person?.deleted ?? false,
+          title: PartnersService.title(p),
+          shape: p.shape,
+          amount_minor: input.amount_minor,
+          target_minor: input.target_minor,
+          currency: p.currency,
+          status: p.status,
+          standing: progress.label,
+          year,
+          pledged_year_minor: pledged,
+          paid_year_minor: paidYear,
+          remaining_year_minor: Math.max(pledged - paidYear, 0),
+          paid_total_minor: mine.reduce((a, x) => a + x.amount_minor, 0),
+          kept,
+          due_count,
+          next_due: progress.next_due,
+          overdue_since: progress.overdue_since,
+          due_day: p.due_day,
+          due_on: p.due_on,
+          created_at: p.created_at,
+          pays_to: PartnersService.paysTo(p),
+        },
+        instalments: p.shape === "monthly" ? instalmentsInYear(input, mine, year, today) : [],
+        payments: mine,
+      });
+    }
+    return out;
   }
 }

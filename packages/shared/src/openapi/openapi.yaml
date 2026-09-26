@@ -2685,6 +2685,7 @@ paths:
   # ── Finance ERP · reports (overview, registers, ledger, reconciliation, reports, statements) — docs/FINANCE_ERP.md §4. Add paths below this line. ──
   /admin/finance/overview:
     get:
+      operationId: financeReportsOverview
       tags: [portal]
       summary: "finance:view. The Finance overview: per-currency income, expenses, net, outstanding pledges, partners, work queues, fund balances, channels, a 12-month series and deep-linked alerts."
       description: >-
@@ -2717,6 +2718,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/transactions.csv:
     get:
+      operationId: financeReportsTransactionsCsv
       tags: [portal]
       summary: "finance:view + finance:export. The transactions register as CSV — the same filters as GET /admin/finance/transactions, every matching row (no paging)."
       description: >-
@@ -2740,6 +2742,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/pledges:
     get:
+      operationId: financeReportsPledges
       tags: [portal]
       summary: "finance:view. The pledge register — every pledge evaluated by the SAME instalment ledger the member's statement and pledge card read."
       description: >-
@@ -2769,6 +2772,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/pledges.csv:
     get:
+      operationId: financeReportsPledgesCsv
       tags: [portal]
       summary: "finance:view + finance:export. The pledge register as CSV — the same filters, every matching pledge."
       parameters:
@@ -2784,6 +2788,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/funds:
     get:
+      operationId: financeReportsFunds
       tags: [portal]
       summary: "finance:view. Every fund (active and inactive) with its balance per currency and the period's / year's activity."
       description: >-
@@ -2811,6 +2816,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/ledger.csv:
     get:
+      operationId: financeReportsLedgerCsv
       tags: [portal]
       summary: "finance:view + finance:export. Ledger postings as CSV — the same filters as GET /admin/finance/ledger, every matching posting."
       parameters:
@@ -2825,6 +2831,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/trial-balance:
     get:
+      operationId: financeReportsTrialBalance
       tags: [portal]
       summary: "finance:view. Trial balance — per account and currency: debits, credits and the balance on the account's normal side; per-currency totals and `balanced`."
       description: >-
@@ -2847,6 +2854,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reconciliation:
     get:
+      operationId: financeReportsReconciliation
       tags: [portal]
       summary: "finance:view. Reconciliation — daily settlement per cash channel, the exceptions list and the ledger's integrity per currency."
       description: >-
@@ -2885,6 +2893,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reports/income:
     get:
+      operationId: financeReportsIncome
       tags: [portal]
       summary: "finance:view. Income for a year — rows (by fund, channel or source) × 12 months, per currency, with totals."
       description: >-
@@ -2906,6 +2915,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reports/income.csv:
     get:
+      operationId: financeReportsIncomeCsv
       tags: [portal]
       summary: "finance:view + finance:export. The income matrix as CSV: currency, key, label, Jan..Dec, total — with a TOTAL row per currency."
       parameters:
@@ -2918,6 +2928,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reports/expenses:
     get:
+      operationId: financeReportsExpenses
       tags: [portal]
       summary: "finance:view. APPROVED expenses for a year — rows (by category or fund) × 12 months by spent_on, per currency, with totals."
       parameters:
@@ -2934,6 +2945,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reports/expenses.csv:
     get:
+      operationId: financeReportsExpensesCsv
       tags: [portal]
       summary: "finance:view + finance:export. The expenses matrix as CSV: currency, key, label, Jan..Dec, total — with a TOTAL row per currency."
       parameters:
@@ -2946,6 +2958,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reports/pledges:
     get:
+      operationId: financeReportsPledgesReport
       tags: [portal]
       summary: "finance:view. Pledges for a year, per currency and month — pledged, paid, kept, missed and partners behind — from the instalment ledger."
       description: >-
@@ -2954,9 +2967,11 @@ paths:
         Σ of the register's pledged_year_minor. paid_minor: pledge-tied succeeded
         payments by payment month (EAT) — Σ = Σ of the register's paid_year_minor.
         kept / missed: monthly instalments due in the month, completed (on time or
-        late) / missed as of today, exactly as the member statement counts them.
-        behind_partners: distinct partners with a missed instalment due in the
-        month; the totals' behind_partners is distinct over the year.
+        late) / missed as of today, exactly as the member statement counts them
+        (every pledge not cancelled). behind_partners: distinct partners with an
+        ACTIVE monthly pledge whose instalment due in the month was missed (a
+        paused pledge reads "paused", never "behind"); the totals'
+        behind_partners is distinct over the year.
       parameters:
         - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 }, description: "Default: the current year (EAT)." }
       responses:
@@ -2970,6 +2985,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reports/pledges.csv:
     get:
+      operationId: financeReportsPledgesReportCsv
       tags: [portal]
       summary: "finance:view + finance:export. The pledges report as CSV: currency, month, pledged, paid, kept, missed, behind_partners — with a TOTAL row per currency."
       parameters:
@@ -2981,6 +2997,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/statements:
     get:
+      operationId: financeReportsStatements
       tags: [portal]
       summary: "finance:view. Year-end givers — every member who gave in the year (succeeded, with an account): totals per currency, gift count, by fund, pledge-paid."
       description: >-
@@ -3004,6 +3021,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/statements.csv:
     get:
+      operationId: financeReportsStatementsCsv
       tags: [portal]
       summary: "finance:view + finance:export. Year-end givers as CSV — one row per member and currency: name, phone, email, currency, gifts, total, pledge_paid, then one column per fund."
       parameters:
@@ -3016,6 +3034,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/statements/{userId}/giving.pdf:
     get:
+      operationId: financeReportsGivingPdf
       tags: [portal]
       summary: "finance:view. A member's giving statement PDF for one year — the member's own PDF (the same renderer), for the office. 404 when the member has no succeeded gift that year."
       parameters:
@@ -3029,6 +3048,7 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
   /admin/finance/statements/{userId}/partners.pdf:
     get:
+      operationId: financeReportsPartnersPdf
       tags: [portal]
       summary: "finance:view. A member's Partners statement PDF for one year — the member's own PDF, for the office. 404 for someone who has never been a partner."
       parameters:
@@ -3042,6 +3062,7 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
   /admin/finance/settings:
     get:
+      operationId: financeReportsSettings
       tags: [portal]
       summary: "finance:view. Read-only Finance settings: which providers are configured (env var NAMES only — never values), the next office receipt number, the giving tiers and the reminder policy."
       responses:
@@ -3054,6 +3075,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reports/financial-position:
     get:
+      operationId: financeReportsFinancialPosition
       tags: [portal]
       summary: "finance:view. Statement of financial position as of a date, per currency, from the ledger: assets (cash:*), funds (fund:*), other (sales:* and any other credit account); balanced = assets = funds + other."
       description: >-
@@ -3076,6 +3098,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reports/financial-position.csv:
     get:
+      operationId: financeReportsFinancialPositionCsv
       tags: [portal]
       summary: "finance:view + finance:export. The statement of financial position as CSV: currency, section (assets | funds | other | total), account, label, balance."
       parameters:
@@ -3087,6 +3110,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reports/income-expenditure:
     get:
+      operationId: financeReportsIncomeExpenditure
       tags: [portal]
       summary: "finance:view. Income and expenditure for a period, per currency: income by fund (gifts net of reversals, from the ledger), other income (sales:*), expenditure by category (approved expenses), and the surplus."
       description: >-
@@ -3113,6 +3137,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/reports/income-expenditure.csv:
     get:
+      operationId: financeReportsIncomeExpenditureCsv
       tags: [portal]
       summary: "finance:view + finance:export. Income and expenditure as CSV: currency, section (income | other_income | expenses | total), key, label, amount."
       parameters:
@@ -3123,8 +3148,33 @@ paths:
         "400": { description: "VALIDATION_FAILED" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/givers:
+    get:
+      operationId: financeReportsGivers
+      tags: [portal]
+      summary: "finance:view. Find the member a gift is from (\"Record a gift\") without members:view — by name (case- and accent-insensitive), email, or phone digits — each with their open pledges."
+      description: >-
+        Members only (any role, not deleted). A query of digits (spaces, + - ( )
+        allowed) matches the phone's digits, also without the leading trunk 0, so
+        "0722 123" finds +254722123…; a query with letters matches the name
+        (contains) and the email. Names that START with the query come first,
+        then by name. open_pledges = the member's pledges that are active or
+        paused, under the words their cards show, with where the money is booked.
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 80 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 20, default: 10 } }
+      responses:
+        "200":
+          description: Matching members
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceGiversResult" }
+        "400": { description: "VALIDATION_FAILED — q shorter than 2 characters (after trimming) or limit out of range." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/needs:
     get:
+      operationId: financeReportsNeeds
       tags: [portal]
       summary: "finance:view. Department needs as Finance sees them — target vs raised (the Departments page's own figure), gifts, and where the money routes. Read-only: approval stays in Departments."
       description: >-
@@ -5253,6 +5303,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/transactions:
     get:
+      operationId: financeReportsTransactions
       tags: [giving]
       summary: "finance:view. The transactions register — dates, fund, status, channel, source, pledge, need and a search; keyset-paged; per-currency totals over the WHOLE filtered set."
       description: >-
@@ -5287,6 +5338,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/ledger:
     get:
+      operationId: financeReportsLedger
       tags: [giving]
       summary: "finance:view. Ledger postings — transaction AND journal — with their owner (receipt / member, or journal kind + memo); keyset-paged; per-currency totals."
       description: >-
@@ -5315,6 +5367,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/trend:
     get:
+      operationId: financeReportsTrend
       tags: [giving]
       summary: "finance:view. Succeeded giving per month (created_at, EAT months), zero-filled, PER CURRENCY (KES and USD are never added). `data` is the KES series (back-compat); `series` has every currency."
       parameters:
@@ -5330,6 +5383,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/audit:
     get:
+      operationId: financeReportsAudit
       tags: [giving]
       summary: "finance:view. The finance slice of the append-only audit trail (§5.10) — giving., purchase., finance., webhook., pledge., department.need, expense., budget., journal. and fund. — newest first, keyset-paged."
       parameters:
@@ -5357,6 +5411,7 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/transactions/{id}:
     get:
+      operationId: financeReportsTransactionDetail
       tags: [giving]
       summary: "finance:view. One transaction — office and reversal fields, who recorded / reversed it — with EVERY ledger posting it owns (the original pair and any reversing pair)."
       parameters:
@@ -11220,6 +11275,40 @@ components:
                   income_minor: { type: integer, format: int64, description: gifts + other income. }
                   expenses_minor: { type: integer, format: int64 }
                   surplus_minor: { type: integer, format: int64, description: income − expenses (negative = deficit). }
+    FinanceGiver:
+      type: object
+      required: [user_id, full_name, phone, email, congregation_name, open_pledges]
+      properties:
+        user_id: { type: string, format: uuid }
+        full_name: { type: string }
+        phone: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        congregation_name: { type: [string, "null"] }
+        open_pledges:
+          type: array
+          description: Active or paused pledges, newest first.
+          items:
+            type: object
+            required: [pledge_id, title, currency, shape, status, amount_minor, target_minor, pays_to]
+            properties:
+              pledge_id: { type: string, format: uuid }
+              title: { type: string }
+              currency: { type: string }
+              shape: { type: string, enum: [monthly, total] }
+              status: { type: string, enum: [active, paused] }
+              amount_minor: { type: [integer, "null"], format: int64 }
+              target_minor: { type: [integer, "null"], format: int64 }
+              pays_to:
+                type: [object, "null"]
+                required: [code, name]
+                properties:
+                  code: { type: string }
+                  name: { type: string }
+    FinanceGiversResult:
+      type: object
+      required: [data]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/FinanceGiver" } }
     FinanceNeedRow:
       type: object
       required: [need_id, title, why, department_id, department_name, fund_code, target_minor, raised_minor, gifts_count, currency, deadline, status, created_at, decided_at]
