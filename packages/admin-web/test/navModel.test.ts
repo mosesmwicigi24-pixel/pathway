@@ -95,11 +95,12 @@ const FINANCE_SPEC: [path: string, label: string, subgroup: string | null][] = [
   ["/finance/transactions", "Transactions", "giving"],
   ["/finance/pledges", "Pledges", "giving"],
   ["/finance/partners", "Partners", "giving"],
+  // money in — moved here from Spending & Planning (owner, 2026-09-26)
+  ["/finance/claims", "Claims", "giving"],
   ["/finance/recurring", "Recurring gifts", "giving"],
   ["/finance/campaigns", "Campaigns", "giving"],
   ["/finance/needs", "Department needs", "spending"],
   ["/finance/expenses", "Expenses", "spending"],
-  ["/finance/claims", "Claims", "spending"],
   ["/finance/budgets", "Budgets", "spending"],
   ["/finance/funds", "Funds", "spending"],
   ["/finance/ledger", "Ledger", "accounting"],
@@ -132,12 +133,12 @@ describe("Finance section (docs/FINANCE_ERP.md §1)", () => {
     ]);
     const entries = finance ? sidebarEntries(finance) : [];
     expect(entries.map((e) => (e.kind === "item" ? e.item.label : `${e.subgroup.label} (${e.items.length})`))).toEqual([
-      "Giving & Income (6)", "Spending & Planning (5)", "Accounting & Reporting (5)", "Settings",
+      "Giving & Income (7)", "Spending & Planning (4)", "Accounting & Reporting (5)", "Settings",
     ]);
     const rows = (key: string): string[] =>
       entries.flatMap((e) => (e.kind === "subgroup" && e.subgroup.key === key ? e.items.map((i) => i.label) : []));
-    expect(rows("giving")).toEqual(["Overview", "Transactions", "Pledges", "Partners", "Recurring gifts", "Campaigns"]);
-    expect(rows("spending")).toEqual(["Department needs", "Expenses", "Claims", "Budgets", "Funds"]);
+    expect(rows("giving")).toEqual(["Overview", "Transactions", "Pledges", "Partners", "Claims", "Recurring gifts", "Campaigns"]);
+    expect(rows("spending")).toEqual(["Department needs", "Expenses", "Budgets", "Funds"]);
     expect(rows("accounting")).toEqual(["Ledger", "Reconciliation", "Reports", "Statements", "Audit"]);
   });
 

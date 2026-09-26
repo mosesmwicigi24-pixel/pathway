@@ -83,6 +83,13 @@ describe("Finance sidebar section", () => {
     expect(toggle("Giving & Income").getAttribute("aria-expanded")).toBe("true");
   });
 
+  it("opens Giving & Income for Claims — money in", () => {
+    renderPage(<Layout />, { path: "/finance/claims" });
+    expect(toggle("Giving & Income").getAttribute("aria-expanded")).toBe("true");
+    expect(toggle("Spending & Planning").getAttribute("aria-expanded")).toBe("false");
+    expect(link("Claims")?.getAttribute("aria-current")).toBe("page");
+  });
+
   it("opens no sub-menu for Settings, which is in none", () => {
     renderPage(<Layout />, { path: "/finance/settings" });
     for (const label of ["Giving & Income", "Spending & Planning", "Accounting & Reporting"]) {
@@ -96,10 +103,10 @@ describe("Finance sidebar section", () => {
     fireEvent.click(toggle("Spending & Planning"));
     expect(toggle("Spending & Planning").getAttribute("aria-expanded")).toBe("true");
     expect(localStorage.getItem(KEY("spending"))).toBe("1");
-    expect(link("Claims")?.getAttribute("href")).toBe("/finance/claims");
+    expect(link("Budgets")?.getAttribute("href")).toBe("/finance/budgets");
     fireEvent.click(toggle("Spending & Planning"));
     expect(localStorage.getItem(KEY("spending"))).toBe("0");
-    expect(link("Claims")).toBeNull();
+    expect(link("Budgets")).toBeNull();
     // another sub-menu is untouched
     expect(localStorage.getItem(KEY("giving"))).toBeNull();
   });
@@ -138,8 +145,8 @@ describe("Finance sidebar section", () => {
     expect(within(nav).queryByRole("button", { name: /Giving|Spending|Accounting/ })).toBeNull();
     const finance = Array.from(nav.querySelectorAll("a")).map((a) => a.getAttribute("href")).filter((h) => h?.startsWith("/finance"));
     expect(finance).toEqual([
-      "/finance", "/finance/transactions", "/finance/pledges", "/finance/partners", "/finance/recurring", "/finance/campaigns",
-      "/finance/needs", "/finance/expenses", "/finance/claims", "/finance/budgets", "/finance/funds",
+      "/finance", "/finance/transactions", "/finance/pledges", "/finance/partners", "/finance/claims", "/finance/recurring",
+      "/finance/campaigns", "/finance/needs", "/finance/expenses", "/finance/budgets", "/finance/funds",
       "/finance/ledger", "/finance/reconciliation", "/finance/reports", "/finance/statements", "/finance/audit",
       "/finance/settings",
     ]);

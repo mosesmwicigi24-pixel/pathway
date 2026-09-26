@@ -22,12 +22,15 @@ Media. Its pages fold into three sub-menus, and Settings stays apart at the
 bottom because it is administration rather than day-to-day finance. In the
 owner's words, this is "much cleaner than having 16 items exposed at the same
 level, while not changing any of your existing terminology". No label, route
-or gate changed; only the order and the folding did.
+or gate changed; only the order and the folding did. Claims first sat under
+Spending & Planning (as listed) and moved to Giving & Income, beside Partners,
+the same day: a claim is a member saying they paid a pledge another way —
+money in, not an expense claim (owner).
 
 ```
 FINANCE
-  Giving & Income        ⌄   Overview · Transactions · Pledges · Partners · Recurring gifts · Campaigns
-  Spending & Planning    ⌄   Department needs · Expenses · Claims · Budgets · Funds
+  Giving & Income        ⌄   Overview · Transactions · Pledges · Partners · Claims · Recurring gifts · Campaigns
+  Spending & Planning    ⌄   Department needs · Expenses · Budgets · Funds
   Accounting & Reporting ⌄   Ledger · Reconciliation · Reports · Statements · Audit
   Settings
 ```
@@ -38,11 +41,11 @@ FINANCE
 | 2 | Giving & Income | Transactions | `/finance/transactions` | financeTransactions | finance:view |
 | 3 | Giving & Income | Pledges | `/finance/pledges` | financePledges | finance:view |
 | 4 | Giving & Income | Partners | `/finance/partners` (`/partners` redirects) | partners | finance:view |
-| 5 | Giving & Income | Recurring gifts | `/finance/recurring` | financeRecurring | finance:view |
-| 6 | Giving & Income | Campaigns | `/finance/campaigns` | financeCampaigns | finance:view |
-| 7 | Spending & Planning (`spending`) | Department needs | `/finance/needs` | financeNeeds | finance:view |
-| 8 | Spending & Planning | Expenses | `/finance/expenses` | financeExpenses | finance:view |
-| 9 | Spending & Planning | Claims | `/finance/claims` | financeClaims | finance:view |
+| 5 | Giving & Income | Claims | `/finance/claims` | financeClaims | finance:view |
+| 6 | Giving & Income | Recurring gifts | `/finance/recurring` | financeRecurring | finance:view |
+| 7 | Giving & Income | Campaigns | `/finance/campaigns` | financeCampaigns | finance:view |
+| 8 | Spending & Planning (`spending`) | Department needs | `/finance/needs` | financeNeeds | finance:view |
+| 9 | Spending & Planning | Expenses | `/finance/expenses` | financeExpenses | finance:view |
 | 10 | Spending & Planning | Budgets | `/finance/budgets` | financeBudgets | finance:view |
 | 11 | Spending & Planning | Funds | `/finance/funds` | financeFunds | finance:view |
 | 12 | Accounting & Reporting (`accounting`) | Ledger | `/finance/ledger` | financeLedger | finance:view |

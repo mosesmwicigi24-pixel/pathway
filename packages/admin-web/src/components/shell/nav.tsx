@@ -155,13 +155,16 @@ export const navGroups: NavGroup[] = [
       // as the ledger. HandHeart rather than HeartHandshake so it does not read
       // as Discipleship Hub. /partners redirects here (App.tsx).
       { path: "/finance/partners", label: "Partners", icon: HandHeart, permission: "finance:view", subgroup: "giving" },
+      // Claims are members saying they paid a pledge another way — money in, so
+      // Giving & Income, beside Partners (owner, 2026-09-26; first placed under
+      // Spending & Planning).
+      { path: "/finance/claims", label: "Claims", icon: BadgeCheck, permission: "finance:view", subgroup: "giving" },
       { path: "/finance/recurring", label: "Recurring gifts", icon: Repeat, permission: "finance:view", subgroup: "giving" },
       { path: "/finance/campaigns", label: "Campaigns", icon: Flag, permission: "finance:view", subgroup: "giving" },
       // Target, not HandHelping: that glyph is Departments' (Operations), and a
       // need is a giving target with raised-vs-target progress.
       { path: "/finance/needs", label: "Department needs", icon: Target, permission: "finance:view", subgroup: "spending" },
       { path: "/finance/expenses", label: "Expenses", icon: ReceiptText, permission: "finance:view", subgroup: "spending" },
-      { path: "/finance/claims", label: "Claims", icon: BadgeCheck, permission: "finance:view", subgroup: "spending" },
       { path: "/finance/budgets", label: "Budgets", icon: Calculator, permission: "finance:view", subgroup: "spending" },
       { path: "/finance/funds", label: "Funds", icon: PiggyBank, permission: "finance:view", subgroup: "spending" },
       { path: "/finance/ledger", label: "Ledger", icon: BookOpen, permission: "finance:view", subgroup: "accounting" },
