@@ -62,7 +62,7 @@ import { fmtDay } from "../finance/dates";
 import { PartnerFaithfulness } from "../finance/b/PartnerFaithfulness";
 import { legacyPartnersRedirect } from "../shell/nav";
 
-/* ---------- tokens (same set as Finance.tsx) ---------- */
+/* ---------- tokens (the Finance kit's set — components/finance/kit.tsx FIN) ---------- */
 const NAVY = "var(--nuru-navy)";
 const MUTED = "var(--muted-foreground)";
 const BORDER = "var(--border)";
@@ -196,7 +196,7 @@ const reminderKind = (r: PartnerReminder): ReminderKind => r.kind ?? (r.sent_by 
 const reminderSender = (r: PartnerReminder): string =>
   reminderKind(r) === "manual" ? (r.sent_by_name ?? (r.sent_by ? shortRef(r.sent_by) : "Office")) : "—";
 
-/* ---------- primitives (local copies, Finance.tsx conventions) ---------- */
+/* ---------- primitives (local copies, in the Finance kit's look) ---------- */
 function Card({ children, style }: { children: ReactNode; style?: CSSProperties }): ReactElement {
   return (
     <div
