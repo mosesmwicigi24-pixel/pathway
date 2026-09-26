@@ -176,6 +176,9 @@ CREATE TABLE budget_lines (
   fund_id       UUID REFERENCES funds(fund_id),
   category_id   UUID REFERENCES expense_categories(category_id),
   label         TEXT NOT NULL CHECK (char_length(label) BETWEEN 2 AND 80),
+  -- The order the lines were sent in (PUT replaces them all), so the editor
+  -- round-trips exactly.
+  position      INT NOT NULL DEFAULT 0,
   monthly_minor BIGINT[] NOT NULL CHECK (array_length(monthly_minor, 1) = 12 AND 0 <= ALL (monthly_minor)),
   CHECK ((kind = 'income' AND fund_id IS NOT NULL) OR (kind = 'expense' AND category_id IS NOT NULL))
 );

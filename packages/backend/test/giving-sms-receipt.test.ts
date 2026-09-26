@@ -309,7 +309,9 @@ describe("Claude writes the thank-you — for the website giver and the app give
     const sms = new FakeMessageProvider("sms");
     const handlers = buildOutboxHandlers({ ...ctxWith(sms), aiProvider: ai });
     await handlers.get("giving.receipt")!({ transaction_id: first, user_id: null });
-    const second = await websiteGift({});
+    // A second payment has its own M-Pesa receipt — two live transactions can
+    // never share one (migration 216, transactions_receipt_code_uniq).
+    const second = await websiteGift({ receipt: "SJ12ABC346" });
     await handlers.get("giving.receipt")!({ transaction_id: second, user_id: null });
     expect(seen[0]).toContain('"prior_gifts":0');
     expect(seen[1]).toContain('"prior_gifts":1');

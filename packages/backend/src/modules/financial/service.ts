@@ -7,7 +7,7 @@ import type { Pool, PoolClient } from "pg";
 import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { maybeOne, one, many, tx, audit, enqueueOutbox } from "../../db/db.js";
+import { maybeOne, one, many, tx, audit, enqueueOutbox, type Queryable } from "../../db/db.js";
 import { NotificationService } from "../notifications/service.js";
 import { ApiError, ProviderNotConfiguredError } from "../../http/errors.js";
 import type { PaymentGateway } from "./gateway.js";
@@ -517,12 +517,36 @@ export class FinancialService {
         // Capture the M-Pesa receipt code (from the SMS) for the member's
         // statement — display-only, set once, never overwrites, never touches
         // amount/status/ledger.
+        //
+        // Savepoint-guarded (migration 216's transactions_receipt_code_uniq):
+        // if another live transaction already holds this code, the UPDATE is a
+        // unique violation, and without the savepoint it would abort THIS
+        // transaction — rolling back the settlement and the processed_webhooks
+        // row, so every provider retry failed the same way, forever. A
+        // display-only field must never undo money that arrived. The clash is
+        // left for Reconciliation (duplicate_receipt); anything else rethrows.
         if (cb.receipt) {
-          await c.query(
-            `UPDATE transactions SET receipt_code = $2
-              WHERE provider_ref = $1 AND receipt_code IS NULL`,
-            [cb.ref, cb.receipt],
-          );
+          await c.query("SAVEPOINT receipt_capture");
+          try {
+            await c.query(
+              `UPDATE transactions SET receipt_code = $2
+                WHERE provider_ref = $1 AND receipt_code IS NULL`,
+              [cb.ref, cb.receipt],
+            );
+            await c.query("RELEASE SAVEPOINT receipt_capture");
+          } catch (err) {
+            if ((err as { code?: string }).code !== "23505") throw err;
+            await c.query("ROLLBACK TO SAVEPOINT receipt_capture");
+            const holder = await maybeOne<{ transaction_id: string }>(
+              c,
+              `SELECT transaction_id FROM transactions WHERE receipt_code = $1 AND status <> 'failed' LIMIT 1`,
+              [cb.receipt],
+            );
+            console.warn(
+              `[giving] ${providerKey} receipt ${cb.receipt} (provider_ref ${cb.ref}) is already on transaction ` +
+                `${holder?.transaction_id ?? "unknown"} — settled without capturing it; Reconciliation flags the duplicate`,
+            );
+          }
         }
       } else {
         await c.query(
@@ -931,10 +955,10 @@ export class FinancialService {
    *  to the gift's own fund or the programme default. One rule for gifts,
    *  pledge schedules and confirmed claims, so a need never splits across funds
    *  by client. */
-  async needFundCode(needId: string | null): Promise<string | null> {
+  async needFundCode(needId: string | null, q: Queryable = this.pool): Promise<string | null> {
     if (!needId) return null;
     const r = await maybeOne<{ code: string }>(
-      this.pool,
+      q,
       `SELECT f.code FROM department_needs n
          JOIN departments d ON d.department_id = n.department_id
          JOIN funds f ON f.code = d.fund_code AND f.is_active
@@ -951,10 +975,11 @@ export class FinancialService {
    *  else the programme default when that is an active fund, else the first
    *  active fund by code — the SQL rule in constants.ts that every pledge's
    *  `pays_to` reads too, so what a pledge says it pays to is where its money
-   *  goes. 404 when the pledge does not exist; 422 when no fund is active. */
-  async pledgeFundCode(pledgeId: string): Promise<string> {
+   *  goes. 404 when the pledge does not exist; 422 when no fund is active.
+   *  `q` lets a caller read it inside its own transaction (finance books). */
+  async pledgeFundCode(pledgeId: string, q: Queryable = this.pool): Promise<string> {
     const p = await maybeOne<{ code: string | null }>(
-      this.pool,
+      q,
       `SELECT ${PLEDGE_PAYS_TO_CODE} AS code FROM pledges p ${PLEDGE_PAYS_TO_JOINS} WHERE p.pledge_id = $1`,
       [pledgeId],
     );
