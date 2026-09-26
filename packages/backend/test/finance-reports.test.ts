@@ -499,6 +499,37 @@ describe("finance reports — the clean books of a small church year", () => {
     expect((await get("/admin/finance/transactions?cursor=not-a-cursor")).status).toBe(400);
   });
 
+  it("transactions: same-day office gifts list newest receipt first — on one page and across pages", async () => {
+    // Every office gift is dated 12:00 EAT on its received day, so a Sunday's
+    // entries tie on created_at; the receipt number breaks the tie (verification
+    // cycle 1 found them in random order). Rows removed again at the end.
+    const day = "2023-03-05";
+    const made: string[] = [];
+    for (const n of [7, 9, 8, 10]) {
+      made.push(await gift({
+        user: ids.amina, fund: "general", amount: 100 * n, at: eat(day), officeChannel: "onhand",
+        receipt: `OR-2023-${String(n).padStart(5, "0")}`, recordedBy: ids.admin, legs: "none",
+      }));
+    }
+    try {
+      const want = ["OR-2023-00010", "OR-2023-00009", "OR-2023-00008", "OR-2023-00007"];
+      const whole = (await get(`/admin/finance/transactions?from=${day}&to=${day}&limit=50`)).body;
+      expect(whole.data.map((r: any) => r.receipt_code)).toEqual(want);
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      let pages = 0;
+      do {
+        const page: any = (await get(`/admin/finance/transactions?from=${day}&to=${day}&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`)).body;
+        seen.push(...page.data.map((r: any) => r.receipt_code));
+        cursor = page.next_cursor;
+        pages += 1;
+      } while (cursor && pages < 10);
+      expect(seen).toEqual(want);
+    } finally {
+      await q(`DELETE FROM transactions WHERE transaction_id = ANY($1::uuid[])`, [made]);
+    }
+  });
+
   it("transactions detail: office + reversal fields, who recorded / reversed it, and EVERY leg", async () => {
     const res = await get(`/admin/finance/transactions/${ids.tx.T10}`);
     expect(res.status).toBe(200);

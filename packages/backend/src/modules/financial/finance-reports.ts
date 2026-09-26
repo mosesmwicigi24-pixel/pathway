@@ -120,6 +120,24 @@ function decodeCursor(raw: string, arity: number): string[] {
   return v as string[];
 }
 
+/** The transactions register's keyset: (created_at, receipt, id). Office
+ *  gifts are all dated 12:00 EAT on their received day, so same-day entries tie
+ *  on created_at; the gapless OR- number then orders them newest receipt first
+ *  (zero-padded, so text order is number order). A legacy 2-part cursor
+ *  (created_at, id) is still accepted. */
+function txnCursor(raw: string): { ts: string; receipt: string | null; id: string } {
+  let parts: string[];
+  try {
+    parts = decodeCursor(raw, 3);
+  } catch {
+    const [ts, id] = tsIdCursor(raw);
+    return { ts, receipt: null, id };
+  }
+  const [ts, receipt, id] = parts as [string, string, string];
+  if (!TS_RE.test(ts) || !isUuid(id) || receipt.length > 80) throw new ApiError("VALIDATION_FAILED", "Malformed cursor");
+  return { ts, receipt, id };
+}
+
 /** A (timestamp, uuid) keyset cursor, validated before it reaches SQL. */
 function tsIdCursor(raw: string): [string, string] {
   const [ts, id] = decodeCursor(raw, 2) as [string, string];
@@ -300,19 +318,23 @@ export async function listFinanceTransactions(
   const P = new Params();
   const w = transactionFilters(q, P);
   if (!opts.all) {
-    let keyset: [string, string] | null = q.cursor ? tsIdCursor(q.cursor) : null;
+    let keyset: { ts: string; receipt: string | null; id: string } | null = q.cursor ? txnCursor(q.cursor) : null;
     if (!keyset && q.before) {
       // The earlier API paged with `before` = a created_at; accept a cursor
       // there too, so a client that fed next_cursor back as `before` works.
       try {
-        keyset = tsIdCursor(q.before);
+        keyset = txnCursor(q.before);
       } catch {
         const at = Date.parse(q.before);
         if (Number.isNaN(at)) throw new ApiError("VALIDATION_FAILED", "`before` is neither a timestamp nor a cursor");
         w.push(`t.created_at < ${P.add(new Date(at).toISOString())}::timestamptz`);
       }
     }
-    if (keyset) w.push(`(t.created_at, t.transaction_id) < (${P.add(keyset[0])}::timestamptz, ${P.add(keyset[1])}::uuid)`);
+    if (keyset && keyset.receipt !== null) {
+      w.push(`(t.created_at, COALESCE(t.receipt_code, ''), t.transaction_id) < (${P.add(keyset.ts)}::timestamptz, ${P.add(keyset.receipt)}::text, ${P.add(keyset.id)}::uuid)`);
+    } else if (keyset) {
+      w.push(`(t.created_at, t.transaction_id) < (${P.add(keyset.ts)}::timestamptz, ${P.add(keyset.id)}::uuid)`);
+    }
   }
   const limit = opts.all ? 100_000 : q.limit + 1;
   const rows = await many<Record<string, unknown>>(
@@ -321,7 +343,7 @@ export async function listFinanceTransactions(
        ${TXN_FROM}
        ${TXN_DETAIL_JOINS}
       WHERE ${w.length ? w.join(" AND ") : "TRUE"}
-      ORDER BY t.created_at DESC, t.transaction_id DESC
+      ORDER BY t.created_at DESC, COALESCE(t.receipt_code, '') DESC, t.transaction_id DESC
       LIMIT ${P.add(limit)}`,
     P.values,
   );
@@ -330,7 +352,7 @@ export async function listFinanceTransactions(
   const last = page[page.length - 1];
   return {
     data: page.map(shapeTxn),
-    next_cursor: hasMore && last ? encodeCursor([String(last.cursor_ts), String(last.transaction_id)]) : null,
+    next_cursor: hasMore && last ? encodeCursor([String(last.cursor_ts), String(last.receipt_code ?? ""), String(last.transaction_id)]) : null,
     totals,
   };
 }
