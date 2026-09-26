@@ -9989,7 +9989,8 @@ components:
         is_active: { type: boolean, default: true }
     BooksFundPatch:
       type: object
-      description: At least one field. The code cannot change.
+      additionalProperties: false
+      description: At least one field (400 otherwise). The code cannot change — an unknown field such as code is a 400.
       properties:
         name: { type: string, minLength: 2, maxLength: 150 }
         name_sw: { type: [string, "null"], minLength: 2, maxLength: 150 }
@@ -10071,7 +10072,8 @@ components:
         reference: { type: [string, "null"], maxLength: 80 }
     BooksExpensePatch:
       type: object
-      description: At least one field; only while the expense is recorded.
+      additionalProperties: false
+      description: At least one field; only while the expense is recorded. Unknown fields (e.g. status) are a 400.
       properties:
         fund: { type: string }
         category: { type: string }
@@ -10119,7 +10121,8 @@ components:
         is_active: { type: boolean, default: true }
     BooksExpenseCategoryPatch:
       type: object
-      description: At least one field. The code cannot change.
+      additionalProperties: false
+      description: At least one field (400 otherwise). The code cannot change — an unknown field such as code is a 400.
       properties:
         name: { type: string, minLength: 2, maxLength: 60 }
         sort: { type: integer }
@@ -10170,6 +10173,7 @@ components:
         name: { type: string, minLength: 2, maxLength: 80 }
     BooksBudgetPatch:
       type: object
+      additionalProperties: false
       description: At least one field; draft only.
       properties:
         year: { type: integer, minimum: 2020, maximum: 2100 }
