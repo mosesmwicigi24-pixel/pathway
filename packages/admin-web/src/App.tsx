@@ -5,7 +5,7 @@
 import { type ReactElement } from "react";
 import { createBrowserRouter, RouterProvider, Navigate, useLocation, useParams } from "react-router-dom";
 import { useAppSelector } from "./store/hooks";
-import { pathPermissions, superAdminOnlyPaths, pathAliases } from "./components/shell/nav";
+import { pathPermissions, superAdminOnlyPaths, pathAliases, legacyPartnersRedirect } from "./components/shell/nav";
 import { Layout } from "./components/shell/Layout";
 import { Login } from "./components/pages/Login";
 import { ResetPassword } from "./components/pages/ResetPassword";
@@ -30,8 +30,25 @@ import { Broadcast } from "./components/pages/Broadcast";
 import { JoinService } from "./components/pages/JoinService";
 import { EventsHub } from "./components/events/EventsHub";
 import { SeriesCommandCenter } from "./components/events/SeriesCommandCenter";
-import { Finance } from "./components/pages/Finance";
 import { Partners } from "./components/pages/Partners";
+// Finance — the ERP module (docs/FINANCE_ERP.md §1). The old single Finance
+// page (components/pages/Finance.tsx) is no longer routed.
+import { FinanceOverview } from "./components/pages/finance/Overview";
+import { FinanceTransactions } from "./components/pages/finance/Transactions";
+import { FinancePledges } from "./components/pages/finance/Pledges";
+import { FinanceClaims } from "./components/pages/finance/Claims";
+import { FinanceRecurring } from "./components/pages/finance/Recurring";
+import { FinanceCampaigns } from "./components/pages/finance/Campaigns";
+import { FinanceNeeds } from "./components/pages/finance/Needs";
+import { FinanceExpenses } from "./components/pages/finance/Expenses";
+import { FinanceBudgets } from "./components/pages/finance/Budgets";
+import { FinanceFunds } from "./components/pages/finance/Funds";
+import { FinanceLedger } from "./components/pages/finance/Ledger";
+import { FinanceReconciliation } from "./components/pages/finance/Reconciliation";
+import { FinanceReports } from "./components/pages/finance/Reports";
+import { FinanceStatements } from "./components/pages/finance/Statements";
+import { FinanceAudit } from "./components/pages/finance/Audit";
+import { FinanceSettings } from "./components/pages/finance/Settings";
 import { Departments } from "./components/pages/Departments";
 import { Certificates } from "./components/pages/Certificates";
 import { Badges } from "./components/pages/Badges";
@@ -71,6 +88,14 @@ function Guarded({ children }: { children: ReactElement }): ReactElement {
   const required = pathPermissions[path];
   if (required && permissions && !permissions.includes(required)) return <Navigate to="/" replace />;
   return children;
+}
+
+/** Old /partners links → Finance (nav.tsx legacyPartnersRedirect): the query
+ *  string rides along (?partner=<id> still opens the drawer); ?tab=claims
+ *  lands on the Claims page. */
+function RedirectPartners(): ReactElement {
+  const { search, hash } = useLocation();
+  return <Navigate to={legacyPartnersRedirect(search, hash)} replace />;
 }
 
 /** Old deep link /cms/level/:id → the workspace's ?level=N deep link. */
@@ -127,8 +152,27 @@ const router = createBrowserRouter([
       // and the per-series Command Center.
       { path: "events", element: <Guarded><EventsHub /></Guarded> },
       { path: "events/series/:id", element: <Guarded><SeriesCommandCenter /></Guarded> },
-      { path: "finance", element: <Guarded><Finance /></Guarded> },
-      { path: "partners", element: <Guarded><Partners /></Guarded> },
+      // Finance (docs/FINANCE_ERP.md §1): Overview at /finance and one route per
+      // sub-page — every path is in nav.tsx's Finance group, so each is gated
+      // finance:view by the same pathPermissions the sidebar uses.
+      { path: "finance", element: <Guarded><FinanceOverview /></Guarded> },
+      { path: "finance/transactions", element: <Guarded><FinanceTransactions /></Guarded> },
+      { path: "finance/pledges", element: <Guarded><FinancePledges /></Guarded> },
+      { path: "finance/partners", element: <Guarded><Partners /></Guarded> },
+      { path: "finance/claims", element: <Guarded><FinanceClaims /></Guarded> },
+      { path: "finance/recurring", element: <Guarded><FinanceRecurring /></Guarded> },
+      { path: "finance/campaigns", element: <Guarded><FinanceCampaigns /></Guarded> },
+      { path: "finance/needs", element: <Guarded><FinanceNeeds /></Guarded> },
+      { path: "finance/expenses", element: <Guarded><FinanceExpenses /></Guarded> },
+      { path: "finance/budgets", element: <Guarded><FinanceBudgets /></Guarded> },
+      { path: "finance/funds", element: <Guarded><FinanceFunds /></Guarded> },
+      { path: "finance/ledger", element: <Guarded><FinanceLedger /></Guarded> },
+      { path: "finance/reconciliation", element: <Guarded><FinanceReconciliation /></Guarded> },
+      { path: "finance/reports", element: <Guarded><FinanceReports /></Guarded> },
+      { path: "finance/statements", element: <Guarded><FinanceStatements /></Guarded> },
+      { path: "finance/audit", element: <Guarded><FinanceAudit /></Guarded> },
+      { path: "finance/settings", element: <Guarded><FinanceSettings /></Guarded> },
+      { path: "partners", element: <RedirectPartners /> },
       { path: "departments", element: <Guarded><Departments /></Guarded> },
       { path: "certificates", element: <Guarded><Certificates /></Guarded> },
       { path: "badges", element: <Guarded><Badges /></Guarded> },

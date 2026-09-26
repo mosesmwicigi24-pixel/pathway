@@ -1,25 +1,29 @@
 // Partners — the Partners programme console (docs/PARTNERS_PROGRAMME.md §1, §3,
-// §5–§6). Who has joined, what each partner has committed, whether they are
-// behind, and — per partner — their pledges with server-computed progress, the
+// §5–§6), now Finance → Partners (/finance/partners; docs/FINANCE_ERP.md §5).
+// Who has joined, what each partner has committed, whether they are behind,
+// and — per partner — their pledges with server-computed progress, the
 // schedules charging them, the payments attributed to each pledge and the
-// reminder log. Phase 2 adds the office's actions: "Send reminder" for one
-// partner (optionally one pledge, optional note), "Remind everyone behind", and
-// the Claims panel where "I paid another way" claims are confirmed (the server
-// records a manual gift and posts the ledger) or rejected. The 12-hour spacing
-// against automatic reminders is enforced server-side; this page only reports
-// it. Money is integer minor units + ISO currency; every progress value and
-// every "behind" flag comes from the server — this page derives nothing about
-// money or standing on its own (§1.1).
+// reminder log. The office's actions: "Send reminder" for one partner
+// (optionally one pledge, optional note) and "Remind everyone behind". The
+// 12-hour spacing against automatic reminders is enforced server-side; this
+// page only reports it. Money is integer minor units + ISO currency; every
+// progress value and every "behind" flag comes from the server — this page
+// derives nothing about money or standing on its own (§1.1).
 //
-// Visual language follows Finance.tsx (dark hero + tile strip, card table,
+// Finance ERP (2026-09-26): `?member=<user_id>` opens a partner's drawer (the
+// Pledges and Recurring pages link here; the older `?partner=` still works);
+// the drawer gains the faithfulness strip — standing, instalments kept of due,
+// "overdue since" — and that year's Partner and Giving statement PDFs; the
+// "I paid another way" claims queue is its own page now (/finance/claims) and
+// the hero's Claims badge links there.
+//
+// Visual language follows the Finance kit (dark hero + tile strip, card table,
 // right-hand drawer) and Members.tsx (avatar + name + cell row, dashed empty
-// state). Helpers are local copies, as every rebuilt page keeps its own.
+// state).
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
-import axios from "axios";
+import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
-  Ban,
   Bell,
   BellOff,
   CalendarClock,
@@ -47,16 +51,19 @@ import {
   type PartnerSort,
   type PartnerStatusFilter,
   type PartnersSummary,
-  type PledgeClaimRow,
   type RemindResult,
   type ReminderKind,
 } from "../../api/client";
+import { financeErrorMessage } from "../../api/finance";
 import { useAppSelector } from "../../store/hooks";
-import { errorMessage } from "../../util/error";
+import { ConfirmDialog, FinanceToaster } from "../finance/kit";
+import { formatMinor } from "../finance/money";
+import { fmtDay } from "../finance/dates";
+import { PartnerFaithfulness } from "../finance/b/PartnerFaithfulness";
+import { legacyPartnersRedirect } from "../shell/nav";
 
-/* ---------- tokens (same set as Finance.tsx) ---------- */
+/* ---------- tokens (the Finance kit's set — components/finance/kit.tsx FIN) ---------- */
 const NAVY = "var(--nuru-navy)";
-const GOLD = "var(--nuru-gold)";
 const MUTED = "var(--muted-foreground)";
 const BORDER = "var(--border)";
 const SURFACE = "var(--secondary)";
@@ -64,10 +71,10 @@ const DISPLAY = "var(--font-display)";
 const MONO = "var(--font-mono)";
 
 /* ---------- helpers ---------- */
-// The portal's money format: integer minor units → "KES 12,345" (no floats,
-// no decimals — same helper Finance/Dashboard keep locally).
-const money = (minor: number | null, currency: string | null): string =>
-  `${currency ?? "KES"} ${Math.round((minor ?? 0) / 100).toLocaleString()}`;
+// Money: integer minor units → "KES 12,345.00", exact (the Finance kit's
+// formatMinor — no floats). A figure with no currency of its own (the programme
+// summary, a tier) reads as KES, the church's home currency, as it always has.
+const money = (minor: number | string | null, currency: string | null): string => formatMinor(minor ?? 0, currency ?? "KES");
 
 const fmtDate = (iso: string | null): string => {
   if (!iso) return "—";
@@ -159,12 +166,6 @@ const SORTS: { label: string; value: PartnerSort }[] = [
   { label: "Behind first", value: "behind" },
 ];
 
-type TabKey = "partners" | "claims";
-const TABS: { key: TabKey; label: string }[] = [
-  { key: "partners", label: "Partners" },
-  { key: "claims", label: "Claims" },
-];
-
 /** Server-enforced (§3): office reminders keep the same 12 h spacing as automatic ones. */
 const REMINDER_SPACING_HOURS = 12;
 /** Body limit of POST /admin/partners/:userId/remind `message` (zod max(200)). */
@@ -195,7 +196,7 @@ const reminderKind = (r: PartnerReminder): ReminderKind => r.kind ?? (r.sent_by 
 const reminderSender = (r: PartnerReminder): string =>
   reminderKind(r) === "manual" ? (r.sent_by_name ?? (r.sent_by ? shortRef(r.sent_by) : "Office")) : "—";
 
-/* ---------- primitives (local copies, Finance.tsx conventions) ---------- */
+/* ---------- primitives (local copies, in the Finance kit's look) ---------- */
 function Card({ children, style }: { children: ReactNode; style?: CSSProperties }): ReactElement {
   return (
     <div
@@ -297,57 +298,6 @@ function Notice({ result, onDismiss, style }: { result: Result; onDismiss?: () =
   );
 }
 
-// The page's one transient confirmation (auto-clears after TOAST_MS).
-function Toast({ text }: { text: string }): ReactElement {
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      style={{
-        position: "fixed",
-        left: "50%",
-        bottom: 24,
-        transform: "translateX(-50%)",
-        zIndex: 90,
-        background: "var(--nuru-dark)",
-        color: "#fff",
-        padding: "10px 16px",
-        borderRadius: 12,
-        fontSize: 13,
-        fontWeight: 600,
-        boxShadow: "0 10px 30px rgba(7,22,41,0.35)",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-        whiteSpace: "nowrap",
-      }}
-    >
-      <Check size={14} /> {text}
-    </div>
-  );
-}
-
-const TOAST_MS = 4000;
-function useToast(): [string | null, (text: string) => void] {
-  const [toast, setToast] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const show = useCallback((text: string) => {
-    if (timer.current) clearTimeout(timer.current);
-    setToast(text);
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      setToast(null);
-    }, TOAST_MS);
-  }, []);
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
-  return [toast, show];
-}
-
 const thStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
@@ -376,6 +326,8 @@ export function Partners(): ReactElement {
   const { permissions } = useAppSelector((s) => s.auth);
   // finance:manage gates the actions; null (not loaded yet) = no actions.
   const canManage = permissions?.includes("finance:manage") ?? false;
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const [rows, setRows] = useState<PartnerRow[]>([]);
   const [summary, setSummary] = useState<PartnersSummary | null>(null);
@@ -388,40 +340,27 @@ export function Partners(): ReactElement {
   const [status, setStatus] = useState<PartnerStatusFilter>("all");
   const [sort, setSort] = useState<PartnerSort>("recent");
 
-  // detail drawer — `?partner=<user_id>` so a partner can be linked to.
+  // detail drawer — `?member=<user_id>` (the link the Finance pages use:
+  // Pledges, Recurring gifts) or the older `?partner=<user_id>`, so a partner
+  // can be linked to.
   const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get("partner");
+  const selectedId = searchParams.get("member") ?? searchParams.get("partner");
   const [detail, setDetail] = useState<PartnerDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  // page tab — `?tab=claims` so the claims queue can be linked to.
-  const tab: TabKey = searchParams.get("tab") === "claims" ? "claims" : "partners";
-  const setTab = useCallback(
-    (t: TabKey) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (t === "claims") next.set("tab", "claims");
-          else next.delete("tab");
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
+  // The claims queue is its own page now (/finance/claims). An old
+  // `?tab=claims` link straight to this route is sent there, the same way the
+  // /partners redirect sends it.
+  const claimsTabLink = searchParams.get("tab") === "claims";
 
-  // claims queue (§1 d) — loaded up front so the hero badge is right on any tab.
-  const [claims, setClaims] = useState<PledgeClaimRow[]>([]);
-  const [claimsLoading, setClaimsLoading] = useState(true);
-  const [claimsError, setClaimsError] = useState<string | null>(null);
-  const [deciding, setDeciding] = useState<{ claim_id: string; decision: "confirm" | "reject" } | null>(null);
+  // Pending "I paid another way" claims — only their count, for the hero badge
+  // that opens the Claims page. null = not known (loading, or it failed).
+  const [claimsCount, setClaimsCount] = useState<number | null>(null);
 
-  // hero-level action feedback ("Remind everyone behind") + the page toast.
+  // hero-level action feedback ("Remind everyone behind").
   const [heroNotice, setHeroNotice] = useState<Result | null>(null);
-  const [remindingAll, setRemindingAll] = useState(false);
-  const [toast, showToast] = useToast();
+  const [askRemindAll, setAskRemindAll] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 250);
@@ -444,7 +383,7 @@ export function Partners(): ReactElement {
       setError(null);
     } catch (e) {
       if (seq !== listSeq.current) return;
-      setError(errorMessage(e, "Could not load partners."));
+      setError(financeErrorMessage(e, "Could not load partners."));
     } finally {
       if (seq === listSeq.current) setLoading(false);
     }
@@ -473,7 +412,7 @@ export function Partners(): ReactElement {
         if (seq === detailSeq.current) setDetail(d);
       })
       .catch((e) => {
-        if (seq === detailSeq.current) setDetailError(errorMessage(e, "Could not load this partner."));
+        if (seq === detailSeq.current) setDetailError(financeErrorMessage(e, "Could not load this partner."));
       })
       .finally(() => {
         if (seq === detailSeq.current) setDetailLoading(false);
@@ -493,7 +432,7 @@ export function Partners(): ReactElement {
         setDetailError(null);
       }
     } catch (e) {
-      if (seq === detailSeq.current) setDetailError(errorMessage(e, "Could not refresh this partner."));
+      if (seq === detailSeq.current) setDetailError(financeErrorMessage(e, "Could not refresh this partner."));
     }
   }, [selectedId]);
 
@@ -502,7 +441,8 @@ export function Partners(): ReactElement {
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
-          next.set("partner", userId);
+          next.delete("partner");
+          next.set("member", userId);
           return next;
         },
         { replace: true },
@@ -514,6 +454,7 @@ export function Partners(): ReactElement {
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
+        next.delete("member");
         next.delete("partner");
         return next;
       },
@@ -521,92 +462,38 @@ export function Partners(): ReactElement {
     );
   }, [setSearchParams]);
 
-  const claimsSeq = useRef(0);
-  const loadClaims = useCallback(async () => {
-    const seq = ++claimsSeq.current;
-    setClaimsLoading(true);
-    try {
-      const data = await PartnersApi.claims();
-      if (seq !== claimsSeq.current) return;
-      setClaims(data);
-      setClaimsError(null);
-    } catch (e) {
-      if (seq !== claimsSeq.current) return;
-      setClaimsError(errorMessage(e, "Could not load claims."));
-    } finally {
-      if (seq === claimsSeq.current) setClaimsLoading(false);
-    }
-  }, []);
-  // On mount, and again whenever the queue is opened — another admin may have
-  // decided a claim meanwhile.
+  // The claims badge: how many "I paid another way" claims are waiting.
   useEffect(() => {
-    void loadClaims();
-  }, [loadClaims, tab]);
+    let alive = true;
+    PartnersApi.claims()
+      .then((data) => {
+        if (alive) setClaimsCount(data.length);
+      })
+      .catch(() => {
+        if (alive) setClaimsCount(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // "Remind everyone behind" (§3): the server walks every partner with a
-  // pledge behind and applies the 12-hour spacing itself; the page states the
-  // blast radius first and reports the counts it gets back.
+  // pledge behind and applies the 12-hour spacing itself; the dialog states
+  // the blast radius first and the hero reports the counts it gets back. A
+  // failure stays in the dialog, in the server's own words.
   const remindBehind = useCallback(async () => {
-    const n = summary?.behind ?? 0;
-    const who = n === 1 ? "the 1 partner who is behind" : `the ${n} partners who are behind`;
-    const ok = window.confirm(
-      `Remind ${who}?\n\nAnyone reminded in the last ${REMINDER_SPACING_HOURS} hours — automatically or by the office — is skipped, so nobody is nagged twice.`,
-    );
-    if (!ok) return;
-    setRemindingAll(true);
     setHeroNotice(null);
-    try {
-      const r = await PartnersApi.remindBehind();
-      setHeroNotice({
-        tone: r.reminded > 0 ? "ok" : "warn",
-        text: `Reminded ${r.reminded} · skipped ${r.skipped}${r.partners === 0 ? " — nobody is behind" : ""}`,
-      });
-      void refreshDetail(); // an open drawer's reminders log gains its row
-    } catch (e) {
-      setHeroNotice({ tone: "error", text: errorMessage(e, "Could not send reminders.") });
-    } finally {
-      setRemindingAll(false);
-    }
-  }, [summary, refreshDetail]);
-
-  // Confirm / reject a claim (§1 d). Confirming is a money write on the server
-  // (a succeeded manual transaction + ledger + receipt) with no undo endpoint,
-  // so both decisions ask first. A 422 means the claim was decided elsewhere —
-  // the row is stale, so the queue is reloaded rather than retried.
-  const decideClaim = useCallback(
-    async (c: PledgeClaimRow, decision: "confirm" | "reject") => {
-      const amount = money(Number(c.amount_minor), c.currency);
-      const question =
-        decision === "confirm"
-          ? `Record ${amount} from ${c.full_name} as a manual gift toward "${c.pledge_title}"?\n\nThis posts to the ledger and sends them a receipt. It cannot be undone here.`
-          : `Reject ${c.full_name}'s claim of ${amount}?\n\nThey will be told.`;
-      if (!window.confirm(question)) return;
-      setDeciding({ claim_id: c.claim_id, decision });
-      try {
-        if (decision === "confirm") await PartnersApi.confirmClaim(c.claim_id);
-        else await PartnersApi.rejectClaim(c.claim_id);
-        setClaims((prev) => prev.filter((x) => x.claim_id !== c.claim_id));
-        setClaimsError(null);
-        showToast(decision === "confirm" ? "Recorded as a manual gift" : "Rejected");
-        if (decision === "confirm") {
-          void loadList(); // given-this-year / behind may have moved
-          if (selectedId === c.user_id) void refreshDetail(); // it is a payment now
-        }
-      } catch (e) {
-        if (axios.isAxiosError(e) && e.response?.status === 422) {
-          setClaimsError(errorMessage(e, "This claim was already decided."));
-          void loadClaims();
-        } else {
-          setClaimsError(errorMessage(e, decision === "confirm" ? "Could not confirm the claim." : "Could not reject the claim."));
-        }
-      } finally {
-        setDeciding(null);
-      }
-    },
-    [showToast, loadList, loadClaims, refreshDetail, selectedId],
-  );
+    const r = await PartnersApi.remindBehind();
+    setAskRemindAll(false);
+    setHeroNotice({
+      tone: r.reminded > 0 ? "ok" : "warn",
+      text: `Reminded ${r.reminded} · skipped ${r.skipped}${r.partners === 0 ? " — nobody is behind" : ""}`,
+    });
+    void refreshDetail(); // an open drawer's reminders log gains its row
+  }, [refreshDetail]);
 
   const filtersActive = debouncedSearch !== "" || status !== "all";
+  const behindCount = summary?.behind ?? 0;
 
   const tiles = useMemo(
     () => [
@@ -619,13 +506,15 @@ export function Partners(): ReactElement {
     [summary],
   );
 
+  if (claimsTabLink) return <Navigate to={legacyPartnersRedirect(location.search, location.hash)} replace />;
+
   return (
     <div className="min-h-full" style={{ background: "var(--background)" }}>
       {/* hero */}
       <div style={{ background: "var(--nuru-dark)", padding: "22px clamp(16px,4vw,48px) 24px" }}>
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-1.5" style={{ fontSize: 11, color: "rgba(232,239,245,0.55)", letterSpacing: "0.04em" }}>
-            <span>Operations</span>
+            <span>Finance</span>
             <ChevronRight size={10} />
             <span style={{ color: "#fff", fontWeight: 600 }}>Partners</span>
           </div>
@@ -647,8 +536,8 @@ export function Partners(): ReactElement {
             </span>
             <button
               type="button"
-              onClick={() => setTab("claims")}
-              title="Claims to review"
+              onClick={() => navigate("/finance/claims")}
+              title="“I paid another way” claims waiting for the office — opens Finance › Claims"
               className="inline-flex items-center gap-1.5 rounded-lg px-2.5"
               style={{
                 height: 32,
@@ -664,21 +553,21 @@ export function Partners(): ReactElement {
             >
               <ClipboardList size={11} /> Claims
               <span
-                aria-label={`${claims.length} pending`}
+                aria-label={claimsCount === null ? "Pending claims" : `${claimsCount} pending`}
                 style={{
                   minWidth: 18,
                   height: 18,
                   padding: "0 6px",
                   borderRadius: 999,
-                  background: claims.length > 0 ? "#F5C77E" : "rgba(255,255,255,0.14)",
-                  color: claims.length > 0 ? "#0B1F33" : "rgba(232,239,245,0.7)",
+                  background: claimsCount ? "#F5C77E" : "rgba(255,255,255,0.14)",
+                  color: claimsCount ? "#0B1F33" : "rgba(232,239,245,0.7)",
                   fontFamily: MONO,
                   fontSize: 11,
                   lineHeight: "18px",
                   textAlign: "center",
                 }}
               >
-                {claimsLoading && claims.length === 0 ? "…" : claims.length}
+                {claimsCount === null ? "…" : claimsCount}
               </span>
             </button>
             {canManage ? (
@@ -686,8 +575,7 @@ export function Partners(): ReactElement {
                 dark
                 icon={<Send size={13} />}
                 label="Remind everyone behind"
-                onClick={() => void remindBehind()}
-                busy={remindingAll}
+                onClick={() => setAskRemindAll(true)}
                 disabledTip={!summary ? "Loading…" : summary.behind === 0 ? "No partner is behind" : undefined}
               />
             ) : null}
@@ -711,167 +599,135 @@ export function Partners(): ReactElement {
         </div>
       </div>
 
-      {/* tab bar */}
-      <div style={{ padding: "0 clamp(16px,4vw,48px)", background: "var(--background)" }}>
-        <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${BORDER}`, overflowX: "auto" }}>
-          {TABS.map((t) => {
-            const active = tab === t.key;
-            const count = t.key === "claims" ? claims.length : 0;
-            return (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTab(t.key)}
-                aria-current={active ? "page" : undefined}
-                style={{
-                  padding: "12px 16px",
-                  border: "none",
-                  background: "transparent",
-                  color: active ? NAVY : MUTED,
-                  fontSize: 14,
-                  fontWeight: active ? 700 : 500,
-                  borderBottom: active ? `2px solid ${GOLD}` : "2px solid transparent",
-                  marginBottom: -1,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 7,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {t.label}
-                {count > 0 ? (
-                  <span style={{ minWidth: 18, height: 18, padding: "0 6px", borderRadius: 999, background: "#FFF4DA", color: "#A87616", fontFamily: MONO, fontSize: 11, lineHeight: "18px", textAlign: "center" }}>
-                    {count}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       <div style={{ padding: "24px clamp(16px,4vw,48px) 48px" }}>
-        {tab === "partners" ? (
-          <>
-            {error ? <p style={{ color: "#A8281F", marginBottom: 12 }}>{error}</p> : null}
+        {error ? <p style={{ color: "#A8281F", marginBottom: 12 }}>{error}</p> : null}
 
-            <Card style={{ overflow: "hidden" }}>
-              <div className="px-5 py-4 flex items-center justify-between flex-wrap gap-3" style={{ borderBottom: `1px solid ${BORDER}` }}>
-                <div>
-                  <div className="nuru-section-title">Partners</div>
-                  <div style={{ fontSize: 12, color: MUTED }}>Everyone who joined the programme, what they committed, and whether they are behind.</div>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <div style={{ position: "relative" }}>
-                    <Search size={14} color="#6B7280" style={{ position: "absolute", left: 10, top: 10 }} />
-                    <input
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Search name, phone, email, cell"
-                      style={{ height: 34, padding: "0 12px 0 30px", background: "var(--input-background)", border: `1px solid ${BORDER}`, borderRadius: 10, width: 260, fontSize: 13 }}
-                    />
-                  </div>
-                  <select value={status} onChange={(e) => setStatus(e.target.value as PartnerStatusFilter)} style={selectStyle} aria-label="Status">
-                    {STATUS_FILTERS.map((s) => (
-                      <option key={s.value} value={s.value}>
-                        Status: {s.label}
-                      </option>
-                    ))}
-                  </select>
-                  <select value={sort} onChange={(e) => setSort(e.target.value as PartnerSort)} style={selectStyle} aria-label="Sort">
-                    {SORTS.map((s) => (
-                      <option key={s.value} value={s.value}>
-                        Sort: {s.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+        <Card style={{ overflow: "hidden" }}>
+          <div className="px-5 py-4 flex items-center justify-between flex-wrap gap-3" style={{ borderBottom: `1px solid ${BORDER}` }}>
+            <div>
+              <div className="nuru-section-title">Partners</div>
+              <div style={{ fontSize: 12, color: MUTED }}>Everyone who joined the programme, what they committed, and whether they are behind.</div>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div style={{ position: "relative" }}>
+                <Search size={14} color="#6B7280" style={{ position: "absolute", left: 10, top: 10 }} />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search name, phone, email, cell"
+                  style={{ height: 34, padding: "0 12px 0 30px", background: "var(--input-background)", border: `1px solid ${BORDER}`, borderRadius: 10, width: 260, fontSize: 13 }}
+                />
               </div>
+              <select value={status} onChange={(e) => setStatus(e.target.value as PartnerStatusFilter)} style={selectStyle} aria-label="Status">
+                {STATUS_FILTERS.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    Status: {s.label}
+                  </option>
+                ))}
+              </select>
+              <select value={sort} onChange={(e) => setSort(e.target.value as PartnerSort)} style={selectStyle} aria-label="Sort">
+                {SORTS.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    Sort: {s.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full" style={{ borderCollapse: "collapse", minWidth: 960 }}>
-                  <thead>
-                    <tr style={{ background: SURFACE }}>
-                      <th style={thStyle}>Member</th>
-                      <th style={thStyle}>Tier</th>
-                      <th style={{ ...thStyle, textAlign: "right" }}>Committed / month</th>
-                      <th style={{ ...thStyle, textAlign: "right" }}>Pledges</th>
-                      <th style={{ ...thStyle, textAlign: "right" }}>Given this year</th>
-                      <th style={thStyle}>Last gift</th>
-                      <th style={thStyle}>Next due</th>
-                      <th style={thStyle}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((r, i) => {
-                      const chip = rowChip(r);
-                      return (
-                        <tr
-                          key={r.user_id}
-                          onClick={() => openPartner(r.user_id)}
-                          className="cursor-pointer transition-colors hover:bg-[var(--input-background)]"
-                          style={{ borderTop: `1px solid ${BORDER}`, background: i % 2 === 1 ? "rgba(238,240,243,0.4)" : "transparent" }}
-                        >
-                          <td style={tdStyle}>
-                            <div className="flex items-center gap-3 min-w-0">
-                              <Avatar name={r.full_name} url={r.avatar_url} seed={i} />
-                              <div className="min-w-0">
-                                <div style={{ fontSize: 13.5, fontWeight: 700, color: NAVY, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.full_name}</div>
-                                <div style={{ fontSize: 11.5, color: MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.cell_name ?? "No cell yet"}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
-                            {r.tier ? (
-                              <span className="inline-flex items-center gap-1.5">
-                                <span style={{ fontWeight: 600 }}>{r.tier.name}</span>
-                                <span style={{ fontSize: 11, color: MUTED, fontFamily: MONO }}>{money(r.tier.monthly_minor, null)}</span>
-                              </span>
-                            ) : (
-                              <span style={{ color: MUTED }}>—</span>
-                            )}
-                          </td>
-                          <td style={{ ...tdStyle, fontFamily: MONO, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>{money(r.committed_monthly_minor, null)}</td>
-                          <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{r.pledges_active}</td>
-                          <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", whiteSpace: "nowrap" }}>{money(r.given_year_minor, null)}</td>
-                          <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12, whiteSpace: "nowrap" }}>{fmtDate(r.last_gift_at)}</td>
-                          <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12, whiteSpace: "nowrap", color: r.behind ? "#A87616" : NAVY }}>{fmtDate(r.next_due_on)}</td>
-                          <td style={tdStyle}>
-                            <Pill chip={chip} />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {loading && rows.length === 0 ? (
-                      <tr>
-                        <td colSpan={8} style={{ padding: "24px 16px", textAlign: "center", fontSize: 13, color: MUTED }}>
-                          Loading partners…
-                        </td>
-                      </tr>
-                    ) : null}
-                    {!loading && rows.length === 0 && !error ? (
-                      <tr>
-                        <td colSpan={8} style={{ padding: 0 }}>
-                          <div className="text-center py-12" style={{ borderTop: `1px dashed ${BORDER}` }}>
-                            <p style={{ fontSize: 14, color: MUTED }}>
-                              {filtersActive ? "No partners match those filters." : "No partners yet — members join from Give → Partners in the app."}
-                            </p>
+          <div className="overflow-x-auto">
+            <table className="w-full" style={{ borderCollapse: "collapse", minWidth: 960 }}>
+              <thead>
+                <tr style={{ background: SURFACE }}>
+                  <th style={thStyle}>Member</th>
+                  <th style={thStyle}>Tier</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Committed / month</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Pledges</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Given this year</th>
+                  <th style={thStyle}>Last gift</th>
+                  <th style={thStyle}>Next due</th>
+                  <th style={thStyle}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => {
+                  const chip = rowChip(r);
+                  return (
+                    <tr
+                      key={r.user_id}
+                      onClick={() => openPartner(r.user_id)}
+                      className="cursor-pointer transition-colors hover:bg-[var(--input-background)]"
+                      style={{ borderTop: `1px solid ${BORDER}`, background: i % 2 === 1 ? "rgba(238,240,243,0.4)" : "transparent" }}
+                    >
+                      <td style={tdStyle}>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Avatar name={r.full_name} url={r.avatar_url} seed={i} />
+                          <div className="min-w-0">
+                            <div style={{ fontSize: 13.5, fontWeight: 700, color: NAVY, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.full_name}</div>
+                            <div style={{ fontSize: 11.5, color: MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.cell_name ?? "No cell yet"}</div>
                           </div>
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          </>
-        ) : (
-          <ClaimsPanel claims={claims} loading={claimsLoading} error={claimsError} canManage={canManage} deciding={deciding} onDecide={(c, d) => void decideClaim(c, d)} />
-        )}
+                        </div>
+                      </td>
+                      <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
+                        {r.tier ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span style={{ fontWeight: 600 }}>{r.tier.name}</span>
+                            <span style={{ fontSize: 11, color: MUTED, fontFamily: MONO }}>{money(r.tier.monthly_minor, null)}</span>
+                          </span>
+                        ) : (
+                          <span style={{ color: MUTED }}>—</span>
+                        )}
+                      </td>
+                      <td style={{ ...tdStyle, fontFamily: MONO, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>{money(r.committed_monthly_minor, null)}</td>
+                      <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{r.pledges_active}</td>
+                      <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", whiteSpace: "nowrap" }}>{money(r.given_year_minor, null)}</td>
+                      <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12, whiteSpace: "nowrap" }}>{fmtDate(r.last_gift_at)}</td>
+                      <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12, whiteSpace: "nowrap", color: r.behind ? "#A87616" : NAVY }}>{fmtDate(r.next_due_on)}</td>
+                      <td style={tdStyle}>
+                        <Pill chip={chip} />
+                      </td>
+                    </tr>
+                  );
+                })}
+                {loading && rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} style={{ padding: "24px 16px", textAlign: "center", fontSize: 13, color: MUTED }}>
+                      Loading partners…
+                    </td>
+                  </tr>
+                ) : null}
+                {!loading && rows.length === 0 && !error ? (
+                  <tr>
+                    <td colSpan={8} style={{ padding: 0 }}>
+                      <div className="text-center py-12" style={{ borderTop: `1px dashed ${BORDER}` }}>
+                        <p style={{ fontSize: 14, color: MUTED }}>
+                          {filtersActive ? "No partners match those filters." : "No partners yet — members join from Give → Partners in the app."}
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       </div>
 
-      {toast ? <Toast text={toast} /> : null}
+      <FinanceToaster />
+      <ConfirmDialog
+        open={askRemindAll}
+        title="Remind everyone behind?"
+        body={
+          <>
+            Sends a reminder to {behindCount === 1 ? "the 1 partner who is behind" : `the ${behindCount} partners who are behind`}, for each pledge that is behind.
+            Anyone reminded in the last {REMINDER_SPACING_HOURS} hours — automatically or by the office — is skipped, so nobody is nagged twice.
+          </>
+        }
+        confirmLabel="Send reminders"
+        errorFallback="Could not send reminders."
+        onConfirm={remindBehind}
+        onCancel={() => setAskRemindAll(false)}
+      />
 
       {selectedId ? (
         <PartnerDrawer
@@ -965,7 +821,7 @@ function PartnerDrawer({
         setRemindOpen(false);
         await onRefresh(); // the reminders log gains its row
       } catch (e) {
-        setRemindResult({ tone: "error", text: errorMessage(e, "Could not send the reminder.") });
+        setRemindResult({ tone: "error", text: financeErrorMessage(e, "Could not send the reminder.") });
       } finally {
         setSending(false);
       }
@@ -1075,6 +931,9 @@ function PartnerDrawer({
           <div style={{ fontFamily: MONO, fontSize: 12, color: m.behind ? "#A87616" : NAVY }}>{fmtDate(m.next_due_on)}</div>
         </div>
       </div>
+
+      {/* faithfulness — the pledge register's view of this partner, and the year's statements */}
+      <PartnerFaithfulness userId={m.user_id} fullName={m.full_name} />
 
       {/* pledges */}
       <div style={{ marginTop: 22 }}>
@@ -1310,7 +1169,20 @@ function RemindPopover({
   );
 }
 
+/** What the wire's Pledge carries beyond client.ts's PartnerPledge (the
+ *  reports contract's Pledge: progress.overdue_since, title, pays_to). Read
+ *  defensively — an older payload without them still renders. */
+type WirePledge = PartnerPledge & {
+  title?: string | undefined;
+  pays_to?: { code: string; name: string } | null | undefined;
+  progress: PartnerPledge["progress"] & { overdue_since?: string | null | undefined };
+};
+
 function PledgeCard({ pledge: p }: { pledge: PartnerPledge }): ReactElement {
+  const wire = p as WirePledge;
+  // Monthly: the earliest missed instalment's due date; total: its due date
+  // once passed short of target (the server's own rule).
+  const overdueSince = wire.progress.overdue_since ?? null;
   // Progress (§1): monthly = paid this period vs amount; total = paid vs target.
   // Both numbers come from the server; the bar only draws the ratio.
   const denom = p.shape === "monthly" ? p.amount_minor : p.target_minor;
@@ -1335,7 +1207,10 @@ function PledgeCard({ pledge: p }: { pledge: PartnerPledge }): ReactElement {
             <Pill chip={prog} />
           </div>
           <div style={{ fontSize: 12.5, color: NAVY, marginTop: 4 }}>{terms}</div>
-          <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{pledgeTarget(p)}</div>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+            {wire.title ?? pledgeTarget(p)}
+            {wire.pays_to ? ` · pays to ${wire.pays_to.name}` : ""}
+          </div>
         </div>
         <div className="flex flex-col items-end gap-1" style={{ fontSize: 11.5, color: MUTED }}>
           <span className="inline-flex items-center gap-1" style={{ color: p.reminders_enabled ? NAVY : MUTED }}>
@@ -1367,6 +1242,11 @@ function PledgeCard({ pledge: p }: { pledge: PartnerPledge }): ReactElement {
         <span className="inline-flex items-center gap-1">
           <CalendarClock size={12} /> Next due <span style={{ fontFamily: MONO, color: prog.label === "Behind" ? "#A87616" : NAVY }}>{fmtDate(nextDue)}</span>
         </span>
+        {overdueSince ? (
+          <span style={{ color: "#A87616", fontWeight: 700 }}>
+            Overdue since <span style={{ fontFamily: MONO }}>{fmtDay(overdueSince)}</span>
+          </span>
+        ) : null}
         <span>
           All time <span style={{ fontFamily: MONO, color: NAVY }}>{money(p.progress.paid_minor, p.currency)}</span>
         </span>
@@ -1394,129 +1274,5 @@ function ScheduleRow({ s }: { s: AdminScheduleRow }): ReactElement {
         {s.consecutive_failures}
       </td>
     </tr>
-  );
-}
-
-/* ====================== CLAIMS ====================== */
-// Pending "I paid another way" claims (§1 d). Confirming asks the server to
-// record a manual gift attributed to the pledge (ledger + receipt); rejecting
-// tells the member. Amounts arrive as text (BIGINT) and are only formatted here.
-function ClaimsPanel({
-  claims,
-  loading,
-  error,
-  canManage,
-  deciding,
-  onDecide,
-}: {
-  claims: PledgeClaimRow[];
-  loading: boolean;
-  error: string | null;
-  canManage: boolean;
-  deciding: { claim_id: string; decision: "confirm" | "reject" } | null;
-  onDecide: (claim: PledgeClaimRow, decision: "confirm" | "reject") => void;
-}): ReactElement {
-  const cols = canManage ? 7 : 6;
-  return (
-    <Card style={{ overflow: "hidden" }}>
-      <div className="px-5 py-4 flex items-center justify-between flex-wrap gap-3" style={{ borderBottom: `1px solid ${BORDER}` }}>
-        <div>
-          <div className="nuru-section-title">Claims to review</div>
-          <div style={{ fontSize: 12, color: MUTED }}>
-            “I paid another way” — confirming records a manual gift toward the pledge, posts the ledger and sends a receipt; rejecting tells the member.
-          </div>
-        </div>
-        <span style={{ fontSize: 12, color: MUTED, fontFamily: MONO, whiteSpace: "nowrap" }}>
-          {loading && claims.length === 0 ? "…" : `${claims.length} pending`}
-        </span>
-      </div>
-      {error ? (
-        <p role="alert" style={{ color: "#A8281F", fontSize: 12.5, padding: "10px 20px 0", margin: 0 }}>
-          {error}
-        </p>
-      ) : null}
-      <div className="overflow-x-auto">
-        <table className="w-full" style={{ borderCollapse: "collapse", minWidth: 960 }}>
-          <thead>
-            <tr style={{ background: SURFACE }}>
-              <th style={thStyle}>Member</th>
-              <th style={thStyle}>Pledge</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
-              <th style={thStyle}>Paid on</th>
-              <th style={thStyle}>Note</th>
-              <th style={thStyle}>Submitted</th>
-              {canManage ? <th style={{ ...thStyle, textAlign: "right" }}>Decision</th> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {claims.map((c, i) => {
-              const mine = deciding?.claim_id === c.claim_id;
-              const otherBusy = deciding !== null && !mine;
-              return (
-                <tr
-                  key={c.claim_id}
-                  style={{ borderTop: `1px solid ${BORDER}`, background: i % 2 === 1 ? "rgba(238,240,243,0.4)" : "transparent", opacity: otherBusy ? 0.6 : 1 }}
-                >
-                  <td style={tdStyle}>
-                    <div className="flex items-center gap-3 min-w-0">
-                      <Avatar name={c.full_name} url={null} seed={i} size={34} />
-                      <div style={{ fontSize: 13.5, fontWeight: 700, color: NAVY, whiteSpace: "nowrap" }}>{c.full_name}</div>
-                    </div>
-                  </td>
-                  <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{c.pledge_title}</td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>{money(Number(c.amount_minor), c.currency)}</td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12, whiteSpace: "nowrap" }}>{fmtDate(c.paid_on)}</td>
-                  <td
-                    style={{ ...tdStyle, color: c.note ? NAVY : MUTED, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                    title={c.note ?? undefined}
-                  >
-                    {c.note ?? "—"}
-                  </td>
-                  <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12, whiteSpace: "nowrap" }}>{fmtDateTime(c.created_at)}</td>
-                  {canManage ? (
-                    <td style={{ ...tdStyle, textAlign: "right", whiteSpace: "nowrap" }}>
-                      <div className="inline-flex gap-2">
-                        <ActionButton
-                          tone="primary"
-                          icon={<Check size={13} />}
-                          label="Confirm"
-                          busy={mine && deciding?.decision === "confirm"}
-                          disabledTip={deciding && !(mine && deciding.decision === "confirm") ? "Another decision is in flight" : undefined}
-                          onClick={() => onDecide(c, "confirm")}
-                        />
-                        <ActionButton
-                          tone="danger"
-                          icon={<Ban size={13} />}
-                          label="Reject"
-                          busy={mine && deciding?.decision === "reject"}
-                          disabledTip={deciding && !(mine && deciding.decision === "reject") ? "Another decision is in flight" : undefined}
-                          onClick={() => onDecide(c, "reject")}
-                        />
-                      </div>
-                    </td>
-                  ) : null}
-                </tr>
-              );
-            })}
-            {loading && claims.length === 0 ? (
-              <tr>
-                <td colSpan={cols} style={{ padding: "24px 16px", textAlign: "center", fontSize: 13, color: MUTED }}>
-                  Loading claims…
-                </td>
-              </tr>
-            ) : null}
-            {!loading && claims.length === 0 && !error ? (
-              <tr>
-                <td colSpan={cols} style={{ padding: 0 }}>
-                  <div className="text-center py-12" style={{ borderTop: `1px dashed ${BORDER}` }}>
-                    <p style={{ fontSize: 14, color: MUTED }}>Nothing to review — every “I paid another way” claim has been decided.</p>
-                  </div>
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-    </Card>
   );
 }
