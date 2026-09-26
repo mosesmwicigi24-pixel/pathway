@@ -336,10 +336,19 @@ export function sinceEAT(iso: string, now: Date = new Date()): string {
   return full;
 }
 
+/** "a" / "an" by sound: an Airtel…, an M-Pesa… (a letter said "em"), a Card…. */
+export function article(word: string): "a" | "an" {
+  if (/^[aeiou]/i.test(word)) return "an";
+  if (/^[FHLMNRSX](?:-|[A-Z])/.test(word)) return "an";
+  return "a";
+}
+
 /** "An M-Pesa payment of KES 1,000.00 from Grace is still processing since 10:42 — it may be this same payment." */
 export function pendingNoticeText(r: FinanceTransactionRow, now: Date = new Date()): string {
   const who = (r.full_name ?? r.display_name).trim().split(/\s+/)[0] || "this member";
-  const what = `${/^[aeiou]/i.test(channelLabel(r.channel)) ? "An" : "A"} ${channelLabel(r.channel)} payment of ${formatMinor(r.amount_minor, r.currency)} from ${who}`;
+  const label = channelLabel(r.channel);
+  const art = article(label);
+  const what = `${art === "an" ? "An" : "A"} ${label} payment of ${formatMinor(r.amount_minor, r.currency)} from ${who}`;
   const state = r.status === "requires_action" ? "is waiting for them to confirm" : "is still processing";
   return `${what} ${state} since ${sinceEAT(r.created_at, now)} — it may be this same payment.`;
 }
