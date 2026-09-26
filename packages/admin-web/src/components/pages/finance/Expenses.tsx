@@ -34,7 +34,7 @@ import {
 } from "../../finance/kit";
 import { sortTotals } from "../../finance/money";
 import { DATE_PRESETS, fmtDateTimeEAT, fmtDay, fmtRange, presetRange, rangeError, type DatePreset } from "../../finance/dates";
-import { useExpenseCategories, useFunds } from "../../finance/b/hooks";
+import { useExpenseCategories, useFunds, useSetUrlParams } from "../../finance/b/hooks";
 import { ExpenseDrawer } from "../../finance/b/ExpenseDrawer";
 import { ExpenseFormDrawer } from "../../finance/b/ExpenseForm";
 import { Stacked, ToggleChips } from "../../finance/b/ui";
@@ -65,6 +65,8 @@ export function FinanceExpenses(): ReactElement {
   const [fromRaw, setFrom] = useUrlParam("from", "");
   const [toRaw, setTo] = useUrlParam("to", "");
   const [openId, setOpenId] = useUrlParam("expense", "");
+  // One navigation for any action that changes several filters at once.
+  const setUrl = useSetUrlParams();
 
   // The approval queue (Overview → "expenses to approve" opens ?status=recorded)
   // is about every expense waiting, whenever it was spent: arriving there with
@@ -148,10 +150,7 @@ export function FinanceExpenses(): ReactElement {
             onClick={
               statusRaw === "recorded"
                 ? undefined
-                : () => {
-                    setStatusRaw("recorded");
-                    setSpent("any");
-                  }
+                : () => setUrl({ status: "recorded", spent: "any", from: null, to: null })
             }
           />
           <KpiTile label="Expenses" icon={<ReceiptText size={12} />} value={firstLoad ? "…" : list.totals.reduce((n, t) => n + t.count, 0).toLocaleString()} hint={statusText} />
@@ -168,15 +167,7 @@ export function FinanceExpenses(): ReactElement {
           { key: "category", label: "Category", value: category, options: [{ value: "", label: "All" }, ...categories.categories.map((c) => ({ value: c.code, label: c.name }))], onChange: setCategory },
         ]}
         clearable={clearable}
-        onClear={() => {
-          setStatusRaw(DEFAULT_STATUS);
-          setFund("");
-          setCategory("");
-          setQ("");
-          setSpent("this_year");
-          setFrom("");
-          setTo("");
-        }}
+        onClear={() => setUrl({ status: null, fund: null, category: null, q: null, spent: null, from: null, to: null })}
         trailing={<ToggleChips ariaLabel="Status" options={STATUS_OPTIONS} value={statuses} onChange={(next) => setStatusRaw(next.join(","))} />}
       />
       {spent === "custom" ? (

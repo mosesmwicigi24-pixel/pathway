@@ -28,6 +28,7 @@ import {
 } from "../../finance/kit";
 import { currentYearEAT, fmtDay } from "../../finance/dates";
 import { keptOfDue, parseYear, pledgeTermsText } from "../../finance/b/logic";
+import { useSetUrlParams } from "../../finance/b/hooks";
 import { FiguresStrip, Stacked } from "../../finance/b/ui";
 
 const STATUSES: readonly { value: PledgeStatusValue; label: string }[] = [
@@ -62,6 +63,7 @@ export function FinancePledges(): ReactElement {
   const [standingRaw, setStanding] = useUrlParam("standing", "");
   const [shapeRaw, setShape] = useUrlParam("shape", "");
   const [q, setQ] = useUrlParam("q", "");
+  const setUrl = useSetUrlParams();
 
   const year = parseYear(yearRaw, thisYear);
   const status = pick(statusRaw, STATUSES);
@@ -157,13 +159,7 @@ export function FinancePledges(): ReactElement {
           { key: "shape", label: "Shape", value: shape ?? "", options: [{ value: "", label: "Both" }, ...SHAPES], onChange: setShape },
         ]}
         clearable={clearable}
-        onClear={() => {
-          setYearRaw("");
-          setStatus("");
-          setStanding("");
-          setShape("");
-          setQ("");
-        }}
+        onClear={() => setUrl({ year: null, status: null, standing: null, shape: null, q: null })}
       />
       <FiguresStrip
         label={`Totals ${yearWord}`}

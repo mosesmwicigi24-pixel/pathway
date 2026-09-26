@@ -27,7 +27,7 @@ import {
 } from "../../finance/kit";
 import { formatMinor } from "../../finance/money";
 import { currentYearEAT, fmtDay, isIsoDate, periodFor, presetRange, todayEAT, type DatePreset, type PeriodValue } from "../../finance/dates";
-import { useResource } from "../../finance/b/hooks";
+import { useResource, useSetUrlParams } from "../../finance/b/hooks";
 import { MONTH_LABELS, parseYear } from "../../finance/b/logic";
 import { MatrixBlock } from "../../finance/b/ReportMatrix";
 import { FinancialPositionView, IncomeExpenditureView } from "../../finance/b/ReportStatements";
@@ -177,9 +177,10 @@ function PledgesTab({ year }: { year: number }): ReactElement {
 const IE_PRESETS: readonly DatePreset[] = ["this_month", "last_month", "this_quarter", "this_year", "last_12_months", "custom"];
 
 function IncomeExpenditureTab(): ReactElement {
-  const [presetRaw, setPreset] = useUrlParam("period", "this_month");
-  const [fromRaw, setFrom] = useUrlParam("from", "");
-  const [toRaw, setTo] = useUrlParam("to", "");
+  const [presetRaw] = useUrlParam("period", "this_month");
+  const [fromRaw] = useUrlParam("from", "");
+  const [toRaw] = useUrlParam("to", "");
+  const setUrl = useSetUrlParams();
   const preset: DatePreset = (IE_PRESETS as readonly string[]).includes(presetRaw) ? (presetRaw as DatePreset) : "this_month";
   const period: PeriodValue = preset === "custom" ? periodFor("custom", new Date(), { from: fromRaw, to: toRaw }) : periodFor(preset);
   const res = useResource(() => FinanceApi.incomeExpenditure({ from: period.from, to: period.to }), `ie:${period.from}:${period.to}`, { errorFallback: "Could not load the income and expenditure statement." });
@@ -188,16 +189,10 @@ function IncomeExpenditureTab(): ReactElement {
       <FilterBar
         period={period}
         presets={IE_PRESETS}
-        onPeriodChange={(p) => {
-          setPreset(p.preset);
-          if (p.preset === "custom") {
-            setFrom(p.from);
-            setTo(p.to);
-          } else {
-            setFrom("");
-            setTo("");
-          }
-        }}
+        onPeriodChange={(p) =>
+          // One navigation: the preset and its dates change together.
+          setUrl(p.preset === "custom" ? { period: "custom", from: p.from, to: p.to } : { period: p.preset === "this_month" ? null : p.preset, from: null, to: null })
+        }
         trailing={<ExportButton path={FINANCE_CSV.incomeExpenditure} params={{ from: period.from, to: period.to }} filename={`income-expenditure-${period.from}-${period.to}`} />}
       />
       <span style={{ fontSize: 12, color: FIN.muted }}>

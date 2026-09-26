@@ -27,7 +27,7 @@ import {
   type Column,
 } from "../../finance/kit";
 import { fmtDateTimeEAT } from "../../finance/dates";
-import { useFunds, useResource } from "../../finance/b/hooks";
+import { useFunds, useResource, useSetUrlParams } from "../../finance/b/hooks";
 import { recurringTotals } from "../../finance/b/logic";
 import { FiguresStrip, Stacked } from "../../finance/b/ui";
 
@@ -48,6 +48,7 @@ export function FinanceRecurring(): ReactElement {
   const funds = useFunds();
   const [statusRaw, setStatus] = useUrlParam("status", "");
   const [attentionRaw, setAttention] = useUrlParam("attention", "");
+  const setUrl = useSetUrlParams();
   const status = (STATUSES.find((s) => s.value === statusRaw)?.value ?? null) as ScheduleStatus | null;
   const attention = attentionRaw === "true" || attentionRaw === "1";
   const query: SchedulesQuery = { status, attention: attention ? true : null, limit: LIMIT };
@@ -141,10 +142,7 @@ export function FinanceRecurring(): ReactElement {
           },
         ]}
         clearable={Boolean(status || attention)}
-        onClear={() => {
-          setStatus("");
-          setAttention("");
-        }}
+        onClear={() => setUrl({ status: null, attention: null })}
       />
       {truncated ? (
         <Notice tone="warn">

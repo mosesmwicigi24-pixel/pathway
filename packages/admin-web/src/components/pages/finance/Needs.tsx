@@ -28,7 +28,7 @@ import {
 } from "../../finance/kit";
 import { formatMinor } from "../../finance/money";
 import { fmtDay, todayEAT } from "../../finance/dates";
-import { useFunds, usePermissions } from "../../finance/b/hooks";
+import { useFunds, usePermissions, useSetUrlParams } from "../../finance/b/hooks";
 import { daysBetween, percentOf } from "../../finance/b/logic";
 import { FiguresStrip, ProgressBar, Stacked } from "../../finance/b/ui";
 
@@ -57,6 +57,7 @@ export function FinanceNeeds(): ReactElement {
   const today = todayEAT();
   const [statusRaw, setStatus] = useUrlParam("status", "approved");
   const [q, setQ] = useUrlParam("q", "");
+  const setUrl = useSetUrlParams();
   const status = STATUSES.find((s) => s.value === statusRaw)?.value ?? "approved";
   const filters: NeedsQuery = { status, q: q || null };
   const list = usePagedList((cursor) => FinanceApi.needs({ ...filters, cursor, limit: 100 }), JSON.stringify(filters), { errorFallback: "Could not load the department needs." });
@@ -148,10 +149,7 @@ export function FinanceNeeds(): ReactElement {
         searchPlaceholder="Need or department"
         selects={[{ key: "status", label: "Status", value: status, options: STATUSES, onChange: setStatus }]}
         clearable={status !== "approved" || Boolean(q)}
-        onClear={() => {
-          setStatus("approved");
-          setQ("");
-        }}
+        onClear={() => setUrl({ status: null, q: null })}
       />
       <FiguresStrip
         label="Totals"

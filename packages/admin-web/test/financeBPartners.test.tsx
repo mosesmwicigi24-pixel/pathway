@@ -197,6 +197,15 @@ describe("Pledges (/finance/pledges)", () => {
     await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/finance/partners?member=u1"));
   });
 
+  it("clears every filter at once (one navigation, not one per filter)", async () => {
+    renderPage(<FinancePledges />, { path: `/finance/pledges?year=${YEAR - 1}&status=active&standing=behind&shape=monthly&q=grace` });
+    await screen.findAllByText("Grace Wanjiru");
+    expect(FinanceApi.pledges).toHaveBeenCalledWith(expect.objectContaining({ year: YEAR - 1, status: "active", standing: "behind", shape: "monthly", q: "grace" }));
+    fireEvent.click(screen.getByText("Clear"));
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/finance/pledges"));
+    await waitFor(() => expect(FinanceApi.pledges).toHaveBeenLastCalledWith(expect.objectContaining({ year: YEAR, status: null, standing: null, shape: null, q: null })));
+  });
+
   it("shows Export CSV only with finance:export", async () => {
     renderPage(<FinancePledges />, { path: "/finance/pledges", permissions: ALL_FINANCE });
     expect(await screen.findByText("Export CSV")).toBeTruthy();

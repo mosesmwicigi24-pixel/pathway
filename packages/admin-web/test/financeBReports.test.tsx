@@ -130,6 +130,16 @@ describe("Reports — statements", () => {
     expect(screen.getByText(/income − expenditure = deficit/)).toBeTruthy();
   });
 
+  it("moves the whole period at once when a preset is picked", async () => {
+    vi.mocked(FinanceApi.incomeExpenditure).mockResolvedValue({ period: presetRange("last_month"), currencies: [] });
+    renderPage(<FinanceReports />, { path: "/finance/reports?tab=ie" });
+    await waitFor(() => expect(FinanceApi.incomeExpenditure).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Period"), { target: { value: "last_month" } });
+    const last = presetRange("last_month");
+    await waitFor(() => expect(FinanceApi.incomeExpenditure).toHaveBeenLastCalledWith({ from: last.from, to: last.to }));
+    expect(screen.getByTestId("location").textContent).toBe("/finance/reports?tab=ie&period=last_month");
+  });
+
   it("shows the Balanced ✓ banner only when the server says so", async () => {
     const pos = (balanced: boolean): FinanceFinancialPosition => ({
       as_of: "2026-09-26",

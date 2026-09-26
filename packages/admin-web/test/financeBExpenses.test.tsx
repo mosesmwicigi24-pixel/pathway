@@ -215,6 +215,17 @@ describe("Expenses — register", () => {
     expect(within(drawer).getByText(/Nothing is posted until another person approves it/)).toBeTruthy();
   });
 
+  it("jumps to the whole approval queue from the tile, and clears every filter at once", async () => {
+    renderPage(<FinanceExpenses />, { path: "/finance/expenses?fund=general&q=power" });
+    await screen.findByText("Kenya Power");
+    fireEvent.click(screen.getByText("Awaiting approval", { selector: "div" }).closest("button") as HTMLElement);
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/finance/expenses?fund=general&q=power&status=recorded&spent=any"));
+    fireEvent.click(screen.getByText("Clear"));
+    await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/finance/expenses"));
+    const last = vi.mocked(FinanceApi.expenses).mock.calls.at(-1)?.[0];
+    expect(last).toMatchObject({ status: ["recorded", "approved"], fund: null, q: null });
+  });
+
   it("opens the approval queue at any date from the Overview's link", async () => {
     renderPage(<FinanceExpenses />, { path: "/finance/expenses?status=recorded" });
     await screen.findByText("Kenya Power");

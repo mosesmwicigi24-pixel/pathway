@@ -3,6 +3,7 @@
 // one-shot reads (claims, schedules, campaigns, budgets, reports) and the
 // look-ups every form needs (funds, expense categories, who "me" is).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAppSelector } from "../../../store/hooks";
 import { FinanceApi, financeErrorMessage, type BooksExpenseCategory } from "../../../api/finance";
 
@@ -59,6 +60,34 @@ export function useResource<T>(load: () => Promise<T>, key: string, opts: { enab
   }, []);
 
   return { data: state.data, loading: state.loading, error: state.error, reload, setData };
+}
+
+/**
+ * Set several URL params in ONE navigation. react-router's setSearchParams(fn)
+ * hands `fn` the params as they were at render, so two kit useUrlParam
+ * setters called in the same event do not compose — the second overwrites the
+ * first ("Clear" would reset only the last filter). Use this whenever one
+ * action changes more than one param. null or "" removes the param (each
+ * page's default then applies, exactly as useUrlParam's fallback does).
+ */
+export function useSetUrlParams(): (patch: Record<string, string | null>) => void {
+  const [, setParams] = useSearchParams();
+  return useCallback(
+    (patch: Record<string, string | null>) => {
+      setParams(
+        (prev) => {
+          const p = new URLSearchParams(prev);
+          for (const [k, v] of Object.entries(patch)) {
+            if (v === null || v === "") p.delete(k);
+            else p.set(k, v);
+          }
+          return p;
+        },
+        { replace: true },
+      );
+    },
+    [setParams],
+  );
 }
 
 /** The signed-in person's permission keys; null while /me loads. */

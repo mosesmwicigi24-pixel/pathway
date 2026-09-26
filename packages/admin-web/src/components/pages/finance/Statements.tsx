@@ -28,12 +28,14 @@ import {
 import { formatMinor } from "../../finance/money";
 import { currentYearEAT, fmtDateEAT } from "../../finance/dates";
 import { parseYear } from "../../finance/b/logic";
+import { useSetUrlParams } from "../../finance/b/hooks";
 import { StatementPdfButton, Stacked } from "../../finance/b/ui";
 
 export function FinanceStatements(): ReactElement {
   const thisYear = currentYearEAT();
   const [yearRaw, setYearRaw] = useUrlParam("year", "");
   const [q, setQ] = useUrlParam("q", "");
+  const setUrl = useSetUrlParams();
   const year = parseYear(yearRaw, thisYear);
   const years = Array.from({ length: 6 }, (_, i) => thisYear - i);
   const filters: StatementsFilters = useMemo(() => ({ year, q: q || null }), [year, q]);
@@ -101,10 +103,7 @@ export function FinanceStatements(): ReactElement {
         searchPlaceholder="Member name, phone or email"
         selects={[{ key: "year", label: "Year", value: String(year), options: years.map((y) => ({ value: String(y), label: String(y) })), onChange: (v) => setYearRaw(Number(v) === thisYear ? "" : v) }]}
         clearable={Boolean(q) || year !== thisYear}
-        onClear={() => {
-          setQ("");
-          setYearRaw("");
-        }}
+        onClear={() => setUrl({ q: null, year: null })}
       />
       <TotalsStrip totals={list.totals} loading={list.loading} label={`Given in ${year}`} noun={["gift", "gifts"]} extra="Members only — website and walk-in gifts have no statement." />
       <SectionCard title="Givers" subtitle="By name. Each row adds up to that member's own statement for the year." icon={<FileText size={15} />} flush>
