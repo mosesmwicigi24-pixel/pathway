@@ -96,6 +96,10 @@ describe("api/finance helpers", () => {
     expect(cleanParams(undefined)).toEqual({});
   });
 
+  it("cleanParams sends a list comma-joined, and drops an empty one", () => {
+    expect(cleanParams({ status: ["recorded", " approved "], kind: [], q: " " })).toEqual({ status: "recorded,approved" });
+  });
+
   it("financeErrorMessage prefers the server's own sentence", () => {
     const e = axiosError(409, { error: { code: "DUPLICATE_RECEIPT", message: "That M-Pesa code is already recorded.", request_id: "r1", details: { transaction_id: "t1" } } });
     expect(financeErrorMessage(e, "Could not record the gift.")).toBe("That M-Pesa code is already recorded.");
