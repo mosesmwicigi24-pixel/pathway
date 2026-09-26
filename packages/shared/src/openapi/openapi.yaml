@@ -2759,6 +2759,7 @@ paths:
         - { name: standing, in: query, required: false, schema: { type: string, enum: [on_track, behind] } }
         - { name: shape, in: query, required: false, schema: { type: string, enum: [monthly, total] } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 }, description: "Member name or phone, or the pledge title." }
+        - { name: user_id, in: query, required: false, schema: { type: string, format: uuid }, description: "One member's pledges only (exact — a name search can catch a namesake)." }
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:

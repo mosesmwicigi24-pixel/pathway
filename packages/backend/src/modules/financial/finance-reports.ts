@@ -588,6 +588,9 @@ export const PledgesQuery = z.object({
   standing: z.enum(["on_track", "behind"]).optional(),
   shape: z.enum(["monthly", "total"]).optional(),
   q: z.string().trim().max(80).optional(),
+  /** One member's pledges (the partner drawer's faithfulness strip) — exact,
+   *  where searching by name could catch a namesake. */
+  user_id: z.string().uuid().optional(),
   cursor: z.string().max(400).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -1119,7 +1122,8 @@ export class FinanceReportsService {
     const needle = q.q?.toLowerCase() ?? "";
     return entries
       .map((e) => e.row)
-      .filter((r) => (!q.status || r.status === q.status)
+      .filter((r) => (!q.user_id || r.user_id === q.user_id)
+        && (!q.status || r.status === q.status)
         && (!q.standing || r.standing === q.standing)
         && (!q.shape || r.shape === q.shape)
         && (!needle || r.member_name.toLowerCase().includes(needle)

@@ -603,6 +603,12 @@ describe("finance reports — the clean books of a small church year", () => {
     expect((await get("/admin/finance/pledges?year=2025&status=paused")).body.data.map((r: any) => r.pledge_id)).toEqual([ids.pDalia]);
     expect((await get("/admin/finance/pledges?year=2025&shape=total")).body.data).toHaveLength(2);
     expect((await get("/admin/finance/pledges?year=2025&q=dalia")).body.data.map((r: any) => r.pledge_id)).toEqual([ids.pDalia]);
+    // One member exactly (the partner drawer's strip) — and a bad id is a 400.
+    const mine = (await get(`/admin/finance/pledges?year=2025&user_id=${ids.amina}`)).body;
+    expect(mine.data.map((r: any) => r.pledge_id)).toEqual([ids.pAmina]);
+    expect(mine.totals[0]).toMatchObject({ pledged_minor: 600000, paid_minor: 150000, remaining_minor: 450000 });
+    expect((await get(`/admin/finance/pledges?year=2025&user_id=${randomUUID()}`)).body.data).toEqual([]);
+    expect((await get(`/admin/finance/pledges?year=2025&user_id=not-a-uuid`)).status).toBe(400);
     // Paging: every pledge once, totals whole.
     const seen: string[] = [];
     let cursor: string | null = null;

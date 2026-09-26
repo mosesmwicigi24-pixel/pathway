@@ -93,6 +93,18 @@ export function FinanceCampaigns(): ReactElement {
     return [...by.entries()].map(([currency, t]) => ({ currency, goal_minor: sumMinor(t.goal), raised_minor: sumMinor(t.raised), n: t.n }));
   }, [live]);
 
+  // Two live campaigns on the same fund (and currency) count the same gifts —
+  // each "raised" includes the other's money. Say so (iPad parity).
+  const sharedFunds = useMemo(() => {
+    const by = new Map<string, CampaignRow[]>();
+    for (const c of live) {
+      if (!c.fund) continue;
+      const k = `${c.fund}|${c.currency}`;
+      by.set(k, [...(by.get(k) ?? []), c]);
+    }
+    return [...by.values()].filter((g) => g.length > 1);
+  }, [live]);
+
   const changeStatus = async (): Promise<void> => {
     if (!statusAction) return;
     const { campaign, to } = statusAction;
@@ -217,6 +229,11 @@ export function FinanceCampaigns(): ReactElement {
           extra="Each campaign counts gifts to its own fund inside its own dates."
         />
       ) : null}
+      {sharedFunds.map((g) => (
+        <Notice key={`${g[0]!.fund}|${g[0]!.currency}`} tone="warn">
+          {g.map((c) => `“${c.title}”`).join(" and ")} are live on the same fund ({g[0]!.fund}, {g[0]!.currency}) — each one's “raised” counts every gift to that fund in its dates, so the same money shows in both.
+        </Notice>
+      ))}
       <SectionCard title="Campaigns" subtitle="Newest start first. Open one for its reach." flush>
         <DataTable
           ariaLabel="Campaigns"

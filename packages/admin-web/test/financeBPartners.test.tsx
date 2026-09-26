@@ -131,7 +131,8 @@ describe("Partners (/finance/partners)", () => {
     await waitFor(() => expect(within(drawer).getAllByText("7 of 9")).toHaveLength(2));
     expect(within(drawer).getAllByText("Overdue since 5 Aug 2026").length).toBeGreaterThan(0);
     expect(within(drawer).queryByText("Namesake's building pledge")).toBeNull();
-    expect(FinanceApi.pledges).toHaveBeenCalledWith(expect.objectContaining({ q: "Grace Wanjiru", year: YEAR }));
+    // The register is asked for exactly this member (user_id), not by name.
+    expect(FinanceApi.pledges).toHaveBeenCalledWith(expect.objectContaining({ user_id: "u1", year: YEAR }));
     // The year's statements are one click away.
     expect(within(drawer).getByText("Partner statement PDF")).toBeTruthy();
     expect(within(drawer).getByText("Giving statement PDF")).toBeTruthy();

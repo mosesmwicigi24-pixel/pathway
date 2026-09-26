@@ -12,15 +12,15 @@ import { useResource } from "./hooks";
 import { faithfulnessSummary, keptOfDue } from "./logic";
 import { StatementPdfButton, SubHead, YearSelect } from "./ui";
 
-/** Every register row for one member in `year`. The register has no member
- *  filter, so it is searched by the member's name (≤ 80 characters) and the
- *  rows are kept by user_id — a namesake's pledges never leak in. Pages are
- *  followed (at most five of 200). */
-export async function memberPledgeRows(userId: string, fullName: string, year: number): Promise<FinancePledgeRow[]> {
+/** Every register row for one member in `year`, by the register's exact
+ *  user_id filter (a name search could catch a namesake). The rows are still
+ *  kept by user_id as a belt-and-braces check. `fullName` is unused now and
+ *  kept for the call sites. Pages are followed (at most five of 200). */
+export async function memberPledgeRows(userId: string, _fullName: string, year: number): Promise<FinancePledgeRow[]> {
   const out: FinancePledgeRow[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < 5; page++) {
-    const p = await FinanceApi.pledges({ q: fullName.trim().slice(0, 80), year, cursor, limit: 200 });
+    const p = await FinanceApi.pledges({ user_id: userId, year, cursor, limit: 200 });
     out.push(...p.data.filter((r) => r.user_id === userId));
     if (!p.next_cursor) break;
     cursor = p.next_cursor;

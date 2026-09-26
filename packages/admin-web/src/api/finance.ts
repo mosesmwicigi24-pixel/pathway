@@ -536,6 +536,8 @@ export type PledgesFilters = {
   shape?: PledgeShapeValue | null | undefined;
   /** Member name or phone, or the pledge title. */
   q?: string | null | undefined;
+  /** One member's pledges, exactly (no namesakes). */
+  user_id?: string | null | undefined;
 };
 export type PledgesQuery = PledgesFilters & PageQuery;
 
