@@ -110,6 +110,18 @@ SELECT role_key, 'members', 'proximity'
  WHERE role_key IN ('super_admin', 'system_admin', 'national_director', 'regional_coach')
 ON CONFLICT DO NOTHING;
 
+-- ── Finance ERP (migration 216, docs/FINANCE_ERP.md §6) ──
+-- `manage` records gifts and expenses, reverses office entries, confirms claims,
+-- sends reminders and runs campaigns; `approve` (already in 'full') approves
+-- expenses and budgets and posts transfers. The Finance Officer holds both; the
+-- maker-checker rule still stops one person approving their own expense.
+-- (Migration 217 grants the same on databases seeded before this line.)
+INSERT INTO rbac_role_permissions (role_key, module_id, capability)
+SELECT role_key, 'finance', 'manage'
+  FROM rbac_roles
+ WHERE role_key = 'finance_officer'
+ON CONFLICT DO NOTHING;
+
 -- ── Live streaming (Nuru Live phase L1, docs/LIVE_STREAMING.md) ──
 -- `go` mints/starts a broadcast; `manage` ends anyone's stream. Church-wide
 -- "go" additionally requires the caller to be staff (checked in the live
