@@ -14,7 +14,7 @@ import type { NotificationService } from "../notifications/service.js";
 import { ApiError } from "../../http/errors.js";
 import type { FinancialService } from "./service.js";
 import { givingTiers } from "./tiers.js";
-import { methodLabel, PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, PLEDGE_PAYS_TO_NAME } from "./constants.js";
+import { methodLabel, giftMethodLabel, PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, PLEDGE_PAYS_TO_NAME } from "./constants.js";
 import {
   NAIROBI_OFFSET_MS, nairobiDate, partnerDate, keptInYear, pledgedInYear, statementSummary,
   statementImpact, statementMonths, statementFaithfulness, allocateInstalments, instalmentsInYear,
@@ -136,6 +136,9 @@ export interface StatementPayment {
   fund_name: string;
   /** card | mpesa | airtel | paypal | manual — provider 'stripe' reads as 'card'. */
   method: string;
+  /** What the member reads for the method — the office channel's words for an
+   *  office-recorded gift ("Cash (at the office)", "Bank transfer", …). */
+  method_label: string;
   pledge_id: string | null;
   /** The pledge's title under the words its card shows; null off-pledge. */
   pledge_title: string | null;
@@ -770,10 +773,10 @@ export class PartnersService {
     );
     const ys = years.map((r) => r.y);
     const y = year ?? ys[0] ?? Number(nairobiDate(now).slice(0, 4));
-    const rows = await many<{ transaction_id: string; amount_minor: string; currency: string; at: string; receipt_code: string | null; fund: string; fund_name: string; provider: string | null; pledge_id: string | null; pledge_title: string | null }>(
+    const rows = await many<{ transaction_id: string; amount_minor: string; currency: string; at: string; receipt_code: string | null; fund: string; fund_name: string; provider: string | null; office_channel: string | null; pledge_id: string | null; pledge_title: string | null }>(
       this.pool,
       `SELECT t.transaction_id, t.amount_minor::text, t.currency, t.created_at::text AS at, t.receipt_code, f.code AS fund, f.name AS fund_name,
-              t.provider, t.pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "c" })} AS pledge_title
+              t.provider, t.office_channel, t.pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "c" })} AS pledge_title
          FROM transactions t
          JOIN funds f ON f.fund_id = t.fund_id
          LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
@@ -792,6 +795,7 @@ export class PartnersService {
         transaction_id: r.transaction_id, amount_minor: Number(r.amount_minor), currency: r.currency, at: r.at,
         receipt_code: r.receipt_code, fund: r.fund, fund_name: r.fund_name,
         method: provider === "stripe" ? "card" : provider,
+        method_label: giftMethodLabel(provider === "stripe" ? "card" : provider, r.office_channel ?? null),
         pledge_id: r.pledge_id, pledge_title: r.pledge_title,
       };
     });
@@ -1060,7 +1064,7 @@ export class PartnersService {
           totalLabel: money(asc.reduce((s, r) => s + r.amount_minor, 0), asc[0]!.currency),
           rows: asc.map((r) => {
             const ref = (r.receipt_code ?? "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
-            return `${dayLabel(r.at)}  ${r.pledge_title ?? "Pledge"}  ${methodLabel(r.method)}${ref ? `  Ref ${ref}` : ""}  ${money(r.amount_minor, r.currency)}`;
+            return `${dayLabel(r.at)}  ${r.pledge_title ?? "Pledge"}  ${r.method_label ?? methodLabel(r.method)}${ref ? `  Ref ${ref}` : ""}  ${money(r.amount_minor, r.currency)}`;
           }),
         };
       });

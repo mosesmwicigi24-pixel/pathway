@@ -14,7 +14,7 @@ import type { PaymentGateway } from "./gateway.js";
 import { sanitizeAccountReference, type MobileMoneyKey, type MobileMoneyProviders } from "./providers.js";
 import type { PayPalGateway } from "./paypal.js";
 import { renderStatementPdf, renderReceiptPdf } from "./statementPdf.js";
-import { PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, methodLabel } from "./constants.js";
+import { PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, methodLabel, giftMethodLabel } from "./constants.js";
 // partners.ts imports FinancialService as a TYPE only, so this is not a cycle.
 import { pledgeTitleFor, pledgeTitleSql } from "./partners.js";
 import { nairobiDate } from "./partnerStatementMath.js";
@@ -726,7 +726,7 @@ export class FinancialService {
               t.receipt_code, t.account_name,
               t.created_at, t.settled_at,
               t.pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "c" })} AS pledge_title,
-              t.need_id
+              t.need_id, t.office_channel
          FROM transactions t
          LEFT JOIN funds f ON f.fund_id = t.fund_id
          LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
@@ -739,7 +739,8 @@ export class FinancialService {
       const provider = (r.provider as string | null) ?? "stripe";
       const { provider: _omit, ...rest } = r;
       void _omit;
-      return { ...rest, amount_minor: Number(r.amount_minor), method: provider === "stripe" ? "card" : provider };
+      const method = provider === "stripe" ? "card" : provider;
+      return { ...rest, amount_minor: Number(r.amount_minor), method, method_label: giftMethodLabel(method, r.office_channel as string | null) };
     });
   }
 
@@ -756,7 +757,7 @@ export class FinancialService {
               t.provider, COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref,
               t.receipt_code, t.account_name,
               t.schedule_id, t.created_at, t.settled_at,
-              t.pledge_id, t.need_id, n.title AS need_title,
+              t.pledge_id, t.need_id, n.title AS need_title, t.office_channel,
               u.full_name AS member_name, c.name AS congregation
          FROM transactions t
          LEFT JOIN funds f ON f.fund_id = t.fund_id
@@ -787,7 +788,7 @@ export class FinancialService {
       ...rest,
       amount_minor: Number(t.amount_minor),
       method,
-      method_label: methodLabel(method),
+      method_label: giftMethodLabel(method, (t.office_channel as string | null) ?? null),
       pledge: pledgeId && pledgeTitle ? { pledge_id: pledgeId, title: pledgeTitle } : null,
       need: needId && needTitle ? { need_id: needId, title: needTitle } : null,
       ledger: ledger.map((l) => ({ ...l, amount_minor: Number(l.amount_minor) })),
@@ -804,7 +805,7 @@ export class FinancialService {
    *  their pledge's title with a subtotal — so the total still foots with the
    *  member's bank and the church ledger. */
   async statementPdf(userId: string, year?: number): Promise<Buffer> {
-    const all = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string; pledge_id: string | null; pledge_title: string | null }>;
+    const all = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; method_label?: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string; pledge_id: string | null; pledge_title: string | null }>;
     // One church year (EAT, by created_at — the statements' own year rule)
     // when the office asks for one; otherwise the complete record.
     const rows = year === undefined
@@ -847,7 +848,7 @@ export class FinancialService {
         totalLabel: ksh(settledSum(recs)),
         rows: recs.map((r) => {
           const ref = refOf(r);
-          return `${fundLabel(r)}  ${ksh(r.amount_minor)}  ${timeLabel(r.created_at)}  ${methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}${r.account_name ? `  "${r.account_name}"` : ""}`;
+          return `${fundLabel(r)}  ${ksh(r.amount_minor)}  ${timeLabel(r.created_at)}  ${r.method_label ?? methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}${r.account_name ? `  "${r.account_name}"` : ""}`;
         }),
       }));
     // Pledge-tied payments, newest first (listGiving's order), each dated and
@@ -856,7 +857,7 @@ export class FinancialService {
       totalLabel: ksh(settledSum(pledgeRows)),
       rows: pledgeRows.map((r) => {
         const ref = refOf(r);
-        return `${dayLabel(r.created_at)}  ${r.pledge_title ?? "General partnership"} pledge  ${fundLabel(r)}  ${ksh(r.amount_minor)}  ${methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}`;
+        return `${dayLabel(r.created_at)}  ${r.pledge_title ?? "General partnership"} pledge  ${fundLabel(r)}  ${ksh(r.amount_minor)}  ${r.method_label ?? methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}`;
       }),
     };
     const giftsTotal = settledSum(gifts);
@@ -880,11 +881,11 @@ export class FinancialService {
   /** Render ONE of the caller's gifts as a downloadable receipt PDF (the in-app
    *  "Giving receipt"). Owner-scoped (404 otherwise). Money stays server-side. */
   async receiptPdf(userId: string, transactionId: string): Promise<Buffer> {
-    const t = await maybeOne<{ amount_minor: number; currency: string; status: string; fund: string | null; fund_name: string | null; provider: string | null; provider_ref: string | null; receipt_code: string | null; account_name: string | null; pledge_id: string | null; need_title: string | null; created_at: unknown; settled_at: unknown }>(
+    const t = await maybeOne<{ amount_minor: number; currency: string; status: string; fund: string | null; fund_name: string | null; provider: string | null; provider_ref: string | null; receipt_code: string | null; account_name: string | null; pledge_id: string | null; need_title: string | null; office_channel: string | null; created_at: unknown; settled_at: unknown }>(
       this.pool,
       `SELECT t.amount_minor, t.currency, t.status, f.code AS fund, f.name AS fund_name, t.provider,
               COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref, t.receipt_code, t.account_name,
-              t.pledge_id, n.title AS need_title, t.created_at, t.settled_at
+              t.pledge_id, n.title AS need_title, t.office_channel, t.created_at, t.settled_at
          FROM transactions t
          LEFT JOIN funds f ON f.fund_id = t.fund_id
          LEFT JOIN department_needs n ON n.need_id = t.need_id
@@ -919,7 +920,7 @@ export class FinancialService {
       giftName: t.account_name,
       pledgeTitle,
       needTitle: t.need_title,
-      methodLabel: methodLabel(method),
+      methodLabel: giftMethodLabel(method, t.office_channel),
       statusLabel: settled(t.status) ? "Completed" : t.status[0]!.toUpperCase() + t.status.slice(1),
       feeLabel: ksh(0),
       totalLabel: ksh(Number(t.amount_minor)),

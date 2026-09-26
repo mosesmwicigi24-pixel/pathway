@@ -149,6 +149,25 @@ const gift = (over: Record<string, unknown> = {}) => ({
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+describe("what the member reads for an office gift", () => {
+  it("history, the receipt detail and the statement name how they paid — never a bare 'Manual'", async () => {
+    const bank = (await post(superAdmin, "/admin/finance/gifts", gift({ channel: "bank", reference: "EQ-7781", amount_minor: 250_000 }))).body;
+    const cash = (await post(superAdmin, "/admin/finance/gifts", gift({ channel: "onhand", amount_minor: 50_000 }))).body;
+    const hist = (await get(member, "/giving/history")).body.data as any[];
+    const label = (id: string) => hist.find((h) => h.transaction_id === id)?.method_label;
+    expect([label(bank.transaction_id), label(cash.transaction_id)]).toEqual(["Bank transfer", "Cash (at the office)"]);
+    expect(hist.find((h) => h.transaction_id === bank.transaction_id).method).toBe("manual"); // the wire value stays
+    const detail = (await get(member, `/giving/transactions/${bank.transaction_id}`)).body;
+    expect(detail).toMatchObject({ method: "manual", method_label: "Bank transfer", receipt_code: bank.receipt_code });
+    const st = (await get(member, `/giving/statements?year=${thisYear()}`)).body;
+    const pays = (st.data ?? st).payments as any[] | undefined;
+    if (pays) for (const x of pays.filter((y) => y.transaction_id === bank.transaction_id)) expect(x.method_label).toBe("Bank transfer");
+    const pdf = await get(member, `/giving/transactions/${bank.transaction_id}/receipt.pdf`);
+    expect(pdf.status).toBe(200);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 describe("office gifts", () => {
   it("records a member's cash gift: one transaction, a gapless OR- receipt, balanced legs at received_on 12:00 EAT, the member's receipt queued, audited", async () => {
     const day = daysAgo(3);
