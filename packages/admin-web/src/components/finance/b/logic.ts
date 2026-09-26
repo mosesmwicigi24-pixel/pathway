@@ -16,12 +16,16 @@ import {
   type BooksBudgetLine,
   type BooksBudgetLineInput,
   type BooksExpense,
+  type BooksExpenseInput,
+  type BooksExpensePatch,
   type BudgetLineKind,
   type CampaignInput,
   type FinancePledgeRow,
   type FinanceReportMatrix,
   type IsoDate,
+  type OfficeChannel,
   type PledgeClaimRow,
+  type WriteCurrency,
 } from "../../../api/finance";
 import { compareCurrencies, formatMinor, minorToMajorInput, parseMajorToMinor, toMinorBigInt, type MinorInput } from "../money";
 import { currentYearEAT, eatYmd, fmtDay, isIsoDate, isoDate, todayEAT } from "../dates";
@@ -62,6 +66,15 @@ export function backdateError(day: string, now: Date = new Date(), days: number 
   if (day > w.max) return "That date is in the future.";
   if (day < w.min) return `That is more than ${days} days ago — the books only accept the last ${days} days.`;
   return null;
+}
+
+/** The Nairobi calendar day of an instant ("2026-09-26T22:30:00Z" → "2026-09-27"); null when unreadable. */
+export function eatDayOf(iso: string | null | undefined): IsoDate | null {
+  if (!iso) return null;
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return null;
+  const { y, m, d } = eatYmd(t);
+  return isoDate(y, m, d);
 }
 
 /** How long ago an instant was, for a queue's "age" column: "just now",
@@ -348,6 +361,98 @@ export function fundImpact(args: { fundName: string; currency: string; balance_m
         : `${args.fundName} will still be ${formatMinor(-after, cur)} overdrawn after this.`;
   }
   return { before: Number(before), after: Number(after), sentence, warning };
+}
+
+/** How an expense was paid — the books' office channels, in the office's words. */
+export const EXPENSE_CHANNELS: readonly { value: OfficeChannel; label: string }[] = [
+  { value: "onhand", label: "Cash" },
+  { value: "bank", label: "Bank" },
+  { value: "cheque", label: "Cheque" },
+  { value: "mpesa", label: "M-Pesa" },
+  { value: "other", label: "Other" },
+];
+
+/** The record / edit form as typed. */
+export interface ExpenseFormValues {
+  fund: string;
+  category: string;
+  payee: string;
+  description: string;
+  /** Major units as typed. */
+  amount: string;
+  currency: WriteCurrency;
+  spent_on: string;
+  channel: OfficeChannel | "";
+  reference: string;
+}
+
+export type ExpenseFormErrors = Partial<Record<keyof ExpenseFormValues, string>>;
+
+/** The books' expense rules (BooksExpenseInput), checked before sending so the
+ *  form can point at the field: a fund and category, a payee of 2–120
+ *  characters, a description ≤ 500, an amount within 1..1,000,000,000 minor,
+ *  spent on within [today − 366 days, today] (EAT), how it was paid, and a
+ *  reference ≤ 80. */
+export function validateExpenseForm(f: ExpenseFormValues, now: Date = new Date()): { errors: ExpenseFormErrors; body: BooksExpenseInput | null } {
+  const errors: ExpenseFormErrors = {};
+  const payee = f.payee.trim();
+  const description = f.description.trim();
+  const reference = f.reference.trim();
+  if (!f.fund) errors.fund = "Choose the fund it is paid from.";
+  if (!f.category) errors.category = "Choose a category.";
+  if (payee.length < FINANCE_LIMITS.payee.min || payee.length > FINANCE_LIMITS.payee.max) errors.payee = `Who was paid — ${FINANCE_LIMITS.payee.min}–${FINANCE_LIMITS.payee.max} characters.`;
+  if (description.length > 500) errors.description = "At most 500 characters.";
+  const amount = parseMajorToMinor(f.amount, { max: FINANCE_LIMITS.amountMaxMinor });
+  if (!amount.ok) errors.amount = amount.error;
+  const dateError = backdateError(f.spent_on, now);
+  if (dateError) errors.spent_on = dateError;
+  if (!f.channel) errors.channel = "How was it paid?";
+  if (reference.length > FINANCE_LIMITS.reference.max) errors.reference = `At most ${FINANCE_LIMITS.reference.max} characters.`;
+  if (Object.keys(errors).length > 0 || !amount.ok || !f.channel) return { errors, body: null };
+  return {
+    errors,
+    body: {
+      fund: f.fund,
+      category: f.category,
+      payee,
+      description: description || null,
+      amount_minor: amount.minor,
+      currency: f.currency,
+      spent_on: f.spent_on,
+      channel: f.channel,
+      reference: reference || null,
+    },
+  };
+}
+
+/** An expense's saved values as the form shows them. */
+export function expenseFormFrom(e: BooksExpense): ExpenseFormValues {
+  return {
+    fund: e.fund.code,
+    category: e.category.code,
+    payee: e.payee,
+    description: e.description ?? "",
+    amount: minorToMajorInput(e.amount_minor),
+    currency: e.currency,
+    spent_on: e.spent_on,
+    channel: e.channel,
+    reference: e.reference ?? "",
+  };
+}
+
+/** Only what changed (PATCH sends at least one field — {} means nothing to save). */
+export function expensePatch(original: BooksExpense, body: BooksExpenseInput): BooksExpensePatch {
+  const p: BooksExpensePatch = {};
+  if (body.fund !== original.fund.code) p.fund = body.fund;
+  if (body.category !== original.category.code) p.category = body.category;
+  if (body.payee !== original.payee) p.payee = body.payee;
+  if ((body.description ?? null) !== (original.description ?? null)) p.description = body.description ?? null;
+  if (body.amount_minor !== original.amount_minor) p.amount_minor = body.amount_minor;
+  if (body.currency !== original.currency) p.currency = body.currency;
+  if (body.spent_on !== original.spent_on) p.spent_on = body.spent_on;
+  if (body.channel !== original.channel) p.channel = body.channel;
+  if ((body.reference ?? null) !== (original.reference ?? null)) p.reference = body.reference ?? null;
+  return p;
 }
 
 /* ====================================================================== */
