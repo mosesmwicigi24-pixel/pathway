@@ -1,7 +1,7 @@
 // Portal shell — navy sidebar (four nav groups, collapsible + mobile drawer),
 // white top bar (search, notifications, profile), and the routed page outlet.
 // Rebuilt to the "Final Pathway Portal" Figma make; gated on a real session.
-import { useEffect, useLayoutEffect, useState, type CSSProperties, type ReactElement } from "react";
+import { Fragment, useEffect, useLayoutEffect, useState, type CSSProperties, type ReactElement } from "react";
 import { NavLink, Outlet, Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
   Bell, Search, User, LogOut, ChevronDown, ChevronUp,
@@ -13,7 +13,8 @@ import { MeApi, WebAuthnApi } from "../../api/client";
 import { passkeyNudgeCandidate, dismissPasskeyNudge, clearPasswordLoginMarker } from "../../lib/passkeys";
 import { useIsMobile } from "./useIsMobile";
 import {
-  navGroups, breadcrumbFor, navItemVisible, navLinkEnd, groupContainsPath, readNavGroupOpen, writeNavGroupOpen,
+  navGroups, breadcrumbFor, navItemVisible, navLinkEnd, itemsContainPath, sidebarEntries,
+  navSubgroupStorageKey, readNavSubgroupOpen, writeNavSubgroupOpen, type NavItem,
 } from "./nav";
 import { useNotifications, notifTimeAgo, CATEGORY_META } from "../notifications/NotificationsProvider";
 
@@ -42,26 +43,31 @@ export function Layout(): ReactElement {
   // One-time passkey nudge: after a PASSWORD login on a WebAuthn-capable
   // browser with ZERO registered passkeys. Dismissal sticks (localStorage).
   const [passkeyNudge, setPasskeyNudge] = useState(false);
-  // Collapsible sidebar groups (nav.tsx NavGroup.collapsible — Finance). Open
-  // by default; the state is remembered per group (localStorage, every access
-  // guarded in nav.tsx), and a folded group re-opens whenever the route is one
-  // of its pages, so the active row is never hidden inside a fold.
-  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(navGroups.filter((g) => g.collapsible).map((g) => [g.label, readNavGroupOpen(g.label)])),
+  // Folding sub-menus (nav.tsx NavGroup.subgroups — Finance's three), keyed by
+  // their storage key. Folded by default, so the section reads as its headers;
+  // a fold or unfold you make is remembered per sub-menu (localStorage, every
+  // access guarded in nav.tsx).
+  const [subOpen, setSubOpen] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(navGroups.flatMap((g) => (g.subgroups ?? []).map((sg) => [
+      navSubgroupStorageKey(g.label, sg.key), readNavSubgroupOpen(g.label, sg.key),
+    ]))),
   );
-  const toggleGroup = (label: string): void => {
-    const open = groupOpen[label] === false;
-    writeNavGroupOpen(label, open);
-    setGroupOpen((prev) => ({ ...prev, [label]: open }));
+  const toggleSub = (group: string, key: string): void => {
+    const id = navSubgroupStorageKey(group, key);
+    const open = subOpen[id] !== true;
+    writeNavSubgroupOpen(group, key, open);
+    setSubOpen((prev) => ({ ...prev, [id]: open }));
   };
-  // Layout effect: runs before paint, so a reload onto a Finance page never
-  // flashes the folded group first.
+  // The sub-menu holding the current page opens by itself, so the active row
+  // is never hidden inside a fold. A layout effect runs before paint, so a
+  // reload onto a Finance page never flashes it folded. It opens for this
+  // visit only — what is remembered is what you chose — and only on
+  // navigation: folding the sub-menu you are standing in is allowed.
   useLayoutEffect(() => {
-    const folded = navGroups.filter((g) => g.collapsible && groupOpen[g.label] === false && groupContainsPath(g, location.pathname));
-    if (folded.length === 0) return;
-    for (const g of folded) writeNavGroupOpen(g.label, true);
-    setGroupOpen((prev) => ({ ...prev, ...Object.fromEntries(folded.map((g) => [g.label, true])) }));
-    // Only on navigation — folding the group you are standing in is allowed.
+    const here = navGroups.flatMap((g) => sidebarEntries(g).flatMap((e) =>
+      e.kind === "subgroup" && itemsContainPath(e.items, location.pathname) ? [navSubgroupStorageKey(g.label, e.subgroup.key)] : []));
+    if (here.length === 0) return;
+    setSubOpen((prev) => (here.every((id) => prev[id] === true) ? prev : { ...prev, ...Object.fromEntries(here.map((id) => [id, true])) }));
   }, [location.pathname]);
 
   useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
@@ -101,6 +107,43 @@ export function Layout(): ReactElement {
 
   const signOut = (): void => { dispatch(logout()); navigate("/login"); };
 
+  // One sidebar page link. `nested` = a row inside an open sub-menu: indented
+  // under the sub-menu's hairline, otherwise identical.
+  const navRow = ({ path, label, icon: Icon }: NavItem, nested: boolean): ReactElement => (
+    <NavLink
+      key={path}
+      to={path}
+      end={navLinkEnd(path)}
+      title={collapsed ? label : undefined}
+      className="flex items-center"
+      style={({ isActive }) => ({
+        gap: 10,
+        margin: nested ? "1px 10px 1px 8px" : "1px 10px",
+        padding: collapsed ? "9px 0" : "8px 12px",
+        justifyContent: collapsed ? "center" : "flex-start",
+        borderRadius: 10,
+        background: isActive ? "var(--nuru-gold)" : "transparent",
+        color: isActive ? "#fff" : "rgba(232,239,245,0.65)",
+        textDecoration: "none",
+      })}
+    >
+      <span className="relative" style={{ display: "flex", flexShrink: 0 }}>
+        <Icon size={15} strokeWidth={2} />
+        {collapsed && path === "/notifications" && unreadCount > 0 && (
+          <span className="absolute rounded-full" style={{ top: -3, right: -4, width: 8, height: 8, background: "var(--nuru-gold)", border: "2px solid var(--nuru-navy)" }} />
+        )}
+      </span>
+      {!collapsed && (
+        <span className="flex items-center" style={{ flex: 1, minWidth: 0, gap: 6 }}>
+          <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }}>{label}</span>
+          {path === "/notifications" && unreadCount > 0 && (
+            <span className="flex items-center justify-center rounded-full shrink-0" style={{ minWidth: 18, height: 18, padding: "0 5px", background: "var(--nuru-gold)", color: "#fff", fontSize: 10, fontWeight: 700 }}>{unreadCount > 9 ? "9+" : unreadCount}</span>
+          )}
+        </span>
+      )}
+    </NavLink>
+  );
+
   return (
     <div className="flex h-screen w-full overflow-hidden" style={{ background: "var(--background)" }}>
       {isMobile && mobileNavOpen && (
@@ -139,72 +182,50 @@ export function Layout(): ReactElement {
           {navGroups.map((group) => {
             const visibleItems = group.items.filter((i) => navItemVisible(i, me?.role ?? role, permissions));
             if (visibleItems.length === 0) return null; // a group with nothing to show doesn't show its header either
-            // A collapsible group folds only in the full sidebar: the mini
-            // sidebar has no header to unfold it from, so it shows every icon.
-            const foldable = group.collapsible === true && !collapsed;
-            const open = !foldable || groupOpen[group.label] !== false;
-            const listId = `nav-group-${group.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
             return (
             <div key={group.label} style={{ marginBottom: 4 }}>
-              {!collapsed && (foldable ? (
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(group.label)}
-                  aria-expanded={open}
-                  aria-controls={listId}
-                  title={open ? `Fold ${group.label}` : `Show ${group.label}`}
-                  className="flex items-center w-full"
-                  style={{ ...GROUP_HEADER, gap: 6, justifyContent: "space-between", textAlign: "left", background: "none", border: "none", cursor: "pointer" }}
-                >
-                  <span className="flex items-center" style={{ gap: 6 }}>
-                    {group.label}
-                    {/* folded while you stand inside it: a gold dot says so */}
-                    {!open && groupContainsPath(group, location.pathname) ? (
-                      <span aria-hidden="true" className="rounded-full" style={{ width: 5, height: 5, background: "var(--nuru-gold)" }} />
-                    ) : null}
-                  </span>
-                  {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                </button>
-              ) : (
-                <div style={GROUP_HEADER}>{group.label}</div>
-              ))}
-              <div id={listId} hidden={!open}>
-              {visibleItems
-                .map(({ path, label, icon: Icon }) => (
-                <NavLink
-                  key={path}
-                  to={path}
-                  end={navLinkEnd(path)}
-                  title={collapsed ? label : undefined}
-                  className="flex items-center"
-                  style={({ isActive }) => ({
-                    gap: 10,
-                    margin: "1px 10px",
-                    padding: collapsed ? "9px 0" : "8px 12px",
-                    justifyContent: collapsed ? "center" : "flex-start",
-                    borderRadius: 10,
-                    background: isActive ? "var(--nuru-gold)" : "transparent",
-                    color: isActive ? "#fff" : "rgba(232,239,245,0.65)",
-                    textDecoration: "none",
-                  })}
-                >
-                  <span className="relative" style={{ display: "flex", flexShrink: 0 }}>
-                    <Icon size={15} strokeWidth={2} />
-                    {collapsed && path === "/notifications" && unreadCount > 0 && (
-                      <span className="absolute rounded-full" style={{ top: -3, right: -4, width: 8, height: 8, background: "var(--nuru-gold)", border: "2px solid var(--nuru-navy)" }} />
-                    )}
-                  </span>
-                  {!collapsed && (
-                    <span className="flex items-center" style={{ flex: 1, minWidth: 0, gap: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }}>{label}</span>
-                      {path === "/notifications" && unreadCount > 0 && (
-                        <span className="flex items-center justify-center rounded-full shrink-0" style={{ minWidth: 18, height: 18, padding: "0 5px", background: "var(--nuru-gold)", color: "#fff", fontSize: 10, fontWeight: 700 }}>{unreadCount > 9 ? "9+" : unreadCount}</span>
-                      )}
-                    </span>
-                  )}
-                </NavLink>
-              ))}
-              </div>
+              {!collapsed && <div style={GROUP_HEADER}>{group.label}</div>}
+              {sidebarEntries(group, visibleItems).map((entry) => {
+                if (entry.kind === "item") return navRow(entry.item, false);
+                const id = navSubgroupStorageKey(group.label, entry.subgroup.key);
+                // The mini sidebar has no header to unfold a sub-menu from, so
+                // it shows every page's icon, folded or not.
+                if (collapsed) return <Fragment key={id}>{entry.items.map((i) => navRow(i, false))}</Fragment>;
+                const { label, icon: SubIcon } = entry.subgroup;
+                const open = subOpen[id] === true;
+                const here = itemsContainPath(entry.items, location.pathname);
+                const listId = `nav-sub-${group.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${entry.subgroup.key}`;
+                return (
+                  <div key={id}>
+                    <button
+                      type="button"
+                      onClick={() => toggleSub(group.label, entry.subgroup.key)}
+                      aria-expanded={open}
+                      aria-controls={listId}
+                      title={open ? `Fold ${label}` : `Show ${label}`}
+                      className="flex items-center"
+                      style={{
+                        gap: 10, margin: "1px 10px", width: "calc(100% - 20px)", padding: "8px 12px", borderRadius: 10,
+                        background: "transparent", border: "none", cursor: "pointer", textAlign: "left",
+                        // brighter while the current page is one of its rows
+                        color: here ? "#fff" : "rgba(232,239,245,0.65)",
+                      }}
+                    >
+                      <SubIcon size={15} strokeWidth={2} style={{ flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+                      {/* folded while you stand inside it: a gold dot says so */}
+                      {!open && here ? (
+                        <span aria-hidden="true" className="rounded-full shrink-0" style={{ width: 6, height: 6, background: "var(--nuru-gold)" }} />
+                      ) : null}
+                      <ChevronDown size={13} style={{ flexShrink: 0, opacity: 0.7, transform: open ? "rotate(180deg)" : "none", transition: "transform 150ms" }} />
+                    </button>
+                    {/* its pages, indented under a hairline from the header's icon */}
+                    <div id={listId} hidden={!open} style={{ margin: "0 0 2px 29px", borderLeft: "1px solid rgba(255,255,255,0.08)" }}>
+                      {entry.items.map((i) => navRow(i, true))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
             );
           })}

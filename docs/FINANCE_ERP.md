@@ -16,28 +16,64 @@ multi-currency totals are always **per currency** (KES and USD are never added).
 A new sidebar group **FINANCE** (web `nav.tsx` group; iPad `Section` group),
 placed directly after OPERATIONS. Finance and Partners leave OPERATIONS
 (Departments stays there; its money view is Finance → Department needs).
-Order follows the ERP flow — money in → commitments → money out → planning →
-books → reporting → admin:
 
-| # | Label | Web route | iPad section | Gate |
-|---|---|---|---|---|
-| 1 | Overview | `/finance` | financeOverview | finance:view |
-| 2 | Transactions | `/finance/transactions` | financeTransactions | finance:view |
-| 3 | Pledges | `/finance/pledges` | financePledges | finance:view |
-| 4 | Partners | `/finance/partners` (`/partners` redirects) | partners | finance:view |
-| 5 | Claims | `/finance/claims` | financeClaims | finance:view |
-| 6 | Recurring gifts | `/finance/recurring` | financeRecurring | finance:view |
-| 7 | Campaigns | `/finance/campaigns` | financeCampaigns | finance:view |
-| 8 | Department needs | `/finance/needs` | financeNeeds | finance:view |
-| 9 | Expenses | `/finance/expenses` | financeExpenses | finance:view |
-| 10 | Budgets | `/finance/budgets` | financeBudgets | finance:view |
-| 11 | Funds | `/finance/funds` | financeFunds | finance:view |
-| 12 | Ledger | `/finance/ledger` | financeLedger | finance:view |
-| 13 | Reconciliation | `/finance/reconciliation` | financeReconciliation | finance:view |
-| 14 | Reports | `/finance/reports` | financeReports | finance:view |
-| 15 | Statements | `/finance/statements` | financeStatements | finance:view |
-| 16 | Audit | `/finance/audit` | financeAudit | finance:view |
-| 17 | Settings | `/finance/settings` | financeSettings | finance:view |
+**Grouping (owner, 2026-09-26):** FINANCE is a plain section title, like
+Media. Its pages fold into three sub-menus, and Settings stays apart at the
+bottom because it is administration rather than day-to-day finance. In the
+owner's words, this is "much cleaner than having 16 items exposed at the same
+level, while not changing any of your existing terminology". No label, route
+or gate changed; only the order and the folding did.
+
+```
+FINANCE
+  Giving & Income        ⌄   Overview · Transactions · Pledges · Partners · Recurring gifts · Campaigns
+  Spending & Planning    ⌄   Department needs · Expenses · Claims · Budgets · Funds
+  Accounting & Reporting ⌄   Ledger · Reconciliation · Reports · Statements · Audit
+  Settings
+```
+
+| # | Sub-menu (key) | Label | Web route | iPad section | Gate |
+|---|---|---|---|---|---|
+| 1 | Giving & Income (`giving`) | Overview | `/finance` | financeOverview | finance:view |
+| 2 | Giving & Income | Transactions | `/finance/transactions` | financeTransactions | finance:view |
+| 3 | Giving & Income | Pledges | `/finance/pledges` | financePledges | finance:view |
+| 4 | Giving & Income | Partners | `/finance/partners` (`/partners` redirects) | partners | finance:view |
+| 5 | Giving & Income | Recurring gifts | `/finance/recurring` | financeRecurring | finance:view |
+| 6 | Giving & Income | Campaigns | `/finance/campaigns` | financeCampaigns | finance:view |
+| 7 | Spending & Planning (`spending`) | Department needs | `/finance/needs` | financeNeeds | finance:view |
+| 8 | Spending & Planning | Expenses | `/finance/expenses` | financeExpenses | finance:view |
+| 9 | Spending & Planning | Claims | `/finance/claims` | financeClaims | finance:view |
+| 10 | Spending & Planning | Budgets | `/finance/budgets` | financeBudgets | finance:view |
+| 11 | Spending & Planning | Funds | `/finance/funds` | financeFunds | finance:view |
+| 12 | Accounting & Reporting (`accounting`) | Ledger | `/finance/ledger` | financeLedger | finance:view |
+| 13 | Accounting & Reporting | Reconciliation | `/finance/reconciliation` | financeReconciliation | finance:view |
+| 14 | Accounting & Reporting | Reports | `/finance/reports` | financeReports | finance:view |
+| 15 | Accounting & Reporting | Statements | `/finance/statements` | financeStatements | finance:view |
+| 16 | Accounting & Reporting | Audit | `/finance/audit` | financeAudit | finance:view |
+| 17 | — (on its own) | Settings | `/finance/settings` | financeSettings | finance:view |
+
+How the sub-menus behave (identical on web and iPad):
+
+- **Folded by default**, so the section reads as the three sub-menu headers
+  and Settings. Each header has its own glyph (web Gift / Wallet / Library;
+  iPad `gift` / `wallet.bifold` / `books.vertical`) and a chevron: down (⌄)
+  while folded, up while open.
+- **The sub-menu holding the current page opens by itself**, before paint on
+  the web, so the highlighted row is never hidden. That opening lasts for the
+  visit only and is not saved. A page belongs to a sub-menu by the same rule
+  that highlights its row: Overview (`/finance`) claims only itself, not every
+  `/finance/*` page.
+- **A fold or unfold you make is remembered** per sub-menu, per device. On
+  the web this is localStorage `nuru.nav.finance.<key>.open`, with every access
+  guarded; on the iPad it is `@AppStorage("nuru.nav.subgroups.open")`.
+  You may fold the sub-menu you are standing in. A gold dot on its header then
+  marks where you are.
+- **The mini (icon-only) sidebar** has no header to unfold from, so it shows
+  every Finance page's icon, as before.
+- **Permissions:** a sub-menu with no row the person may see is left out,
+  header and all, and a group with no visible row shows no header (the iPad now
+  matches the web here). Sub-menu rows remain in the group's flat `items`, so
+  the route guard (`pathPermissions`) and NavLink `end` see every page.
 
 Every web sub-route is added to `pathPermissions` (exact-path guard) and gets a
 page title; the breadcrumb reads "Finance · <page>" on both surfaces. Write
