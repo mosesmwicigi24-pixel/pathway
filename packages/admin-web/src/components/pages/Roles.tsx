@@ -1,48 +1,33 @@
 // Roles & Permissions — System page rebuilt to the make, wired to the real RBAC
 // API (SystemApi.roles / createRole / updateRole / setRolePermissions / deleteRole).
-// The matrix dimensions (16 modules × 6 capabilities) are fixed and mirror the
-// backend (system module PERM_MODULES/CAPABILITIES). Built-in roles can't be
-// deleted; Super Admin is always full and cannot be restricted.
+// The permission grid is drawn from the server's own catalog
+// (GET /admin/permissions/catalog — PERM_MODULES × CAPABILITIES), never from a
+// list kept here: a save replaces the role's whole matrix, and the old
+// hard-coded 6-capability grid silently stripped finance:manage and
+// live:go/manage on every save (docs/FINANCE_ERP.md §6). The save plan
+// (components/finance/a/permissionMatrix.ts) sends every ticked cell, leaves
+// system-managed `proximity` grants to the server (it keeps them), and refuses
+// to save if the role holds anything else the grid can't show. Built-in roles
+// can't be deleted; Super Admin is always full and cannot be restricted.
 import { useCallback, useEffect, useMemo, useState, Fragment, type ReactElement, type CSSProperties } from "react";
 import {
   ChevronRight, Pencil, Plus, Shield, ShieldCheck, ShieldAlert, ShieldHalf, Trash2, Search,
-  Globe, UsersRound, BookOpenCheck, HeartHandshake, X, Check, Lock, RotateCcw, Save,
+  Globe, UsersRound, BookOpenCheck, HeartHandshake, X, Check, Lock, RotateCcw, Save, AlertTriangle, RefreshCw,
 } from "lucide-react";
-import { SystemApi, type SystemRole, type RolePermission, type Capability } from "../../api/client";
+import { SystemApi, type SystemRole, type RolePermission } from "../../api/client";
+import { financeErrorMessage } from "../../api/finance";
 import { errorMessage } from "../../util/error";
+import {
+  ROLE_SERVER_KEPT_CAPABILITIES,
+  describeGrants,
+  initialChecked,
+  planSave,
+  sameKeys,
+  type Grant,
+  type MatrixModel,
+} from "../finance/a/permissionMatrix";
+import { usePermissionCatalog } from "../finance/a/usePermissionCatalog";
 
-interface PermModule { id: string; label: string; group: string }
-const PERM_MODULES: PermModule[] = [
-  { id: "dashboard", label: "Dashboard & analytics", group: "Portal" },
-  { id: "levels", label: "Curriculum Levels", group: "Curriculum" },
-  { id: "cms", label: "Modules (CMS)", group: "Curriculum" },
-  { id: "quiz", label: "Quiz Builder", group: "Curriculum" },
-  { id: "videos", label: "Video Library", group: "Curriculum" },
-  { id: "cells", label: "Cell Engagement", group: "Operations" },
-  { id: "members", label: "Members", group: "Operations" },
-  { id: "reflections", label: "Reflection Queue", group: "Operations" },
-  { id: "events", label: "Events & Attendance", group: "Operations" },
-  { id: "finance", label: "Finance", group: "Operations" },
-  { id: "certificates", label: "Certificates", group: "Operations" },
-  { id: "badges", label: "Badges", group: "Operations" },
-  // Departments (docs/PARTNERS_PROGRAMME.md §4): mirrors backend PERM_MODULES.
-  { id: "departments", label: "Departments (serving, posts & needs)", group: "Operations" },
-  { id: "users", label: "Users", group: "System" },
-  { id: "rolesAdmin", label: "Roles & Permissions", group: "System" },
-  { id: "countries", label: "Countries", group: "System" },
-  { id: "languages", label: "Languages", group: "System" },
-  { id: "congregations", label: "Congregations", group: "System" },
-  // Mirrors backend PERM_MODULES (migration 198). The follow_up_team role holds
-  // exactly this module; the matrix must show the row or the role cannot be
-  // audited or edited from here.
-  { id: "followUp", label: "Follow-up (call list & services)", group: "Follow-up" },
-  // Same, for the website role.
-  { id: "website", label: "Website (nuruplace.org)", group: "Website" },
-];
-const CAPABILITIES: { key: Capability; label: string }[] = [
-  { key: "view", label: "View" }, { key: "create", label: "Create" }, { key: "edit", label: "Edit" },
-  { key: "delete", label: "Delete" }, { key: "approve", label: "Approve" }, { key: "export", label: "Export" },
-];
 const roleChip: Record<SystemRole["role_type"], { bg: string; color: string }> = {
   system: { bg: "#FDECEC", color: "#A8281F" },
   staff: { bg: "#EEF1F8", color: "#1F3A6B" },
@@ -61,18 +46,6 @@ const KEY_ICONS: Record<string, { Icon: typeof Shield; tone: string; bg: string 
   pastoral_reviewer: { Icon: HeartHandshake, tone: "#0F6B33", bg: "#E8F6EE" },
   discipler: { Icon: ShieldCheck, tone: "#0B7285", bg: "#E0F2F4" },
 };
-type Matrix = Record<string, Record<Capability, boolean>>;
-function toMatrix(perms: RolePermission[]): Matrix {
-  const m: Matrix = {};
-  for (const mod of PERM_MODULES) m[mod.id] = { view: false, create: false, edit: false, delete: false, approve: false, export: false };
-  for (const p of perms) { const row = m[p.module_id]; if (row) row[p.capability] = true; }
-  return m;
-}
-function fromMatrix(m: Matrix): RolePermission[] {
-  const out: RolePermission[] = [];
-  for (const mod of PERM_MODULES) for (const c of CAPABILITIES) if (m[mod.id]?.[c.key]) out.push({ module_id: mod.id, capability: c.key });
-  return out;
-}
 
 export function Roles(): ReactElement {
   const [list, setList] = useState<SystemRole[]>([]);
@@ -143,7 +116,7 @@ export function Roles(): ReactElement {
 
       {createOpen && <RoleModal roles={list} onClose={() => setCreateOpen(false)} onDone={async (key) => { setCreateOpen(false); await load(); const created = (await SystemApi.roles()).find((x) => x.role_key === key); if (created) setOpenRole(created); }} onError={setError} />}
       {editRole && <RoleModal roles={list} editRole={editRole} onClose={() => setEditRole(null)} onDone={async () => { setEditRole(null); await load(); }} onError={setError} />}
-      {openRole && <PermissionsDrawer role={openRole} onClose={() => setOpenRole(null)} onSaved={async () => { setOpenRole(null); await load(); }} onError={setError} />}
+      {openRole && <PermissionsDrawer role={openRole} onClose={() => setOpenRole(null)} onSaved={async () => { setOpenRole(null); await load(); }} />}
     </div>
   );
 }
@@ -262,71 +235,169 @@ function RoleModal({ roles, editRole, onClose, onDone, onError }: { roles: Syste
   );
 }
 
-function PermissionsDrawer({ role, onClose, onSaved, onError }: { role: SystemRole; onClose: () => void; onSaved: () => void; onError: (m: string) => void }): ReactElement {
-  const locked = role.role_key === "super_admin";
-  const [working, setWorking] = useState<Matrix>(() => toMatrix(role.permissions));
-  const [busy, setBusy] = useState(false);
-  const groups = Array.from(new Set(PERM_MODULES.map((m) => m.group)));
-  const total = useMemo(() => fromMatrix(working).length, [working]);
-
-  function setCell(modId: string, cap: Capability, val: boolean): void {
-    if (locked) return;
-    setWorking((p) => ({ ...p, [modId]: { ...(p[modId] as Record<Capability, boolean>), [cap]: val } }));
-  }
-  function toggleRow(modId: string): void {
-    if (locked) return;
-    setWorking((p) => { const row = p[modId] as Record<Capability, boolean>; const allOn = CAPABILITIES.every((c) => row[c.key]); return { ...p, [modId]: Object.fromEntries(CAPABILITIES.map((c) => [c.key, !allOn])) as Record<Capability, boolean> }; });
-  }
-  function toggleColumn(cap: Capability): void {
-    if (locked) return;
-    setWorking((p) => { const allOn = PERM_MODULES.every((m) => (p[m.id] as Record<Capability, boolean>)[cap]); const next: Matrix = {}; for (const m of PERM_MODULES) next[m.id] = { ...(p[m.id] as Record<Capability, boolean>), [cap]: !allOn }; return next; });
-  }
-  async function save(): Promise<void> {
-    if (locked) return;
-    setBusy(true);
-    try { await SystemApi.setRolePermissions(role.role_key, fromMatrix(working)); onSaved(); } catch (e) { onError(errorMessage(e, "Save failed.")); } finally { setBusy(false); }
-  }
-
-  const Box = ({ on, onClick }: { on: boolean; onClick: () => void }): ReactElement => (
-    <button onClick={onClick} disabled={locked} className="flex items-center justify-center rounded-md mx-auto" style={{ width: 22, height: 22, border: `1.5px solid ${on ? "#16A34A" : "var(--border)"}`, background: on ? "#16A34A" : "var(--card)", cursor: locked ? "not-allowed" : "pointer", opacity: locked ? 0.7 : 1 }}>{on && <Check size={13} color="#fff" />}</button>
+/** One grid cell: a ticked / unticked box, named for screen readers ("Finance — Manage"). */
+function Box({ on, locked, label, onClick }: { on: boolean; locked: boolean; label: string; onClick: () => void }): ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={locked}
+      aria-pressed={on}
+      aria-label={label}
+      title={label}
+      className="flex items-center justify-center rounded-md mx-auto"
+      style={{ width: 22, height: 22, border: `1.5px solid ${on ? "#16A34A" : "var(--border)"}`, background: on ? "#16A34A" : "var(--card)", cursor: locked ? "not-allowed" : "pointer", opacity: locked ? 0.7 : 1 }}
+    >
+      {on && <Check size={13} color="#fff" />}
+    </button>
   );
+}
 
+/** The capabilities whose meaning isn't obvious, under the grid. */
+function CapabilityLegend({ model }: { model: MatrixModel }): ReactElement | null {
+  const hinted = model.capabilities.filter((c) => c.hint);
+  if (hinted.length === 0) return null;
+  return (
+    <div style={{ marginTop: 14, display: "grid", gap: 4, fontSize: 11.5, color: "var(--muted-foreground)", lineHeight: 1.5 }}>
+      {hinted.map((c) => (
+        <div key={c.key}>
+          <span style={{ fontWeight: 700, color: "var(--nuru-navy)" }}>{c.label}</span> — {c.hint}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PermissionsDrawer({ role, onClose, onSaved }: { role: SystemRole; onClose: () => void; onSaved: () => void }): ReactElement {
+  const locked = role.role_key === "super_admin";
+  const catalog = usePermissionCatalog();
+  const model = catalog.model;
+  // The role's grants as they stand, widened: the client's Capability type
+  // lags the server (go, manage, proximity arrive at runtime).
+  const original = role.permissions as readonly Grant[];
+  const initial = useMemo(() => (model ? initialChecked(original, model) : null), [model, original]);
+  const [edits, setEdits] = useState<Set<string> | null>(null);
+  const working = edits ?? initial;
+  const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const plan = model && working ? planSave(original, working, model, ROLE_SERVER_KEPT_CAPABILITIES) : null;
+  const dirty = Boolean(initial && working && !sameKeys(working, initial));
+  const blocked = plan ? plan.blocked.length > 0 : false;
+  const canSave = !locked && !busy && plan !== null && !blocked && dirty;
+
+  const update = (fn: (s: Set<string>) => void): void => {
+    if (locked || !working) return;
+    const next = new Set(working);
+    fn(next);
+    setEdits(next);
+  };
+  const setCell = (key: string, val: boolean): void =>
+    update((s) => {
+      if (val) s.add(key);
+      else s.delete(key);
+    });
+  const toggleRow = (modId: string): void =>
+    update((s) => {
+      if (!model) return;
+      const keys = model.capabilities.map((c) => `${modId}:${c.key}`);
+      const allOn = keys.every((k) => s.has(k));
+      for (const k of keys) {
+        if (allOn) s.delete(k);
+        else s.add(k);
+      }
+    });
+  const toggleColumn = (cap: string): void =>
+    update((s) => {
+      if (!model) return;
+      const keys = model.modules.map((m) => `${m.id}:${cap}`);
+      const allOn = keys.every((k) => s.has(k));
+      for (const k of keys) {
+        if (allOn) s.delete(k);
+        else s.add(k);
+      }
+    });
+
+  async function save(): Promise<void> {
+    if (!canSave || !plan) return;
+    setBusy(true);
+    setSaveError(null);
+    try {
+      // Every ticked cell; `proximity` stays server-side (never in the body).
+      await SystemApi.setRolePermissions(role.role_key, plan.grants as RolePermission[]);
+      onSaved();
+    } catch (e) {
+      setSaveError(financeErrorMessage(e, "The permissions were not saved."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const total = model ? model.modules.length * model.capabilities.length : 0;
   return (
     <div className="fixed inset-0 z-50 flex" style={{ background: "rgba(11,31,51,0.45)" }} onClick={onClose}>
-      <div className="ml-auto flex flex-col" style={{ width: "min(720px, 100vw)", maxWidth: "100vw", height: "100%", background: "var(--card)", boxShadow: "-20px 0 60px rgba(0,0,0,0.25)" }} onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label={`Permissions — ${role.name}`} className="ml-auto flex flex-col" style={{ width: "min(820px, 100vw)", maxWidth: "100vw", height: "100%", background: "var(--card)", boxShadow: "-20px 0 60px rgba(0,0,0,0.25)" }} onClick={(e) => e.stopPropagation()}>
         <div className="px-6 py-5" style={{ background: "var(--nuru-navy)", color: "#fff" }}>
           <div className="flex items-start justify-between gap-4">
-            <div><div className="flex items-center gap-2" style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: "var(--nuru-gold)" }}><Shield size={12} /> PERMISSIONS</div><h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginTop: 2 }}>{role.name}</h2><div style={{ fontSize: 12, color: "rgba(232,239,245,0.7)", marginTop: 4 }}><code style={{ fontFamily: "var(--font-mono)" }}>{role.role_key}</code> · {total} of {PERM_MODULES.length * CAPABILITIES.length} capabilities</div></div>
-            <button onClick={onClose} className="rounded-lg p-1.5" style={{ background: "rgba(255,255,255,0.1)", border: "none" }}><X size={16} color="#fff" /></button>
+            <div><div className="flex items-center gap-2" style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: "var(--nuru-gold)" }}><Shield size={12} /> PERMISSIONS</div><h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginTop: 2 }}>{role.name}</h2><div style={{ fontSize: 12, color: "rgba(232,239,245,0.7)", marginTop: 4 }}><code style={{ fontFamily: "var(--font-mono)" }}>{role.role_key}</code> · {model && working ? `${working.size} of ${total} capabilities` : "loading the permission list…"}</div></div>
+            <button onClick={onClose} aria-label="Close" className="rounded-lg p-1.5" style={{ background: "rgba(255,255,255,0.1)", border: "none" }}><X size={16} color="#fff" /></button>
           </div>
           {locked && <div className="mt-3 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5" style={{ background: "rgba(245,199,126,0.14)", color: "#F5C77E", fontSize: 11.5, fontWeight: 600 }}><Lock size={12} /> Super Admin always has full access and cannot be restricted.</div>}
         </div>
         <div className="flex-1 overflow-auto px-5 py-4">
-          <table className="w-full border-collapse" style={{ minWidth: 520 }}>
-            <thead><tr>
-              <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--muted-foreground)" }}>Module</th>
-              {CAPABILITIES.map((c) => <th key={c.key} style={{ padding: "6px 4px", width: 72 }}><button onClick={() => toggleColumn(c.key)} disabled={locked} style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, color: "var(--nuru-navy)", cursor: locked ? "default" : "pointer", background: "none", border: "none" }}>{c.label}</button></th>)}
-            </tr></thead>
-            <tbody>
-              {groups.map((g) => (
-                <Fragment key={g}>
-                  <tr><td colSpan={CAPABILITIES.length + 1} style={{ padding: "12px 8px 5px" }}><span className="nuru-eyebrow nuru-eyebrow-gold">{g}</span></td></tr>
-                  {PERM_MODULES.filter((m) => m.group === g).map((m) => (
-                    <tr key={m.id} style={{ borderTop: "1px solid var(--border)" }}>
-                      <td style={{ padding: "8px" }}><button onClick={() => toggleRow(m.id)} disabled={locked} className="text-left" style={{ fontSize: 13, fontWeight: 600, color: "var(--nuru-navy)", cursor: locked ? "default" : "pointer", background: "none", border: "none" }}>{m.label}</button></td>
-                      {CAPABILITIES.map((c) => <td key={c.key} style={{ padding: "6px 4px", textAlign: "center" }}><Box on={!!working[m.id]?.[c.key]} onClick={() => setCell(m.id, c.key, !working[m.id]?.[c.key])} /></td>)}
-                    </tr>
+          {catalog.error ? (
+            <div role="alert" className="rounded-xl" style={{ background: "#FDECEC", border: "1px solid #F5C2C0", color: "#B42318", padding: "12px 14px", fontSize: 13 }}>
+              <div className="flex items-center gap-2" style={{ fontWeight: 700 }}><AlertTriangle size={14} /> {catalog.error}</div>
+              <div style={{ color: "var(--nuru-navy)", marginTop: 6 }}>Without it this editor can&apos;t show every permission the server has, and saving a partial grid would remove the grants it can&apos;t see — so Save is off until the list loads.</div>
+              <button onClick={catalog.retry} className="mt-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--nuru-navy)", fontSize: 12.5, fontWeight: 600 }}><RefreshCw size={12} /> Try again</button>
+            </div>
+          ) : !model || !working ? (
+            <div className="text-center py-16" style={{ fontSize: 14, color: "var(--muted-foreground)" }}>Loading the permission list…</div>
+          ) : (
+            <>
+              <table className="w-full border-collapse" style={{ minWidth: 200 + model.capabilities.length * 64 }}>
+                <thead><tr>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--muted-foreground)" }}>Module</th>
+                  {model.capabilities.map((c) => <th key={c.key} style={{ padding: "6px 4px", width: 64 }}><button onClick={() => toggleColumn(c.key)} disabled={locked} title={c.hint ?? `Toggle ${c.label} for every module`} style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, color: "var(--nuru-navy)", cursor: locked ? "default" : "pointer", background: "none", border: "none" }}>{c.label}</button></th>)}
+                </tr></thead>
+                <tbody>
+                  {model.groups.map((g) => (
+                    <Fragment key={g}>
+                      <tr><td colSpan={model.capabilities.length + 1} style={{ padding: "12px 8px 5px" }}><span className="nuru-eyebrow nuru-eyebrow-gold">{g}</span></td></tr>
+                      {model.modules.filter((m) => m.group === g).map((m) => (
+                        <tr key={m.id} style={{ borderTop: "1px solid var(--border)" }}>
+                          <td style={{ padding: "8px" }}><button onClick={() => toggleRow(m.id)} disabled={locked} className="text-left" title={m.label === m.id ? `${m.id} — a module this page has no label for yet` : `Toggle every capability for ${m.label}`} style={{ fontSize: 13, fontWeight: 600, color: "var(--nuru-navy)", cursor: locked ? "default" : "pointer", background: "none", border: "none" }}>{m.label}{m.label === m.id ? <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--muted-foreground)", marginLeft: 6 }}>(server module)</span> : null}</button></td>
+                          {model.capabilities.map((c) => {
+                            const key = `${m.id}:${c.key}`;
+                            const on = working.has(key);
+                            return <td key={c.key} style={{ padding: "6px 4px", textAlign: "center" }}><Box on={on} locked={locked} label={`${m.label} — ${c.label}`} onClick={() => setCell(key, !on)} /></td>;
+                          })}
+                        </tr>
+                      ))}
+                    </Fragment>
                   ))}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
+                </tbody>
+              </table>
+              <CapabilityLegend model={model} />
+              {plan && plan.keptByServer.length > 0 ? (
+                <div style={{ marginTop: 12, fontSize: 11.5, color: "var(--muted-foreground)" }}>
+                  Also held, and kept by the server on every save (system-managed, not in this grid): <code style={{ fontFamily: "var(--font-mono)" }}>{describeGrants(plan.keptByServer)}</code>.
+                </div>
+              ) : null}
+              {blocked && plan ? (
+                <div role="alert" className="rounded-xl" style={{ marginTop: 12, background: "#FDECEC", border: "1px solid #F5C2C0", color: "#B42318", padding: "10px 12px", fontSize: 12.5 }}>
+                  This role holds {plan.blocked.length === 1 ? "a grant" : "grants"} this editor can&apos;t show or save: <code style={{ fontFamily: "var(--font-mono)" }}>{describeGrants(plan.blocked)}</code>. Saving would remove {plan.blocked.length === 1 ? "it" : "them"}, so Save is off — ask a developer.
+                </div>
+              ) : null}
+            </>
+          )}
+          {saveError ? <div role="alert" style={{ marginTop: 12, color: "#B42318", fontSize: 12.5, fontWeight: 600 }}>{saveError}</div> : null}
         </div>
         <div className="px-6 py-4 flex items-center justify-between gap-2" style={{ borderTop: "1px solid var(--border)", background: "var(--secondary)" }}>
-          <button onClick={() => setWorking(toMatrix(role.permissions))} disabled={locked} className="flex items-center gap-1.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--muted-foreground)", cursor: locked ? "default" : "pointer", background: "none", border: "none" }}><RotateCcw size={13} /> Reset</button>
-          <div className="flex items-center gap-2"><button onClick={onClose} className="rounded-xl px-4 py-2.5" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--foreground)", fontSize: 13, fontWeight: 600 }}>Cancel</button><button onClick={() => void save()} disabled={locked || busy} className="flex items-center gap-2 rounded-xl px-5 py-2.5" style={{ background: locked ? "var(--muted)" : "var(--nuru-gold)", color: locked ? "var(--muted-foreground)" : "#fff", fontSize: 13, fontWeight: 600, border: "none", cursor: locked ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}><Save size={14} /> Save changes</button></div>
+          <button onClick={() => setEdits(null)} disabled={locked || !dirty} className="flex items-center gap-1.5" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--muted-foreground)", cursor: locked || !dirty ? "default" : "pointer", background: "none", border: "none", opacity: locked || !dirty ? 0.6 : 1 }}><RotateCcw size={13} /> Reset</button>
+          <div className="flex items-center gap-2"><button onClick={onClose} className="rounded-xl px-4 py-2.5" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--foreground)", fontSize: 13, fontWeight: 600 }}>Cancel</button><button onClick={() => void save()} disabled={!canSave} className="flex items-center gap-2 rounded-xl px-5 py-2.5" style={{ background: canSave ? "var(--nuru-gold)" : "var(--muted)", color: canSave ? "#fff" : "var(--muted-foreground)", fontSize: 13, fontWeight: 600, border: "none", cursor: canSave ? "pointer" : "default", opacity: busy ? 0.6 : 1 }}><Save size={14} /> {busy ? "Saving…" : "Save changes"}</button></div>
         </div>
       </div>
     </div>
   );
 }
+
