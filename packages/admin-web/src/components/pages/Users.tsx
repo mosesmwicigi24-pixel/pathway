@@ -204,13 +204,20 @@ function UserPermissionsDrawer({ user, roleName, onClose, onSaved, onError }: {
   const [edits, setEdits] = useState<Set<string> | null>(null);
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    setLoadError(null);
     SystemApi.userPermissions(user.user_id)
       .then((d) => { if (!alive) return; setData(d); setEdits(null); })
-      .catch((e) => { if (alive) onError(errorMessage(e, "Could not load permissions.")); })
+      .catch((e) => {
+        if (!alive) return;
+        const msg = financeErrorMessage(e, "Could not load this person's permissions.");
+        setLoadError(msg);
+        onError(msg);
+      })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [user.user_id, onError]);
@@ -285,7 +292,12 @@ function UserPermissionsDrawer({ user, roleName, onClose, onSaved, onError }: {
               <div style={{ color: "var(--nuru-navy)", marginTop: 6 }}>Without it this editor can&apos;t show every permission the server has, and saving a partial grid would remove the direct grants it can&apos;t see — so Save is off until the list loads.</div>
               <button onClick={catalog.retry} className="mt-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--nuru-navy)", fontSize: 12.5, fontWeight: 600 }}><RefreshCw size={12} /> Try again</button>
             </div>
-          ) : loading || !model ? (
+          ) : loadError ? (
+            <div role="alert" className="rounded-xl" style={{ background: "#FDECEC", border: "1px solid #F5C2C0", color: "#B42318", padding: "12px 14px", fontSize: 13 }}>
+              <div className="flex items-center gap-2" style={{ fontWeight: 700 }}><AlertTriangle size={14} /> {loadError}</div>
+              <div style={{ color: "var(--nuru-navy)", marginTop: 6 }}>Nothing can be changed until they load — close this and open it again.</div>
+            </div>
+          ) : loading || !model || !data ? (
             <div className="text-center py-16" style={{ fontSize: 14, color: "var(--muted-foreground)" }}>Loading permissions…</div>
           ) : (
             <>

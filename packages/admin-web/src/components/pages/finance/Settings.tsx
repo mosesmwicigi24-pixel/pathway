@@ -82,7 +82,7 @@ function Categories(): ReactElement {
       async () => {
         for (const p of plan) await FinanceApi.updateExpenseCategory(p.category_id, { sort: p.sort });
       },
-      "The new order was not saved — reloaded the list as it is now.",
+      "Not all of the new order was saved — the list below is as it stands now; try the move again.",
     );
   };
 

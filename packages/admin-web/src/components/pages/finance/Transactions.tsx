@@ -256,6 +256,7 @@ export function FinanceTransactions(): ReactElement {
         <RecordGiftDrawer
           funds={funds.active}
           fundsLoading={funds.loading}
+          fundsError={funds.error}
           onClose={() => setRecordOpen(false)}
           onRecorded={() => list.reload()}
           onView={(id) => setTx(id)}

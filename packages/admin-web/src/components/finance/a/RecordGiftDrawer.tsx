@@ -165,6 +165,8 @@ export interface RecordGiftDrawerProps {
   /** Active funds (the picker offers only these). */
   funds: readonly FinanceFundRow[];
   fundsLoading?: boolean | undefined;
+  /** The funds list failed to load (the picker says why it is empty). */
+  fundsError?: string | null | undefined;
   onClose: () => void;
   /** After every successful recording (reload the register). */
   onRecorded: (r: BooksGiftResult) => void;
@@ -175,7 +177,7 @@ export interface RecordGiftDrawerProps {
   now?: Date | undefined;
 }
 
-export function RecordGiftDrawer({ funds, fundsLoading = false, onClose, onRecorded, onView, now }: RecordGiftDrawerProps): ReactElement {
+export function RecordGiftDrawer({ funds, fundsLoading = false, fundsError = null, onClose, onRecorded, onView, now }: RecordGiftDrawerProps): ReactElement {
   const ids = { amount: useId(), channel: useId(), reference: useId(), date: useId(), pledge: useId(), need: useId(), fund: useId(), note: useId(), name: useId(), phone: useId() };
   const [key, renewKey] = useIdempotencyKey();
   const clock = useMemo(() => now ?? new Date(), [now]);
@@ -594,7 +596,13 @@ export function RecordGiftDrawer({ funds, fundsLoading = false, onClose, onRecor
               {fundDecisionText(decision)}
             </div>
           ) : (
-            <Field label="Fund" htmlFor={ids.fund} required error={shown.fund} hint={fundsLoading ? "Loading funds…" : "Active funds only."}>
+            <Field
+              label="Fund"
+              htmlFor={ids.fund}
+              required
+              error={shown.fund ?? (fundsError && funds.length === 0 ? `${fundsError} Close and reopen the form to try again.` : undefined)}
+              hint={fundsLoading ? "Loading funds…" : "Active funds only."}
+            >
               <select id={ids.fund} value={fund} onChange={(e) => setFund(e.target.value)} style={{ ...selectStyle, width: "100%" }}>
                 <option value="">Choose a fund…</option>
                 {funds.map((f) => (
