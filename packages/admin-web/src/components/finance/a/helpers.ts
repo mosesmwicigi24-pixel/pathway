@@ -812,11 +812,16 @@ export function auditDetails(metadata: Record<string, unknown> | null | undefine
   }
   take("fund", (v) => `Fund ${v}`);
   take("reason", (v) => `“${clip(v)}”`);
+  // Money lines carry their currency, so the bare currency key is not repeated.
+  if (Object.keys(metadata).some((k) => k.endsWith("_minor"))) used.add("currency");
   for (const [k, v] of Object.entries(metadata)) {
     if (out.length >= max) break;
     if (used.has(k) || k.endsWith("_id") || k === "idempotency_key") continue;
     const s = scalar(v);
-    if (s !== null) out.push(`${k.replace(/_/g, " ")}: ${clip(s, 40)}`);
+    if (s !== null && k.endsWith("_minor") && toMinorBigInt(s) !== null) {
+      // Money in metadata is minor units — show it as money, never raw digits.
+      out.push(`${k.slice(0, -"_minor".length).replace(/_/g, " ")}: ${formatMinor(s, currency ?? "KES")}`);
+    } else if (s !== null) out.push(`${k.replace(/_/g, " ")}: ${clip(s, 40)}`);
     used.add(k);
   }
   return out;

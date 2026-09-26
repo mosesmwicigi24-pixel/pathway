@@ -116,7 +116,13 @@ export function BudgetActuals({ budgetId, year, now = new Date() }: { budgetId: 
     { kind: "expense", title: "Expenses" },
   ];
   const ytdLabel = ytd === 12 ? "Year" : ytd === 0 ? "YTD (not started)" : `YTD (Jan–${MONTH_LABELS[ytd - 1]})`;
-  const netActualYtd = (inc ? ytdSum(inc.actual_minor, ytd) : 0) - (exp ? ytdSum(exp.actual_minor, ytd) : 0);
+  // Net actual is ALL KES money in less ALL KES money out in the period —
+  // budgeted lines plus unbudgeted money — so it is the church's real surplus,
+  // not just the budgeted lines' (cycle 1 finding: it showed 133,923 when the
+  // year's real KES surplus was over 1.3m).
+  const allIn = inc ? ytdSum(inc.actual_minor, ytd) + ytdSum(inc.unbudgeted_minor, ytd) : 0;
+  const allOut = exp ? ytdSum(exp.actual_minor, ytd) + ytdSum(exp.unbudgeted_minor, ytd) : 0;
+  const netActualYtd = allIn - allOut;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -184,7 +190,8 @@ export function BudgetActuals({ budgetId, year, now = new Date() }: { budgetId: 
       </div>
       <div className="flex flex-wrap items-baseline" style={{ gap: "6px 24px", fontSize: 12.5, color: FIN.navy }}>
         <span>
-          Net actual {ytd === 12 ? "for the year" : "to date"}: <MoneyText amount_minor={netActualYtd} currency="KES" strong />
+          Net actual {ytd === 12 ? "for the year" : "to date"}: <MoneyText amount_minor={netActualYtd} currency="KES" strong />{" "}
+          <span style={{ color: FIN.muted }}>(all KES in − all KES out, budgeted or not)</span>
         </span>
         {inc ? (
           <span style={{ color: FIN.muted }}>

@@ -403,6 +403,13 @@ describe("words for codes", () => {
     expect(auditDetails({ from_fund: "tithe", to_fund: "missions", memo: "Seed" })).toEqual(["tithe → missions", "memo: Seed"]);
     expect(auditDetails(null)).toEqual([]);
     expect(auditDetails({ a: 1, b: 2, c: 3, d: 4, e: 5 })).toHaveLength(4);
+    // Minor-unit metadata reads as money (cycle 1: a budget showed "income total minor: 120000000").
+    expect(auditDetails({ lines: 3, income_total_minor: 120_000_000, expense_total_minor: 84_000_000 })).toEqual([
+      "lines: 3",
+      "income total: KES 1,200,000.00",
+      "expense total: KES 840,000.00",
+    ]);
+    expect(auditDetails({ currency: "USD", balance_minor: 2_500 })).toEqual(["balance: USD 25.00"]);
   });
   it("auditEntityHref links transactions and journals only", () => {
     expect(auditEntityHref("transactions", "t1")).toBe("/finance/transactions?tx=t1");
