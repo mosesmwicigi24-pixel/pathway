@@ -734,6 +734,37 @@ export function humanizeAction(action: string): string {
   return `${head.charAt(0).toUpperCase()}${head.slice(1)} · ${rest || head}`;
 }
 
+/** Where an audit row's entity can be opened on these pages, or null. */
+export function auditEntityHref(entity: string, entityId: string | null): string | null {
+  if (!entityId) return null;
+  const e = entity.toLowerCase();
+  if (e === "transactions" || e === "transaction") return `/finance/transactions?tx=${encodeURIComponent(entityId)}`;
+  if (e === "journals" || e === "journal") return `/finance/ledger?tab=journals&journal=${encodeURIComponent(entityId)}`;
+  return null;
+}
+
+/* ====================================================================== */
+/* Expense categories — ordering                                            */
+/* ====================================================================== */
+
+/**
+ * Move the category at `index` one place up (-1) or down (+1) and renumber the
+ * whole list 10, 20, 30… so ties (a freshly seeded list is often all 0) can't
+ * swallow the move. Returns only the categories whose sort changes — the PATCHes
+ * to send — or [] when the move is out of range.
+ */
+export function reorderPlan<T extends { category_id: string; sort: number }>(list: readonly T[], index: number, dir: -1 | 1): { category_id: string; sort: number }[] {
+  const target = index + dir;
+  if (index < 0 || index >= list.length || target < 0 || target >= list.length) return [];
+  const next = [...list];
+  const a = next[index];
+  const b = next[target];
+  if (!a || !b) return [];
+  next[index] = b;
+  next[target] = a;
+  return next.map((c, i) => ({ category_id: c.category_id, sort: (i + 1) * 10, was: c.sort })).filter((c) => c.sort !== c.was).map(({ category_id, sort }) => ({ category_id, sort }));
+}
+
 const scalar = (v: unknown): string | null => {
   if (typeof v === "string") return v.trim() ? v.trim() : null;
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
