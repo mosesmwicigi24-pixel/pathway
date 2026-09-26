@@ -53,6 +53,32 @@ export function usePeriodParam(defaultPreset: DatePreset = "this_month", prefix 
   return [period, set];
 }
 
+/**
+ * Change several URL params in ONE navigation. react-router's functional
+ * setSearchParams reads the params of the current render, so two setters fired
+ * by one click (useUrlParam + useUrlParam) lose the first change — every
+ * "Clear" or multi-param update goes through this instead. null / "" deletes.
+ */
+export function usePatchParams(): (patch: Readonly<Record<string, string | null>>) => void {
+  const [, setParams] = useSearchParams();
+  return useCallback(
+    (patch) => {
+      setParams(
+        (prev) => {
+          const n = new URLSearchParams(prev);
+          for (const [k, v] of Object.entries(patch)) {
+            if (v === null || v === "") n.delete(k);
+            else n.set(k, v);
+          }
+          return n;
+        },
+        { replace: true },
+      );
+    },
+    [setParams],
+  );
+}
+
 /** The query string that reopens `p` on another page ("period=last_month"). */
 export function periodQuery(p: PeriodValue): string {
   const q = new URLSearchParams();

@@ -25,6 +25,7 @@ import { Button, Drawer, FIN, Field, MoneyInput, MoneyText, Notice, giverDisplay
 import { formatMinor, type ParsedAmount } from "../money";
 import { fmtDay, todayEAT } from "../dates";
 import {
+  CASH_ACCOUNT_FOR,
   GIFT_CHANNELS,
   accountLabel,
   addDaysIso,
@@ -50,7 +51,6 @@ const MODES: readonly { key: GiverMode; label: string }[] = [
   { key: "walkin", label: "Walk-in" },
   { key: "anonymous", label: "Anonymous" },
 ];
-const CASH_ACCOUNT: Readonly<Record<OfficeChannel, string>> = { onhand: "cash:onhand", bank: "cash:bank", cheque: "cash:cheque", mpesa: "cash:mpesa", other: "cash:manual" };
 
 function Section({ title, children }: { title: string; children: ReactNode }): ReactElement {
   return (
@@ -627,7 +627,7 @@ export function RecordGiftDrawer({ funds, fundsLoading = false, onClose, onRecor
           <div style={{ fontSize: 12.5, color: FIN.muted, lineHeight: 1.55, borderTop: `1px dashed ${FIN.border}`, paddingTop: 12 }}>
             On <strong style={{ color: FIN.navy }}>Record</strong>: {formatMinor(form.amountMinor, currency)} from{" "}
             {mode === "member" ? (giver?.full_name ?? "the member") : mode === "walkin" ? walkinName.trim() || "the walk-in giver" : "an anonymous giver"} is posted to{" "}
-            {bookedFund ?? "the fund"} as received {fmtDay(receivedOn)} — debit {accountLabel(CASH_ACCOUNT[channel])}, credit the fund — and takes the next office receipt number (OR-
+            {bookedFund ?? "the fund"} as received {fmtDay(receivedOn)} — debit {accountLabel(CASH_ACCOUNT_FOR[channel])}, credit the fund — and takes the next office receipt number (OR-
             {receivedOn.slice(0, 4) || "year"}-…). Corrections are reversals, never deletions.
           </div>
         ) : null}

@@ -511,6 +511,15 @@ export function fundInUseText(fundName: string, u: FundInUse): string {
 /* Accounts                                                                 */
 /* ====================================================================== */
 
+/** The cash account an office channel posts to (other → cash:manual). */
+export const CASH_ACCOUNT_FOR: Readonly<Record<OfficeChannel, string>> = {
+  onhand: "cash:onhand",
+  bank: "cash:bank",
+  cheque: "cash:cheque",
+  mpesa: "cash:mpesa",
+  other: "cash:manual",
+};
+
 export const CASH_ACCOUNT_LABELS: Readonly<Record<string, string>> = {
   "cash:onhand": "Cash on hand",
   "cash:bank": "Bank",
