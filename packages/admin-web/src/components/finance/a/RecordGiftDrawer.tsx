@@ -233,7 +233,7 @@ export function RecordGiftDrawer({ funds, fundsLoading = false, fundsError = nul
     let alive = true;
     const today = todayEAT(clock);
     setPendingCheck("checking");
-    FinanceApi.transactions({ q: (giver.phone ?? giver.full_name).slice(0, FINANCE_LIMITS.searchMax), from: addDaysIso(today, -2), to: today, limit: 50 }).then(
+    FinanceApi.transactions({ user_id: giver.user_id, from: addDaysIso(today, -2), to: today, limit: 50 }).then(
       (p) => {
         if (!alive) return;
         setPending(pendingForMember(p.data, giver.user_id, clock));

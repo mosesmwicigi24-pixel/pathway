@@ -499,6 +499,15 @@ describe("finance reports — the clean books of a small church year", () => {
     expect((await get("/admin/finance/transactions?cursor=not-a-cursor")).status).toBe(400);
   });
 
+  it("transactions: user_id filter is exact (the gift form's still-processing check)", async () => {
+    const mine = (await get(`/admin/finance/transactions?user_id=${ids.amina}&limit=200`)).body;
+    expect(mine.data.length).toBeGreaterThan(0);
+    expect(mine.data.every((r: any) => r.user_id === ids.amina)).toBe(true);
+    const n = Number((await q(`SELECT count(*) n FROM transactions WHERE user_id = $1`, [ids.amina])).rows[0].n);
+    expect(mine.totals.reduce((a: number, t: any) => a + t.count, 0)).toBe(n);
+    expect((await get(`/admin/finance/transactions?user_id=nope`)).status).toBe(400);
+  });
+
   it("transactions: same-day office gifts list newest receipt first — on one page and across pages", async () => {
     // Every office gift is dated 12:00 EAT on its received day, so a Sunday's
     // entries tie on created_at; the receipt number breaks the tie (verification

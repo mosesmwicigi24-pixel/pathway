@@ -39,7 +39,7 @@ export function channelText(t: Pick<Tx, "channel" | "office_channel" | "source" 
 
 export const memberHref = (userId: string): string => `/member-profile?id=${encodeURIComponent(userId)}`;
 /** The Partners page opens a partner's drawer from ?partner=<user_id> (Partners.tsx). */
-export const partnerHref = (userId: string): string => `/finance/partners?partner=${encodeURIComponent(userId)}`;
+export const partnerHref = (userId: string): string => `/finance/partners?member=${encodeURIComponent(userId)}`;
 export const needHref = (needId: string): string => `/finance/needs?need=${encodeURIComponent(needId)}`;
 
 function Row({ label, children }: { label: string; children: ReactNode }): ReactElement {

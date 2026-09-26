@@ -482,6 +482,8 @@ export type TransactionsFilters = PeriodQuery & {
   q?: string | null | undefined;
   pledged?: AnyYesNo | null | undefined;
   need?: AnyYesNo | null | undefined;
+  /** One member's transactions exactly. */
+  user_id?: string | null | undefined;
 };
 export type TransactionsQuery = TransactionsFilters & PageQuery;
 

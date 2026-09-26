@@ -188,7 +188,9 @@ describe("Record a gift", () => {
     fireEvent.change(screen.getByPlaceholderText("Search members…"), { target: { value: "gra" } });
     fireEvent.click(await screen.findByRole("option", { name: /Grace Wanjiru/ }));
     expect(await screen.findByText("An M-Pesa payment of KES 1,000.00 from Grace is still processing since 08:10 — it may be this same payment.")).toBeTruthy();
-    expect(mocks.transactions).toHaveBeenCalledWith(expect.objectContaining({ q: "+254700000001", from: "2026-09-24", to: "2026-09-26" }));
+    // Asked for exactly this member (user_id), not by phone or name.
+    expect(mocks.transactions).toHaveBeenCalledWith(expect.objectContaining({ user_id: expect.any(String), from: "2026-09-24", to: "2026-09-26" }));
+    expect(mocks.transactions.mock.calls.at(-1)?.[0]).not.toHaveProperty("q");
   });
 
   it("names the existing entry on DUPLICATE_RECEIPT", async () => {

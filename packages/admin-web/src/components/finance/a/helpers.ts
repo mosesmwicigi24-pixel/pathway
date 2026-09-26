@@ -154,7 +154,9 @@ export function referenceError(channel: OfficeChannel, value: string): string | 
   if (!v) {
     if (!rule.required) return null;
     const what = channel === "mpesa" ? "an M-Pesa payment" : channel === "cheque" ? "a cheque" : "a bank payment";
-    return `Enter the ${rule.label.toLowerCase()} — it is required for ${what}.`;
+    // "M-Pesa code" keeps its capitals; "Cheque number" reads "cheque number".
+    const label = /^[A-Z][a-z]/.test(rule.label) && !rule.label.startsWith("M-Pesa") ? rule.label[0]!.toLowerCase() + rule.label.slice(1) : rule.label;
+    return `Enter the ${label} — it is required for ${what}.`;
   }
   if (v.length > FINANCE_LIMITS.reference.max) return `At most ${FINANCE_LIMITS.reference.max} characters.`;
   if (channel === "mpesa" && !FINANCE_LIMITS.mpesaCodePattern.test(v.toUpperCase())) {
@@ -803,12 +805,15 @@ export function auditDetails(metadata: Record<string, unknown> | null | undefine
   }
   take("receipt_code", (v) => `Receipt ${v}`);
   take("reference", (v) => `Ref ${v}`);
-  const from = scalar(metadata.from_fund);
-  const to = scalar(metadata.to_fund);
+  // journal.transfer_posted records {from, to}; older rows used {from_fund, to_fund}.
+  const fromKey = metadata.from_fund !== undefined ? "from_fund" : "from";
+  const toKey = metadata.to_fund !== undefined ? "to_fund" : "to";
+  const from = scalar(metadata[fromKey]);
+  const to = scalar(metadata[toKey]);
   if (from && to && out.length < max) {
     out.push(`${from} → ${to}`);
-    used.add("from_fund");
-    used.add("to_fund");
+    used.add(fromKey);
+    used.add(toKey);
   }
   take("fund", (v) => `Fund ${v}`);
   take("reason", (v) => `“${clip(v)}”`);

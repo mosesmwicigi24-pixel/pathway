@@ -150,6 +150,7 @@ describe("references (POST /gifts)", () => {
     expect(referenceError("bank", "")).toMatch(/required for a bank payment/);
     expect(referenceError("cheque", "  ")).toMatch(/required for a cheque/);
     expect(referenceError("mpesa", "")).toMatch(/required for an M-Pesa payment/);
+    expect(referenceError("mpesa", "")).toMatch(/^Enter the M-Pesa code/); // the brand keeps its capitals
     expect(referenceError("onhand", "")).toBeNull();
     expect(referenceError("other", "")).toBeNull();
   });
@@ -401,6 +402,8 @@ describe("words for codes", () => {
       "“Entered twice”",
     ]);
     expect(auditDetails({ from_fund: "tithe", to_fund: "missions", memo: "Seed" })).toEqual(["tithe → missions", "memo: Seed"]);
+    // journal.transfer_posted records {from, to} — paired the same way (iPad parity).
+    expect(auditDetails({ from: "tithe", to: "building", memo: "Seed" })).toEqual(["tithe → building", "memo: Seed"]);
     expect(auditDetails(null)).toEqual([]);
     expect(auditDetails({ a: 1, b: 2, c: 3, d: 4, e: 5 })).toHaveLength(4);
     // Minor-unit metadata reads as money (cycle 1: a budget showed "income total minor: 120000000").

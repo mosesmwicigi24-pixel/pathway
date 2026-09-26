@@ -5957,6 +5957,7 @@ paths:
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 } }
         - { name: pledged, in: query, required: false, schema: { type: string, enum: [any, "yes", "no"], default: any } }
         - { name: need, in: query, required: false, schema: { type: string, enum: [any, "yes", "no"], default: any } }
+        - { name: user_id, in: query, required: false, schema: { type: string, format: uuid }, description: "One member's transactions only (exact — a name or phone search can catch a namesake)." }
         - $ref: "#/components/parameters/Cursor"
         - { name: before, in: query, required: false, deprecated: true, schema: { type: string }, description: "Earlier paging parameter: a created_at instant (or a cursor). Use cursor." }
         - $ref: "#/components/parameters/Limit"

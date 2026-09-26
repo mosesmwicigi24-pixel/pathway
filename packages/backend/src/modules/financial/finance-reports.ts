@@ -211,6 +211,9 @@ export const TransactionsQuery = z.object({
   q: z.string().trim().max(80).optional(),
   pledged: z.enum(["any", "yes", "no"]).default("any"),
   need: z.enum(["any", "yes", "no"]).default("any"),
+  /** One member's transactions exactly (the gift form's "still processing"
+   *  check) — a name or phone search could catch a namesake. */
+  user_id: z.string().uuid().optional(),
   cursor: z.string().max(400).optional(),
   /** The earlier paging parameter: a created_at instant, or a cursor. */
   before: z.string().max(400).optional(),
@@ -233,6 +236,7 @@ function transactionFilters(q: TransactionsFilter, P: Params): string[] {
   if (q.status) w.push(`t.status = ${P.add(q.status)}::txn_status`);
   if (q.channel) w.push(`${CHANNEL_SQL} = ${P.add(q.channel === "stripe" ? "card" : q.channel)}`);
   if (q.source) w.push(`t.source = ${P.add(q.source)}`);
+  if (q.user_id) w.push(`t.user_id = ${P.add(q.user_id)}::uuid`);
   if (q.pledged === "yes") w.push(`t.pledge_id IS NOT NULL`);
   if (q.pledged === "no") w.push(`t.pledge_id IS NULL`);
   if (q.need === "yes") w.push(`t.need_id IS NOT NULL`);
