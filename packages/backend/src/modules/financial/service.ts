@@ -737,10 +737,12 @@ export class FinancialService {
     );
     return rows.map((r) => {
       const provider = (r.provider as string | null) ?? "stripe";
-      const { provider: _omit, ...rest } = r;
+      // office_channel only chooses the words; it is not part of the member's row.
+      const { provider: _omit, office_channel: _office, ...rest } = r;
       void _omit;
+      void _office;
       const method = provider === "stripe" ? "card" : provider;
-      return { ...rest, amount_minor: Number(r.amount_minor), method, method_label: giftMethodLabel(method, r.office_channel as string | null) };
+      return { ...rest, amount_minor: Number(r.amount_minor), method, method_label: giftMethodLabel(method, (r.office_channel as string | null) ?? null) };
     });
   }
 
