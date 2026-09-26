@@ -311,6 +311,45 @@ export function voidConsequence(e: Pick<BooksExpense, "status" | "amount_minor" 
   return "Nothing was posted yet, so nothing is reversed. The expense stays on the register as void, with your reason.";
 }
 
+/** A fund's balance in one currency (0 when it holds none) — from the
+ *  per-currency balances GET /admin/finance/funds reports. */
+export function fundBalanceIn(balances: readonly { currency: string; balance_minor: number }[], currency: string): number {
+  const code = currency.trim().toUpperCase();
+  return balances.find((b) => b.currency.trim().toUpperCase() === code)?.balance_minor ?? 0;
+}
+
+export interface FundImpact {
+  before: number;
+  after: number;
+  /** "General Fund balance: KES 120,000.00 → KES 105,000.00 after this." */
+  sentence: string;
+  /** Set when the fund ends below zero — the action is still allowed (the money
+   *  really left), but the person is told plainly first. */
+  warning: string | null;
+}
+
+/**
+ * What an expense posting does to its fund, in the expense's currency:
+ * approving takes the amount out, voiding an approved expense puts it back.
+ * The server allows an approval to overdraw a fund (the money has already
+ * gone), so a negative result is a warning, never a block.
+ */
+export function fundImpact(args: { fundName: string; currency: string; balance_minor: number; amount_minor: number; action: "approve" | "void" }): FundImpact {
+  const before = toMinorBigInt(args.balance_minor) ?? 0n;
+  const amount = toMinorBigInt(args.amount_minor) ?? 0n;
+  const after = args.action === "approve" ? before - amount : before + amount;
+  const cur = args.currency;
+  const sentence = `${args.fundName} balance: ${formatMinor(before, cur)} → ${formatMinor(after, cur)} after this.`;
+  let warning: string | null = null;
+  if (after < 0n) {
+    warning =
+      args.action === "approve"
+        ? `${args.fundName} will be ${formatMinor(-after, cur)} overdrawn — approve only if the money has really left.`
+        : `${args.fundName} will still be ${formatMinor(-after, cur)} overdrawn after this.`;
+  }
+  return { before: Number(before), after: Number(after), sentence, warning };
+}
+
 /* ====================================================================== */
 /* Budgets — the lines editor                                               */
 /* ====================================================================== */

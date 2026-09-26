@@ -15,6 +15,8 @@ import {
   daysBetween,
   draftFromLine,
   faithfulnessSummary,
+  fundBalanceIn,
+  fundImpact,
   keptOfDue,
   kindTotalMinor,
   lineTotalMinor,
@@ -232,6 +234,29 @@ describe("expenses — maker-checker", () => {
   it("states what approving posts", () => {
     expect(approveConsequence(exp, "Cash")).toBe("Posts KES 1,500.00 out of General Fund via Cash on 20 Sep 2026. The fund's balance drops by that amount.");
   });
+  it("states what approving and voiding do to the fund's balance, in the expense's currency", () => {
+    const balances = [
+      { currency: "KES", balance_minor: 12_000_000 },
+      { currency: "USD", balance_minor: 5_000 },
+    ];
+    expect(fundBalanceIn(balances, "usd")).toBe(5_000);
+    expect(fundBalanceIn(balances, "EUR")).toBe(0);
+    const approve = fundImpact({ fundName: "General Fund", currency: "KES", balance_minor: fundBalanceIn(balances, "KES"), amount_minor: 1_500_000, action: "approve" });
+    expect(approve).toEqual({ before: 12_000_000, after: 10_500_000, sentence: "General Fund balance: KES 120,000.00 → KES 105,000.00 after this.", warning: null });
+    const back = fundImpact({ fundName: "General Fund", currency: "KES", balance_minor: 10_500_000, amount_minor: 1_500_000, action: "void" });
+    expect(back.sentence).toBe("General Fund balance: KES 105,000.00 → KES 120,000.00 after this.");
+    expect(back.warning).toBeNull();
+  });
+
+  it("warns — but does not block — when an approval overdraws the fund", () => {
+    const over = fundImpact({ fundName: "Missions", currency: "KES", balance_minor: 100_000, amount_minor: 950_000, action: "approve" });
+    expect(over.after).toBe(-850_000);
+    expect(over.sentence).toBe("Missions balance: KES 1,000.00 → -KES 8,500.00 after this.");
+    expect(over.warning).toBe("Missions will be KES 8,500.00 overdrawn — approve only if the money has really left.");
+    const still = fundImpact({ fundName: "Missions", currency: "KES", balance_minor: -900_000, amount_minor: 50_000, action: "void" });
+    expect(still.warning).toBe("Missions will still be KES 8,500.00 overdrawn after this.");
+  });
+
   it("words a void differently for approved and recorded expenses", () => {
     expect(voidConsequence(exp)).toBe("Posts the reversing entry — General Fund gets KES 1,500.00 back. The expense stays on the register as void, with your reason.");
     expect(voidConsequence({ ...exp, status: "recorded" })).toMatch(/^Nothing was posted yet, so nothing is reversed\./);

@@ -104,6 +104,7 @@ const registerRow = (over: Partial<FinancePledgeRow>): FinancePledgeRow => ({
 const page = (rows: FinancePledgeRow[], totals: FinancePledgesPage["totals"] = []): FinancePledgesPage => ({ year: YEAR, data: rows, next_cursor: null, totals });
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.mocked(PartnersApi.list).mockResolvedValue({
     data: [partnerRow],
     summary: { partners: 1, active_pledges: 1, committed_monthly_minor: 500_000, behind: 1, given_year_minor: 3_500_000 },
