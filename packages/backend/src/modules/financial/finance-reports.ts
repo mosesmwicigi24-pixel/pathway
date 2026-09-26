@@ -543,9 +543,22 @@ export async function listLedgerPage(
 
   const P = new Params();
   const w = ledgerFilters(q, P);
+  // Same-day postings tie on created_at (every office posting is 12:00 EAT):
+  // order by the owner — the receipt (newest first) or the journal — so a
+  // posting's legs stay together, debit first. 4-part cursor; a legacy 2-part
+  // (created_at, entry_id) cursor still pages.
+  const OWNER = `COALESCE(t.receipt_code, le.journal_id::text, le.transaction_id::text, '')`;
   if (!opts.all && q.cursor) {
-    const [ts, id] = tsIdCursor(q.cursor);
-    w.push(`(le.created_at, le.entry_id) < (${P.add(ts)}::timestamptz, ${P.add(id)}::uuid)`);
+    let four: string[] | null = null;
+    try { four = decodeCursor(q.cursor, 4); } catch { four = null; }
+    if (four) {
+      const [ts, owner, deb, id] = four as [string, string, string, string];
+      if (!TS_RE.test(ts) || !isUuid(id) || owner.length > 80 || (deb !== "1" && deb !== "0")) throw new ApiError("VALIDATION_FAILED", "Malformed cursor");
+      w.push(`(le.created_at, ${OWNER}, (le.side = 'debit'), le.entry_id) < (${P.add(ts)}::timestamptz, ${P.add(owner)}::text, ${P.add(deb === "1")}::boolean, ${P.add(id)}::uuid)`);
+    } else {
+      const [ts, id] = tsIdCursor(q.cursor);
+      w.push(`(le.created_at, le.entry_id) < (${P.add(ts)}::timestamptz, ${P.add(id)}::uuid)`);
+    }
   }
   const limit = opts.all ? 200_000 : q.limit + 1;
   const rows = await many<Record<string, unknown>>(
@@ -559,13 +572,14 @@ export async function listLedgerPage(
             CASE WHEN t.transaction_id IS NULL THEN NULL ELSE ${DISPLAY_NAME_SQL} END AS member_name,
             t.status::text AS transaction_status,
             j.kind AS journal_kind, j.memo,
-            ${cursorTs("le.created_at")} AS cursor_ts
+            ${cursorTs("le.created_at")} AS cursor_ts,
+            ${OWNER} AS cursor_owner
        FROM ledger_entries le
        LEFT JOIN transactions t ON t.transaction_id = le.transaction_id
        LEFT JOIN users u ON u.user_id = t.user_id
        LEFT JOIN journals j ON j.journal_id = le.journal_id
       WHERE ${w.length ? w.join(" AND ") : "TRUE"}
-      ORDER BY le.created_at DESC, le.entry_id DESC
+      ORDER BY le.created_at DESC, ${OWNER} DESC, (le.side = 'debit') DESC, le.entry_id DESC
       LIMIT ${P.add(limit)}`,
     P.values,
   );
@@ -574,11 +588,14 @@ export async function listLedgerPage(
   const last = page[page.length - 1];
   return {
     data: page.map((r) => {
-      const { cursor_ts: _c, ...rest } = r;
+      const { cursor_ts: _c, cursor_owner: _o, ...rest } = r;
       void _c;
+      void _o;
       return { ...rest, amount_minor: Number(r.amount_minor) };
     }),
-    next_cursor: hasMore && last ? encodeCursor([String(last.cursor_ts), String(last.entry_id)]) : null,
+    next_cursor: hasMore && last
+      ? encodeCursor([String(last.cursor_ts), String(last.cursor_owner ?? ""), last.side === "debit" ? "1" : "0", String(last.entry_id)])
+      : null,
     totals,
   };
 }

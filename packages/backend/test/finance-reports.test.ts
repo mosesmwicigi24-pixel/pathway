@@ -719,6 +719,19 @@ describe("finance reports — the clean books of a small church year", () => {
       cursor = page.next_cursor;
     } while (cursor);
     expect(seen).toEqual(all.data.map((r: any) => r.entry_id));
+    // A posting's legs sit together, debit first (same-day office postings all
+    // share 12:00 EAT, so ordering by created_at alone scattered them).
+    const ownerOf = (r: any) => r.receipt_code ?? r.journal_id ?? r.transaction_id;
+    const firstSeen = new Map<string, number>();
+    all.data.forEach((r: any, i: number) => {
+      const k = `${r.created_at}|${ownerOf(r)}`;
+      if (!firstSeen.has(k)) firstSeen.set(k, i);
+      else expect(i - firstSeen.get(k)!, `legs of ${k} are not adjacent`).toBeLessThanOrEqual(3);
+    });
+    for (let i = 1; i < all.data.length; i++) {
+      const a = all.data[i - 1], b = all.data[i];
+      if (a.created_at === b.created_at && ownerOf(a) === ownerOf(b) && a.side !== b.side) expect(a.side).toBe("debit");
+    }
     const csv = await get("/admin/finance/ledger.csv?account=cash:onhand", exporterTok);
     expect(csv.status).toBe(200);
     expect(csv.text.split("\r\n")[0]).toBe("﻿posted_on,created_at,entry_id,kind,account,side,amount,currency,transaction_id,receipt_code,member,transaction_status,journal_id,journal_kind,memo");
