@@ -10,6 +10,9 @@ import {
   // with any other sidebar row, so the mini (icon-only) sidebar stays legible.
   PieChart, ArrowLeftRight, HandCoins, BadgeCheck, Repeat, Flag, Target, ReceiptText,
   Calculator, PiggyBank, BookOpen, Scale, BarChart3, FileText, History, Settings2,
+  // …and one for each of Finance's three sub-menu headers (Giving & Income,
+  // Spending & Planning, Accounting & Reporting — "the books").
+  Gift, Wallet, Library,
   type LucideIcon,
 } from "lucide-react";
 
@@ -29,18 +32,39 @@ export interface NavItem {
    * keeps enforcing its own gate regardless of what the sidebar shows.
    */
   permission?: string;
+  /**
+   * Key of the group's sub-menu (NavGroup.subgroups) this row folds under.
+   * Absent = a row of its own directly under the group header.
+   */
+  subgroup?: string;
+}
+/**
+ * A folding sub-menu inside a group (Finance's Giving & Income, Spending &
+ * Planning, Accounting & Reporting). Its rows are the group's items that name
+ * it in `subgroup` — they stay in `items`, so every flattening of the nav
+ * (route guard, permissions, NavLink `end`) sees them without knowing about
+ * sub-menus at all.
+ */
+export interface NavSubgroup {
+  /** Stable id: the saved fold state is keyed on it, so a relabel keeps it. */
+  key: string;
+  label: string;
+  /** Header glyph in the full sidebar; the mini sidebar shows the rows' own. */
+  icon: LucideIcon;
 }
 export interface NavGroup {
   label: string;
+  /** Every row of the group, flat, in sidebar order (a sub-menu's rows are
+   *  contiguous — the sub-menu sits where its first row would). */
   items: NavItem[];
   /**
-   * The group header becomes a toggle (chevron) that folds / unfolds its rows.
-   * Default expanded; the choice persists per group in localStorage
-   * (navGroupStorageKey), and the group re-opens by itself whenever the
-   * current route is one of its pages. The mini (icon-only) sidebar ignores
-   * the fold and always shows every row's icon.
+   * Folding sub-menus (see NavSubgroup). Each is a row with a chevron that
+   * shows or hides its pages: folded by default, the one holding the current
+   * page opens by itself, and a fold or unfold you make is remembered per
+   * sub-menu (navSubgroupStorageKey). The mini (icon-only) sidebar has no
+   * header to unfold one from, so it shows every row's icon.
    */
-  collapsible?: boolean;
+  subgroups?: NavSubgroup[];
 }
 
 export const navGroups: NavGroup[] = [
@@ -107,37 +131,45 @@ export const navGroups: NavGroup[] = [
     ],
   },
   {
-    // Finance — the ERP module (docs/FINANCE_ERP.md §1; owner request
-    // 2026-09-26: "a menu title like Media, with sub-menus under it"). Ordered by
-    // the ERP flow: money in → commitments → money out → planning → books →
-    // reporting → admin. Every page is gated on finance:view (the page's reads);
-    // what a person may DO on a page — export, manage, approve (§6) — is a
-    // separate capability the page checks itself (components/finance/kit.tsx
-    // useFinanceCaps). Collapsible: seventeen rows is a lot of sidebar.
+    // Finance — the ERP module (docs/FINANCE_ERP.md §1). FINANCE is a plain
+    // section title like Media, and its pages fold into three sub-menus, with
+    // Settings kept apart at the bottom because it is administration rather
+    // than day-to-day finance (owner, 2026-09-26: "much cleaner than having 16
+    // items exposed at the same level, while not changing any of your existing
+    // terminology" — every label and route is unchanged). The order below IS
+    // the sidebar order. Every page is gated on finance:view (the page's
+    // reads); what a person may DO on a page — export, manage, approve (§6) —
+    // is a separate capability the page checks itself
+    // (components/finance/kit.tsx useFinanceCaps).
     label: "Finance",
-    collapsible: true,
+    subgroups: [
+      { key: "giving", label: "Giving & Income", icon: Gift },
+      { key: "spending", label: "Spending & Planning", icon: Wallet },
+      { key: "accounting", label: "Accounting & Reporting", icon: Library },
+    ],
     items: [
-      { path: "/finance", label: "Overview", icon: PieChart, permission: "finance:view" },
-      { path: "/finance/transactions", label: "Transactions", icon: ArrowLeftRight, permission: "finance:view" },
-      { path: "/finance/pledges", label: "Pledges", icon: HandCoins, permission: "finance:view" },
+      { path: "/finance", label: "Overview", icon: PieChart, permission: "finance:view", subgroup: "giving" },
+      { path: "/finance/transactions", label: "Transactions", icon: ArrowLeftRight, permission: "finance:view", subgroup: "giving" },
+      { path: "/finance/pledges", label: "Pledges", icon: HandCoins, permission: "finance:view", subgroup: "giving" },
       // Partners programme (docs/PARTNERS_PROGRAMME.md): same `finance` module
       // as the ledger. HandHeart rather than HeartHandshake so it does not read
       // as Discipleship Hub. /partners redirects here (App.tsx).
-      { path: "/finance/partners", label: "Partners", icon: HandHeart, permission: "finance:view" },
-      { path: "/finance/claims", label: "Claims", icon: BadgeCheck, permission: "finance:view" },
-      { path: "/finance/recurring", label: "Recurring gifts", icon: Repeat, permission: "finance:view" },
-      { path: "/finance/campaigns", label: "Campaigns", icon: Flag, permission: "finance:view" },
+      { path: "/finance/partners", label: "Partners", icon: HandHeart, permission: "finance:view", subgroup: "giving" },
+      { path: "/finance/recurring", label: "Recurring gifts", icon: Repeat, permission: "finance:view", subgroup: "giving" },
+      { path: "/finance/campaigns", label: "Campaigns", icon: Flag, permission: "finance:view", subgroup: "giving" },
       // Target, not HandHelping: that glyph is Departments' (Operations), and a
       // need is a giving target with raised-vs-target progress.
-      { path: "/finance/needs", label: "Department needs", icon: Target, permission: "finance:view" },
-      { path: "/finance/expenses", label: "Expenses", icon: ReceiptText, permission: "finance:view" },
-      { path: "/finance/budgets", label: "Budgets", icon: Calculator, permission: "finance:view" },
-      { path: "/finance/funds", label: "Funds", icon: PiggyBank, permission: "finance:view" },
-      { path: "/finance/ledger", label: "Ledger", icon: BookOpen, permission: "finance:view" },
-      { path: "/finance/reconciliation", label: "Reconciliation", icon: Scale, permission: "finance:view" },
-      { path: "/finance/reports", label: "Reports", icon: BarChart3, permission: "finance:view" },
-      { path: "/finance/statements", label: "Statements", icon: FileText, permission: "finance:view" },
-      { path: "/finance/audit", label: "Audit", icon: History, permission: "finance:view" },
+      { path: "/finance/needs", label: "Department needs", icon: Target, permission: "finance:view", subgroup: "spending" },
+      { path: "/finance/expenses", label: "Expenses", icon: ReceiptText, permission: "finance:view", subgroup: "spending" },
+      { path: "/finance/claims", label: "Claims", icon: BadgeCheck, permission: "finance:view", subgroup: "spending" },
+      { path: "/finance/budgets", label: "Budgets", icon: Calculator, permission: "finance:view", subgroup: "spending" },
+      { path: "/finance/funds", label: "Funds", icon: PiggyBank, permission: "finance:view", subgroup: "spending" },
+      { path: "/finance/ledger", label: "Ledger", icon: BookOpen, permission: "finance:view", subgroup: "accounting" },
+      { path: "/finance/reconciliation", label: "Reconciliation", icon: Scale, permission: "finance:view", subgroup: "accounting" },
+      { path: "/finance/reports", label: "Reports", icon: BarChart3, permission: "finance:view", subgroup: "accounting" },
+      { path: "/finance/statements", label: "Statements", icon: FileText, permission: "finance:view", subgroup: "accounting" },
+      { path: "/finance/audit", label: "Audit", icon: History, permission: "finance:view", subgroup: "accounting" },
+      // In no sub-menu: a row of its own at the bottom of the section.
       { path: "/finance/settings", label: "Settings", icon: Settings2, permission: "finance:view" },
     ],
   },
@@ -341,28 +373,70 @@ export function navLinkEnd(path: string): boolean {
   const prefix = path === "/" ? "/" : `${path}/`;
   return allNavPaths.some((p) => p !== path && p.startsWith(prefix));
 }
+/** True when `pathname` is one of these pages or a sub-route of one — by the
+ *  same rule that lights a row (navLinkEnd): a path that prefixes other rows'
+ *  paths ("/", "/curriculum", "/finance") matches only itself, so Overview
+ *  does not claim every Finance page for the Giving & Income sub-menu. */
+export function itemsContainPath(items: NavItem[], pathname: string): boolean {
+  return items.some((i) => pathname === i.path || (!navLinkEnd(i.path) && pathname.startsWith(`${i.path}/`)));
+}
 /** True when `pathname` is one of the group's pages or a sub-route of one. */
 export function groupContainsPath(group: NavGroup, pathname: string): boolean {
-  return group.items.some((i) => pathname === i.path || (i.path !== "/" && pathname.startsWith(`${i.path}/`)));
+  return itemsContainPath(group.items, pathname);
 }
-/** localStorage key holding a collapsible group's open state ("nuru.nav.finance.open"). */
-export function navGroupStorageKey(label: string): string {
-  return `nuru.nav.${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.open`;
+
+/** One line of a group in the full sidebar: a row, or a sub-menu and its rows. */
+export type SidebarEntry =
+  | { kind: "item"; item: NavItem }
+  | { kind: "subgroup"; subgroup: NavSubgroup; items: NavItem[] };
+/**
+ * The group's lines in sidebar order, built from `items` (pass the rows this
+ * person may see): a sub-menu appears where its first row would, holding all
+ * its rows; a sub-menu with no row to show is left out, header and all. A row
+ * naming a sub-menu the group does not declare stays visible as a plain row —
+ * a typo must never hide a page (the nav tests forbid it anyway).
+ */
+export function sidebarEntries(group: NavGroup, items: NavItem[] = group.items): SidebarEntry[] {
+  const entries: SidebarEntry[] = [];
+  const bySubgroup = new Map<string, NavItem[]>();
+  for (const item of items) {
+    const subgroup = item.subgroup ? group.subgroups?.find((s) => s.key === item.subgroup) : undefined;
+    if (!subgroup) {
+      entries.push({ kind: "item", item });
+      continue;
+    }
+    const rows = bySubgroup.get(subgroup.key);
+    if (rows) {
+      rows.push(item);
+      continue;
+    }
+    const first = [item];
+    bySubgroup.set(subgroup.key, first);
+    entries.push({ kind: "subgroup", subgroup, items: first });
+  }
+  return entries;
 }
-/** Read a collapsible group's saved state — default OPEN; storage that is
- *  missing, blocked (private mode) or holding junk also reads as open. */
-export function readNavGroupOpen(label: string): boolean {
+
+/** localStorage key holding a sub-menu's open state ("nuru.nav.finance.giving.open"). */
+export function navSubgroupStorageKey(group: string, subgroup: string): string {
+  const slug = (part: string): string => part.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return `nuru.nav.${slug(group)}.${slug(subgroup)}.open`;
+}
+/** Read a sub-menu's saved state — default FOLDED (the section reads as its
+ *  sub-menu headers); only an explicit "1" opens it. Storage that is missing,
+ *  blocked (private mode) or holding junk reads as folded. */
+export function readNavSubgroupOpen(group: string, subgroup: string): boolean {
   try {
-    return globalThis.localStorage?.getItem(navGroupStorageKey(label)) !== "0";
+    return globalThis.localStorage?.getItem(navSubgroupStorageKey(group, subgroup)) === "1";
   } catch {
-    return true;
+    return false;
   }
 }
-/** Persist a collapsible group's state; storage failures are ignored (the
- *  sidebar still folds for this session, it just won't be remembered). */
-export function writeNavGroupOpen(label: string, open: boolean): void {
+/** Persist a sub-menu's state; storage failures are ignored (the sidebar still
+ *  folds for this session, it just won't be remembered). */
+export function writeNavSubgroupOpen(group: string, subgroup: string, open: boolean): void {
   try {
-    globalThis.localStorage?.setItem(navGroupStorageKey(label), open ? "1" : "0");
+    globalThis.localStorage?.setItem(navSubgroupStorageKey(group, subgroup), open ? "1" : "0");
   } catch {
     /* storage unavailable — the fold lasts for this session only */
   }
