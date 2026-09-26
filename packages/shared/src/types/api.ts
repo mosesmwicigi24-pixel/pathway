@@ -43,6 +43,9 @@ export const API_ERROR_CODES = {
   USE_EXPENSE_VOID: 422,
   /** Maker-checker: the person who recorded or edited an expense cannot approve it. */
   SAME_PERSON: 403,
+  /** Deactivating a fund that pledges, recurring gifts, departments or live
+   *  campaigns still send money to — refused unless the office confirms (force). */
+  FUND_IN_USE: 409,
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERROR_CODES;

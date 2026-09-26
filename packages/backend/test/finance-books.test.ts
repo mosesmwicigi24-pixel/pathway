@@ -21,6 +21,7 @@ import { FinancialService } from "../src/modules/financial/service.js";
 import { PartnersService } from "../src/modules/financial/partners.js";
 import { FinanceBooks } from "../src/modules/financial/books.js";
 import { DepartmentsService } from "../src/modules/departments/service.js";
+import { CampaignService } from "../src/modules/financial/campaigns.js";
 import { NotificationService } from "../src/modules/notifications/service.js";
 import { FakeMobileMoneyProvider } from "../src/modules/financial/providers.js";
 import { nairobiDate } from "../src/modules/financial/partnerStatementMath.js";
@@ -476,6 +477,59 @@ describe("funds", () => {
     expect(await count(`SELECT count(*) FROM funds WHERE code = 'building-2027'`)).toBe(1);
     const audits = await testPool().query(`SELECT action FROM audit_log WHERE action LIKE 'fund.%' ORDER BY audit_id`);
     expect(audits.rows.map((r) => r.action)).toEqual(["fund.created", "fund.updated", "fund.updated"]);
+  });
+
+  it("switching off a fund money still routes to is 409 FUND_IN_USE with the counts, unless forced (audited); an unused fund switches off freely; reactivation never needs force", async () => {
+    await post(manager, "/admin/finance/funds", { code: "building", name: "Building fund" });
+    const fin = new FinancialService(testPool(), new FakeGateway());
+    const partners = new PartnersService(testPool(), fin);
+    // Two open pledges pay to it (one paused); a cancelled one no longer does.
+    await partners.createPledge(member.id, { shape: "monthly", amount_minor: 10_000, currency: "KES", due_day: 5, fund: "building", reminders_enabled: true } as never);
+    const paused = await partners.createPledge(member2.id, { shape: "total", target_minor: 50_000, currency: "KES", due_on: "2099-12-31", fund: "building", reminders_enabled: true } as never);
+    const cancelled = await partners.createPledge(member2.id, { shape: "total", target_minor: 9_000, currency: "KES", due_on: "2099-12-31", fund: "building", reminders_enabled: true } as never);
+    await testPool().query(`UPDATE pledges SET status = 'paused' WHERE pledge_id = $1`, [paused.pledge_id]);
+    await testPool().query(`UPDATE pledges SET status = 'cancelled' WHERE pledge_id = $1`, [cancelled.pledge_id]);
+    // A recurring gift, a department and a live campaign on it.
+    await fin.createSchedule(member.id, { fund: "building", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "card" } as never);
+    const departments = new DepartmentsService(testPool(), new NotificationService(testPool()));
+    await departments.create(admin.id, cong, { name: "Building team", purpose: "The new hall", leader_user_id: member2.id, gift_keys: [], fund_code: "building", is_open_to_join: true } as never);
+    const campaigns = new CampaignService(testPool());
+    const c = await campaigns.create(cong, admin.id, { title: "New hall", blurb: "The hall leaks every rainy season.", fund: "building", goal_minor: 1_000_000, currency: "KES", starts_on: "2000-01-01", ends_on: "2099-12-31" } as never);
+    await campaigns.setStatus(cong, String(c.campaign_id), "live");
+    const counts = { active_pledges: 2, active_schedules: 1, departments: 1, live_campaigns: 1 };
+
+    const refused = await patch(manager, "/admin/finance/funds/building", { is_active: false, name: "Building Fund 2027" });
+    expect([refused.status, refused.body.error.code]).toEqual([409, "FUND_IN_USE"]);
+    expect(refused.body.error.details).toEqual(counts);
+    expect(refused.body.error.message).toContain("2 active pledges, 1 recurring gift, 1 department and 1 live campaign still send money to Building fund");
+    expect((await testPool().query(`SELECT name, is_active FROM funds WHERE code = 'building'`)).rows[0]).toEqual({ name: "Building fund", is_active: true });
+    // Only switching it off is guarded; force on its own is not a change.
+    expect((await patch(manager, "/admin/finance/funds/building", { description: "The new hall" })).status).toBe(200);
+    expect((await patch(manager, "/admin/finance/funds/building", { force: true })).status).toBe(400);
+    const forced = await patch(manager, "/admin/finance/funds/building", { is_active: false, force: true });
+    expect([forced.status, forced.body.is_active]).toEqual([200, false]);
+    const audit = async (code: string) =>
+      (await testPool().query(`SELECT metadata FROM audit_log WHERE action = 'fund.updated' AND metadata->>'code' = $1 ORDER BY audit_id DESC LIMIT 1`, [code])).rows[0].metadata;
+    expect(await audit("building")).toMatchObject({ force: true, in_use: counts, changes: { is_active: { from: true, to: false } } });
+    // Already off: re-sending is_active false changes nothing and is not guarded. Reactivation never needs force.
+    expect((await patch(manager, "/admin/finance/funds/building", { is_active: false, sort: 3 })).status).toBe(200);
+    const back = await patch(manager, "/admin/finance/funds/building", { is_active: true });
+    expect([back.status, back.body.is_active]).toEqual([200, true]);
+    // A single user reads in the singular.
+    await testPool().query(`UPDATE pledges SET status = 'cancelled' WHERE fund_id = (SELECT fund_id FROM funds WHERE code = 'building')`);
+    await testPool().query(`UPDATE giving_schedules SET status = 'cancelled'`);
+    await testPool().query(`UPDATE campaigns SET status = 'ended'`);
+    const one = await patch(manager, "/admin/finance/funds/building", { is_active: false });
+    expect(one.status).toBe(409);
+    expect(one.body.error.message).toContain("1 department still sends money to Building fund");
+    expect(one.body.error.details).toEqual({ active_pledges: 0, active_schedules: 0, departments: 1, live_campaigns: 0 });
+    // An unused fund switches off without force, and the audit says it was unused.
+    await post(manager, "/admin/finance/funds", { code: "retreat-2026", name: "Retreat 2026" });
+    const unused = await patch(manager, "/admin/finance/funds/retreat-2026", { is_active: false });
+    expect([unused.status, unused.body.is_active]).toEqual([200, false]);
+    expect(await audit("retreat-2026")).toMatchObject({ force: false, in_use: { active_pledges: 0, active_schedules: 0, departments: 0, live_campaigns: 0 } });
+    // The permission gate still comes first.
+    expect((await patch(viewer, "/admin/finance/funds/building", { is_active: false, force: true })).status).toBe(403);
   });
 });
 

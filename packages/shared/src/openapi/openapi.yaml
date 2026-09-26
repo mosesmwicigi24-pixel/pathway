@@ -4782,8 +4782,8 @@ paths:
   # INVALID_DATE (422: received_on / spent_on / occurred_on outside
   # [today − 366 days, today], Africa/Nairobi), INVALID_REFERENCE (422),
   # CURRENCY_MISMATCH (422), NOT_REVERSIBLE / ALREADY_REVERSED /
-  # USE_EXPENSE_VOID (422), SAME_PERSON (403). Every error body is the common
-  # Error envelope.
+  # USE_EXPENSE_VOID (422), SAME_PERSON (403), FUND_IN_USE (409). Every error
+  # body is the common Error envelope.
   # Dates: every posting's ledger legs carry the ECONOMIC date at 12:00
   # Africa/Nairobi (received_on / spent_on / occurred_on; a reversal carries its
   # gift's own date, a void its expense's spent_on) so period reads over
@@ -4897,6 +4897,16 @@ paths:
       tags: [giving]
       operationId: financeBooksUpdateFund
       summary: "finance:manage. Rename (name, name_sw), describe, reorder (sort), activate/deactivate. The code never changes. Audited fund.updated."
+      description: >
+        Deactivating an ACTIVE fund is refused (409 FUND_IN_USE) while money
+        still routes to it: open (active|paused) pledges whose pays-to rule
+        resolves to it, active|paused recurring gifts on it, active departments
+        whose fund_code it is, and live campaigns on it — their payments would
+        fail once it is off. details carries the four counts and the message
+        names them ("12 active pledges, 3 recurring gifts and 1 department still
+        send money to Building fund"). Send force: true to deactivate anyway;
+        the audit row records force and the counts. Reactivating, or re-sending
+        is_active false for a fund already off, is never guarded.
       parameters:
         - name: code
           in: path
@@ -4913,9 +4923,14 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/BooksFund" }
-        "400": { description: "VALIDATION_FAILED — empty patch or a field out of bounds." }
+        "400": { description: "VALIDATION_FAILED — empty patch (force alone is not a change) or a field out of bounds." }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "FUND_IN_USE — is_active false on an active fund that money still routes to, without force. details: { active_pledges, active_schedules, departments, live_campaigns } (counts)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /admin/finance/transfers:
     post:
       tags: [giving]
@@ -9990,13 +10005,14 @@ components:
     BooksFundPatch:
       type: object
       additionalProperties: false
-      description: At least one field (400 otherwise). The code cannot change — an unknown field such as code is a 400.
+      description: At least one of name, name_sw, description, sort, is_active (400 otherwise — force alone is not a change). The code cannot change — an unknown field such as code is a 400.
       properties:
         name: { type: string, minLength: 2, maxLength: 150 }
         name_sw: { type: [string, "null"], minLength: 2, maxLength: 150 }
         description: { type: [string, "null"], maxLength: 500 }
         sort: { type: integer }
         is_active: { type: boolean }
+        force: { type: boolean, default: false, description: "With is_active false: deactivate even though money still routes to the fund (otherwise 409 FUND_IN_USE). Ignored otherwise." }
     BooksTransferInput:
       type: object
       required: [from_fund, to_fund, amount_minor, currency, occurred_on, memo]

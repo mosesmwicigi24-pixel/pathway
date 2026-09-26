@@ -24,6 +24,7 @@ import { ApiError } from "../../http/errors.js";
 import type { Principal } from "../../http/http.js";
 import type { FinancialService } from "./service.js";
 import { pledgeTitleFor } from "./partners.js";
+import { PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS } from "./constants.js";
 import { nairobiDate } from "./partnerStatementMath.js";
 import { minorToMajor, type CsvCell } from "./csv.js";
 
@@ -618,9 +619,38 @@ export class FinanceBooks {
       description: patchText(1, 500),
       sort: z.number().int().min(-1_000_000).max(1_000_000).optional(),
       is_active: z.boolean().optional(),
+      /** Deactivate even though money is still routed to the fund. */
+      force: z.boolean().optional(),
     })
     .strict()
-    .refine(nonEmpty, { message: "Nothing to change" });
+    .refine(({ force: _force, ...fields }) => nonEmpty(fields), { message: "Nothing to change" });
+
+  /** What still sends money to a fund: open pledges whose pays-to rule
+   *  (constants.ts, the rule pledgeFundCode routes by) resolves to it, active
+   *  or paused recurring gifts on it, active departments whose needs book to it, and
+   *  live campaigns on it. Deactivating the fund would make every one of those
+   *  payments fail ("Unknown or inactive fund") — or, for pledges that only
+   *  reach it as the programme default, silently re-route them. */
+  private static async fundInUse(c: Queryable, code: string, fundId: string): Promise<{ active_pledges: number; active_schedules: number; departments: number; live_campaigns: number }> {
+    return one(
+      c,
+      `SELECT (SELECT count(*)::int FROM pledges p ${PLEDGE_PAYS_TO_JOINS}
+                WHERE p.status IN ('active','paused') AND ${PLEDGE_PAYS_TO_CODE} = $1) AS active_pledges,
+              (SELECT count(*)::int FROM giving_schedules s WHERE s.fund_id = $2 AND s.status IN ('active','paused')) AS active_schedules,
+              (SELECT count(*)::int FROM departments d WHERE d.fund_code = $1 AND d.status = 'active') AS departments,
+              (SELECT count(*)::int FROM campaigns cp WHERE cp.fund_id = $2 AND cp.status = 'live') AS live_campaigns`,
+      [code, fundId],
+    );
+  }
+
+  /** "12 active pledges, 3 recurring gifts and 1 department" — the non-zero ones. */
+  private static inUseWords(u: { active_pledges: number; active_schedules: number; departments: number; live_campaigns: number }): { words: string; single: boolean } {
+    const parts = ([
+      [u.active_pledges, "active pledge"], [u.active_schedules, "recurring gift"], [u.departments, "department"], [u.live_campaigns, "live campaign"],
+    ] as const).filter(([n]) => n > 0).map(([n, what]) => `${n} ${what}${n === 1 ? "" : "s"}`);
+    const words = parts.length <= 1 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+    return { words, single: parts.length === 1 && u.active_pledges + u.active_schedules + u.departments + u.live_campaigns === 1 };
+  }
 
   private static readonly FUND_COLS = `fund_id, code, name, name_sw, description, sort, is_active`;
   private static fundOut(r: Record<string, unknown>): Record<string, unknown> {
@@ -653,6 +683,19 @@ export class FinanceBooks {
     return tx(this.pool, async (c) => {
       const before = await maybeOne<Record<string, unknown>>(c, `SELECT ${FinanceBooks.FUND_COLS} FROM funds WHERE code = $1 FOR NO KEY UPDATE`, [code]);
       if (!before) throw new ApiError("NOT_FOUND", "Fund not found");
+      // Switching an ACTIVE fund off is refused while money still routes to it,
+      // unless the office confirms (force). Re-sending is_active:false for a
+      // fund that is already off changes nothing and is not guarded;
+      // reactivation never is.
+      let deactivation: { force: boolean; in_use: Awaited<ReturnType<typeof FinanceBooks.fundInUse>> } | null = null;
+      if (patch.is_active === false && before.is_active === true) {
+        const inUse = await FinanceBooks.fundInUse(c, code, String(before.fund_id));
+        const { words, single } = FinanceBooks.inUseWords(inUse);
+        if (words && patch.force !== true) {
+          throw new ApiError("FUND_IN_USE", `${words} still ${single ? "sends" : "send"} money to ${String(before.name)} — deactivate anyway to stop it receiving money`, { ...inUse });
+        }
+        deactivation = { force: patch.force === true, in_use: inUse };
+      }
       const sets: string[] = [];
       const params: unknown[] = [code];
       const changes: Record<string, unknown> = {};
@@ -664,7 +707,7 @@ export class FinanceBooks {
         changes[k] = { from: before[k] ?? null, to: v };
       }
       const r = await one<Record<string, unknown>>(c, `UPDATE funds SET ${sets.join(", ")} WHERE code = $1 RETURNING ${FinanceBooks.FUND_COLS}`, params);
-      await audit(c, actorId, "fund.updated", "funds", String(r.fund_id), { code, changes });
+      await audit(c, actorId, "fund.updated", "funds", String(r.fund_id), { code, changes, ...(deactivation ?? {}) });
       return FinanceBooks.fundOut(r);
     });
   }
