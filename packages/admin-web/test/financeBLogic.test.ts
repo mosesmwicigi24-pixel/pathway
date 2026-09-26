@@ -192,9 +192,18 @@ describe("pledges", () => {
     expect(s.monthly).toBe(2);
     expect(s.overdueSince).toBe("2026-08-05"); // the cancelled pledge's date does not count
     expect(s.totals).toEqual([
-      { currency: "KES", pledged_minor: 13_500_000, paid_minor: 10_500_000, remaining_minor: 3_000_000, count: 3 },
-      { currency: "USD", pledged_minor: 10_000, paid_minor: 2_500, remaining_minor: 7_500, count: 1 },
+      { currency: "KES", pledged_minor: 13_500_000, paid_minor: 10_500_000, remaining_minor: 3_000_000, paid_toward_minor: 10_500_000, paid_beyond_minor: 0, count: 3 },
+      { currency: "USD", pledged_minor: 10_000, paid_minor: 2_500, remaining_minor: 7_500, paid_toward_minor: 2_500, paid_beyond_minor: 0, count: 1 },
     ]);
+    // A cancelled pledge paid this year has no promise (pledged 0): its money is
+    // "beyond", so pledged = toward + remaining and paid = toward + beyond still hold.
+    const eli = faithfulnessSummary([
+      row({ pledge_id: "live", pledged_year_minor: 750_000, paid_year_minor: 150_000, remaining_year_minor: 600_000 }),
+      row({ pledge_id: "ended", status: "cancelled", standing: "paused", pledged_year_minor: 0, paid_year_minor: 200_000, remaining_year_minor: 0 }),
+    ]).totals[0]!;
+    expect(eli).toMatchObject({ pledged_minor: 750_000, paid_minor: 350_000, remaining_minor: 600_000, paid_toward_minor: 150_000, paid_beyond_minor: 200_000 });
+    expect(eli.paid_toward_minor + eli.remaining_minor).toBe(eli.pledged_minor);
+    expect(eli.paid_toward_minor + eli.paid_beyond_minor).toBe(eli.paid_minor);
     expect(faithfulnessSummary([]).standing).toBe("none");
     expect(faithfulnessSummary([row({ standing: "fulfilled" })]).standing).toBe("fulfilled");
   });

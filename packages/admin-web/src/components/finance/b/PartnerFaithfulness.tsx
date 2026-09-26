@@ -86,12 +86,17 @@ export function PartnerFaithfulness({ userId, fullName }: { userId: string; full
                   <span style={{ color: FIN.muted }}>
                     Pledged <MoneyText amount_minor={t.pledged_minor} currency={t.currency} strong />
                   </span>
-                  <span style={{ color: FIN.muted }}>
-                    Paid <MoneyText amount_minor={t.paid_minor} currency={t.currency} strong style={{ color: FIN.good }} />
+                  <span style={{ color: FIN.muted }} title="Paid toward this year's promises. Pledged = paid toward + remaining.">
+                    Paid toward it <MoneyText amount_minor={t.paid_toward_minor} currency={t.currency} strong style={{ color: FIN.good }} />
                   </span>
                   <span style={{ color: FIN.muted }}>
                     Remaining <MoneyText amount_minor={t.remaining_minor} currency={t.currency} strong style={t.remaining_minor > 0 ? { color: FIN.warn } : undefined} />
                   </span>
+                  {t.paid_beyond_minor > 0 ? (
+                    <span style={{ color: FIN.muted }} title="Paid above this year's promise — to a pledge since cancelled, or paid ahead.">
+                      Also paid <MoneyText amount_minor={t.paid_beyond_minor} currency={t.currency} strong /> beyond this year's promises (a cancelled pledge, or paid ahead)
+                    </span>
+                  ) : null}
                 </div>
               ))}
             </div>

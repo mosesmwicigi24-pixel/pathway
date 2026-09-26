@@ -143,7 +143,7 @@ export function FinancePledges(): ReactElement {
         <KpiStrip>
           <KpiTile label="Pledges" icon={<HandCoins size={12} />} value={list.loading && list.totals.length === 0 ? "…" : pledgeCount.toLocaleString()} hint="in this selection" />
           <KpiTile label={`Pledged ${yearWord}`} value={<PerCurrency amounts={list.totals.map((t) => ({ currency: t.currency, amount_minor: t.pledged_minor }))} />} loading={list.loading && list.totals.length === 0} hint="instalments due + total targets" />
-          <KpiTile label={`Paid ${yearWord}`} icon={<Wallet size={12} />} tone="good" value={<PerCurrency amounts={list.totals.map((t) => ({ currency: t.currency, amount_minor: t.paid_minor }))} />} loading={list.loading && list.totals.length === 0} hint="succeeded payments to pledges" />
+          <KpiTile label={`Paid ${yearWord}`} icon={<Wallet size={12} />} tone="good" value={<PerCurrency amounts={list.totals.map((t) => ({ currency: t.currency, amount_minor: t.paid_minor }))} />} loading={list.loading && list.totals.length === 0} hint="every succeeded payment to a pledge — toward this year's promises, or beyond them" />
           <KpiTile label="Remaining" icon={<AlertTriangle size={12} />} tone="warn" value={<PerCurrency amounts={list.totals.map((t) => ({ currency: t.currency, amount_minor: t.remaining_minor }))} />} loading={list.loading && list.totals.length === 0} hint={`still to come ${yearWord}`} />
         </KpiStrip>
       }
@@ -168,8 +168,11 @@ export function FinancePledges(): ReactElement {
           currency: t.currency,
           figures: [
             { label: "Pledged", amount_minor: t.pledged_minor, title: "Monthly instalments due in the year + total pledges' targets due in the year" },
-            { label: "Paid", amount_minor: t.paid_minor, tone: "good" },
+            { label: "Paid toward it", amount_minor: t.paid_toward_minor, tone: "good", title: "Paid toward this year's promises. Pledged = paid toward + remaining." },
             { label: "Remaining", amount_minor: t.remaining_minor, tone: t.remaining_minor > 0 ? "warn" : "default" },
+            ...(t.paid_beyond_minor > 0
+              ? [{ label: "Paid beyond", amount_minor: t.paid_beyond_minor, title: "Paid above this year's promise — to pledges since cancelled, or paid ahead. Paid = toward + beyond." }]
+              : []),
           ],
           note: `${t.count.toLocaleString()} ${t.count === 1 ? "pledge" : "pledges"}`,
         }))}

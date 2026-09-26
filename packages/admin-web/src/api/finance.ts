@@ -520,6 +520,10 @@ export interface FinancePledgeTotal extends CurrencyTotal {
   pledged_minor: number;
   paid_minor: number;
   remaining_minor: number;
+  /** Σ min(paid, pledged): paid toward this year's promises. pledged = toward + remaining. */
+  paid_toward_minor: number;
+  /** Σ max(paid − pledged, 0): paid above this year's promise (a cancelled pledge, or paid ahead). paid = toward + beyond. */
+  paid_beyond_minor: number;
 }
 export interface FinancePledgesPage extends ListEnvelope<FinancePledgeRow, FinancePledgeTotal> {
   year: number;

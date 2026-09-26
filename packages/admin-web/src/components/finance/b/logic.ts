@@ -209,8 +209,9 @@ export interface FaithfulnessSummary {
   monthly: number;
   /** The earliest date any of their (not cancelled) pledges has been overdue since. */
   overdueSince: IsoDate | null;
-  /** Per currency (KES first): pledged / paid / remaining in the year, and how many pledges. */
-  totals: { currency: string; pledged_minor: number; paid_minor: number; remaining_minor: number; count: number }[];
+  /** Per currency (KES first): pledged / paid / remaining in the year, and how many pledges.
+   *  paid = paid_toward + paid_beyond and pledged = paid_toward + remaining. */
+  totals: { currency: string; pledged_minor: number; paid_minor: number; remaining_minor: number; paid_toward_minor: number; paid_beyond_minor: number; count: number }[];
 }
 
 /** One member's pledge-register rows, summed for the partner drawer's
@@ -225,13 +226,19 @@ export function faithfulnessSummary(rows: readonly FinancePledgeRow[]): Faithful
   else if (live.length > 0 && live.every((r) => r.standing === "fulfilled")) standing = "fulfilled";
   else if (live.length > 0) standing = "paused";
   const overdue = live.map((r) => r.overdue_since).filter((d): d is string => typeof d === "string" && isIsoDate(d)).sort();
-  const by = new Map<string, { pledged: bigint; paid: bigint; remaining: bigint; count: number }>();
+  const by = new Map<string, { pledged: bigint; paid: bigint; remaining: bigint; toward: bigint; beyond: bigint; count: number }>();
   for (const r of rows) {
     const code = r.currency.trim().toUpperCase();
-    const t = by.get(code) ?? { pledged: 0n, paid: 0n, remaining: 0n, count: 0 };
-    t.pledged += toMinorBigInt(r.pledged_year_minor) ?? 0n;
-    t.paid += toMinorBigInt(r.paid_year_minor) ?? 0n;
+    const t = by.get(code) ?? { pledged: 0n, paid: 0n, remaining: 0n, toward: 0n, beyond: 0n, count: 0 };
+    const pledged = toMinorBigInt(r.pledged_year_minor) ?? 0n;
+    const paid = toMinorBigInt(r.paid_year_minor) ?? 0n;
+    t.pledged += pledged;
+    t.paid += paid;
     t.remaining += toMinorBigInt(r.remaining_year_minor) ?? 0n;
+    // Row by row: pledged = toward + remaining, paid = toward + beyond — so the
+    // strip foots even when a cancelled pledge (promise 0) was paid this year.
+    t.toward += paid < pledged ? paid : pledged;
+    t.beyond += paid > pledged ? paid - pledged : 0n;
     t.count += 1;
     by.set(code, t);
   }
@@ -243,7 +250,7 @@ export function faithfulnessSummary(rows: readonly FinancePledgeRow[]): Faithful
     overdueSince: overdue[0] ?? null,
     totals: [...by.entries()]
       .sort(([a], [b]) => compareCurrencies(a, b))
-      .map(([currency, t]) => ({ currency, pledged_minor: Number(t.pledged), paid_minor: Number(t.paid), remaining_minor: Number(t.remaining), count: t.count })),
+      .map(([currency, t]) => ({ currency, pledged_minor: Number(t.pledged), paid_minor: Number(t.paid), remaining_minor: Number(t.remaining), paid_toward_minor: Number(t.toward), paid_beyond_minor: Number(t.beyond), count: t.count })),
   };
 }
 
