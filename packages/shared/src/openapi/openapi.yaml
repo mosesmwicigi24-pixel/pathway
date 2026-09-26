@@ -3498,6 +3498,11 @@ paths:
     get:
       tags: [system]
       summary: Admin. Every partner — membership, tier, commitment, given this year, behind.
+      description: >-
+        given_year (each row and the summary) is every succeeded gift this year
+        (EAT), any fund, PER CURRENCY — KES and USD are never added.
+        given_year_minor is the KES figure alone, kept for clients that read one
+        number.
       parameters:
         - { in: query, name: q, required: false, schema: { type: string } }
         - { in: query, name: status, required: false, schema: { type: string, enum: [all, active, paused, behind, left] } }

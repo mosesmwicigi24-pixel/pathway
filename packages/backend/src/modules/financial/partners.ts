@@ -1394,13 +1394,26 @@ export class PartnersService {
     const data: Record<string, unknown>[] = [];
     for (const u of rows) {
       const p = (await this.partnership(u.user_id, now)) as { pledges: Record<string, unknown>[]; committed_monthly_minor: number; tier: unknown; membership: { status: string; joined_at: string } | null; due: Record<string, unknown>[] };
-      const given = await one<{ total: string | null; last_at: string | null }>(
+      // Every succeeded gift this year, PER CURRENCY (KES and USD are never
+      // added — the Finance rule); given_year_minor stays the KES figure for
+      // clients that read the single number.
+      const givenRows = await many<{ currency: string; total: string }>(
         this.pool,
-        `SELECT sum(amount_minor) FILTER (WHERE extract(year from created_at AT TIME ZONE 'Africa/Nairobi') = $2)::text AS total,
-                max(created_at)::text AS last_at
-           FROM transactions WHERE user_id = $1 AND status = 'succeeded'`,
+        `SELECT currency, sum(amount_minor)::text AS total
+           FROM transactions
+          WHERE user_id = $1 AND status = 'succeeded'
+            AND extract(year from created_at AT TIME ZONE 'Africa/Nairobi') = $2
+          GROUP BY currency`,
         [u.user_id, year],
       );
+      const given = await one<{ last_at: string | null }>(
+        this.pool,
+        `SELECT max(created_at)::text AS last_at FROM transactions WHERE user_id = $1 AND status = 'succeeded'`,
+        [u.user_id],
+      );
+      const givenYear = givenRows
+        .map((g) => ({ currency: g.currency.trim(), amount_minor: Number(g.total) }))
+        .sort((a, b) => (a.currency === b.currency ? 0 : a.currency === "KES" ? -1 : b.currency === "KES" ? 1 : a.currency.localeCompare(b.currency)));
       const behind = p.pledges.some((x) => (x.progress as PledgeProgress).label === "behind");
       // The earliest date anything is due — every active pledge's next due
       // date (not only those inside the member's DUE window) and the
@@ -1415,7 +1428,9 @@ export class PartnersService {
         membership: p.membership, tier: p.tier,
         pledges_active: p.pledges.filter((x) => x.status === "active").length,
         committed_monthly_minor: p.committed_monthly_minor,
-        given_year_minor: Number(given.total ?? 0), last_gift_at: given.last_at,
+        given_year: givenYear,
+        given_year_minor: givenYear.find((g) => g.currency === "KES")?.amount_minor ?? 0,
+        last_gift_at: given.last_at,
         behind, next_due_on: nextDue, status,
       });
     }
@@ -1435,6 +1450,13 @@ export class PartnersService {
         committed_monthly_minor: data.reduce((a, d) => a + Number(d.committed_monthly_minor), 0),
         behind: data.filter((d) => d.behind).length,
         given_year_minor: data.reduce((a, d) => a + Number(d.given_year_minor), 0),
+        given_year: (() => {
+          const by = new Map<string, number>();
+          for (const d of data) for (const g of d.given_year as { currency: string; amount_minor: number }[]) by.set(g.currency, (by.get(g.currency) ?? 0) + g.amount_minor);
+          return [...by.entries()]
+            .map(([currency, amount_minor]) => ({ currency, amount_minor }))
+            .sort((a, b) => (a.currency === b.currency ? 0 : a.currency === "KES" ? -1 : b.currency === "KES" ? 1 : a.currency.localeCompare(b.currency)));
+        })(),
       },
     };
   }

@@ -508,6 +508,23 @@ describe("finance reports — the clean books of a small church year", () => {
     expect((await get(`/admin/finance/transactions?user_id=nope`)).status).toBe(400);
   });
 
+  it("partners list: given this year is per currency, never KES + USD added", async () => {
+    const res = (await get("/admin/partners")).body;
+    const year = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Nairobi", year: "numeric" }).format(new Date()));
+    for (const r of res.data as any[]) {
+      const sql = (await q(
+        `SELECT currency, sum(amount_minor)::bigint AS s FROM transactions
+          WHERE user_id = $1 AND status = 'succeeded' AND extract(year from created_at AT TIME ZONE 'Africa/Nairobi') = $2
+          GROUP BY currency ORDER BY currency`, [r.user_id, year])).rows.map((x: any) => ({ currency: x.currency.trim(), amount_minor: Number(x.s) }));
+      expect([...r.given_year].sort((a: any, b: any) => a.currency.localeCompare(b.currency))).toEqual(sql);
+      expect(r.given_year_minor).toBe(sql.find((x: any) => x.currency === "KES")?.amount_minor ?? 0);
+    }
+    const sum = new Map<string, number>();
+    for (const r of res.data as any[]) for (const g of r.given_year) sum.set(g.currency, (sum.get(g.currency) ?? 0) + g.amount_minor);
+    expect(Object.fromEntries(res.summary.given_year.map((g: any) => [g.currency, g.amount_minor]))).toEqual(Object.fromEntries(sum));
+    expect(res.summary.given_year_minor).toBe(sum.get("KES") ?? 0);
+  });
+
   it("transactions: same-day office gifts list newest receipt first — on one page and across pages", async () => {
     // Every office gift is dated 12:00 EAT on its received day, so a Sunday's
     // entries tie on created_at; the receipt number breaks the tie (verification

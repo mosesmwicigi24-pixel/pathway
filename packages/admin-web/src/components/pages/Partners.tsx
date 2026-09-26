@@ -322,6 +322,14 @@ const selectStyle: CSSProperties = {
 };
 
 /* ====================================================================== */
+
+/** Given this year, one line per currency — KES and USD are never added.
+ *  Falls back to the KES-only number when the API predates given_year. */
+function givenText(g: { currency: string; amount_minor: number }[] | undefined, kesMinor: number): string {
+  if (!g || g.length === 0) return formatMinor(kesMinor, "KES");
+  return g.map((x) => formatMinor(x.amount_minor, x.currency)).join(" · ");
+}
+
 export function Partners(): ReactElement {
   const { permissions } = useAppSelector((s) => s.auth);
   // finance:manage gates the actions; null (not loaded yet) = no actions.
@@ -501,7 +509,7 @@ export function Partners(): ReactElement {
       { label: "Active pledges", value: summary ? String(summary.active_pledges) : "—", hint: "monthly + total", icon: <Target size={13} /> },
       { label: "Committed / month", value: summary ? money(summary.committed_monthly_minor, null) : "—", hint: "across monthly pledges", icon: <Wallet size={13} /> },
       { label: "Behind", value: summary ? String(summary.behind) : "—", hint: "partners past due", icon: <AlertTriangle size={13} />, warn: summary ? summary.behind > 0 : false },
-      { label: "Given this year", value: summary ? money(summary.given_year_minor, null) : "—", hint: "attributed to pledges", icon: <Receipt size={13} /> },
+      { label: "Given this year", value: summary ? givenText(summary.given_year, summary.given_year_minor) : "—", hint: "every gift, any fund", icon: <Receipt size={13} /> },
     ],
     [summary],
   );
@@ -680,7 +688,7 @@ export function Partners(): ReactElement {
                       </td>
                       <td style={{ ...tdStyle, fontFamily: MONO, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>{money(r.committed_monthly_minor, null)}</td>
                       <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right" }}>{r.pledges_active}</td>
-                      <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", whiteSpace: "nowrap" }}>{money(r.given_year_minor, null)}</td>
+                      <td style={{ ...tdStyle, fontFamily: MONO, textAlign: "right", whiteSpace: "nowrap" }}>{givenText(r.given_year, r.given_year_minor)}</td>
                       <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12, whiteSpace: "nowrap" }}>{fmtDate(r.last_gift_at)}</td>
                       <td style={{ ...tdStyle, fontFamily: MONO, fontSize: 12, whiteSpace: "nowrap", color: r.behind ? "#A87616" : NAVY }}>{fmtDate(r.next_due_on)}</td>
                       <td style={tdStyle}>
@@ -916,7 +924,7 @@ function PartnerDrawer({
         </div>
         <div style={cellStyle}>
           <div style={labelStyle}>Given this year</div>
-          <div style={{ fontFamily: MONO, fontSize: 12, color: NAVY, fontWeight: 700 }}>{money(m.given_year_minor, currency)}</div>
+          <div style={{ fontFamily: MONO, fontSize: 12, color: NAVY, fontWeight: 700 }}>{givenText(m.given_year, m.given_year_minor)}</div>
         </div>
         <div style={cellStyle}>
           <div style={labelStyle}>Active pledges</div>
