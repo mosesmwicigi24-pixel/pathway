@@ -62,8 +62,13 @@ export function FinanceBudgets(): ReactElement {
     else setYear(y);
   };
 
+  // Show what the server just returned at once (the list included, so a new
+  // budget never flashes "no budget"), then re-read the list for the truth.
   const refresh = (d?: BooksBudgetDetail): void => {
-    if (d) detail.setData(() => d);
+    if (d) {
+      detail.setData(() => d);
+      list.setData((l) => [d, ...(l ?? []).filter((b) => b.budget_id !== d.budget_id)]);
+    }
     list.reload();
   };
 
