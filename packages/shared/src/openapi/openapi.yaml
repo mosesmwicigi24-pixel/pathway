@@ -2682,6 +2682,543 @@ paths:
         "200": { description: Cancelled }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  # ── Finance ERP · reports (overview, registers, ledger, reconciliation, reports, statements) — docs/FINANCE_ERP.md §4. Add paths below this line. ──
+  /admin/finance/overview:
+    get:
+      operationId: financeReportsOverview
+      tags: [portal]
+      summary: "finance:view. The Finance overview: per-currency income, expenses, net, outstanding pledges, partners, work queues, fund balances, channels, a 12-month series and deep-linked alerts."
+      description: >-
+        Every money figure is per currency; KES and USD are never added. Income is
+        succeeded transactions dated by `created_at` in the church's calendar (EAT) —
+        the same dating the member statements and the pledge ledger use. Expenses are
+        APPROVED expenses dated by `spent_on`. MTD and YTD run from the first of
+        `to`'s month / year through `to`; "same period last year" is `from`..`to`
+        shifted back one year. Outstanding pledges = Σ remaining_year_minor over
+        active pledges for `to`'s year, from the instalment ledger (the member
+        statement's rule). Partners = the Partners page's count and "behind" (any
+        pledge behind, as of today). `fund_balances` is the top 6 funds by KES
+        balance (credits − debits on fund:<code>, transaction AND journal
+        postings, all time). `channels` = money received per cash account in the
+        period, net of reversals (the Reconciliation settlement summed; ledger
+        created_at in EAT). `series` is the 12
+        calendar months ending with `to`'s month. `alerts` carry only kinds with
+        count > 0; `link` is the web route the alert opens.
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, format: date }, description: "YYYY-MM-DD (EAT, inclusive). Default: the first day of the current month." }
+        - { name: to, in: query, required: false, schema: { type: string, format: date }, description: "YYYY-MM-DD (EAT, inclusive). Default: today." }
+      responses:
+        "200":
+          description: The overview
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceOverview" }
+        "400": { description: "VALIDATION_FAILED — a malformed date, or from after to." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/transactions.csv:
+    get:
+      operationId: financeReportsTransactionsCsv
+      tags: [portal]
+      summary: "finance:view + finance:export. The transactions register as CSV — the same filters as GET /admin/finance/transactions, every matching row (no paging)."
+      description: >-
+        text/csv; charset=utf-8, UTF-8 BOM, header row, CRLF. Money is exact major
+        units from minor units with the ISO currency in its own column; cells that
+        start with = + - @ are prefixed with an apostrophe.
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+        - { name: fund, in: query, required: false, schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [requires_action, processing, succeeded, failed, refunded] } }
+        - { name: channel, in: query, required: false, schema: { $ref: "#/components/schemas/FinanceChannel" } }
+        - { name: source, in: query, required: false, schema: { type: string, enum: [app, website, admin] } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 } }
+        - { name: pledged, in: query, required: false, schema: { type: string, enum: [any, "yes", "no"], default: any } }
+        - { name: need, in: query, required: false, schema: { type: string, enum: [any, "yes", "no"], default: any } }
+      responses:
+        "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
+        "400": { description: "VALIDATION_FAILED — a malformed filter." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/pledges:
+    get:
+      operationId: financeReportsPledges
+      tags: [portal]
+      summary: "finance:view. The pledge register — every pledge evaluated by the SAME instalment ledger the member's statement and pledge card read."
+      description: >-
+        Per pledge: the year's pledged / paid / remaining (the statement's §3a rule:
+        pledged_year_minor = pledgedInYear, paid_year_minor = the year's succeeded
+        payments to it, remaining = max(pledged − paid, 0)), kept of due_count (its
+        instalments due in the year, resolved), and — as of today — its standing
+        (the pledge card's label: on_track | behind | fulfilled | paused), next due
+        date and overdue_since. `totals` are over the whole filtered set, per
+        currency (amount_minor = pledged). Ordered newest pledge first; keyset paged.
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 }, description: "Default: the current year (EAT)." }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [active, paused, fulfilled, cancelled] } }
+        - { name: standing, in: query, required: false, schema: { type: string, enum: [on_track, behind] } }
+        - { name: shape, in: query, required: false, schema: { type: string, enum: [monthly, total] } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 }, description: "Member name or phone, or the pledge title." }
+        - { name: user_id, in: query, required: false, schema: { type: string, format: uuid }, description: "One member's pledges only (exact — a name search can catch a namesake)." }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of the register
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinancePledgesPage" }
+        "400": { description: "VALIDATION_FAILED — a malformed filter or cursor." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/pledges.csv:
+    get:
+      operationId: financeReportsPledgesCsv
+      tags: [portal]
+      summary: "finance:view + finance:export. The pledge register as CSV — the same filters, every matching pledge."
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [active, paused, fulfilled, cancelled] } }
+        - { name: standing, in: query, required: false, schema: { type: string, enum: [on_track, behind] } }
+        - { name: shape, in: query, required: false, schema: { type: string, enum: [monthly, total] } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 } }
+      responses:
+        "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
+        "400": { description: "VALIDATION_FAILED — a malformed filter." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/funds:
+    get:
+      operationId: financeReportsFunds
+      tags: [portal]
+      summary: "finance:view. Every fund (active and inactive) with its balance per currency and the period's / year's activity."
+      description: >-
+        balance = credits − debits on fund:<code> over ALL ledger postings,
+        transaction AND journal (income credits a fund; approved expenses and
+        transfers out debit it). income = the fund's movement from giving in the
+        ledger — credits − debits on fund:<code> owned by transactions, by the
+        posting's created_at in EAT (a reversal nets out on the original gift's
+        date) — for the period and year-to-date of `to`; expenses_ytd is APPROVED
+        expenses by spent_on; transfers_in / transfers_out are the fund's credit /
+        debit legs in `transfer` journals, by posting date (a transfer's legs
+        carry its occurred_on) — gross: a reversed transfer shows in the ledger
+        as its `reversal` journal. Ordered by sort, then name. `totals` = Σ balances per currency (count = funds holding that
+        currency). POST /admin/finance/funds and PATCH /admin/finance/funds/{code}
+        are the books side (docs/FINANCE_ERP.md §4).
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, format: date }, description: "Period start for income period_minor (EAT). Default: the first day of the current month." }
+        - { name: to, in: query, required: false, schema: { type: string, format: date }, description: "Period end (EAT); YTD runs from 1 January of its year. Default: today." }
+      responses:
+        "200":
+          description: Funds
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceFundsPage" }
+        "400": { description: "VALIDATION_FAILED — a malformed date, or from after to." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [giving]
+      operationId: financeBooksCreateFund
+      summary: "finance:manage. Create a fund. The code is a permanent slug; funds are never deleted (deactivate instead). Audited fund.created."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksFundInput" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksFund" }
+        "400": { description: "VALIDATION_FAILED — code not ^[a-z][a-z0-9-]{1,39}$, name not 2–150 characters." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { description: "CONFLICT — a fund with that code exists." }
+  /admin/finance/ledger.csv:
+    get:
+      operationId: financeReportsLedgerCsv
+      tags: [portal]
+      summary: "finance:view + finance:export. Ledger postings as CSV — the same filters as GET /admin/finance/ledger, every matching posting."
+      parameters:
+        - { name: account, in: query, required: false, schema: { type: string, maxLength: 60 } }
+        - { name: kind, in: query, required: false, schema: { type: string, enum: [transaction, journal] } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
+        "400": { description: "VALIDATION_FAILED — a malformed filter." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/trial-balance:
+    get:
+      operationId: financeReportsTrialBalance
+      tags: [portal]
+      summary: "finance:view. Trial balance — per account and currency: debits, credits and the balance on the account's normal side; per-currency totals and `balanced`."
+      description: >-
+        Reads every ledger posting (transaction AND journal) whose created_at falls
+        in the period, as inclusive EAT days (no dates = all time). balance_minor is on the account's
+        normal side: cash:* are debit-normal (debit − credit); fund:*, sales:* and
+        everything else are credit-normal (credit − debit). balanced = Σ debits =
+        Σ credits in every currency.
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: The trial balance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceTrialBalance" }
+        "400": { description: "VALIDATION_FAILED — a malformed date, or from after to." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reconciliation:
+    get:
+      operationId: financeReportsReconciliation
+      tags: [portal]
+      summary: "finance:view. Reconciliation — daily settlement per cash channel, the exceptions list and the ledger's integrity per currency."
+      description: >-
+        settlement: per EAT day (the posting's created_at) per cash channel, the
+        money a channel received (debit postings on cash:* owned by transactions)
+        minus reversals (credit postings on cash:* owned by transactions — dated at
+        the original gift's date, so a reversal restates the day it corrects), in
+        the period. exceptions: kinds are exactly stale_processing
+        (processing / requires_action: M-Pesa or Airtel older than 30 minutes, card
+        or PayPal older than 24 hours), failed (created in the period),
+        succeeded_without_ledger, unbalanced_transaction (its postings' debits ≠
+        credits), refunded_without_reversal (status refunded, no reversing credit
+        on cash:*), duplicate_receipt and unbalanced_journal (debits ≠ credits, or
+        no postings). duplicate_receipt is either (a) one receipt code — trimmed,
+        case-insensitive — on more than one non-failed transaction (one entry per
+        code, naming the latest transaction; the unique index should make this
+        impossible), or (b) a SUCCEEDED office gift with office_channel mpesa
+        whose M-Pesa code (upper(office_reference)) is the receipt_code of another
+        SUCCEEDED transaction — the office recorded a payment that also settled
+        online; one entry per office row, transaction_id = the office row (reverse
+        it), detail naming both receipt codes and both transaction ids. Only
+        `failed` is bounded by the period; every other kind is an open issue
+        whenever it arose. integrity: Σ debits and Σ credits over the whole
+        ledger, per currency.
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, format: date }, description: "Default: the first day of the current month." }
+        - { name: to, in: query, required: false, schema: { type: string, format: date }, description: "Default: today." }
+      responses:
+        "200":
+          description: Reconciliation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceReconciliation" }
+        "400": { description: "VALIDATION_FAILED — a malformed date, or from after to." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/income:
+    get:
+      operationId: financeReportsIncome
+      tags: [portal]
+      summary: "finance:view. Income for a year — rows (by fund, channel or source) × 12 months, per currency, with totals."
+      description: >-
+        Succeeded transactions by created_at month in EAT (the member statements'
+        basis; a reversed gift is `refunded` and drops out of the month it was
+        in). A transaction with no fund (a media purchase) is the row `none`. Rows sum to the totals; months
+        sum to each row's total.
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 }, description: "Default: the current year (EAT)." }
+        - { name: by, in: query, required: false, schema: { type: string, enum: [fund, channel, source], default: fund } }
+      responses:
+        "200":
+          description: The income matrix
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceReportMatrix" }
+        "400": { description: "VALIDATION_FAILED — a malformed year or grouping." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/income.csv:
+    get:
+      operationId: financeReportsIncomeCsv
+      tags: [portal]
+      summary: "finance:view + finance:export. The income matrix as CSV: currency, key, label, Jan..Dec, total — with a TOTAL row per currency."
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 } }
+        - { name: by, in: query, required: false, schema: { type: string, enum: [fund, channel, source], default: fund } }
+      responses:
+        "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
+        "400": { description: "VALIDATION_FAILED" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/expenses:
+    get:
+      operationId: financeReportsExpenses
+      tags: [portal]
+      summary: "finance:view. APPROVED expenses for a year — rows (by category or fund) × 12 months by spent_on, per currency, with totals."
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 }, description: "Default: the current year (EAT)." }
+        - { name: by, in: query, required: false, schema: { type: string, enum: [category, fund], default: category } }
+      responses:
+        "200":
+          description: The expenses matrix
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceReportMatrix" }
+        "400": { description: "VALIDATION_FAILED — a malformed year or grouping." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/expenses.csv:
+    get:
+      operationId: financeReportsExpensesCsv
+      tags: [portal]
+      summary: "finance:view + finance:export. The expenses matrix as CSV: currency, key, label, Jan..Dec, total — with a TOTAL row per currency."
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 } }
+        - { name: by, in: query, required: false, schema: { type: string, enum: [category, fund], default: category } }
+      responses:
+        "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
+        "400": { description: "VALIDATION_FAILED" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/pledges:
+    get:
+      operationId: financeReportsPledgesReport
+      tags: [portal]
+      summary: "finance:view. Pledges for a year, per currency and month — pledged, paid, kept, missed and partners behind — from the instalment ledger."
+      description: >-
+        pledged_minor: monthly pledges' instalments due in the month + total
+        pledges' target in the month of due_on (not cancelled) — Σ over the year =
+        Σ of the register's pledged_year_minor. paid_minor: pledge-tied succeeded
+        payments by payment month (EAT) — Σ = Σ of the register's paid_year_minor.
+        kept / missed: monthly instalments due in the month, completed (on time or
+        late) / missed as of today, exactly as the member statement counts them
+        (every pledge not cancelled). behind_partners: distinct partners with an
+        ACTIVE monthly pledge whose instalment due in the month was missed (a
+        paused pledge reads "paused", never "behind"); the totals'
+        behind_partners is distinct over the year.
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 }, description: "Default: the current year (EAT)." }
+      responses:
+        "200":
+          description: The pledges report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinancePledgesReport" }
+        "400": { description: "VALIDATION_FAILED — a malformed year." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/pledges.csv:
+    get:
+      operationId: financeReportsPledgesReportCsv
+      tags: [portal]
+      summary: "finance:view + finance:export. The pledges report as CSV: currency, month, pledged, paid, kept, missed, behind_partners — with a TOTAL row per currency."
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 } }
+      responses:
+        "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
+        "400": { description: "VALIDATION_FAILED" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/statements:
+    get:
+      operationId: financeReportsStatements
+      tags: [portal]
+      summary: "finance:view. Year-end givers — every member who gave in the year (succeeded, with an account): totals per currency, gift count, by fund, pledge-paid."
+      description: >-
+        Dated by created_at (EAT), the member statement's own year rule, so a row
+        foots with that member's statement. Memberless gifts (website / office
+        walk-ins) have no statement and are not listed. Ordered by name; keyset
+        paged. `totals` are over the whole filtered set per currency (count = gifts).
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 }, description: "Default: the current year (EAT)." }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 }, description: "Member name, phone or email." }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of givers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceStatementsPage" }
+        "400": { description: "VALIDATION_FAILED — a malformed filter or cursor." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/statements.csv:
+    get:
+      operationId: financeReportsStatementsCsv
+      tags: [portal]
+      summary: "finance:view + finance:export. Year-end givers as CSV — one row per member and currency: name, phone, email, currency, gifts, total, pledge_paid, then one column per fund."
+      parameters:
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 } }
+      responses:
+        "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
+        "400": { description: "VALIDATION_FAILED" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/statements/{userId}/giving.pdf:
+    get:
+      operationId: financeReportsGivingPdf
+      tags: [portal]
+      summary: "finance:view. A member's giving statement PDF for one year — the member's own PDF (the same renderer), for the office. 404 when the member has no succeeded gift that year."
+      parameters:
+        - $ref: "#/components/parameters/UserIdPath"
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 }, description: "Default: the current year (EAT)." }
+      responses:
+        "200": { description: "application/pdf (Content-Disposition attachment)", content: { application/pdf: { schema: { type: string, format: binary } } } }
+        "400": { description: "VALIDATION_FAILED — a malformed id or year." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/finance/statements/{userId}/partners.pdf:
+    get:
+      operationId: financeReportsPartnersPdf
+      tags: [portal]
+      summary: "finance:view. A member's Partners statement PDF for one year — the member's own PDF, for the office. 404 for someone who has never been a partner."
+      parameters:
+        - $ref: "#/components/parameters/UserIdPath"
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 }, description: "Default: the current year (EAT)." }
+      responses:
+        "200": { description: "application/pdf (Content-Disposition attachment)", content: { application/pdf: { schema: { type: string, format: binary } } } }
+        "400": { description: "VALIDATION_FAILED — a malformed id or year." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/finance/settings:
+    get:
+      operationId: financeReportsSettings
+      tags: [portal]
+      summary: "finance:view. Read-only Finance settings: which providers are configured (env var NAMES only — never values), the next office receipt number, the giving tiers and the reminder policy."
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/financial-position:
+    get:
+      operationId: financeReportsFinancialPosition
+      tags: [portal]
+      summary: "finance:view. Statement of financial position as of a date, per currency, from the ledger: assets (cash:*), funds (fund:*), other (sales:* and any other credit account); balanced = assets = funds + other."
+      description: >-
+        Every ledger posting (transaction AND journal, every kind — openings,
+        transfers, reversals included) with created_at before the end of as_of
+        (EAT). assets: each cash:* account, debits − credits. funds: each fund:*
+        account, credits − debits (the same balance GET /admin/finance/funds
+        shows). other: every other account (sales:media, …), credits − debits.
+        balanced is per currency and overall.
+      parameters:
+        - { name: as_of, in: query, required: false, schema: { type: string, format: date }, description: "YYYY-MM-DD (EAT, inclusive). Default: today." }
+      responses:
+        "200":
+          description: The statement of financial position
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceFinancialPosition" }
+        "400": { description: "VALIDATION_FAILED — a malformed date." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/financial-position.csv:
+    get:
+      operationId: financeReportsFinancialPositionCsv
+      tags: [portal]
+      summary: "finance:view + finance:export. The statement of financial position as CSV: currency, section (assets | funds | other | total), account, label, balance."
+      parameters:
+        - { name: as_of, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
+        "400": { description: "VALIDATION_FAILED" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/income-expenditure:
+    get:
+      operationId: financeReportsIncomeExpenditure
+      tags: [portal]
+      summary: "finance:view. Income and expenditure for a period, per currency: income by fund (gifts net of reversals, from the ledger), other income (sales:*), expenditure by category (approved expenses), and the surplus."
+      description: >-
+        income: per fund, transaction-owned credits − transaction-owned debits on
+        fund:* with the posting's created_at in the period (EAT) — gifts net of
+        reversals; because every leg carries its economic date this foots with
+        succeeded gifts by transactions.created_at. other_income: the same on
+        every other non-cash account (sales:media). expenses: APPROVED expenses by
+        category, spent_on in the period (expense journals net of their voids).
+        Transfers, opening balances and their reversals are internal movements
+        and are excluded. income_minor = gifts + other income; surplus_minor =
+        income_minor − expenses_minor.
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, format: date }, description: "Default: the first day of the current month (EAT)." }
+        - { name: to, in: query, required: false, schema: { type: string, format: date }, description: "Default: today (EAT)." }
+      responses:
+        "200":
+          description: The income and expenditure statement
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceIncomeExpenditure" }
+        "400": { description: "VALIDATION_FAILED — a malformed date, or from after to." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/income-expenditure.csv:
+    get:
+      operationId: financeReportsIncomeExpenditureCsv
+      tags: [portal]
+      summary: "finance:view + finance:export. Income and expenditure as CSV: currency, section (income | other_income | expenses | total), key, label, amount."
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
+        "400": { description: "VALIDATION_FAILED" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/givers:
+    get:
+      operationId: financeReportsGivers
+      tags: [portal]
+      summary: "finance:view. Find the member a gift is from (\"Record a gift\") without members:view — by name (case- and accent-insensitive), email, or phone digits — each with their open pledges."
+      description: >-
+        Members only (any role, not deleted). A query of digits (spaces, + - ( )
+        allowed) matches the phone's digits, also without the leading trunk 0, so
+        "0722 123" finds +254722123…; a query with letters matches the name
+        (contains) and the email. Names that START with the query come first,
+        then by name. open_pledges = the member's pledges that are active or
+        paused, under the words their cards show, with where the money is booked.
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 80 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 20, default: 10 } }
+      responses:
+        "200":
+          description: Matching members
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceGiversResult" }
+        "400": { description: "VALIDATION_FAILED — q shorter than 2 characters (after trimming) or limit out of range." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/needs:
+    get:
+      operationId: financeReportsNeeds
+      tags: [portal]
+      summary: "finance:view. Department needs as Finance sees them — target vs raised (the Departments page's own figure), gifts, and where the money routes. Read-only: approval stays in Departments."
+      description: >-
+        raised_minor is needRaisedMinor — every succeeded gift to the need or to a
+        pledge toward it, church-wide — so this page and the department page can
+        never disagree. fund_code is the department's fund routing as gifts
+        resolve it (null = the gift's own fund). Newest first; keyset paged.
+        totals are per currency over the whole filtered set (amount_minor =
+        raised).
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [pending, approved, rejected, closed, all], default: approved } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 }, description: "Need title or department name." }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of needs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceNeedsPage" }
+        "400": { description: "VALIDATION_FAILED — a malformed filter or cursor." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/campaigns:
     get:
       tags: [financial]
@@ -2689,7 +3226,9 @@ paths:
       description: >-
         Each row carries people_asked / gave / declined alongside raised_minor, so a
         campaign nobody saw can be told apart from one people saw and declined —
-        they look identical in the giving totals alone.
+        they look identical in the giving totals alone. raised_minor = succeeded
+        gifts to the campaign's fund from starts_on through ends_on (EAT days,
+        inclusive) — a gift after the campaign ended never counts toward it.
       security: [{ bearerAuth: [] }]
       responses:
         "200": { description: Campaign list }
@@ -2959,6 +3498,11 @@ paths:
     get:
       tags: [system]
       summary: Admin. Every partner — membership, tier, commitment, given this year, behind.
+      description: >-
+        given_year (each row and the summary) is every succeeded gift this year
+        (EAT), any fund, PER CURRENCY — KES and USD are never added.
+        given_year_minor is the KES figure alone, kept for clients that read one
+        number.
       parameters:
         - { in: query, name: q, required: false, schema: { type: string } }
         - { in: query, name: status, required: false, schema: { type: string, enum: [all, active, paused, behind, left] } }
@@ -3212,7 +3756,11 @@ paths:
   /admin/finance/schedules:
     get:
       tags: [portal]
-      summary: "finance:view. Recurring giving with collection health — member, amount, method, status, next run, consecutive_failures, last_error and needs_attention. Ordered paused first, then most failures, then soonest due. Optional ?status=active|paused|cancelled and ?limit (max 200)."
+      summary: "finance:view. Recurring giving with collection health — member, amount, method, status, next run, consecutive_failures, last_error and needs_attention. Ordered paused first, then most failures, then soonest due. Optional ?status=active|paused|cancelled, ?attention=true (only the ones needing attention — paused, or with a consecutive failure; never cancelled) and ?limit (max 200)."
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [active, paused, cancelled] } }
+        - { name: attention, in: query, required: false, schema: { type: boolean }, description: "true = only schedules needing attention (the same rule as needs_attention)." }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
       responses:
         "200": { description: Recurring giving }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -4771,6 +5319,619 @@ paths:
         "200": { description: Revoked }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  # ── Finance ERP · books (writes, expenses, budgets, funds admin) — docs/FINANCE_ERP.md §4. Add paths below this line. ──
+  # Error rule for every books write: 400 VALIDATION_FAILED = the request's shape
+  # (missing/badly formatted fields, amount bounds, reference required);
+  # 422 UNPROCESSABLE = it names something that does not exist or cannot be used
+  # (unknown/inactive fund or category, member, pledge not the member's or not
+  # open, need not approved, wrong status for the action). Named codes where the
+  # office needs to know exactly what happened: DUPLICATE_RECEIPT (409),
+  # INVALID_DATE (422: received_on / spent_on / occurred_on outside
+  # [today − 366 days, today], Africa/Nairobi), INVALID_REFERENCE (422),
+  # CURRENCY_MISMATCH (422), NOT_REVERSIBLE / ALREADY_REVERSED /
+  # USE_EXPENSE_VOID (422), SAME_PERSON (403), FUND_IN_USE (409). Every error
+  # body is the common Error envelope.
+  # Dates: every posting's ledger legs carry the ECONOMIC date at 12:00
+  # Africa/Nairobi (received_on / spent_on / occurred_on; a reversal carries its
+  # gift's own date, a void its expense's spent_on) so period reads over
+  # ledger_entries.created_at agree with the status-based registers.
+  /admin/finance/gifts:
+    post:
+      tags: [giving]
+      operationId: financeBooksRecordGift
+      summary: "finance:manage. Record a gift the office received (cash on hand, bank, cheque, offline M-Pesa, other). Audited finance.gift_recorded."
+      description: >
+        ONE database transaction: the transaction row (provider manual, source
+        admin, status succeeded, created_at = settled_at = received_on 12:00
+        EAT), its receipt, balanced ledger legs (debit cash:<onhand|bank|cheque|mpesa|manual>
+        for channel onhand|bank|cheque|mpesa|other, credit fund:<code>), the
+        member's normal giving.receipt outbox job (only when user_id is set) and
+        the audit row. Giver: exactly one of user_id (a member), giver_name (a
+        walk-in; giver_phone optional) or anonymous: true. Fund routing is the
+        server's: with pledge_id the fund is the pledge's own
+        (FinancialService.pledgeFundCode — `fund` is ignored); else with
+        need_id the need's department fund when active, else `fund`.
+        Receipt: EVERY office gift (every channel, M-Pesa included) gets the
+        next gapless office number OR-<year>-<5 digits> for the Nairobi year the
+        gift is RECORDED in (row-locked counter, taken inside the same
+        transaction, so a rolled-back attempt leaves no gap). The payment's own
+        reference (M-Pesa code, cheque number, bank reference) is kept in
+        office_reference (`reference` on the wire). Channel mpesa: the code is
+        trimmed and upper-cased and must be 8–12 letters/digits (422
+        INVALID_REFERENCE), and it may not already be the receipt of a
+        SUCCEEDED transaction (an online M-Pesa payment that settled) or the
+        reference of another SUCCEEDED office M-Pesa gift (409
+        DUPLICATE_RECEIPT, naming it). A reversed entry does not block
+        re-recording the corrected one. A gift for a pledge or need must be in
+        that pledge's / need's currency (422 CURRENCY_MISMATCH). Idempotent on
+        idempotency_key: a replay returns 200 with the transaction as booked and
+        reused: true (never re-posts, never takes a second number).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksGiftInput" }
+      responses:
+        "201":
+          description: Recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksGiftResult" }
+        "200":
+          description: Replay of an idempotency_key already recorded — the transaction as it was booked (it may have been reversed since), reused true.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksGiftResult" }
+        "400": { description: "VALIDATION_FAILED — giver mode ambiguous or missing, no fund, amount outside 1..1,000,000,000 minor, currency not KES|USD, received_on not a date, reference missing for mpesa|cheque|bank, pledge_id without user_id." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { description: "DUPLICATE_RECEIPT — that M-Pesa code is already the receipt of a succeeded transaction or the reference of a succeeded office M-Pesa gift (details.transaction_id names it); CONFLICT — the idempotency_key belongs to a payment that is not an office gift." }
+        "422": { description: "INVALID_DATE — received_on after today or more than 366 days ago (EAT); INVALID_REFERENCE — an M-Pesa code that is not 8–12 letters/digits; CURRENCY_MISMATCH — currency differs from the pledge's or need's; UNPROCESSABLE — unknown member, unknown or inactive fund (including the fund a pledge routes to), pledge not this member's or not open (active|paused), need not approved." }
+  /admin/finance/transactions/{id}/reverse:
+    post:
+      tags: [giving]
+      operationId: financeBooksReverseTransaction
+      summary: "finance:manage. Reverse an office gift or a confirmed manual claim — reversal legs + status refunded, one transaction. Audited finance.gift_reversed."
+      description: >
+        Only provider manual AND status succeeded (office gifts and confirmed
+        "I paid another way" claims). Posts the mirror of the original legs
+        (debit the fund account it credited, credit the cash account it debited),
+        dated at the gift's own date so every period nets to zero, sets status
+        refunded + reversed_at/by/reason. The gift then leaves the member's
+        statements and the pledge's instalment ledger (the instalment re-opens;
+        a total pledge the gift had fulfilled goes back to active). The OR-
+        receipt number stays on the reversed row (never reused — the sequence
+        stays gapless); a reversed office M-Pesa entry no longer blocks
+        recording its code again. Provider payments (M-Pesa STK, card, PayPal)
+        are refunded at the provider, never here.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksReverseInput" }
+      responses:
+        "200":
+          description: Reversed — the transaction with every ledger leg (original + reversal).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksTransaction" }
+        "400": { description: "VALIDATION_FAILED — reason not 5–300 characters." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "NOT_REVERSIBLE — not provider manual, not succeeded, or its ledger legs are not one balanced debit/credit pair (reconcile first); ALREADY_REVERSED — reversed before." }
+  # /admin/finance/funds (POST, finance:manage) shares ONE path item with its GET — see the reports section.
+  /admin/finance/funds/{code}:
+    patch:
+      tags: [giving]
+      operationId: financeBooksUpdateFund
+      summary: "finance:manage. Rename (name, name_sw), describe, reorder (sort), activate/deactivate. The code never changes. Audited fund.updated."
+      description: >
+        Deactivating an ACTIVE fund is refused (409 FUND_IN_USE) while money
+        still routes to it: open (active|paused) pledges whose pays-to rule
+        resolves to it, active|paused recurring gifts on it, active departments
+        whose fund_code it is, and live campaigns on it — their payments would
+        fail once it is off. details carries the four counts and the message
+        names them ("12 active pledges, 3 recurring gifts and 1 department still
+        send money to Building fund"). Send force: true to deactivate anyway;
+        the audit row records force and the counts. Reactivating, or re-sending
+        is_active false for a fund already off, is never guarded.
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[a-z][a-z0-9-]{1,39}$" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksFundPatch" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksFund" }
+        "400": { description: "VALIDATION_FAILED — empty patch (force alone is not a change) or a field out of bounds." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "FUND_IN_USE — is_active false on an active fund that money still routes to, without force. details: { active_pledges, active_schedules, departments, live_campaigns } (counts)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /admin/finance/transfers:
+    post:
+      tags: [giving]
+      operationId: financeBooksTransferFunds
+      summary: "finance:approve. Move money between funds — a journal kind transfer (debit fund:<from>, credit fund:<to>) + a fund_transfers row, one transaction. Audited journal.transfer_posted."
+      description: >
+        The from-fund's balance in that currency (credits − debits on
+        fund:<from> over ALL ledger rows, transactions and journals) may not go
+        below zero unless allow_negative is true (the UI warns). Transfers from
+        the same fund are serialised (row lock), so two at once cannot both
+        spend the same balance. The to-fund must be active; the from-fund may be
+        inactive (emptying a retired fund). Optional idempotency_key: a replay
+        returns the transfer as posted (200, reused true) and posts nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksTransferInput" }
+      responses:
+        "201":
+          description: Posted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksTransfer" }
+        "200":
+          description: Replay of an idempotency_key already posted — reused true.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksTransfer" }
+        "400": { description: "VALIDATION_FAILED — same fund, amount out of bounds, currency, occurred_on not a date, memo not 3–300." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { description: "INVALID_DATE — occurred_on after today or more than 366 days ago (EAT); UNPROCESSABLE — unknown fund, inactive to-fund, or details.reason NEGATIVE_BALANCE (details.balance_minor, details.balance_after_minor) when the from-fund would go below zero without allow_negative." }
+  /admin/finance/expenses:
+    get:
+      tags: [giving]
+      operationId: financeBooksListExpenses
+      summary: "finance:view. The expense register — newest spent_on first, keyset-paged; totals for the WHOLE filtered set."
+      parameters:
+        - { name: status, in: query, schema: { type: string }, description: "One status or a comma list of recorded|approved|void (e.g. recorded,approved)." }
+        - { name: fund, in: query, schema: { type: string }, description: Fund code. }
+        - { name: category, in: query, schema: { type: string }, description: Expense category code. }
+        - { name: from, in: query, schema: { type: string, format: date }, description: "spent_on ≥ from (inclusive)." }
+        - { name: to, in: query, schema: { type: string, format: date }, description: "spent_on ≤ to (inclusive)." }
+        - { name: q, in: query, schema: { type: string, maxLength: 80 }, description: "Matches payee, description or reference (case-insensitive)." }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of expenses.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksExpenseList" }
+        "400": { description: "VALIDATION_FAILED — unknown status, bad date or cursor." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [giving]
+      operationId: financeBooksRecordExpense
+      summary: "finance:manage. Record an expense (status recorded — NOTHING is posted until a different person approves it). Audited expense.recorded."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksExpenseInput" }
+      responses:
+        "201":
+          description: Recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksExpense" }
+        "400": { description: "VALIDATION_FAILED — a field out of bounds or spent_on not a date." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { description: "INVALID_DATE — spent_on after today or more than 366 days ago (EAT); UNPROCESSABLE — unknown or inactive fund or category." }
+  /admin/finance/expenses.csv:
+    get:
+      tags: [giving]
+      operationId: financeBooksExpensesCsv
+      summary: "finance:export. The expense register as CSV — same filters as the list (no paging): header row, amounts in major units with their currency column, formula-leading cells neutralised."
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: fund, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: q, in: query, schema: { type: string, maxLength: 80 } }
+      responses:
+        "200":
+          description: "text/csv; charset=utf-8 attachment. Columns: expense_id, spent_on, payee, category, fund, description, amount, currency, channel, reference, status, recorded_by, recorded_at, approved_by, approved_at, voided_by, voided_at, void_reason."
+          content:
+            text/csv:
+              schema: { type: string }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/expenses/{id}:
+    get:
+      tags: [giving]
+      operationId: financeBooksGetExpense
+      summary: "finance:view. One expense."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: The expense.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksExpense" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [giving]
+      operationId: financeBooksUpdateExpense
+      summary: "finance:manage. Correct an expense while it is still recorded (unapproved). The editor becomes one of its makers — they cannot approve it. Audited expense.updated."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksExpensePatch" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksExpense" }
+        "400": { description: "VALIDATION_FAILED — empty patch or a field out of bounds." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "INVALID_DATE — spent_on outside [today − 366 days, today] (EAT); UNPROCESSABLE — no longer recorded (approved or void), or an unknown/inactive fund or category." }
+  /admin/finance/expenses/{id}/approve:
+    post:
+      tags: [giving]
+      operationId: financeBooksApproveExpense
+      summary: "finance:approve. Approve a recorded expense — posts journal kind expense (debit fund:<code>, credit cash:<channel account>): occurred_on = spent_on, legs at spent_on 12:00 EAT. Audited expense.approved."
+      description: >
+        Maker-checker: whoever recorded the expense, or edited it while it was
+        recorded, cannot approve it (403 SAME_PERSON) — a SuperAdmin may approve
+        their own. Channel → cash account: onhand|bank|cheque|mpesa →
+        cash:<same>, other → cash:manual.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Approved and posted (journal_id set).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksExpense" }
+        "403": { description: "FORBIDDEN_SCOPE (no finance:approve) or SAME_PERSON (maker-checker)." }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "UNPROCESSABLE — not recorded (already approved or void)." }
+  /admin/finance/expenses/{id}/void:
+    post:
+      tags: [giving]
+      operationId: financeBooksVoidExpense
+      summary: "finance:manage. Void an expense. A recorded one is simply voided (nothing was posted); an approved one also gets a reversing journal expense_void (debit cash, credit fund): occurred_on = spent_on, legs at the same timestamp as the approval legs; voided_at = now. Audited expense.voided."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksReverseInput" }
+      responses:
+        "200":
+          description: Voided.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksExpense" }
+        "400": { description: "VALIDATION_FAILED — reason not 5–300 characters." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "UNPROCESSABLE — already void." }
+  /admin/finance/expense-categories:
+    get:
+      tags: [giving]
+      operationId: financeBooksListExpenseCategories
+      summary: "finance:view. Every expense category, active and inactive, by sort then name."
+      responses:
+        "200":
+          description: Categories.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/BooksExpenseCategory" } }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [giving]
+      operationId: financeBooksCreateExpenseCategory
+      summary: "finance:manage. Add an expense category. Codes are permanent slugs; categories are deactivated, never deleted. Audited finance.category_created."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksExpenseCategoryInput" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksExpenseCategory" }
+        "400": { description: "VALIDATION_FAILED — code not ^[a-z][a-z0-9-]{1,39}$, name not 2–60 characters." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { description: "CONFLICT — a category with that code exists." }
+  /admin/finance/expense-categories/{id}:
+    patch:
+      tags: [giving]
+      operationId: financeBooksUpdateExpenseCategory
+      summary: "finance:manage. Rename, reorder, activate/deactivate a category (code is permanent). Audited finance.category_updated."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksExpenseCategoryPatch" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksExpenseCategory" }
+        "400": { description: "VALIDATION_FAILED — empty patch or a field out of bounds." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/finance/budgets:
+    get:
+      tags: [giving]
+      operationId: financeBooksListBudgets
+      summary: "finance:view. Every year's budget, newest year first, with line totals (KES)."
+      responses:
+        "200":
+          description: Budgets.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/BooksBudget" } }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+    post:
+      tags: [giving]
+      operationId: financeBooksCreateBudget
+      summary: "finance:manage. Start a year's budget as a draft (one per year; KES). Audited budget.created."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksBudgetInput" }
+      responses:
+        "201":
+          description: Created (no lines yet).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksBudgetDetail" }
+        "400": { description: "VALIDATION_FAILED — year not 2020–2100, name not 2–80 characters." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { description: "CONFLICT — that year already has a budget." }
+  /admin/finance/budgets/{id}:
+    get:
+      tags: [giving]
+      operationId: financeBooksGetBudget
+      summary: "finance:view. One budget with its lines."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: The budget.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksBudgetDetail" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [giving]
+      operationId: financeBooksUpdateBudget
+      summary: "finance:manage. Rename a draft budget or move it to another year (draft only). Audited budget.updated."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksBudgetPatch" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksBudgetDetail" }
+        "400": { description: "VALIDATION_FAILED — empty patch or a field out of bounds." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "CONFLICT — that year already has a budget." }
+        "422": { description: "UNPROCESSABLE — the budget is approved." }
+  /admin/finance/budgets/{id}/lines:
+    put:
+      tags: [giving]
+      operationId: financeBooksReplaceBudgetLines
+      summary: "finance:manage. Replace ALL of a draft budget's lines. Income lines name a fund; expense lines name a category (and optionally a fund). Audited budget.lines_replaced."
+      description: >
+        Each line carries 12 monthly KES amounts (January first), each a
+        non-negative integer in minor units. No overlaps, so totals never count
+        a shilling twice: one income line per fund; per expense category either
+        ONE church-wide line (no fund) or lines for distinct funds — not both.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksBudgetLinesInput" }
+      responses:
+        "200":
+          description: The budget with its new lines.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksBudgetDetail" }
+        "400": { description: "VALIDATION_FAILED — line shape (kind/fund/category rules, 12 non-negative amounts, overlapping lines, more than 200 lines)." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "UNPROCESSABLE — the budget is approved, or a line names an unknown fund or category." }
+  /admin/finance/budgets/{id}/approve:
+    post:
+      tags: [giving]
+      operationId: financeBooksApproveBudget
+      summary: "finance:approve. Approve a draft budget that has at least one line; it is then read-only. Audited budget.approved."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Approved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksBudgetDetail" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "UNPROCESSABLE — already approved, or no lines." }
+  /admin/finance/budgets/{id}/actuals:
+    get:
+      tags: [giving]
+      operationId: financeBooksBudgetActuals
+      summary: "finance:view. Budget vs actual per line and month (KES), with variance = actual − budget, and totals per kind."
+      description: >
+        Income actual = succeeded KES gifts to the line's fund, by the Nairobi
+        month of the gift (created_at). Expense actual = APPROVED KES expenses in
+        the line's category (and fund, when the line names one) by spent_on
+        month. Voided expenses and reversed gifts are not actuals. totals[] has
+        both kinds, always; `unbudgeted` is actual money of that kind no line
+        covers (so actual + unbudgeted foots to the year's KES total of that
+        kind). USD money is outside budgets (known limit).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Budget vs actual.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksBudgetActuals" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/finance/opening-balances:
+    post:
+      tags: [giving]
+      operationId: financeBooksPostOpeningBalance
+      summary: "finance:approve. Bring a fund's balance in from before the system — journal kind opening (debit cash:<channel account>, credit fund:<code>), legs at as_of 12:00 EAT. Idempotent. Audited journal.opening_posted."
+      description: >
+        Without opening balances every fund starts at zero and the first
+        expenses drive it negative. One journal per (channel, fund, currency)
+        amount; post several for several accounts. Channel → cash account as for
+        gifts (other → cash:manual). A wrong opening balance is corrected by
+        reversing it (POST /admin/finance/journals/{id}/reverse) and posting the
+        right one. A replay of the same idempotency_key returns the journal as
+        posted (200, reused true) and posts nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksOpeningBalanceInput" }
+      responses:
+        "201":
+          description: Posted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksJournalResult" }
+        "200":
+          description: Replay of an idempotency_key already posted — reused true.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksJournalResult" }
+        "400": { description: "VALIDATION_FAILED — a field out of bounds or as_of not a date." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "409": { description: "CONFLICT — the idempotency_key belongs to a journal that is not an opening balance." }
+        "422": { description: "INVALID_DATE — as_of after today or more than 3660 days ago (EAT); UNPROCESSABLE — unknown or inactive fund." }
+  /admin/finance/journals:
+    get:
+      tags: [giving]
+      operationId: financeBooksListJournals
+      summary: "finance:view. Journals (postings that are not giving transactions) — newest occurred_on first, with their legs; totals for the WHOLE filtered set."
+      parameters:
+        - { name: kind, in: query, schema: { type: string }, description: "One kind or a comma list of expense|expense_void|transfer|opening|reversal." }
+        - { name: from, in: query, schema: { type: string, format: date }, description: "occurred_on ≥ from (inclusive)." }
+        - { name: to, in: query, schema: { type: string, format: date }, description: "occurred_on ≤ to (inclusive)." }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of journals.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksJournalList" }
+        "400": { description: "VALIDATION_FAILED — unknown kind, bad date or cursor." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/journals/{id}:
+    get:
+      tags: [giving]
+      operationId: financeBooksGetJournal
+      summary: "finance:view. One journal with its legs."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: The journal.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksJournal" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /admin/finance/journals/{id}/reverse:
+    post:
+      tags: [giving]
+      operationId: financeBooksReverseJournal
+      summary: "finance:approve. Reverse a transfer or opening journal — journal kind reversal (reversal_of = it), mirrored legs dated at the original's leg timestamp. Once per journal. Audited journal.reversed."
+      description: >
+        Expense journals are undone by voiding the expense (422
+        USE_EXPENSE_VOID); a reversal is never itself reversed (422
+        NOT_REVERSIBLE — post the right journal instead); a journal already
+        reversed → 422 ALREADY_REVERSED. The fund the reversal debits (a
+        transfer's receiving fund; an opening balance's fund) may not go below
+        zero in that currency unless allow_negative is true (422 details.reason
+        NEGATIVE_BALANCE).
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BooksJournalReverseInput" }
+      responses:
+        "201":
+          description: The reversal journal.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BooksJournal" }
+        "400": { description: "VALIDATION_FAILED — reason not 5–300 characters." }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "USE_EXPENSE_VOID — an expense or expense_void journal; NOT_REVERSIBLE — a reversal journal; ALREADY_REVERSED; UNPROCESSABLE with details.reason NEGATIVE_BALANCE (details.balance_minor, details.balance_after_minor)." }
+  /admin/permissions/catalog:
+    get:
+      tags: [portal]
+      operationId: permissionsCatalog
+      summary: "rolesAdmin:view OR users:view OR finance:view (Admin/SuperAdmin always). The server's own RBAC dimensions, so role and user-permission editors render every module and capability and saving never strips a grant the editor did not show."
+      responses:
+        "200":
+          description: The catalog (PERM_MODULES × CAPABILITIES from http/auth.ts).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PermissionCatalog" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/summary:
     get:
       tags: [giving]
@@ -4780,54 +5941,129 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/transactions:
     get:
+      operationId: financeReportsTransactions
       tags: [giving]
-      summary: Admin (view). Transactions register (fund/status filters, keyset-paged).
+      summary: "finance:view. The transactions register — dates, fund, status, channel, source, pledge, need and a search; keyset-paged; per-currency totals over the WHOLE filtered set."
+      description: >-
+        from/to are EAT calendar days, inclusive, on created_at. q matches the
+        receipt code, the office reference, the member's name or phone, the giver's
+        name or phone, and the provider reference. Ordered newest first
+        (created_at, then transaction_id). `before` — a created_at instant or a
+        cursor — is the earlier paging parameter and still works; prefer `cursor`.
+        Rows are additive over the earlier register row. totals: amount_minor =
+        Σ succeeded amounts, count = every matching row (any status), per currency.
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+        - { name: fund, in: query, required: false, schema: { type: string }, description: Fund code. }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [requires_action, processing, succeeded, failed, refunded] } }
+        - { name: channel, in: query, required: false, schema: { $ref: "#/components/schemas/FinanceChannel" } }
+        - { name: source, in: query, required: false, schema: { type: string, enum: [app, website, admin] } }
+        - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 } }
+        - { name: pledged, in: query, required: false, schema: { type: string, enum: [any, "yes", "no"], default: any } }
+        - { name: need, in: query, required: false, schema: { type: string, enum: [any, "yes", "no"], default: any } }
+        - { name: user_id, in: query, required: false, schema: { type: string, format: uuid }, description: "One member's transactions only (exact — a name or phone search can catch a namesake)." }
+        - $ref: "#/components/parameters/Cursor"
+        - { name: before, in: query, required: false, deprecated: true, schema: { type: string }, description: "Earlier paging parameter: a created_at instant (or a cursor). Use cursor." }
+        - $ref: "#/components/parameters/Limit"
       responses:
-        "200": { description: Transactions }
+        "200":
+          description: A page of transactions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceTransactionsPage" }
+        "400": { description: "VALIDATION_FAILED — a malformed filter or cursor." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/ledger:
     get:
+      operationId: financeReportsLedger
       tags: [giving]
-      summary: Admin (view). Recent balanced double-entry ledger postings.
+      summary: "finance:view. Ledger postings — transaction AND journal — with their owner (receipt / member, or journal kind + memo); keyset-paged; per-currency totals."
+      description: >-
+        account is an exact account (fund:tithe), or a prefix ending in ':' (cash:).
+        from/to are inclusive EAT days on the posting's created_at — every leg is
+        dated at its economic date (an office gift's received date; a reversal at
+        the original gift's date; expense legs at spent_on; a transfer at
+        occurred_on), so this is the ledger's own calendar. Newest first
+        (created_at, then entry_id). The earlier `?limit=` call still works and
+        returns the same rows, now with the new fields.
+      parameters:
+        - { name: account, in: query, required: false, schema: { type: string, maxLength: 60 } }
+        - { name: kind, in: query, required: false, schema: { type: string, enum: [transaction, journal] } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+        - $ref: "#/components/parameters/Cursor"
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
       responses:
-        "200": { description: Ledger entries }
+        "200":
+          description: A page of postings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceLedgerPage" }
+        "400": { description: "VALIDATION_FAILED — a malformed filter or cursor." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/trend:
     get:
+      operationId: financeReportsTrend
       tags: [giving]
-      summary: Admin (view). Settled giving per month for the overview trend (zero-filled).
+      summary: "finance:view. Succeeded giving per month (created_at, EAT months), zero-filled, PER CURRENCY (KES and USD are never added). `data` is the KES series (back-compat); `series` has every currency."
       parameters:
         - in: query
           name: months
           schema: { type: integer, minimum: 1, maximum: 24, default: 6 }
       responses:
-        "200": { description: Monthly settled totals }
+        "200":
+          description: Monthly settled totals per currency
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceTrend" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/audit:
     get:
+      operationId: financeReportsAudit
       tags: [giving]
-      summary: Admin (view). Finance-scoped slice of the append-only audit trail (§5.10).
+      summary: "finance:view. The finance slice of the append-only audit trail (§5.10) — giving., purchase., finance., webhook., pledge., department.need, expense., budget., journal. and fund. — newest first, keyset-paged."
       parameters:
+        - { name: action_prefix, in: query, required: false, schema: { type: string, maxLength: 80 }, description: "Narrow to actions starting with this; must itself start with one of the finance prefixes (e.g. expense. or pledge.claim_)." }
         - in: query
           name: actor
-          schema: { type: string, enum: [All, System, Admin], default: All }
+          description: "All | System (no actor) | Admin (any signed-in actor) | a user id."
+          schema:
+            oneOf:
+              - { type: string, enum: [All, System, Admin], default: All }
+              - { type: string, format: uuid }
+        - { name: from, in: query, required: false, schema: { type: string, format: date }, description: "EAT day, inclusive, on occurred_at." }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+        - $ref: "#/components/parameters/Cursor"
         - in: query
           name: limit
           schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
       responses:
-        "200": { description: Finance audit entries }
+        "200":
+          description: Finance audit entries
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceAuditPage" }
+        "400": { description: "VALIDATION_FAILED — a prefix outside the finance slice, or a malformed filter." }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/transactions/{id}:
     get:
+      operationId: financeReportsTransactionDetail
       tags: [giving]
-      summary: Admin (view). A single transaction plus its balanced ledger postings.
+      summary: "finance:view. One transaction — office and reversal fields, who recorded / reversed it — with EVERY ledger posting it owns (the original pair and any reversing pair)."
       parameters:
         - in: path
           name: id
           required: true
           schema: { type: string, format: uuid }
       responses:
-        "200": { description: Transaction detail }
+        "200":
+          description: Transaction detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceTransactionDetail" }
         "404": { description: Transaction not found }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/config:
@@ -9231,6 +10467,457 @@ components:
           type: array
           description: "Ordered: general, then active funds by name, then campaigns live today in the member's congregation, then that congregation's approved department needs."
           items: { $ref: "#/components/schemas/PledgeOption" }
+    # ── Finance ERP · books schemas — add below this line. ──
+    BooksCurrencyTotal:
+      type: object
+      description: One currency's total — KES and USD are never added together.
+      required: [currency, amount_minor, count]
+      properties:
+        currency: { type: string, enum: [KES, USD] }
+        amount_minor: { type: integer, format: int64 }
+        count: { type: integer }
+    BooksFundRef:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+    BooksCategoryRef:
+      type: object
+      required: [category_id, code, name]
+      properties:
+        category_id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+    BooksLedgerLeg:
+      type: object
+      description: One side of a balanced posting. cash:<channel> is where money sits; fund:<code> is fund equity.
+      required: [entry_id, account, side, amount_minor, currency, created_at]
+      properties:
+        entry_id: { type: string, format: uuid }
+        account: { type: string, description: "cash:onhand|bank|cheque|mpesa|manual|stripe|airtel|paypal or fund:<code>" }
+        side: { type: string, enum: [debit, credit] }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        created_at: { type: string, format: date-time, description: The posting's economic date (12:00 EAT for office postings). }
+    BooksGiftInput:
+      type: object
+      description: >
+        Exactly one giver mode — user_id (a member), giver_name (a walk-in;
+        giver_phone optional), or anonymous true (no name, no phone). null and
+        "" read as absent. pledge_id needs user_id.
+      required: [idempotency_key, amount_minor, currency, channel, received_on]
+      properties:
+        idempotency_key: { type: string, minLength: 8, maxLength: 255, description: "Client-generated per recording (a UUID); a replay returns the booked transaction." }
+        user_id: { type: [string, "null"], format: uuid }
+        giver_name: { type: [string, "null"], minLength: 2, maxLength: 120 }
+        giver_phone: { type: [string, "null"], minLength: 7, maxLength: 32 }
+        anonymous: { type: boolean, default: false }
+        fund: { type: [string, "null"], description: "Fund code. Required unless pledge_id is set (the pledge decides) or need_id resolves to its department's active fund." }
+        amount_minor: { type: integer, format: int64, minimum: 1, maximum: 1000000000 }
+        currency: { type: string, enum: [KES, USD] }
+        channel: { type: string, enum: [onhand, bank, cheque, mpesa, other], description: "onhand = physical cash; mpesa = an M-Pesa payment recorded by hand (same till/paybill as online)." }
+        reference: { type: [string, "null"], maxLength: 80, description: "Stored as office_reference. Required for mpesa (the M-Pesa code — trimmed, upper-cased, 8–12 letters/digits), cheque (cheque number) and bank (bank reference); optional for onhand/other. Never the receipt: every office gift's receipt_code is its own OR- number." }
+        received_on: { type: string, format: date, description: "The day the money was received (Africa/Nairobi), within [today − 366 days, today], else 422 INVALID_DATE. The transaction's created_at/settled_at and its ledger legs are received_on 12:00 EAT." }
+        pledge_id: { type: [string, "null"], format: uuid, description: "The member's open (active|paused) pledge this pays toward; the gift is then booked to the pledge's fund." }
+        need_id: { type: [string, "null"], format: uuid, description: "An approved department need; booked to its department's active fund, else `fund`." }
+        note: { type: [string, "null"], maxLength: 60, description: "Stored as the gift's account_name — printed on the member's receipt like a named gift." }
+    BooksTransaction:
+      type: object
+      description: A manual transaction (office gift or confirmed claim) as the books see it, with every ledger leg.
+      required:
+        [transaction_id, status, provider, source, receipt_code, amount_minor, currency, fund, channel, reference,
+         received_on, created_at, settled_at, user_id, member_name, giver_name, giver_phone, anonymous, pledge, need,
+         note, recorded_by, recorded_by_name, reversed_at, reversed_by, reversed_by_name, reversal_reason, ledger]
+      properties:
+        transaction_id: { type: string, format: uuid }
+        status: { type: string, enum: [requires_action, processing, succeeded, failed, refunded], description: "succeeded when recorded; refunded once reversed." }
+        provider: { type: string, description: "manual for every office gift and confirmed claim." }
+        source: { type: string, enum: [app, website, admin], description: "admin = recorded by the office; app = a member's confirmed claim." }
+        receipt_code: { type: [string, "null"], description: "Office gifts: always the gapless OR-<year>-<5 digits> number (the M-Pesa code is in reference). Confirmed claims: null." }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        fund: { oneOf: [ { $ref: "#/components/schemas/BooksFundRef" }, { type: "null" } ] }
+        channel: { type: [string, "null"], enum: [onhand, bank, cheque, mpesa, other, null], description: "office_channel; null on a claim." }
+        reference: { type: [string, "null"], description: "office_reference — the M-Pesa code (upper-cased), cheque number or bank reference." }
+        received_on: { type: string, format: date, description: The Nairobi date of created_at. }
+        created_at: { type: string, format: date-time }
+        settled_at: { type: [string, "null"], format: date-time }
+        user_id: { type: [string, "null"], format: uuid }
+        member_name: { type: [string, "null"] }
+        giver_name: { type: [string, "null"] }
+        giver_phone: { type: [string, "null"] }
+        anonymous: { type: boolean, description: "No member, no name, no phone." }
+        pledge:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [pledge_id, title]
+              properties:
+                pledge_id: { type: string, format: uuid }
+                title: { type: string }
+        need:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [need_id, title]
+              properties:
+                need_id: { type: string, format: uuid }
+                title: { type: string }
+        note: { type: [string, "null"], description: account_name }
+        recorded_by: { type: [string, "null"], format: uuid }
+        recorded_by_name: { type: [string, "null"] }
+        reversed_at: { type: [string, "null"], format: date-time }
+        reversed_by: { type: [string, "null"], format: uuid }
+        reversed_by_name: { type: [string, "null"] }
+        reversal_reason: { type: [string, "null"] }
+        ledger: { type: array, items: { $ref: "#/components/schemas/BooksLedgerLeg" }, description: "Oldest first: the original debit/credit, then (once reversed) the mirror pair." }
+    BooksGiftResult:
+      allOf:
+        - $ref: "#/components/schemas/BooksTransaction"
+        - type: object
+          required: [idempotency_key, reused]
+          properties:
+            idempotency_key: { type: string }
+            reused: { type: boolean, description: "true = a replay; nothing new was posted." }
+    BooksReverseInput:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 5, maxLength: 300, description: "Why — kept on the record and in the audit trail (trimmed)." }
+    BooksFund:
+      type: object
+      required: [fund_id, code, name, name_sw, description, sort, is_active]
+      properties:
+        fund_id: { type: string, format: uuid }
+        code: { type: string, description: Permanent slug; the ledger account is fund:<code>. }
+        name: { type: string }
+        name_sw: { type: [string, "null"] }
+        description: { type: [string, "null"] }
+        sort: { type: integer }
+        is_active: { type: boolean }
+    BooksFundInput:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string, pattern: "^[a-z][a-z0-9-]{1,39}$" }
+        name: { type: string, minLength: 2, maxLength: 150 }
+        name_sw: { type: [string, "null"], minLength: 2, maxLength: 150 }
+        description: { type: [string, "null"], maxLength: 500 }
+        sort: { type: integer, default: 0 }
+        is_active: { type: boolean, default: true }
+    BooksFundPatch:
+      type: object
+      additionalProperties: false
+      description: At least one of name, name_sw, description, sort, is_active (400 otherwise — force alone is not a change). The code cannot change — an unknown field such as code is a 400.
+      properties:
+        name: { type: string, minLength: 2, maxLength: 150 }
+        name_sw: { type: [string, "null"], minLength: 2, maxLength: 150 }
+        description: { type: [string, "null"], maxLength: 500 }
+        sort: { type: integer }
+        is_active: { type: boolean }
+        force: { type: boolean, default: false, description: "With is_active false: deactivate even though money still routes to the fund (otherwise 409 FUND_IN_USE). Ignored otherwise." }
+    BooksTransferInput:
+      type: object
+      required: [from_fund, to_fund, amount_minor, currency, occurred_on, memo]
+      properties:
+        from_fund: { type: string, description: Fund code. }
+        to_fund: { type: string, description: Fund code (active; different from from_fund). }
+        amount_minor: { type: integer, format: int64, minimum: 1, maximum: 1000000000 }
+        currency: { type: string, enum: [KES, USD] }
+        occurred_on: { type: string, format: date, description: "Within [today − 366 days, today] (EAT), else 422 INVALID_DATE. The journal's legs are dated occurred_on 12:00 EAT." }
+        memo: { type: string, minLength: 3, maxLength: 300 }
+        allow_negative: { type: boolean, default: false, description: "Post even if the from-fund's balance in this currency goes below zero." }
+        idempotency_key: { type: [string, "null"], minLength: 8, maxLength: 255, description: "Optional; a retry with the same key is a replay, never a second transfer." }
+    BooksTransfer:
+      type: object
+      required: [transfer_id, journal_id, from_fund, to_fund, amount_minor, currency, occurred_on, memo, created_by, created_at, from_balance_after_minor, reversed_by_journal_id, reused, ledger]
+      properties:
+        transfer_id: { type: string, format: uuid }
+        journal_id: { type: string, format: uuid }
+        from_fund: { $ref: "#/components/schemas/BooksFundRef" }
+        to_fund: { $ref: "#/components/schemas/BooksFundRef" }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        occurred_on: { type: string, format: date }
+        memo: { type: string }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        from_balance_after_minor: { type: integer, format: int64, description: "The from-fund's balance in this currency right after the transfer was posted (may be negative when allow_negative). On a replay: the balance now." }
+        reversed_by_journal_id: { type: [string, "null"], format: uuid, description: "Set once the transfer's journal has been reversed." }
+        reused: { type: boolean, description: "true = a replay of the idempotency_key." }
+        ledger: { type: array, items: { $ref: "#/components/schemas/BooksLedgerLeg" } }
+    BooksExpense:
+      type: object
+      required:
+        [expense_id, fund, category, payee, description, amount_minor, currency, spent_on, channel, reference, status,
+         recorded_by, recorded_by_name, recorded_at, approved_by, approved_by_name, approved_at,
+         voided_by, voided_by_name, voided_at, void_reason, journal_id, void_journal_id]
+      properties:
+        expense_id: { type: string, format: uuid }
+        fund: { $ref: "#/components/schemas/BooksFundRef" }
+        category: { $ref: "#/components/schemas/BooksCategoryRef" }
+        payee: { type: string }
+        description: { type: [string, "null"] }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string, enum: [KES, USD] }
+        spent_on: { type: string, format: date }
+        channel: { type: string, enum: [onhand, bank, cheque, mpesa, other] }
+        reference: { type: [string, "null"] }
+        status: { type: string, enum: [recorded, approved, void] }
+        recorded_by: { type: [string, "null"], format: uuid }
+        recorded_by_name: { type: [string, "null"] }
+        recorded_at: { type: string, format: date-time }
+        approved_by: { type: [string, "null"], format: uuid }
+        approved_by_name: { type: [string, "null"] }
+        approved_at: { type: [string, "null"], format: date-time }
+        voided_by: { type: [string, "null"], format: uuid }
+        voided_by_name: { type: [string, "null"] }
+        voided_at: { type: [string, "null"], format: date-time }
+        void_reason: { type: [string, "null"] }
+        journal_id: { type: [string, "null"], format: uuid, description: The expense journal posted on approval. }
+        void_journal_id: { type: [string, "null"], format: uuid, description: The expense_void journal posted when an APPROVED expense is voided. }
+    BooksExpenseInput:
+      type: object
+      required: [fund, category, payee, amount_minor, currency, spent_on, channel]
+      properties:
+        fund: { type: string, description: Active fund code. }
+        category: { type: string, description: Active expense category code. }
+        payee: { type: string, minLength: 2, maxLength: 120 }
+        description: { type: [string, "null"], maxLength: 500 }
+        amount_minor: { type: integer, format: int64, minimum: 1, maximum: 1000000000 }
+        currency: { type: string, enum: [KES, USD] }
+        spent_on: { type: string, format: date, description: "Within [today − 366 days, today] (EAT), else 422 INVALID_DATE. Approval posts at spent_on 12:00 EAT." }
+        channel: { type: string, enum: [onhand, bank, cheque, mpesa, other], description: "How it was paid; decides the cash account credited on approval." }
+        reference: { type: [string, "null"], maxLength: 80 }
+    BooksExpensePatch:
+      type: object
+      additionalProperties: false
+      description: At least one field; only while the expense is recorded. Unknown fields (e.g. status) are a 400.
+      properties:
+        fund: { type: string }
+        category: { type: string }
+        payee: { type: string, minLength: 2, maxLength: 120 }
+        description: { type: [string, "null"], maxLength: 500 }
+        amount_minor: { type: integer, format: int64, minimum: 1, maximum: 1000000000 }
+        currency: { type: string, enum: [KES, USD] }
+        spent_on: { type: string, format: date }
+        channel: { type: string, enum: [onhand, bank, cheque, mpesa, other] }
+        reference: { type: [string, "null"], maxLength: 80 }
+    BooksExpenseList:
+      type: object
+      required: [data, next_cursor, totals, totals_by_status]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/BooksExpense" } }
+        next_cursor: { type: [string, "null"], description: Opaque; pass back as cursor for the next page. }
+        totals: { type: array, items: { $ref: "#/components/schemas/BooksCurrencyTotal" }, description: "Per currency over the WHOLE filtered set (every page, every status in the filter). Filter status=recorded,approved to leave voids out." }
+        totals_by_status:
+          type: array
+          description: The same filtered set broken down by status and currency.
+          items:
+            type: object
+            required: [status, currency, amount_minor, count]
+            properties:
+              status: { type: string, enum: [recorded, approved, void] }
+              currency: { type: string, enum: [KES, USD] }
+              amount_minor: { type: integer, format: int64 }
+              count: { type: integer }
+    BooksExpenseCategory:
+      type: object
+      required: [category_id, code, name, is_active, sort]
+      properties:
+        category_id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        is_active: { type: boolean }
+        sort: { type: integer }
+    BooksExpenseCategoryInput:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string, pattern: "^[a-z][a-z0-9-]{1,39}$" }
+        name: { type: string, minLength: 2, maxLength: 60 }
+        sort: { type: integer, default: 0 }
+        is_active: { type: boolean, default: true }
+    BooksExpenseCategoryPatch:
+      type: object
+      additionalProperties: false
+      description: At least one field (400 otherwise). The code cannot change — an unknown field such as code is a 400.
+      properties:
+        name: { type: string, minLength: 2, maxLength: 60 }
+        sort: { type: integer }
+        is_active: { type: boolean }
+    BooksBudget:
+      type: object
+      required:
+        [budget_id, year, name, status, currency, created_by, created_by_name, created_at, approved_by, approved_by_name,
+         approved_at, line_count, income_total_minor, expense_total_minor]
+      properties:
+        budget_id: { type: string, format: uuid }
+        year: { type: integer }
+        name: { type: string }
+        status: { type: string, enum: [draft, approved] }
+        currency: { type: string, enum: [KES], description: Budgets are KES only. }
+        created_by: { type: [string, "null"], format: uuid }
+        created_by_name: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        approved_by: { type: [string, "null"], format: uuid }
+        approved_by_name: { type: [string, "null"] }
+        approved_at: { type: [string, "null"], format: date-time }
+        line_count: { type: integer }
+        income_total_minor: { type: integer, format: int64, description: Σ of every income line's 12 months. }
+        expense_total_minor: { type: integer, format: int64, description: Σ of every expense line's 12 months. }
+    BooksBudgetLine:
+      type: object
+      required: [line_id, kind, fund, category, label, monthly_minor, total_minor]
+      properties:
+        line_id: { type: string, format: uuid }
+        kind: { type: string, enum: [income, expense] }
+        fund: { oneOf: [ { $ref: "#/components/schemas/BooksFundRef" }, { type: "null" } ], description: "Always set on income lines; optional on expense lines." }
+        category: { oneOf: [ { $ref: "#/components/schemas/BooksCategoryRef" }, { type: "null" } ], description: "Set on expense lines only." }
+        label: { type: string }
+        monthly_minor: { type: array, minItems: 12, maxItems: 12, items: { type: integer, format: int64, minimum: 0 }, description: January → December. }
+        total_minor: { type: integer, format: int64 }
+    BooksBudgetDetail:
+      allOf:
+        - $ref: "#/components/schemas/BooksBudget"
+        - type: object
+          required: [lines]
+          properties:
+            lines: { type: array, items: { $ref: "#/components/schemas/BooksBudgetLine" }, description: "Income lines first, then expense; each in the order they were sent." }
+    BooksBudgetInput:
+      type: object
+      required: [year, name]
+      properties:
+        year: { type: integer, minimum: 2020, maximum: 2100 }
+        name: { type: string, minLength: 2, maxLength: 80 }
+    BooksBudgetPatch:
+      type: object
+      additionalProperties: false
+      description: At least one field; draft only.
+      properties:
+        year: { type: integer, minimum: 2020, maximum: 2100 }
+        name: { type: string, minLength: 2, maxLength: 80 }
+    BooksBudgetLinesInput:
+      type: object
+      required: [lines]
+      properties:
+        lines:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            required: [kind, label, monthly_minor]
+            properties:
+              kind: { type: string, enum: [income, expense] }
+              fund: { type: [string, "null"], description: "Fund code — required for income; optional for expense." }
+              category: { type: [string, "null"], description: "Expense category code — required for expense; must be absent for income." }
+              label: { type: string, minLength: 2, maxLength: 80 }
+              monthly_minor: { type: array, minItems: 12, maxItems: 12, items: { type: integer, format: int64, minimum: 0, maximum: 100000000000 } }
+    BooksBudgetActualsRow:
+      type: object
+      required: [budget_minor, actual_minor, variance_minor, budget_total_minor, actual_total_minor, variance_total_minor]
+      properties:
+        budget_minor: { type: array, minItems: 12, maxItems: 12, items: { type: integer, format: int64 } }
+        actual_minor: { type: array, minItems: 12, maxItems: 12, items: { type: integer, format: int64 } }
+        variance_minor: { type: array, minItems: 12, maxItems: 12, items: { type: integer, format: int64 }, description: "actual − budget per month (positive = above budget: good for income, overspend for expense)." }
+        budget_total_minor: { type: integer, format: int64 }
+        actual_total_minor: { type: integer, format: int64 }
+        variance_total_minor: { type: integer, format: int64 }
+    BooksBudgetActuals:
+      type: object
+      required: [budget, year, currency, months, lines, totals]
+      properties:
+        budget: { $ref: "#/components/schemas/BooksBudget" }
+        year: { type: integer }
+        currency: { type: string, enum: [KES] }
+        months: { type: array, minItems: 12, maxItems: 12, items: { type: string }, description: "YYYY-MM, January → December." }
+        lines:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/BooksBudgetActualsRow"
+              - type: object
+                required: [line_id, kind, label, fund, category]
+                properties:
+                  line_id: { type: string, format: uuid }
+                  kind: { type: string, enum: [income, expense] }
+                  label: { type: string }
+                  fund: { oneOf: [ { $ref: "#/components/schemas/BooksFundRef" }, { type: "null" } ] }
+                  category: { oneOf: [ { $ref: "#/components/schemas/BooksCategoryRef" }, { type: "null" } ] }
+        totals:
+          type: array
+          description: "Exactly two rows: income, then expense. actual = Σ line actuals; unbudgeted = that kind's actual money no line covers."
+          items:
+            allOf:
+              - $ref: "#/components/schemas/BooksBudgetActualsRow"
+              - type: object
+                required: [kind, unbudgeted_minor, unbudgeted_total_minor]
+                properties:
+                  kind: { type: string, enum: [income, expense] }
+                  unbudgeted_minor: { type: array, minItems: 12, maxItems: 12, items: { type: integer, format: int64 } }
+                  unbudgeted_total_minor: { type: integer, format: int64 }
+    BooksOpeningBalanceInput:
+      type: object
+      required: [idempotency_key, channel, fund, amount_minor, currency, as_of, memo]
+      properties:
+        idempotency_key: { type: string, minLength: 8, maxLength: 255 }
+        channel: { type: string, enum: [onhand, bank, cheque, mpesa, other], description: "Where the money sits: cash:<onhand|bank|cheque|mpesa>, other → cash:manual." }
+        fund: { type: string, description: Active fund code. }
+        amount_minor: { type: integer, format: int64, minimum: 1, maximum: 1000000000000 }
+        currency: { type: string, enum: [KES, USD] }
+        as_of: { type: string, format: date, description: "The balance date — within [today − 3660 days, today] (EAT), else 422 INVALID_DATE. Legs are dated as_of 12:00 EAT." }
+        memo: { type: string, minLength: 3, maxLength: 300 }
+    BooksJournalReverseInput:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 5, maxLength: 300, description: "Why — becomes the reversal journal's memo and is audited (trimmed)." }
+        allow_negative: { type: boolean, default: false, description: "Reverse even if the debited fund's balance in this currency goes below zero." }
+    BooksJournal:
+      type: object
+      required: [journal_id, kind, memo, occurred_on, created_at, created_by, created_by_name, ref_id, reversal_of, reversed_by_journal_id, legs, totals]
+      properties:
+        journal_id: { type: string, format: uuid }
+        kind: { type: string, enum: [expense, expense_void, transfer, opening, reversal] }
+        memo: { type: [string, "null"] }
+        occurred_on: { type: string, format: date, description: The economic date; the legs are dated occurred_on 12:00 EAT (a reversal restates its original's timestamp). }
+        created_at: { type: string, format: date-time, description: When it was entered. }
+        created_by: { type: [string, "null"], format: uuid }
+        created_by_name: { type: [string, "null"] }
+        ref_id: { type: [string, "null"], format: uuid, description: "expense / expense_void → expense_id; transfer → transfer_id; reversal → its original's ref_id; opening → null." }
+        reversal_of: { type: [string, "null"], format: uuid, description: "kind reversal: the journal it mirrors." }
+        reversed_by_journal_id: { type: [string, "null"], format: uuid, description: "The reversal journal that undid this one, if any." }
+        legs: { type: array, items: { $ref: "#/components/schemas/BooksLedgerLeg" }, description: Debit first. }
+        totals:
+          type: array
+          description: The journal's amount per currency (Σ debit legs = Σ credit legs).
+          items:
+            type: object
+            required: [currency, amount_minor]
+            properties:
+              currency: { type: string }
+              amount_minor: { type: integer, format: int64 }
+    BooksJournalResult:
+      allOf:
+        - $ref: "#/components/schemas/BooksJournal"
+        - type: object
+          required: [reused]
+          properties:
+            reused: { type: boolean, description: "true = a replay of the idempotency_key; nothing new was posted." }
+    BooksJournalList:
+      type: object
+      required: [data, next_cursor, totals]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/BooksJournal" } }
+        next_cursor: { type: [string, "null"] }
+        totals: { type: array, items: { $ref: "#/components/schemas/BooksCurrencyTotal" }, description: "Per currency over the WHOLE filtered set: amount = Σ debit legs, count = journals." }
+    PermissionCatalog:
+      type: object
+      required: [modules, capabilities]
+      properties:
+        modules: { type: array, items: { type: string }, description: "PERM_MODULES, server order." }
+        capabilities: { type: array, items: { type: string }, description: "CAPABILITIES, server order (view, create, edit, delete, approve, export, go, manage)." }
     Pledge:
       type: object
       required: [pledge_id, shape, currency, status, progress, title, custom_title, pays_to]
@@ -9958,6 +11645,800 @@ components:
         frequency: { type: string, enum: [weekly, monthly] }
         method: { type: string, enum: [card, mpesa, airtel], default: card }
         idempotency_key: { type: string, minLength: 8, maxLength: 255 }
+    # ── Finance ERP · reports schemas — add below this line. ──
+    FinanceChannel:
+      type: string
+      description: >-
+        Where the money came in: the office channel for an office-recorded gift
+        (onhand | bank | cheque | mpesa | other), else the provider — card (Stripe),
+        mpesa, airtel, paypal, or manual (a confirmed "I paid another way" claim).
+        Offline M-Pesa recorded by the office and online M-Pesa are both `mpesa`
+        (one till, one statement); `source` tells them apart. Filters also accept
+        `stripe` as an alias of `card`.
+      enum: [card, mpesa, airtel, paypal, manual, onhand, bank, cheque, other]
+    FinanceCurrencyTotal:
+      type: object
+      description: One currency's total over the WHOLE filtered set — never a sum across currencies.
+      required: [currency, amount_minor, count]
+      properties:
+        currency: { type: string, example: KES }
+        amount_minor: { type: integer, format: int64 }
+        count: { type: integer }
+    FinanceCurrencyAmount:
+      type: object
+      required: [currency, amount_minor]
+      properties:
+        currency: { type: string, example: KES }
+        amount_minor: { type: integer, format: int64 }
+    FinanceCurrencyBalance:
+      type: object
+      required: [currency, balance_minor]
+      properties:
+        currency: { type: string, example: KES }
+        balance_minor: { type: integer, format: int64, description: "credits − debits on the fund's account; negative when more left the fund than came in." }
+    FinanceOverview:
+      type: object
+      required: [period, currencies, income, expenses, net, outstanding_pledges, partners, counts, fund_balances, channels, series, alerts]
+      properties:
+        period:
+          type: object
+          required: [from, to, mtd_from, ytd_from, last_year_from, last_year_to]
+          properties:
+            from: { type: string, format: date }
+            to: { type: string, format: date }
+            mtd_from: { type: string, format: date, description: "First day of to's month." }
+            ytd_from: { type: string, format: date, description: "1 January of to's year." }
+            last_year_from: { type: string, format: date }
+            last_year_to: { type: string, format: date }
+        currencies: { type: array, items: { type: string }, description: "Every currency the figures below carry; KES first, then A–Z. KES is always present." }
+        income:
+          type: array
+          items:
+            type: object
+            required: [currency, period_minor, period_count, mtd_minor, ytd_minor, same_period_last_year_minor]
+            properties:
+              currency: { type: string }
+              period_minor: { type: integer, format: int64 }
+              period_count: { type: integer }
+              mtd_minor: { type: integer, format: int64 }
+              ytd_minor: { type: integer, format: int64 }
+              same_period_last_year_minor: { type: integer, format: int64 }
+        expenses:
+          type: array
+          description: APPROVED expenses only, by spent_on.
+          items:
+            type: object
+            required: [currency, period_minor, period_count, ytd_minor]
+            properties:
+              currency: { type: string }
+              period_minor: { type: integer, format: int64 }
+              period_count: { type: integer }
+              ytd_minor: { type: integer, format: int64 }
+        net:
+          type: array
+          description: income − expenses, per currency.
+          items:
+            type: object
+            required: [currency, period_minor, ytd_minor]
+            properties:
+              currency: { type: string }
+              period_minor: { type: integer, format: int64 }
+              ytd_minor: { type: integer, format: int64 }
+        outstanding_pledges:
+          type: array
+          items:
+            type: object
+            required: [currency, remaining_year_minor, pledges]
+            properties:
+              currency: { type: string }
+              remaining_year_minor: { type: integer, format: int64 }
+              pledges: { type: integer, description: Active pledges counted. }
+        partners:
+          type: object
+          required: [count, behind]
+          properties:
+            count: { type: integer }
+            behind: { type: integer }
+        counts:
+          type: object
+          required: [processing, failed_in_period, pending_claims, expenses_awaiting_approval, failing_schedules, stale_processing, integrity_issues]
+          properties:
+            processing: { type: integer, description: "Transactions now processing or requiring action (any age)." }
+            failed_in_period: { type: integer }
+            pending_claims: { type: integer }
+            expenses_awaiting_approval: { type: integer, description: Expenses recorded and not yet approved. }
+            failing_schedules: { type: integer, description: "Recurring gifts needing attention: paused, or with a consecutive failure (not cancelled)." }
+            stale_processing: { type: integer }
+            integrity_issues: { type: integer, description: "Reconciliation exceptions other than stale_processing and failed." }
+        fund_balances:
+          type: array
+          description: Top 6 funds by KES balance (all time).
+          items:
+            type: object
+            required: [code, name, is_active, balances]
+            properties:
+              code: { type: string }
+              name: { type: string }
+              is_active: { type: boolean }
+              balances: { type: array, items: { $ref: "#/components/schemas/FinanceCurrencyBalance" } }
+        channels:
+          type: array
+          description: Money received per cash account in the period, net of reversals.
+          items: { $ref: "#/components/schemas/FinanceChannelTotal" }
+        series:
+          type: array
+          items:
+            type: object
+            required: [currency, months]
+            properties:
+              currency: { type: string }
+              months:
+                type: array
+                description: 12 entries, oldest first, the last being to's month (through to).
+                items:
+                  type: object
+                  required: [month, income_minor, expenses_minor]
+                  properties:
+                    month: { type: string, example: "2026-09", description: YYYY-MM }
+                    income_minor: { type: integer, format: int64 }
+                    expenses_minor: { type: integer, format: int64 }
+        alerts:
+          type: array
+          items:
+            type: object
+            required: [kind, count, link]
+            properties:
+              kind: { type: string, enum: [pending_claims, expenses_awaiting_approval, failing_schedules, stale_processing, integrity_issues, partners_behind] }
+              count: { type: integer }
+              link: { type: string, example: /finance/claims, description: The web route that opens the queue. }
+    FinanceChannelTotal:
+      type: object
+      required: [channel, account, currency, count, received_minor, reversed_minor, net_minor]
+      properties:
+        channel: { type: string, description: "The account without its cash: prefix (stripe = card)." }
+        account: { type: string, example: "cash:mpesa" }
+        currency: { type: string }
+        count: { type: integer, description: Gifts received. }
+        received_minor: { type: integer, format: int64 }
+        reversed_minor: { type: integer, format: int64 }
+        net_minor: { type: integer, format: int64 }
+    FinanceTransactionRow:
+      type: object
+      description: >-
+        One transaction as the office sees it. Additive over the earlier register
+        row: transaction_id, full_name, amount_minor, currency, status, fund,
+        account_name, method, created_at and settled_at are unchanged.
+      required: [transaction_id, user_id, full_name, member_phone, display_name, amount_minor, currency, status, fund, fund_name, account_name, method, channel, source, provider, provider_ref, receipt_code, giver_name, giver_phone, pledge_id, pledge_title, need_id, need_title, office_channel, office_reference, recorded_by, recorded_by_name, reversed_at, reversed_by, reversed_by_name, reversal_reason, created_at, settled_at]
+      properties:
+        transaction_id: { type: string, format: uuid }
+        user_id: { type: [string, "null"], format: uuid, description: "Null for a memberless gift (website, or an office walk-in / anonymous gift — see source)." }
+        full_name: { type: [string, "null"], description: The member's name; null when memberless. }
+        member_phone: { type: [string, "null"] }
+        display_name: { type: string, description: "member name → giver_name → giver_phone → \"Anonymous\"." }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        status: { type: string, enum: [requires_action, processing, succeeded, failed, refunded] }
+        fund: { type: [string, "null"], description: "Fund code; null for a media purchase." }
+        fund_name: { type: [string, "null"] }
+        account_name: { type: [string, "null"] }
+        method: { type: [string, "null"], description: "Legacy: the raw provider (stripe | mpesa | airtel | paypal | manual). Prefer channel." }
+        channel: { $ref: "#/components/schemas/FinanceChannel" }
+        source: { type: string, enum: [app, website, admin] }
+        provider: { type: string }
+        provider_ref: { type: [string, "null"], description: "Provider reference, else the Stripe payment-intent id." }
+        receipt_code: { type: [string, "null"], description: "The M-Pesa code of an online M-Pesa gift, or the office receipt (OR-YYYY-NNNNN) of an office-recorded one." }
+        giver_name: { type: [string, "null"] }
+        giver_phone: { type: [string, "null"] }
+        pledge_id: { type: [string, "null"], format: uuid }
+        pledge_title: { type: [string, "null"] }
+        need_id: { type: [string, "null"], format: uuid }
+        need_title: { type: [string, "null"] }
+        office_channel: { type: [string, "null"], enum: [onhand, bank, cheque, mpesa, other, null] }
+        office_reference: { type: [string, "null"], description: "The office's reference — for office channel mpesa, the M-Pesa code (uppercased)." }
+        recorded_by: { type: [string, "null"], format: uuid }
+        recorded_by_name: { type: [string, "null"] }
+        reversed_at: { type: [string, "null"], format: date-time }
+        reversed_by: { type: [string, "null"], format: uuid }
+        reversed_by_name: { type: [string, "null"] }
+        reversal_reason: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        settled_at: { type: [string, "null"], format: date-time }
+    FinanceTransactionsPage:
+      type: object
+      required: [data, next_cursor, totals]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/FinanceTransactionRow" } }
+        next_cursor: { type: [string, "null"], description: Opaque; pass back as `cursor`. Null on the last page. }
+        totals:
+          type: array
+          description: "Per currency over the WHOLE filtered set: amount_minor = Σ succeeded amounts; count = every matching row, any status."
+          items: { $ref: "#/components/schemas/FinanceCurrencyTotal" }
+    FinanceLedgerLeg:
+      type: object
+      required: [entry_id, account, side, amount_minor, currency, created_at, is_reversal]
+      properties:
+        entry_id: { type: string, format: uuid }
+        account: { type: string }
+        side: { type: string, enum: [debit, credit] }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        created_at: { type: string, format: date-time }
+        is_reversal: { type: boolean, description: "A reversing leg: a debit on a non-cash account or a credit on cash:*." }
+    FinanceTransactionDetail:
+      type: object
+      required: [transaction, ledger_entries]
+      properties:
+        transaction:
+          allOf:
+            - $ref: "#/components/schemas/FinanceTransactionRow"
+            - type: object
+              required: [stripe_payment_intent, idempotency_key, schedule_id, giver_email]
+              properties:
+                stripe_payment_intent: { type: [string, "null"] }
+                idempotency_key: { type: [string, "null"] }
+                schedule_id: { type: [string, "null"], format: uuid }
+                giver_email: { type: [string, "null"] }
+        ledger_entries:
+          type: array
+          description: EVERY posting the transaction owns — the original pair and, once reversed, the reversing pair.
+          items: { $ref: "#/components/schemas/FinanceLedgerLeg" }
+    FinancePledgeRow:
+      type: object
+      required: [pledge_id, user_id, member_name, member_phone, title, shape, amount_minor, target_minor, currency, status, standing, year, pledged_year_minor, paid_year_minor, remaining_year_minor, paid_total_minor, kept, due_count, next_due, overdue_since, due_day, due_on, created_at, pays_to]
+      properties:
+        pledge_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        member_name: { type: string }
+        member_phone: { type: [string, "null"] }
+        title: { type: string }
+        shape: { type: string, enum: [monthly, total] }
+        amount_minor: { type: [integer, "null"], format: int64, description: A monthly pledge's instalment. }
+        target_minor: { type: [integer, "null"], format: int64, description: A total pledge's target. }
+        currency: { type: string }
+        status: { type: string, enum: [active, paused, fulfilled, cancelled] }
+        standing: { type: string, enum: [on_track, behind, fulfilled, paused], description: "The pledge card's label as of today (cancelled reads paused)." }
+        year: { type: integer }
+        pledged_year_minor: { type: integer, format: int64 }
+        paid_year_minor: { type: integer, format: int64 }
+        remaining_year_minor: { type: integer, format: int64 }
+        paid_total_minor: { type: integer, format: int64, description: "Every succeeded payment toward it, all time." }
+        kept: { type: integer }
+        due_count: { type: integer }
+        next_due: { type: [string, "null"], format: date }
+        overdue_since: { type: [string, "null"], format: date }
+        due_day: { type: [integer, "null"] }
+        due_on: { type: [string, "null"], format: date }
+        created_at: { type: string, format: date-time }
+        pays_to:
+          type: [object, "null"]
+          required: [code, name]
+          properties:
+            code: { type: string }
+            name: { type: string }
+    FinancePledgeTotal:
+      type: object
+      description: >-
+        Per currency over the whole filtered register. Row by row, paid =
+        toward + beyond and pledged = toward + remaining, so the totals foot:
+        pledged_minor = paid_toward_minor + remaining_minor and paid_minor =
+        paid_toward_minor + paid_beyond_minor.
+      required: [currency, amount_minor, count, pledged_minor, paid_minor, remaining_minor, paid_toward_minor, paid_beyond_minor]
+      properties:
+        currency: { type: string }
+        amount_minor: { type: integer, format: int64, description: "= pledged_minor (the common totals shape)." }
+        count: { type: integer }
+        pledged_minor: { type: integer, format: int64 }
+        paid_minor: { type: integer, format: int64 }
+        remaining_minor: { type: integer, format: int64 }
+        paid_toward_minor: { type: integer, format: int64, description: "Σ min(paid, pledged) per pledge — what was paid toward this year's promises." }
+        paid_beyond_minor: { type: integer, format: int64, description: "Σ max(paid − pledged, 0) per pledge — paid above this year's promise: payments to a pledge since cancelled, or paid ahead." }
+    FinancePledgesPage:
+      type: object
+      required: [year, data, next_cursor, totals]
+      properties:
+        year: { type: integer }
+        data: { type: array, items: { $ref: "#/components/schemas/FinancePledgeRow" } }
+        next_cursor: { type: [string, "null"] }
+        totals: { type: array, items: { $ref: "#/components/schemas/FinancePledgeTotal" } }
+    FinanceFundRow:
+      type: object
+      required: [code, name, name_sw, is_active, description, sort, balances, income, expenses_ytd, transfers_in_ytd, transfers_out_ytd, last_activity_at]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        name_sw: { type: [string, "null"] }
+        is_active: { type: boolean }
+        description: { type: [string, "null"] }
+        sort: { type: integer }
+        balances: { type: array, items: { $ref: "#/components/schemas/FinanceCurrencyBalance" } }
+        income:
+          type: array
+          items:
+            type: object
+            required: [currency, period_minor, ytd_minor]
+            properties:
+              currency: { type: string }
+              period_minor: { type: integer, format: int64 }
+              ytd_minor: { type: integer, format: int64 }
+        expenses_ytd: { type: array, items: { $ref: "#/components/schemas/FinanceCurrencyAmount" } }
+        transfers_in_ytd: { type: array, items: { $ref: "#/components/schemas/FinanceCurrencyAmount" } }
+        transfers_out_ytd: { type: array, items: { $ref: "#/components/schemas/FinanceCurrencyAmount" } }
+        last_activity_at: { type: [string, "null"], format: date-time, description: The latest posting on the fund's account. }
+    FinanceFundsPage:
+      type: object
+      required: [period, data, next_cursor, totals]
+      properties:
+        period:
+          type: object
+          required: [from, to, ytd_from]
+          properties:
+            from: { type: string, format: date }
+            to: { type: string, format: date }
+            ytd_from: { type: string, format: date }
+        data: { type: array, items: { $ref: "#/components/schemas/FinanceFundRow" } }
+        next_cursor: { type: "null", description: Funds are one page. }
+        totals: { type: array, items: { $ref: "#/components/schemas/FinanceCurrencyTotal" }, description: "Σ balances per currency; count = funds holding that currency." }
+    FinanceLedgerRow:
+      type: object
+      description: >-
+        One posting. Additive over the earlier ledger row: entry_id,
+        transaction_id, account, side, amount_minor, currency and created_at are
+        unchanged (transaction_id is now null on a journal posting).
+      required: [entry_id, kind, transaction_id, journal_id, account, side, amount_minor, currency, created_at, posted_on, receipt_code, user_id, member_name, transaction_status, journal_kind, memo]
+      properties:
+        entry_id: { type: string, format: uuid }
+        kind: { type: string, enum: [transaction, journal] }
+        transaction_id: { type: [string, "null"], format: uuid }
+        journal_id: { type: [string, "null"], format: uuid }
+        account: { type: string }
+        side: { type: string, enum: [debit, credit] }
+        amount_minor: { type: integer, format: int64 }
+        currency: { type: string }
+        created_at: { type: string, format: date-time, description: When the posting was written. }
+        posted_on: { type: string, format: date, description: "The EAT date of created_at — the date every ledger view (filters, trial balance, settlement) reads." }
+        receipt_code: { type: [string, "null"] }
+        user_id: { type: [string, "null"], format: uuid }
+        member_name: { type: [string, "null"], description: "The transaction's display name (member → giver → phone → Anonymous); null on a journal posting." }
+        transaction_status: { type: [string, "null"] }
+        journal_kind: { type: [string, "null"], enum: [expense, expense_void, transfer, opening, reversal, null], description: "Null on a transaction posting. opening = an opening balance; reversal = the mirror of a transfer or an opening." }
+        memo: { type: [string, "null"] }
+    FinanceLedgerTotal:
+      type: object
+      required: [currency, amount_minor, count, debit_minor, credit_minor]
+      properties:
+        currency: { type: string }
+        amount_minor: { type: integer, format: int64, description: "debit_minor − credit_minor (0 over a balanced, unfiltered ledger)." }
+        count: { type: integer }
+        debit_minor: { type: integer, format: int64 }
+        credit_minor: { type: integer, format: int64 }
+    FinanceLedgerPage:
+      type: object
+      required: [data, next_cursor, totals]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/FinanceLedgerRow" } }
+        next_cursor: { type: [string, "null"] }
+        totals: { type: array, items: { $ref: "#/components/schemas/FinanceLedgerTotal" } }
+    FinanceTrialBalance:
+      type: object
+      required: [period, data, totals, balanced]
+      properties:
+        period:
+          type: object
+          required: [from, to]
+          properties:
+            from: { type: [string, "null"], format: date }
+            to: { type: [string, "null"], format: date }
+        data:
+          type: array
+          items:
+            type: object
+            required: [account, currency, debit_minor, credit_minor, balance_minor, normal_side]
+            properties:
+              account: { type: string }
+              currency: { type: string }
+              debit_minor: { type: integer, format: int64 }
+              credit_minor: { type: integer, format: int64 }
+              balance_minor: { type: integer, format: int64, description: On the account's normal side. }
+              normal_side: { type: string, enum: [debit, credit] }
+        totals:
+          type: array
+          items:
+            type: object
+            required: [currency, debit_minor, credit_minor, balanced]
+            properties:
+              currency: { type: string }
+              debit_minor: { type: integer, format: int64 }
+              credit_minor: { type: integer, format: int64 }
+              balanced: { type: boolean }
+        balanced: { type: boolean, description: Every currency balances. }
+    FinanceReconciliationException:
+      type: object
+      required: [kind, transaction_id, journal_id, amount_minor, currency, at, detail]
+      properties:
+        kind: { type: string, enum: [stale_processing, failed, succeeded_without_ledger, unbalanced_transaction, refunded_without_reversal, duplicate_receipt, unbalanced_journal] }
+        transaction_id: { type: [string, "null"], format: uuid }
+        journal_id: { type: [string, "null"], format: uuid }
+        amount_minor: { type: [integer, "null"], format: int64 }
+        currency: { type: [string, "null"] }
+        at: { type: [string, "null"], format: date-time, description: When the row was created. }
+        detail: { type: string }
+    FinanceReconciliation:
+      type: object
+      required: [period, settlement, exceptions, exception_counts, integrity]
+      properties:
+        period:
+          type: object
+          required: [from, to]
+          properties:
+            from: { type: string, format: date }
+            to: { type: string, format: date }
+        settlement:
+          type: array
+          description: Newest day first; within a day by channel, then currency.
+          items:
+            type: object
+            required: [day, channel, account, currency, count, received_minor, reversed_count, reversed_minor, amount_minor]
+            properties:
+              day: { type: string, format: date }
+              channel: { type: string }
+              account: { type: string }
+              currency: { type: string }
+              count: { type: integer, description: Gifts received that day. }
+              received_minor: { type: integer, format: int64 }
+              reversed_count: { type: integer }
+              reversed_minor: { type: integer, format: int64 }
+              amount_minor: { type: integer, format: int64, description: received − reversed. }
+        exceptions: { type: array, items: { $ref: "#/components/schemas/FinanceReconciliationException" } }
+        exception_counts:
+          type: object
+          required: [stale_processing, failed, succeeded_without_ledger, unbalanced_transaction, refunded_without_reversal, duplicate_receipt, unbalanced_journal]
+          properties:
+            stale_processing: { type: integer }
+            failed: { type: integer }
+            succeeded_without_ledger: { type: integer }
+            unbalanced_transaction: { type: integer }
+            refunded_without_reversal: { type: integer }
+            duplicate_receipt: { type: integer }
+            unbalanced_journal: { type: integer }
+        integrity:
+          type: array
+          items:
+            type: object
+            required: [currency, debit_minor, credit_minor, balanced]
+            properties:
+              currency: { type: string }
+              debit_minor: { type: integer, format: int64 }
+              credit_minor: { type: integer, format: int64 }
+              balanced: { type: boolean }
+    FinanceReportMatrix:
+      type: object
+      required: [report, year, by, currencies]
+      properties:
+        report: { type: string, enum: [income, expenses] }
+        year: { type: integer }
+        by: { type: string, enum: [fund, channel, source, category] }
+        currencies:
+          type: array
+          description: KES first, then A–Z; only currencies with data (KES always present).
+          items:
+            type: object
+            required: [currency, rows, totals]
+            properties:
+              currency: { type: string }
+              rows:
+                type: array
+                description: Largest total first.
+                items:
+                  type: object
+                  required: [key, label, months, total_minor]
+                  properties:
+                    key: { type: string, description: "fund code / channel / source / category code; `none` when absent." }
+                    label: { type: string }
+                    months: { type: array, minItems: 12, maxItems: 12, items: { type: integer, format: int64 }, description: January first. }
+                    total_minor: { type: integer, format: int64 }
+              totals:
+                type: object
+                required: [months, total_minor]
+                properties:
+                  months: { type: array, minItems: 12, maxItems: 12, items: { type: integer, format: int64 } }
+                  total_minor: { type: integer, format: int64 }
+    FinancePledgesReport:
+      type: object
+      required: [year, currencies]
+      properties:
+        year: { type: integer }
+        currencies:
+          type: array
+          items:
+            type: object
+            required: [currency, months, totals]
+            properties:
+              currency: { type: string }
+              months:
+                type: array
+                minItems: 12
+                maxItems: 12
+                items:
+                  type: object
+                  required: [month, pledged_minor, paid_minor, kept, missed, behind_partners]
+                  properties:
+                    month: { type: integer, minimum: 1, maximum: 12 }
+                    pledged_minor: { type: integer, format: int64 }
+                    paid_minor: { type: integer, format: int64 }
+                    kept: { type: integer }
+                    missed: { type: integer }
+                    behind_partners: { type: integer }
+              totals:
+                type: object
+                required: [pledged_minor, paid_minor, kept, missed, behind_partners]
+                properties:
+                  pledged_minor: { type: integer, format: int64 }
+                  paid_minor: { type: integer, format: int64 }
+                  kept: { type: integer }
+                  missed: { type: integer }
+                  behind_partners: { type: integer }
+    FinanceStatementRow:
+      type: object
+      required: [user_id, full_name, phone, email, gifts, totals, by_fund, pledge_paid, last_gift_at]
+      properties:
+        user_id: { type: string, format: uuid }
+        full_name: { type: string }
+        phone: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        gifts: { type: integer, description: "Succeeded gifts in the year, every currency." }
+        totals: { type: array, items: { $ref: "#/components/schemas/FinanceCurrencyTotal" } }
+        by_fund:
+          type: array
+          items:
+            type: object
+            required: [code, name, currency, amount_minor]
+            properties:
+              code: { type: string }
+              name: { type: string }
+              currency: { type: string }
+              amount_minor: { type: integer, format: int64 }
+        pledge_paid: { type: array, items: { $ref: "#/components/schemas/FinanceCurrencyAmount" }, description: The part of the year's giving that was toward a pledge. }
+        last_gift_at: { type: string, format: date-time }
+    FinanceStatementsPage:
+      type: object
+      required: [year, data, next_cursor, totals]
+      properties:
+        year: { type: integer }
+        data: { type: array, items: { $ref: "#/components/schemas/FinanceStatementRow" } }
+        next_cursor: { type: [string, "null"] }
+        totals: { type: array, items: { $ref: "#/components/schemas/FinanceCurrencyTotal" } }
+    FinanceAuditRow:
+      type: object
+      required: [audit_id, actor_id, actor_name, action, entity, entity_id, metadata, occurred_at, actor_type]
+      properties:
+        audit_id: { type: integer, format: int64 }
+        actor_id: { type: [string, "null"], format: uuid }
+        actor_name: { type: [string, "null"] }
+        action: { type: string }
+        entity: { type: string }
+        entity_id: { type: [string, "null"] }
+        metadata: { type: [object, "null"] }
+        occurred_at: { type: string, format: date-time }
+        actor_type: { type: string, enum: [System, Admin] }
+    FinanceAuditPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/FinanceAuditRow" } }
+        next_cursor: { type: [string, "null"], description: Pass back as `cursor`. }
+    FinanceTrend:
+      type: object
+      required: [data, currency, series]
+      properties:
+        data:
+          type: array
+          description: "Back-compat: the KES series only (it used to add every currency together)."
+          items: { $ref: "#/components/schemas/FinanceTrendPoint" }
+        currency: { type: string, example: KES, description: The currency `data` is in. }
+        series:
+          type: array
+          description: One zero-filled series per currency present in the window (KES always).
+          items:
+            type: object
+            required: [currency, points]
+            properties:
+              currency: { type: string }
+              points: { type: array, items: { $ref: "#/components/schemas/FinanceTrendPoint" } }
+    FinanceTrendPoint:
+      type: object
+      required: [m, month, total_minor]
+      properties:
+        m: { type: string, example: Sep }
+        month: { type: string, format: date-time, description: The month's first instant. }
+        total_minor: { type: integer, format: int64 }
+    FinanceSettings:
+      type: object
+      required: [providers, receipt_counter, giving_tiers, cost_per_disciple_minor, reminder_policy]
+      properties:
+        providers:
+          type: array
+          items:
+            type: object
+            required: [key, label, configured, env]
+            properties:
+              key: { type: string, enum: [stripe, mpesa, airtel, paypal] }
+              label: { type: string }
+              configured: { type: boolean }
+              env: { type: array, items: { type: string }, description: "The environment variable NAMES this provider reads — never their values." }
+        receipt_counter:
+          type: object
+          required: [year, next, next_receipt]
+          properties:
+            year: { type: integer }
+            next: { type: integer }
+            next_receipt: { type: string, example: OR-2026-00001 }
+        giving_tiers:
+          type: array
+          items:
+            type: object
+            required: [amount_minor, currency, disciples_per_year, meaning]
+            properties:
+              amount_minor: { type: integer, format: int64 }
+              currency: { type: string }
+              disciples_per_year: { type: integer }
+              meaning: { type: string }
+        cost_per_disciple_minor: { type: integer, format: int64 }
+        reminder_policy:
+          type: object
+          required: [due_soon_days, due_window_days, follow_up_hours, follow_ups, in_flight_minutes, text]
+          properties:
+            due_soon_days: { type: integer }
+            due_window_days: { type: integer }
+            follow_up_hours: { type: integer }
+            follow_ups: { type: integer }
+            in_flight_minutes: { type: integer }
+            text: { type: array, items: { type: string } }
+    FinanceAccountBalance:
+      type: object
+      required: [account, label, balance_minor]
+      properties:
+        account: { type: string, example: "cash:mpesa" }
+        label: { type: string, example: M-Pesa }
+        balance_minor: { type: integer, format: int64 }
+    FinanceFinancialPosition:
+      type: object
+      required: [as_of, currencies, balanced]
+      properties:
+        as_of: { type: string, format: date }
+        currencies:
+          type: array
+          description: KES first, then A–Z (KES always present).
+          items:
+            type: object
+            required: [currency, assets, funds, other, totals, balanced]
+            properties:
+              currency: { type: string }
+              assets: { type: array, items: { $ref: "#/components/schemas/FinanceAccountBalance" }, description: "cash:* accounts, debits − credits." }
+              funds:
+                type: array
+                description: "fund:* accounts, credits − debits."
+                items:
+                  allOf:
+                    - $ref: "#/components/schemas/FinanceAccountBalance"
+                    - type: object
+                      required: [code]
+                      properties:
+                        code: { type: string }
+              other: { type: array, items: { $ref: "#/components/schemas/FinanceAccountBalance" }, description: "Every other account (sales:media, …), credits − debits." }
+              totals:
+                type: object
+                required: [assets_minor, funds_minor, other_minor]
+                properties:
+                  assets_minor: { type: integer, format: int64 }
+                  funds_minor: { type: integer, format: int64 }
+                  other_minor: { type: integer, format: int64 }
+              balanced: { type: boolean, description: "assets_minor = funds_minor + other_minor." }
+        balanced: { type: boolean, description: Every currency balances. }
+    FinanceStatementLine:
+      type: object
+      required: [key, label, amount_minor]
+      properties:
+        key: { type: string, description: "Fund code, account, or expense category code." }
+        label: { type: string }
+        amount_minor: { type: integer, format: int64 }
+    FinanceIncomeExpenditure:
+      type: object
+      required: [period, currencies]
+      properties:
+        period:
+          type: object
+          required: [from, to]
+          properties:
+            from: { type: string, format: date }
+            to: { type: string, format: date }
+        currencies:
+          type: array
+          description: KES first, then A–Z (KES always present).
+          items:
+            type: object
+            required: [currency, income, other_income, expenses, totals]
+            properties:
+              currency: { type: string }
+              income: { type: array, items: { $ref: "#/components/schemas/FinanceStatementLine" }, description: "Per fund (key = fund code): gifts net of reversals." }
+              other_income: { type: array, items: { $ref: "#/components/schemas/FinanceStatementLine" }, description: "key = the account (sales:media, …)." }
+              expenses: { type: array, items: { $ref: "#/components/schemas/FinanceStatementLine" }, description: "Per expense category (key = category code)." }
+              totals:
+                type: object
+                required: [gifts_minor, other_income_minor, income_minor, expenses_minor, surplus_minor]
+                properties:
+                  gifts_minor: { type: integer, format: int64 }
+                  other_income_minor: { type: integer, format: int64 }
+                  income_minor: { type: integer, format: int64, description: gifts + other income. }
+                  expenses_minor: { type: integer, format: int64 }
+                  surplus_minor: { type: integer, format: int64, description: income − expenses (negative = deficit). }
+    FinanceGiver:
+      type: object
+      required: [user_id, full_name, phone, email, congregation_name, open_pledges]
+      properties:
+        user_id: { type: string, format: uuid }
+        full_name: { type: string }
+        phone: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        congregation_name: { type: [string, "null"] }
+        open_pledges:
+          type: array
+          description: Active or paused pledges, newest first.
+          items:
+            type: object
+            required: [pledge_id, title, currency, shape, status, amount_minor, target_minor, pays_to]
+            properties:
+              pledge_id: { type: string, format: uuid }
+              title: { type: string }
+              currency: { type: string }
+              shape: { type: string, enum: [monthly, total] }
+              status: { type: string, enum: [active, paused] }
+              amount_minor: { type: [integer, "null"], format: int64 }
+              target_minor: { type: [integer, "null"], format: int64 }
+              pays_to:
+                type: [object, "null"]
+                required: [code, name]
+                properties:
+                  code: { type: string }
+                  name: { type: string }
+    FinanceGiversResult:
+      type: object
+      required: [data]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/FinanceGiver" } }
+    FinanceNeedRow:
+      type: object
+      required: [need_id, title, why, department_id, department_name, fund_code, target_minor, raised_minor, gifts_count, currency, deadline, status, created_at, decided_at]
+      properties:
+        need_id: { type: string, format: uuid }
+        title: { type: string }
+        why: { type: string }
+        department_id: { type: string, format: uuid }
+        department_name: { type: string }
+        fund_code: { type: [string, "null"], description: "The department's fund, when it names an active fund — where a gift to the need is booked; null = the gift's own fund." }
+        target_minor: { type: integer, format: int64 }
+        raised_minor: { type: integer, format: int64 }
+        gifts_count: { type: integer }
+        currency: { type: string }
+        deadline: { type: [string, "null"], format: date }
+        status: { type: string, enum: [pending, approved, rejected, closed] }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: [string, "null"], format: date-time }
+    FinanceNeedTotal:
+      type: object
+      required: [currency, amount_minor, count, target_minor, raised_minor]
+      properties:
+        currency: { type: string }
+        amount_minor: { type: integer, format: int64, description: "= raised_minor (the common totals shape)." }
+        count: { type: integer }
+        target_minor: { type: integer, format: int64 }
+        raised_minor: { type: integer, format: int64 }
+    FinanceNeedsPage:
+      type: object
+      required: [data, next_cursor, totals]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/FinanceNeedRow" } }
+        next_cursor: { type: [string, "null"] }
+        totals: { type: array, items: { $ref: "#/components/schemas/FinanceNeedTotal" } }
     GivingRecord:
       type: object
       required: [transaction_id, amount_minor, currency, status, pledge_id, pledge_title, need_id]

@@ -1,11 +1,15 @@
 // Portal navigation model — the four sidebar groups + per-route page titles,
 // rebuilt to the "Final Pathway Portal" Figma make. Routes drive react-router.
 import {
-  LayoutDashboard, Users, CalendarDays, Wallet, Award, Layers,
+  LayoutDashboard, Users, CalendarDays, Award, Layers,
   TrendingUp, MessageSquare, MessageSquareText, MessagesSquare, Video, Star, AlignLeft, Bell,
   Shield, Globe, Languages as LanguagesIcon, UserCog, Church, Sparkles, Brain, MapPin,
   Radio, SlidersVertical, ListMusic, UserCheck, UserRoundCheck, HeartHandshake, HeartPulse, Megaphone, QrCode, HandHeart,
   HandHelping, Inbox,
+  // Finance (docs/FINANCE_ERP.md §1) — one distinct glyph per page, none shared
+  // with any other sidebar row, so the mini (icon-only) sidebar stays legible.
+  PieChart, ArrowLeftRight, HandCoins, BadgeCheck, Repeat, Flag, Target, ReceiptText,
+  Calculator, PiggyBank, BookOpen, Scale, BarChart3, FileText, History, Settings2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -26,7 +30,18 @@ export interface NavItem {
    */
   permission?: string;
 }
-export interface NavGroup { label: string; items: NavItem[] }
+export interface NavGroup {
+  label: string;
+  items: NavItem[];
+  /**
+   * The group header becomes a toggle (chevron) that folds / unfolds its rows.
+   * Default expanded; the choice persists per group in localStorage
+   * (navGroupStorageKey), and the group re-opens by itself whenever the
+   * current route is one of its pages. The mini (icon-only) sidebar ignores
+   * the fold and always shows every row's icon.
+   */
+  collapsible?: boolean;
+}
 
 export const navGroups: NavGroup[] = [
   {
@@ -79,18 +94,51 @@ export const navGroups: NavGroup[] = [
       { path: "/reflection-queue", label: "Reflection Queue", icon: MessageSquare },
       { path: "/level-reviews", label: "Level reviews", icon: UserCheck },
       { path: "/events", label: "Events", icon: CalendarDays },
-      { path: "/finance", label: "Finance", icon: Wallet, permission: "finance:view" },
-      // Partners programme (docs/PARTNERS_PROGRAMME.md): same `finance` module
-      // as the ledger — finance:view to see, finance:manage to act. HandHeart
-      // rather than HeartHandshake so it does not read as Discipleship Hub.
-      { path: "/partners", label: "Partners", icon: HandHeart, permission: "finance:view" },
+      // Finance and Partners moved to their own FINANCE group below
+      // (docs/FINANCE_ERP.md §1, owner request 2026-09-26).
       // Departments (docs/PARTNERS_PROGRAMME.md §4): where members serve, what a
       // department posts, and its needs as giving targets. Its own `departments`
       // module — departments:view to see, departments:manage to act. HandHelping:
-      // an offered hand, distinct from Partners (HandHeart) and the Hub.
+      // an offered hand, distinct from Partners (HandHeart) and the Hub. It stays
+      // here; its money view is Finance → Department needs.
       { path: "/departments", label: "Departments", icon: HandHelping, permission: "departments:view" },
       { path: "/certificates", label: "Certificates", icon: Award, permission: "certificates:view" },
       { path: "/badges", label: "Badges", icon: Star, permission: "badges:view" },
+    ],
+  },
+  {
+    // Finance — the ERP module (docs/FINANCE_ERP.md §1; owner request
+    // 2026-09-26: "a menu title like Media, with sub-menus under it"). Ordered by
+    // the ERP flow: money in → commitments → money out → planning → books →
+    // reporting → admin. Every page is gated on finance:view (the page's reads);
+    // what a person may DO on a page — export, manage, approve (§6) — is a
+    // separate capability the page checks itself (components/finance/kit.tsx
+    // useFinanceCaps). Collapsible: seventeen rows is a lot of sidebar.
+    label: "Finance",
+    collapsible: true,
+    items: [
+      { path: "/finance", label: "Overview", icon: PieChart, permission: "finance:view" },
+      { path: "/finance/transactions", label: "Transactions", icon: ArrowLeftRight, permission: "finance:view" },
+      { path: "/finance/pledges", label: "Pledges", icon: HandCoins, permission: "finance:view" },
+      // Partners programme (docs/PARTNERS_PROGRAMME.md): same `finance` module
+      // as the ledger. HandHeart rather than HeartHandshake so it does not read
+      // as Discipleship Hub. /partners redirects here (App.tsx).
+      { path: "/finance/partners", label: "Partners", icon: HandHeart, permission: "finance:view" },
+      { path: "/finance/claims", label: "Claims", icon: BadgeCheck, permission: "finance:view" },
+      { path: "/finance/recurring", label: "Recurring gifts", icon: Repeat, permission: "finance:view" },
+      { path: "/finance/campaigns", label: "Campaigns", icon: Flag, permission: "finance:view" },
+      // Target, not HandHelping: that glyph is Departments' (Operations), and a
+      // need is a giving target with raised-vs-target progress.
+      { path: "/finance/needs", label: "Department needs", icon: Target, permission: "finance:view" },
+      { path: "/finance/expenses", label: "Expenses", icon: ReceiptText, permission: "finance:view" },
+      { path: "/finance/budgets", label: "Budgets", icon: Calculator, permission: "finance:view" },
+      { path: "/finance/funds", label: "Funds", icon: PiggyBank, permission: "finance:view" },
+      { path: "/finance/ledger", label: "Ledger", icon: BookOpen, permission: "finance:view" },
+      { path: "/finance/reconciliation", label: "Reconciliation", icon: Scale, permission: "finance:view" },
+      { path: "/finance/reports", label: "Reports", icon: BarChart3, permission: "finance:view" },
+      { path: "/finance/statements", label: "Statements", icon: FileText, permission: "finance:view" },
+      { path: "/finance/audit", label: "Audit", icon: History, permission: "finance:view" },
+      { path: "/finance/settings", label: "Settings", icon: Settings2, permission: "finance:view" },
     ],
   },
   {
@@ -203,8 +251,25 @@ export const pageTitles: Record<string, string> = {
   "/broadcast": "Broadcast",
   "/sms": "SMS Center",
   "/events": "Events & Attendance",
-  "/finance": "Finance",
-  "/partners": "Partners",
+  // Finance (docs/FINANCE_ERP.md §1) — the top bar reads "Finance · <title>"
+  // for every one of these (breadcrumbFor below).
+  "/finance": "Overview",
+  "/finance/transactions": "Transactions",
+  "/finance/pledges": "Pledges",
+  "/finance/partners": "Partners",
+  "/finance/claims": "Claims",
+  "/finance/recurring": "Recurring gifts",
+  "/finance/campaigns": "Campaigns",
+  "/finance/needs": "Department needs",
+  "/finance/expenses": "Expenses",
+  "/finance/budgets": "Budgets",
+  "/finance/funds": "Funds",
+  "/finance/ledger": "Ledger",
+  "/finance/reconciliation": "Reconciliation",
+  "/finance/reports": "Reports",
+  "/finance/statements": "Statements",
+  "/finance/audit": "Audit",
+  "/finance/settings": "Settings",
   "/departments": "Departments",
   "/certificates": "Certificates & Badges",
   "/badges": "Badges Catalog",
@@ -227,4 +292,78 @@ export function titleFor(pathname: string): string {
   if (pathname.startsWith("/cms/level/")) return "CMS — Level Detail";
   if (pathname.startsWith("/events/series/")) return "Event Command Center";
   return "Nuru Pathway";
+}
+
+// ── Finance section (docs/FINANCE_ERP.md §1) ──
+export const FINANCE_BASE = "/finance";
+/** True for /finance and every /finance/* route. */
+export function isFinancePath(pathname: string): boolean {
+  return pathname === FINANCE_BASE || pathname.startsWith(`${FINANCE_BASE}/`);
+}
+
+/** What the top bar shows: the page title, and — for a sectioned module — the
+ *  section it lives in. Only Finance is sectioned today ("Finance ·
+ *  Transactions": section muted, title strong); every other route keeps its
+ *  plain title, exactly as before. */
+export interface Breadcrumb {
+  section: string | null;
+  title: string;
+}
+export function breadcrumbFor(pathname: string): Breadcrumb {
+  const title = titleFor(pathname);
+  return isFinancePath(pathname) ? { section: "Finance", title } : { section: null, title };
+}
+
+/**
+ * Where an old /partners link lands now that Partners lives under Finance
+ * (docs/FINANCE_ERP.md §1): /finance/partners with the query string (and hash)
+ * kept — ?partner=<id> still opens that partner's drawer — except the claims
+ * queue, /partners?tab=claims, which is its own page now (/finance/claims; any
+ * other params ride along).
+ */
+export function legacyPartnersRedirect(search: string, hash = ""): string {
+  const query = search && !search.startsWith("?") ? `?${search}` : search;
+  const params = new URLSearchParams(query);
+  if (params.get("tab") === "claims") {
+    params.delete("tab");
+    const rest = params.toString();
+    return `${FINANCE_BASE}/claims${rest ? `?${rest}` : ""}${hash}`;
+  }
+  return `${FINANCE_BASE}/partners${query}${hash}`;
+}
+
+// ── Sidebar helpers (Layout.tsx) ──
+const allNavPaths: string[] = navGroups.flatMap((g) => g.items.map((i) => i.path));
+/** NavLink `end`: an item whose path prefixes another item's path must match
+ *  exactly — "/" (Dashboard), "/curriculum", and "/finance" (Overview), which
+ *  would otherwise light up on every page beneath it. */
+export function navLinkEnd(path: string): boolean {
+  const prefix = path === "/" ? "/" : `${path}/`;
+  return allNavPaths.some((p) => p !== path && p.startsWith(prefix));
+}
+/** True when `pathname` is one of the group's pages or a sub-route of one. */
+export function groupContainsPath(group: NavGroup, pathname: string): boolean {
+  return group.items.some((i) => pathname === i.path || (i.path !== "/" && pathname.startsWith(`${i.path}/`)));
+}
+/** localStorage key holding a collapsible group's open state ("nuru.nav.finance.open"). */
+export function navGroupStorageKey(label: string): string {
+  return `nuru.nav.${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.open`;
+}
+/** Read a collapsible group's saved state — default OPEN; storage that is
+ *  missing, blocked (private mode) or holding junk also reads as open. */
+export function readNavGroupOpen(label: string): boolean {
+  try {
+    return globalThis.localStorage?.getItem(navGroupStorageKey(label)) !== "0";
+  } catch {
+    return true;
+  }
+}
+/** Persist a collapsible group's state; storage failures are ignored (the
+ *  sidebar still folds for this session, it just won't be remembered). */
+export function writeNavGroupOpen(label: string, open: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(navGroupStorageKey(label), open ? "1" : "0");
+  } catch {
+    /* storage unavailable — the fold lasts for this session only */
+  }
 }

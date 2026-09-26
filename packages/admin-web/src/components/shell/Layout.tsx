@@ -1,7 +1,7 @@
 // Portal shell — navy sidebar (four nav groups, collapsible + mobile drawer),
 // white top bar (search, notifications, profile), and the routed page outlet.
 // Rebuilt to the "Final Pathway Portal" Figma make; gated on a real session.
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, useState, type CSSProperties, type ReactElement } from "react";
 import { NavLink, Outlet, Navigate, useLocation, useNavigate } from "react-router-dom";
 import {
   Bell, Search, User, LogOut, ChevronDown, ChevronUp,
@@ -12,12 +12,18 @@ import { logout, setPermissions } from "../../store/authSlice";
 import { MeApi, WebAuthnApi } from "../../api/client";
 import { passkeyNudgeCandidate, dismissPasskeyNudge, clearPasswordLoginMarker } from "../../lib/passkeys";
 import { useIsMobile } from "./useIsMobile";
-import { navGroups, titleFor, navItemVisible } from "./nav";
+import {
+  navGroups, breadcrumbFor, navItemVisible, navLinkEnd, groupContainsPath, readNavGroupOpen, writeNavGroupOpen,
+} from "./nav";
 import { useNotifications, notifTimeAgo, CATEGORY_META } from "../notifications/NotificationsProvider";
 
 const SIDEBAR_FULL = 260;
 const SIDEBAR_MINI = 68;
 const TOPBAR_H = 72;
+// Sidebar group header (the small uppercase label above each group's rows).
+const GROUP_HEADER: CSSProperties = {
+  fontSize: 9, fontWeight: 800, color: "rgba(232,239,245,0.3)", textTransform: "uppercase", letterSpacing: "0.1em", padding: "10px 20px 4px",
+};
 
 export function Layout(): ReactElement {
   const dispatch = useAppDispatch();
@@ -36,6 +42,27 @@ export function Layout(): ReactElement {
   // One-time passkey nudge: after a PASSWORD login on a WebAuthn-capable
   // browser with ZERO registered passkeys. Dismissal sticks (localStorage).
   const [passkeyNudge, setPasskeyNudge] = useState(false);
+  // Collapsible sidebar groups (nav.tsx NavGroup.collapsible — Finance). Open
+  // by default; the state is remembered per group (localStorage, every access
+  // guarded in nav.tsx), and a folded group re-opens whenever the route is one
+  // of its pages, so the active row is never hidden inside a fold.
+  const [groupOpen, setGroupOpen] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(navGroups.filter((g) => g.collapsible).map((g) => [g.label, readNavGroupOpen(g.label)])),
+  );
+  const toggleGroup = (label: string): void => {
+    const open = groupOpen[label] === false;
+    writeNavGroupOpen(label, open);
+    setGroupOpen((prev) => ({ ...prev, [label]: open }));
+  };
+  // Layout effect: runs before paint, so a reload onto a Finance page never
+  // flashes the folded group first.
+  useLayoutEffect(() => {
+    const folded = navGroups.filter((g) => g.collapsible && groupOpen[g.label] === false && groupContainsPath(g, location.pathname));
+    if (folded.length === 0) return;
+    for (const g of folded) writeNavGroupOpen(g.label, true);
+    setGroupOpen((prev) => ({ ...prev, ...Object.fromEntries(folded.map((g) => [g.label, true])) }));
+    // Only on navigation — folding the group you are standing in is allowed.
+  }, [location.pathname]);
 
   useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
   useEffect(() => {
@@ -69,7 +96,7 @@ export function Layout(): ReactElement {
   const display = (me?.full_name?.trim() || emailName.split(/[._-]/).map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" "));
   const initials = (display.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0] ?? "").join("") || "NU").toUpperCase();
   const roleLabel = (me?.role ?? role ?? "member").toUpperCase();
-  const pageTitle = titleFor(location.pathname);
+  const crumb = breadcrumbFor(location.pathname);
   const { notifications, unreadCount, markRead, markAllRead, remove, clearAll } = useNotifications();
 
   const signOut = (): void => { dispatch(logout()); navigate("/login"); };
@@ -112,17 +139,42 @@ export function Layout(): ReactElement {
           {navGroups.map((group) => {
             const visibleItems = group.items.filter((i) => navItemVisible(i, me?.role ?? role, permissions));
             if (visibleItems.length === 0) return null; // a group with nothing to show doesn't show its header either
+            // A collapsible group folds only in the full sidebar: the mini
+            // sidebar has no header to unfold it from, so it shows every icon.
+            const foldable = group.collapsible === true && !collapsed;
+            const open = !foldable || groupOpen[group.label] !== false;
+            const listId = `nav-group-${group.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
             return (
             <div key={group.label} style={{ marginBottom: 4 }}>
-              {!collapsed && (
-                <div style={{ fontSize: 9, fontWeight: 800, color: "rgba(232,239,245,0.3)", textTransform: "uppercase", letterSpacing: "0.1em", padding: "10px 20px 4px" }}>{group.label}</div>
-              )}
+              {!collapsed && (foldable ? (
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.label)}
+                  aria-expanded={open}
+                  aria-controls={listId}
+                  title={open ? `Fold ${group.label}` : `Show ${group.label}`}
+                  className="flex items-center w-full"
+                  style={{ ...GROUP_HEADER, gap: 6, justifyContent: "space-between", textAlign: "left", background: "none", border: "none", cursor: "pointer" }}
+                >
+                  <span className="flex items-center" style={{ gap: 6 }}>
+                    {group.label}
+                    {/* folded while you stand inside it: a gold dot says so */}
+                    {!open && groupContainsPath(group, location.pathname) ? (
+                      <span aria-hidden="true" className="rounded-full" style={{ width: 5, height: 5, background: "var(--nuru-gold)" }} />
+                    ) : null}
+                  </span>
+                  {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                </button>
+              ) : (
+                <div style={GROUP_HEADER}>{group.label}</div>
+              ))}
+              <div id={listId} hidden={!open}>
               {visibleItems
                 .map(({ path, label, icon: Icon }) => (
                 <NavLink
                   key={path}
                   to={path}
-                  end={path === "/" || path === "/curriculum"}
+                  end={navLinkEnd(path)}
                   title={collapsed ? label : undefined}
                   className="flex items-center"
                   style={({ isActive }) => ({
@@ -152,6 +204,7 @@ export function Layout(): ReactElement {
                   )}
                 </NavLink>
               ))}
+              </div>
             </div>
             );
           })}
@@ -217,7 +270,17 @@ export function Layout(): ReactElement {
 
           <div className="flex items-center gap-3" style={{ minWidth: 0, flex: isMobile ? 1 : undefined }}>
             <div style={{ minWidth: 0 }}>
-              <h1 style={{ fontSize: isMobile ? 15 : 18, fontWeight: 700, color: "var(--nuru-navy)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.2 }}>{pageTitle}</h1>
+              <h1 style={{ fontSize: isMobile ? 15 : 18, fontWeight: 700, color: "var(--nuru-navy)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.2 }}>
+                {/* Sectioned modules read "Finance · Transactions": the section
+                    muted, the page strong. Every other route: its title alone. */}
+                {crumb.section ? (
+                  <>
+                    <span style={{ color: "var(--muted-foreground)", fontWeight: 500 }}>{crumb.section}</span>{" "}
+                    <span aria-hidden="true" style={{ color: "var(--muted-foreground)", fontWeight: 400, margin: "0 2px" }}>·</span>{" "}
+                  </>
+                ) : null}
+                {crumb.title}
+              </h1>
               {!isMobile && <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 1 }}>Nuru Pathway Admin Portal</p>}
             </div>
           </div>

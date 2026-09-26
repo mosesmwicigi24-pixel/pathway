@@ -57,6 +57,9 @@ export interface StatementGroup {
 export interface StatementFacts {
   congregation: string;
   member: string;
+  /** "Year 2026" when the statement covers one year (the office's download);
+   *  absent for the member's complete record. */
+  periodLabel?: string;
   /** Σ settled gifts outside a pledge ("KSh 3,500"). */
   giftsLabel: string;
   /** Σ settled pledge-tied payments; null when that is zero — the header
@@ -245,6 +248,7 @@ export function renderStatementPdf(facts: StatementFacts): Buffer {
     "NURU PATHWAY - GIVING STATEMENT",
     facts.congregation,
     facts.member,
+    ...(facts.periodLabel ? [facts.periodLabel] : []),
     "",
     facts.pledgesLabel === null
       ? `Total given ${facts.totalLabel}`

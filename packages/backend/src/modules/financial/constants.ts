@@ -44,3 +44,16 @@ export const PLEDGE_PAYS_TO_NAME = `CASE WHEN pt_own.code IS NOT NULL THEN pt_ow
 export function methodLabel(method: string): string {
   return ({ mpesa: "M-Pesa", airtel: "Airtel Money", card: "Card", paypal: "PayPal", manual: "Manual" } as Record<string, string>)[method] ?? method;
 }
+
+/** A gift the office RECORDED (Finance → Record a gift; transactions.office_channel
+ *  set) reads by how the member paid — cash at the office, a bank transfer, a
+ *  cheque, M-Pesa to the till — never the bare "Manual" a confirmed pledge
+ *  claim shows. Everything else falls back to methodLabel. The wire `method`
+ *  stays "manual" either way; only the words change. */
+export function giftMethodLabel(method: string, officeChannel: string | null | undefined): string {
+  if (officeChannel) {
+    const words = ({ onhand: "Cash (at the office)", bank: "Bank transfer", cheque: "Cheque", mpesa: "M-Pesa", other: "Recorded by the office" } as Record<string, string>)[officeChannel];
+    if (words) return words;
+  }
+  return methodLabel(method);
+}

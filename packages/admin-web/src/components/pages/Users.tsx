@@ -10,46 +10,27 @@
 // top of roles, written via SystemApi.userPermissions / setUserPermissions.
 // Elevated members (is_staff, kept role='Student') appear in the list with a
 // badge and can be granted a precise capability without minting a role.
+//
+// The grid comes from the server's own catalog (GET /admin/permissions/catalog
+// — PERM_MODULES × CAPABILITIES), not a list kept here: the old hard-coded grid
+// had no departments / followUp / live rows and no go / manage columns, so
+// those could never be granted to one person (docs/FINANCE_ERP.md §6). A save
+// replaces the direct layer wholesale; if the catalog can't load, or the
+// person holds a direct grant the grid can't show, Save stays off.
 import { useCallback, useEffect, useMemo, useState, Fragment, type ReactElement, type CSSProperties } from "react";
 import {
   ChevronRight, Search, Plus, ChevronDown, X, Mail, Phone, UserCog, ShieldCheck,
   Globe, Languages as LanguagesIcon, Pencil, Ban, Eye, EyeOff, Lock, KeyRound, Check, Trash2,
-  Shield, ShieldHalf, Sparkles, Save, RotateCcw,
+  Shield, ShieldHalf, Sparkles, Save, RotateCcw, AlertTriangle, RefreshCw,
 } from "lucide-react";
 import {
   SystemApi, OpsApi, uploadToCloudinary,
-  type SystemUser, type SystemRole, type Country, type Language, type Capability, type UserPermissions, type Permission,
+  type SystemUser, type SystemRole, type Country, type Language, type UserPermissions,
 } from "../../api/client";
+import { financeErrorMessage } from "../../api/finance";
 import { errorMessage } from "../../util/error";
-
-// Fixed RBAC dimensions — mirror the backend (system module PERM_MODULES/CAPABILITIES)
-// and the Roles page grid. module × capability; only granted cells are stored.
-interface PermModule { id: string; label: string; group: string }
-const PERM_MODULES: PermModule[] = [
-  { id: "dashboard", label: "Dashboard & analytics", group: "Portal" },
-  { id: "levels", label: "Curriculum Levels", group: "Curriculum" },
-  { id: "cms", label: "Modules (CMS)", group: "Curriculum" },
-  { id: "quiz", label: "Quiz Builder", group: "Curriculum" },
-  { id: "videos", label: "Video Library", group: "Curriculum" },
-  { id: "cells", label: "Cell Engagement", group: "Operations" },
-  { id: "members", label: "Members", group: "Operations" },
-  { id: "reflections", label: "Reflection Queue", group: "Operations" },
-  { id: "events", label: "Events & Attendance", group: "Operations" },
-  { id: "finance", label: "Finance", group: "Operations" },
-  { id: "certificates", label: "Certificates", group: "Operations" },
-  { id: "badges", label: "Badges", group: "Operations" },
-  { id: "users", label: "Users", group: "System" },
-  { id: "rolesAdmin", label: "Roles & Permissions", group: "System" },
-  { id: "countries", label: "Countries", group: "System" },
-  { id: "languages", label: "Languages", group: "System" },
-  { id: "congregations", label: "Congregations", group: "System" },
-  { id: "website", label: "Website (nuruplace.org)", group: "Website" },
-];
-const CAPABILITIES: { key: Capability; label: string }[] = [
-  { key: "view", label: "View" }, { key: "create", label: "Create" }, { key: "edit", label: "Edit" },
-  { key: "delete", label: "Delete" }, { key: "approve", label: "Approve" }, { key: "export", label: "Export" },
-];
-const permKey = (p: Permission): string => `${p.module_id}:${p.capability}`;
+import { describeGrants, grantKey, initialChecked, planSave, sameKeys } from "../finance/a/permissionMatrix";
+import { usePermissionCatalog } from "../finance/a/usePermissionCatalog";
 
 const AVATAR_GRADIENTS = [
   "linear-gradient(135deg,#0B1F33,#1E4068)", "linear-gradient(135deg,#C89B3C,#8B6914)",
@@ -214,77 +195,88 @@ function UserPermissionsDrawer({ user, roleName, onClose, onSaved, onError }: {
   user: SystemUser; roleName: (key: string) => string;
   onClose: () => void; onSaved: () => void; onError: (m: string) => void;
 }): ReactElement {
+  const catalog = usePermissionCatalog();
+  const model = catalog.model;
   const [data, setData] = useState<UserPermissions | null>(null);
   const [loading, setLoading] = useState(true);
-  // Working set of DIRECT grants (the only editable layer), keyed "module:capability".
-  const [direct, setDirect] = useState<Set<string>>(new Set());
+  // Working set of DIRECT grants (the only editable layer) the grid can show,
+  // keyed "module:capability"; null = unchanged since load.
+  const [edits, setEdits] = useState<Set<string> | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    setLoadError(null);
     SystemApi.userPermissions(user.user_id)
-      .then((d) => { if (!alive) return; setData(d); setDirect(new Set(d.direct.map(permKey))); })
-      .catch((e) => { if (alive) onError(errorMessage(e, "Could not load permissions.")); })
+      .then((d) => { if (!alive) return; setData(d); setEdits(null); })
+      .catch((e) => {
+        if (!alive) return;
+        const msg = financeErrorMessage(e, "Could not load this person's permissions.");
+        setLoadError(msg);
+        onError(msg);
+      })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [user.user_id, onError]);
 
   const bridged = data?.bridged ?? false;
-  const fromRoles = useMemo(() => new Set((data?.from_roles ?? []).map(permKey)), [data]);
-  const dirty = useMemo(() => {
-    if (!data) return false;
-    const orig = new Set(data.direct.map(permKey));
-    if (orig.size !== direct.size) return true;
-    for (const k of direct) if (!orig.has(k)) return true;
-    return false;
-  }, [data, direct]);
+  const fromRoles = useMemo(() => new Set((data?.from_roles ?? []).map(grantKey)), [data]);
+  const initial = useMemo(() => (data && model ? initialChecked(data.direct, model) : null), [data, model]);
+  const direct = edits ?? initial ?? new Set<string>();
+  const plan = data && model ? planSave(data.direct, direct, model) : null;
+  const dirty = Boolean(initial && !sameKeys(direct, initial));
+  const blocked = plan ? plan.blocked.length > 0 : false;
+  const canSave = !bridged && !busy && dirty && plan !== null && !blocked;
 
-  const groups = Array.from(new Set(PERM_MODULES.map((m) => m.group)));
   const roleCount = fromRoles.size;
   const directCount = direct.size;
 
-  const has = (mod: string, cap: Capability): { role: boolean; direct: boolean; effective: boolean } => {
+  const has = (mod: string, cap: string): { role: boolean; direct: boolean; effective: boolean } => {
     const k = `${mod}:${cap}`;
     const role = bridged || fromRoles.has(k);
     const d = direct.has(k);
     return { role, direct: d, effective: role || d };
   };
-  function toggleDirect(mod: string, cap: Capability): void {
-    if (bridged) return;
+  function toggleDirect(mod: string, cap: string): void {
+    if (bridged || !initial) return;
     const k = `${mod}:${cap}`;
     // Toggling a cell already granted by a role is a no-op for the direct layer
     // (the grant stands via the role); we don't let it add a redundant direct grant.
     if (fromRoles.has(k)) return;
-    setDirect((prev) => { const next = new Set(prev); if (next.has(k)) next.delete(k); else next.add(k); return next; });
+    const next = new Set(direct);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    setEdits(next);
   }
   async function save(): Promise<void> {
-    if (bridged) return;
+    if (!canSave || !plan) return;
     setBusy(true);
+    setSaveError(null);
     try {
-      const perms: Permission[] = Array.from(direct).map((s) => { const [module_id, capability] = s.split(":"); return { module_id: module_id ?? "", capability: capability ?? "" }; });
-      await SystemApi.setUserPermissions(user.user_id, perms);
+      await SystemApi.setUserPermissions(user.user_id, plan.grants);
       onSaved();
-    } catch (e) { onError(errorMessage(e, "Save failed.")); } finally { setBusy(false); }
+    } catch (e) { setSaveError(financeErrorMessage(e, "The direct grants were not saved.")); } finally { setBusy(false); }
   }
 
   return (
     <div className="fixed inset-0 z-50 flex" style={{ background: "rgba(11,31,51,0.45)" }} onClick={onClose}>
-      <div className="ml-auto flex flex-col" style={{ width: "min(760px, 100vw)", maxWidth: "100vw", height: "100%", background: "var(--card)", boxShadow: "-20px 0 60px rgba(0,0,0,0.25)" }} onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label={`Permissions — ${user.full_name}`} className="ml-auto flex flex-col" style={{ width: "min(860px, 100vw)", maxWidth: "100vw", height: "100%", background: "var(--card)", boxShadow: "-20px 0 60px rgba(0,0,0,0.25)" }} onClick={(e) => e.stopPropagation()}>
         <div className="px-6 py-5" style={{ background: "var(--nuru-navy)", color: "#fff" }}>
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2" style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: "var(--nuru-gold)" }}><Shield size={12} /> USER PERMISSIONS</div>
-              <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginTop: 2 }}>{user.full_name}</h2>
+              <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginTop: 2, color: "#fff" }}>{user.full_name}</h2>
               <div className="flex items-center gap-1.5 flex-wrap" style={{ fontSize: 12, color: "rgba(232,239,245,0.7)", marginTop: 4 }}>
                 {user.is_staff && <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5" style={{ background: "rgba(245,199,126,0.16)", color: "#F5C77E", fontSize: 9.5, fontWeight: 700 }}><Sparkles size={9} /> ELEVATED MEMBER</span>}
                 <span>{user.role_keys.length ? user.role_keys.map(roleName).join(", ") : "No role assigned"}</span>
               </div>
             </div>
-            <button onClick={onClose} className="rounded-lg p-1.5" style={{ background: "rgba(255,255,255,0.1)", border: "none" }}><X size={16} color="#fff" /></button>
+            <button onClick={onClose} aria-label="Close" className="rounded-lg p-1.5" style={{ background: "rgba(255,255,255,0.1)", border: "none" }}><X size={16} color="#fff" /></button>
           </div>
           {bridged ? (
-            <div className="mt-3 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5" style={{ background: "rgba(245,199,126,0.14)", color: "#F5C77E", fontSize: 11.5, fontWeight: 600 }}><Lock size={12} /> Legacy Admin/SuperAdmin — full access via the bridge; direct grants aren't needed.</div>
+            <div className="mt-3 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5" style={{ background: "rgba(245,199,126,0.14)", color: "#F5C77E", fontSize: 11.5, fontWeight: 600 }}><Lock size={12} /> Legacy Admin/SuperAdmin — full access via the bridge; direct grants aren&apos;t needed.</div>
           ) : (
             <div className="mt-3 flex items-center gap-4" style={{ fontSize: 11.5, color: "rgba(232,239,245,0.85)" }}>
               <span className="inline-flex items-center gap-1.5"><span style={{ width: 12, height: 12, borderRadius: 3, background: "#3B6CB5" }} /> From role · {roleCount}</span>
@@ -294,39 +286,63 @@ function UserPermissionsDrawer({ user, roleName, onClose, onSaved, onError }: {
         </div>
 
         <div className="flex-1 overflow-auto px-5 py-4">
-          {loading ? (
+          {catalog.error ? (
+            <div role="alert" className="rounded-xl" style={{ background: "#FDECEC", border: "1px solid #F5C2C0", color: "#B42318", padding: "12px 14px", fontSize: 13 }}>
+              <div className="flex items-center gap-2" style={{ fontWeight: 700 }}><AlertTriangle size={14} /> {catalog.error}</div>
+              <div style={{ color: "var(--nuru-navy)", marginTop: 6 }}>Without it this editor can&apos;t show every permission the server has, and saving a partial grid would remove the direct grants it can&apos;t see — so Save is off until the list loads.</div>
+              <button onClick={catalog.retry} className="mt-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--nuru-navy)", fontSize: 12.5, fontWeight: 600 }}><RefreshCw size={12} /> Try again</button>
+            </div>
+          ) : loadError ? (
+            <div role="alert" className="rounded-xl" style={{ background: "#FDECEC", border: "1px solid #F5C2C0", color: "#B42318", padding: "12px 14px", fontSize: 13 }}>
+              <div className="flex items-center gap-2" style={{ fontWeight: 700 }}><AlertTriangle size={14} /> {loadError}</div>
+              <div style={{ color: "var(--nuru-navy)", marginTop: 6 }}>Nothing can be changed until they load — close this and open it again.</div>
+            </div>
+          ) : loading || !model || !data ? (
             <div className="text-center py-16" style={{ fontSize: 14, color: "var(--muted-foreground)" }}>Loading permissions…</div>
           ) : (
-            <table className="w-full border-collapse" style={{ minWidth: 560 }}>
-              <thead><tr>
-                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--muted-foreground)" }}>Module</th>
-                {CAPABILITIES.map((c) => <th key={c.key} style={{ padding: "6px 4px", width: 78, fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, color: "var(--nuru-navy)" }}>{c.label}</th>)}
-              </tr></thead>
-              <tbody>
-                {groups.map((g) => (
-                  <Fragment key={g}>
-                    <tr><td colSpan={CAPABILITIES.length + 1} style={{ padding: "12px 8px 5px" }}><span className="nuru-eyebrow nuru-eyebrow-gold">{g}</span></td></tr>
-                    {PERM_MODULES.filter((m) => m.group === g).map((m) => (
-                      <tr key={m.id} style={{ borderTop: "1px solid var(--border)" }}>
-                        <td style={{ padding: "8px", fontSize: 13, fontWeight: 600, color: "var(--nuru-navy)" }}>{m.label}</td>
-                        {CAPABILITIES.map((c) => {
-                          const s = has(m.id, c.key);
-                          return <td key={c.key} style={{ padding: "6px 4px", textAlign: "center" }}><PermCell state={s} bridged={bridged} onClick={() => toggleDirect(m.id, c.key)} /></td>;
-                        })}
-                      </tr>
-                    ))}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <table className="w-full border-collapse" style={{ minWidth: 200 + model.capabilities.length * 66 }}>
+                <thead><tr>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--muted-foreground)" }}>Module</th>
+                  {model.capabilities.map((c) => <th key={c.key} title={c.hint ?? undefined} style={{ padding: "6px 4px", width: 66, fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, color: "var(--nuru-navy)" }}>{c.label}</th>)}
+                </tr></thead>
+                <tbody>
+                  {model.groups.map((g) => (
+                    <Fragment key={g}>
+                      <tr><td colSpan={model.capabilities.length + 1} style={{ padding: "12px 8px 5px" }}><span className="nuru-eyebrow nuru-eyebrow-gold">{g}</span></td></tr>
+                      {model.modules.filter((m) => m.group === g).map((m) => (
+                        <tr key={m.id} style={{ borderTop: "1px solid var(--border)" }}>
+                          <td style={{ padding: "8px", fontSize: 13, fontWeight: 600, color: "var(--nuru-navy)" }}>{m.label}{m.label === m.id ? <span style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--muted-foreground)", marginLeft: 6 }}>(server module)</span> : null}</td>
+                          {model.capabilities.map((c) => {
+                            const s = has(m.id, c.key);
+                            return <td key={c.key} style={{ padding: "6px 4px", textAlign: "center" }}><PermCell state={s} bridged={bridged} label={`${m.label} — ${c.label}`} onClick={() => toggleDirect(m.id, c.key)} /></td>;
+                          })}
+                        </tr>
+                      ))}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+              {model.capabilities.some((c) => c.hint) ? (
+                <div style={{ marginTop: 14, display: "grid", gap: 4, fontSize: 11.5, color: "var(--muted-foreground)", lineHeight: 1.5 }}>
+                  {model.capabilities.filter((c) => c.hint).map((c) => <div key={c.key}><span style={{ fontWeight: 700, color: "var(--nuru-navy)" }}>{c.label}</span> — {c.hint}</div>)}
+                </div>
+              ) : null}
+              {blocked && plan ? (
+                <div role="alert" className="rounded-xl" style={{ marginTop: 12, background: "#FDECEC", border: "1px solid #F5C2C0", color: "#B42318", padding: "10px 12px", fontSize: 12.5 }}>
+                  {user.full_name} holds {plan.blocked.length === 1 ? "a direct grant" : "direct grants"} this editor can&apos;t show or save: <code style={{ fontFamily: "var(--font-mono)" }}>{describeGrants(plan.blocked)}</code>. Saving would remove {plan.blocked.length === 1 ? "it" : "them"}, so Save is off — ask a developer.
+                </div>
+              ) : null}
+            </>
           )}
+          {saveError ? <div role="alert" style={{ marginTop: 12, color: "#B42318", fontSize: 12.5, fontWeight: 600 }}>{saveError}</div> : null}
         </div>
 
         <div className="px-6 py-4 flex items-center justify-between gap-2" style={{ borderTop: "1px solid var(--border)", background: "var(--secondary)" }}>
-          <button onClick={() => data && setDirect(new Set(data.direct.map(permKey)))} disabled={bridged || !dirty} className="flex items-center gap-1.5" style={{ fontSize: 12.5, fontWeight: 600, color: bridged || !dirty ? "var(--muted-foreground)" : "var(--nuru-navy)", cursor: bridged || !dirty ? "default" : "pointer", background: "none", border: "none", opacity: bridged || !dirty ? 0.6 : 1 }}><RotateCcw size={13} /> Reset</button>
+          <button onClick={() => setEdits(null)} disabled={bridged || !dirty} className="flex items-center gap-1.5" style={{ fontSize: 12.5, fontWeight: 600, color: bridged || !dirty ? "var(--muted-foreground)" : "var(--nuru-navy)", cursor: bridged || !dirty ? "default" : "pointer", background: "none", border: "none", opacity: bridged || !dirty ? 0.6 : 1 }}><RotateCcw size={13} /> Reset</button>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="rounded-xl px-4 py-2.5" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--foreground)", fontSize: 13, fontWeight: 600 }}>Cancel</button>
-            <button onClick={() => void save()} disabled={bridged || busy || !dirty} className="flex items-center gap-2 rounded-xl px-5 py-2.5" style={{ background: bridged || !dirty ? "var(--muted)" : "var(--nuru-gold)", color: bridged || !dirty ? "var(--muted-foreground)" : "#fff", fontSize: 13, fontWeight: 600, border: "none", cursor: bridged || !dirty ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}><Save size={14} /> Save direct grants</button>
+            <button onClick={() => void save()} disabled={!canSave} className="flex items-center gap-2 rounded-xl px-5 py-2.5" style={{ background: canSave ? "var(--nuru-gold)" : "var(--muted)", color: canSave ? "#fff" : "var(--muted-foreground)", fontSize: 13, fontWeight: 600, border: "none", cursor: canSave ? "pointer" : "default", opacity: busy ? 0.6 : 1 }}><Save size={14} /> {busy ? "Saving…" : "Save direct grants"}</button>
           </div>
         </div>
       </div>
@@ -334,19 +350,20 @@ function UserPermissionsDrawer({ user, roleName, onClose, onSaved, onError }: {
   );
 }
 
+
 // One matrix cell. Role-derived (or bridged) grants render as a locked navy/blue
 // check (source: role — not directly editable). Direct grants render as a green
 // toggle the admin owns. An empty editable cell is an outlined box.
-function PermCell({ state, bridged, onClick }: { state: { role: boolean; direct: boolean; effective: boolean }; bridged: boolean; onClick: () => void }): ReactElement {
+function PermCell({ state, bridged, label, onClick }: { state: { role: boolean; direct: boolean; effective: boolean }; bridged: boolean; label: string; onClick: () => void }): ReactElement {
   if (state.role) {
     return (
-      <span title={bridged ? "Granted via the Admin/SuperAdmin bridge" : "Granted by an assigned role — change the role to remove"} className="flex items-center justify-center rounded-md mx-auto" style={{ width: 22, height: 22, border: "1.5px solid #3B6CB5", background: "#3B6CB5", opacity: 0.9 }}>
+      <span role="img" aria-label={`${label}: granted by ${bridged ? "the Admin bridge" : "a role"}`} title={bridged ? "Granted via the Admin/SuperAdmin bridge" : "Granted by an assigned role — change the role to remove"} className="flex items-center justify-center rounded-md mx-auto" style={{ width: 22, height: 22, border: "1.5px solid #3B6CB5", background: "#3B6CB5", opacity: 0.9 }}>
         <ShieldHalf size={12} color="#fff" />
       </span>
     );
   }
   return (
-    <button onClick={onClick} title={state.direct ? "Direct grant — click to remove" : "Click to grant directly"} className="flex items-center justify-center rounded-md mx-auto" style={{ width: 22, height: 22, border: `1.5px solid ${state.direct ? "#16A34A" : "var(--border)"}`, background: state.direct ? "#16A34A" : "var(--card)", cursor: "pointer" }}>
+    <button onClick={onClick} aria-label={label} aria-pressed={state.direct} title={state.direct ? "Direct grant — click to remove" : "Click to grant directly"} className="flex items-center justify-center rounded-md mx-auto" style={{ width: 22, height: 22, border: `1.5px solid ${state.direct ? "#16A34A" : "var(--border)"}`, background: state.direct ? "#16A34A" : "var(--card)", cursor: "pointer" }}>
       {state.direct && <Check size={13} color="#fff" />}
     </button>
   );

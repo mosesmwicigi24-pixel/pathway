@@ -291,7 +291,7 @@ describe("the Partners statement on the wire", () => {
     expect(history.find((r) => r.transaction_id === tithe)).toMatchObject({ pledge_id: null, pledge_title: null, need_id: null });
     // Nothing removed: every field that was there before is still there.
     expect(Object.keys(history[0]!).sort()).toEqual([
-      "account_name", "amount_minor", "created_at", "currency", "fund", "method", "need_id", "pledge_id", "pledge_title",
+      "account_name", "amount_minor", "created_at", "currency", "fund", "method", "method_label", "need_id", "pledge_id", "pledge_title",
       "provider_ref", "receipt_code", "settled_at", "status", "transaction_id",
     ]);
   });

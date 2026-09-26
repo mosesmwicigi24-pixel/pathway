@@ -2133,7 +2133,10 @@ export interface PartnerRow {
   tier: { name: string; monthly_minor: number } | null;
   pledges_active: number;
   committed_monthly_minor: number;
+  /** KES only — kept for older readers; use given_year. */
   given_year_minor: number;
+  /** Every succeeded gift this year, any fund, per currency (never added across currencies). */
+  given_year?: { currency: string; amount_minor: number }[];
   last_gift_at: string | null;
   behind: boolean;
   next_due_on: string | null;
@@ -2144,7 +2147,9 @@ export interface PartnersSummary {
   active_pledges: number;
   committed_monthly_minor: number;
   behind: number;
+  /** KES only — kept for older readers; use given_year. */
   given_year_minor: number;
+  given_year?: { currency: string; amount_minor: number }[];
 }
 
 export type PledgeShape = "monthly" | "total";
