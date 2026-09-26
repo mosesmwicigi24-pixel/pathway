@@ -35,14 +35,18 @@ export function useResource<T>(load: () => Promise<T>, key: string, opts: { enab
   const reload = useCallback(() => {
     const gen = ++generation.current;
     setState((s) => ({ ...s, loading: true, error: null }));
-    loadRef.current().then(
-      (data) => {
-        if (gen === generation.current) setState({ data, loading: false, error: null });
-      },
-      (e: unknown) => {
-        if (gen === generation.current) setState({ data: null, loading: false, error: financeErrorMessage(e, fallback) });
-      },
-    );
+    // Through a resolved promise, so a loader that throws synchronously lands
+    // in the error state like any failed read instead of breaking the page.
+    Promise.resolve()
+      .then(() => loadRef.current())
+      .then(
+        (data) => {
+          if (gen === generation.current) setState({ data, loading: false, error: null });
+        },
+        (e: unknown) => {
+          if (gen === generation.current) setState({ data: null, loading: false, error: financeErrorMessage(e, fallback) });
+        },
+      );
   }, [fallback]);
 
   useEffect(() => {
