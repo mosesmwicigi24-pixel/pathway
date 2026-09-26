@@ -956,6 +956,10 @@ export type BooksFundPatch = {
   description?: string | null | undefined;
   sort?: number | undefined;
   is_active?: boolean | undefined;
+  /** Deactivate even though money still routes to the fund (resend after a
+   *  409 FUND_IN_USE, whose details count active_pledges, active_schedules,
+   *  departments and live_campaigns). */
+  force?: boolean | undefined;
 };
 
 export type BooksTransferInput = {
@@ -1484,3 +1488,40 @@ export const FinanceApi = {
   /** finance:view. A member's Partners statement PDF for a year (404 = never a partner). */
   partnerStatementPdf: (userId: string, year: number, filename = `partners-statement-${year}.pdf`) => downloadPdf(statementPdfPath(userId, "partners"), { year }, filename),
 };
+
+/* ====================================================================== */
+/* Givers — member search for "Record a gift" (appended: web pages set A)   */
+/* ====================================================================== */
+
+/** One of a member's open (active | paused) pledges, as the gift form offers it. */
+export interface GiverOpenPledge {
+  pledge_id: string;
+  title: string;
+  currency: string;
+  shape: PledgeShapeValue;
+  /** A monthly pledge's instalment. */
+  amount_minor: number | null;
+  /** A total pledge's target. */
+  target_minor: number | null;
+  /** The fund the pledge routes a gift to (the books ignore the form's fund under a pledge). */
+  pays_to: { code: string; name: string } | null;
+}
+
+/** GET /admin/finance/givers row — a member the office can record a gift for. */
+export interface FinanceGiver {
+  user_id: string;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  congregation_name: string | null;
+  open_pledges: GiverOpenPledge[];
+}
+
+/**
+ * finance:view. GET /admin/finance/givers?q&limit — members matching a name,
+ * phone or email, each with their open pledges (search-as-you-type in the
+ * Record a gift drawer). `limit` defaults to 8 here.
+ */
+export function searchGivers(q: string, limit = 8): Promise<FinanceGiver[]> {
+  return get<{ data: FinanceGiver[] }>(`${F}/givers`, { q, limit }).then((r) => r.data);
+}
