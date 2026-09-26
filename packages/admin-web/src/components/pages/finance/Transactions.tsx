@@ -156,7 +156,7 @@ export function FinanceTransactions(): ReactElement {
       key: "giver",
       header: "Giver",
       cell: (r) => (
-        <span className="inline-flex items-center" style={{ gap: 6, maxWidth: 240 }}>
+        <span className="inline-flex items-center" style={{ gap: 6, maxWidth: 200 }}>
           <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.display_name}</span>
           {r.user_id ? (
             <Link
@@ -172,30 +172,29 @@ export function FinanceTransactions(): ReactElement {
         </span>
       ),
     },
-    { key: "fund", header: "Fund", cell: (r) => r.fund_name ?? r.fund ?? <span style={{ color: FIN.muted }}>—</span> },
     {
-      key: "channel",
-      header: "Channel",
-      nowrap: true,
+      key: "fund",
+      header: "Fund · for",
       cell: (r) => (
-        <span style={{ fontSize: 11.5, fontWeight: 600, color: FIN.navy, background: FIN.surface, border: `1px solid ${FIN.border}`, borderRadius: 999, padding: "2px 8px", whiteSpace: "nowrap" }}>
-          {r.provider === "manual" && !r.office_channel ? "Claim" : channelLabel(r.channel)}
+        <span className="inline-flex flex-col" style={{ gap: 3, maxWidth: 190 }}>
+          <span>{r.fund_name ?? r.fund ?? <span style={{ color: FIN.muted }}>—</span>}</span>
+          {r.pledge_title ? <Tag title={`Pledge: ${r.pledge_title}`}>{`Pledge · ${r.pledge_title}`}</Tag> : null}
+          {r.need_title ? <Tag title={`Department need: ${r.need_title}`}>{`Need · ${r.need_title}`}</Tag> : null}
         </span>
       ),
     },
-    { key: "source", header: "Source", nowrap: true, cell: (r) => <span style={{ fontSize: 12, color: FIN.muted }}>{SOURCE_LABELS[r.source] ?? r.source}</span> },
     {
-      key: "for",
-      header: "For",
-      cell: (r) =>
-        r.pledge_title || r.need_title ? (
-          <span className="inline-flex flex-col" style={{ gap: 3 }}>
-            {r.pledge_title ? <Tag title={`Pledge: ${r.pledge_title}`}>{`Pledge · ${r.pledge_title}`}</Tag> : null}
-            {r.need_title ? <Tag title={`Department need: ${r.need_title}`}>{`Need · ${r.need_title}`}</Tag> : null}
+      key: "channel",
+      header: "Channel · source",
+      nowrap: true,
+      cell: (r) => (
+        <span className="inline-flex flex-col" style={{ gap: 3, alignItems: "flex-start" }}>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: FIN.navy, background: FIN.surface, border: `1px solid ${FIN.border}`, borderRadius: 999, padding: "2px 8px", whiteSpace: "nowrap" }}>
+            {r.provider === "manual" && !r.office_channel ? "Claim" : channelLabel(r.channel)}
           </span>
-        ) : (
-          <span style={{ color: FIN.muted }}>—</span>
-        ),
+          <span style={{ fontSize: 11, color: FIN.muted }}>{SOURCE_LABELS[r.source] ?? r.source}</span>
+        </span>
+      ),
     },
     { key: "amount", header: "Amount", align: "right", cell: (r) => <MoneyText amount_minor={r.amount_minor} currency={r.currency} strong={r.status === "succeeded"} style={r.status === "succeeded" ? undefined : { color: FIN.muted }} /> },
     { key: "status", header: "Status", cell: (r) => <StatusChip status={r.status} label={r.reversed_at ? "Reversed" : undefined} /> },
@@ -247,7 +246,7 @@ export function FinanceTransactions(): ReactElement {
           rowKey={(r) => r.transaction_id}
           onRowClick={(r) => setTx(r.transaction_id)}
           selectedKey={tx || null}
-          minWidth={980}
+          minWidth={860}
           empty={clearable ? "No transactions match these filters." : "No transactions in this period yet."}
           {...pagedTableProps(list)}
         />

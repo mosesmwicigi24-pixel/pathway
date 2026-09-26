@@ -580,7 +580,7 @@ export const ALERT_COPY: Readonly<Record<FinanceAlertKind, AlertCopy>> = {
     tone: "warn",
   },
   failing_schedules: {
-    title: (n) => `${plural(n, "recurring gift")} need attention`,
+    title: (n) => `${plural(n, "recurring gift")} ${n === 1 ? "needs" : "need"} attention`,
     hint: "Paused, or the last collection failed.",
     fallbackLink: "/finance/recurring?attention=true",
     tone: "warn",
@@ -592,7 +592,7 @@ export const ALERT_COPY: Readonly<Record<FinanceAlertKind, AlertCopy>> = {
     tone: "warn",
   },
   integrity_issues: {
-    title: (n) => `${plural(n, "books issue")}`,
+    title: (n) => `${plural(n, "issue")} in the books`,
     hint: "Postings that are missing or don't balance — tell the developer; don't re-record.",
     fallbackLink: "/finance/reconciliation?tab=exceptions",
     tone: "error",

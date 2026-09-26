@@ -11,6 +11,7 @@ import {
   accountLabel,
   addDaysIso,
   alertLink,
+  article,
   auditDetails,
   auditEntityHref,
   backdateBounds,
@@ -261,6 +262,12 @@ describe("a member's payment still in flight", () => {
     ];
     expect(pendingForMember(rows, "u1", NOW).map((r) => r.transaction_id)).toEqual(["b", "a"]);
   });
+  it("picks a / an by sound", () => {
+    expect(article("M-Pesa")).toBe("an");
+    expect(article("Airtel Money")).toBe("an");
+    expect(article("Card")).toBe("a");
+    expect(article("PayPal")).toBe("a");
+  });
   it("says what may be the same payment, in Nairobi time", () => {
     expect(pendingNoticeText(row({}), NOW)).toBe("An M-Pesa payment of KES 1,000.00 from Grace is still processing since 10:42 — it may be this same payment.");
     expect(pendingNoticeText(row({ status: "requires_action", created_at: "2026-09-25T07:42:00Z", channel: "card" }), NOW)).toBe(
@@ -362,6 +369,9 @@ describe("words for codes", () => {
     expect(alertLink("integrity_issues", "/finance/ledger")).toBe("/finance/reconciliation?tab=exceptions");
     expect(ALERT_COPY.expenses_awaiting_approval.title(1)).toBe("1 expense to approve");
     expect(ALERT_COPY.pending_claims.title(3)).toBe("3 claims waiting");
+    expect(ALERT_COPY.failing_schedules.title(1)).toBe("1 recurring gift needs attention");
+    expect(ALERT_COPY.failing_schedules.title(2)).toBe("2 recurring gifts need attention");
+    expect(ALERT_COPY.integrity_issues.title(1)).toBe("1 issue in the books");
   });
   it("every reconciliation kind has an explanation and what to do", () => {
     expect([...EXCEPTION_ORDER].sort()).toEqual(Object.keys(EXCEPTION_COPY).sort());

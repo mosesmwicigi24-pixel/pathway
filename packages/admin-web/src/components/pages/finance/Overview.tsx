@@ -32,6 +32,7 @@ import { fmtDay, fmtMonth, fmtRange } from "../../finance/dates";
 import { ALERT_COPY, alertLink, fmtPct, pctChange, plural } from "../../finance/a/helpers";
 import { periodQuery, useAsync, usePeriodParam } from "../../finance/a/hooks";
 import { IncomeExpenseChart } from "../../finance/a/IncomeExpenseChart";
+import { MoneyLines } from "../../finance/a/ui";
 
 const PRESETS = ["this_month", "last_month", "this_quarter", "this_year", "last_12_months", "custom"] as const;
 
@@ -39,14 +40,14 @@ const PRESETS = ["this_month", "last_month", "this_quarter", "this_year", "last_
 function IncomeValue({ income }: { income: Overview["income"] }): ReactElement {
   if (income.length === 0) return <span>—</span>;
   return (
-    <span style={{ display: "inline-flex", flexDirection: "column", gap: 6 }}>
+    <span style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
       {sortTotals(income).map((i) => {
         const p = pctChange(i.period_minor, i.same_period_last_year_minor);
         const color = p === null ? "rgba(232,239,245,0.5)" : p >= 0 ? "#86EFAC" : "#F5A3A3";
         return (
-          <span key={i.currency} style={{ display: "inline-flex", flexDirection: "column" }}>
+          <span key={i.currency} style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
             <span style={{ whiteSpace: "nowrap" }}>{formatMinor(i.period_minor, i.currency)}</span>
-            <span style={{ fontFamily: FIN.mono, fontSize: 11, color, whiteSpace: "nowrap" }}>
+            <span style={{ fontFamily: FIN.mono, fontSize: 11, lineHeight: 1.35, color, overflowWrap: "anywhere" }}>
               {p === null
                 ? i.same_period_last_year_minor === 0 && i.period_minor > 0
                   ? "new — nothing this time last year"
@@ -291,8 +292,8 @@ function FundBalancesCard({ data, loading }: { data: Overview | null; loading: b
                 <span style={{ fontFamily: FIN.mono, fontSize: 11, color: FIN.muted }}>fund:{f.code}</span>{" "}
                 {!f.is_active ? <StatusChip status="inactive" /> : null}
               </span>
-              <span style={{ fontFamily: FIN.mono, fontSize: 13, fontWeight: 600, color: FIN.navy, textAlign: "right" }}>
-                <PerCurrency amounts={f.balances.map((b) => ({ currency: b.currency, amount_minor: b.balance_minor }))} />
+              <span style={{ fontSize: 13, color: FIN.navy, textAlign: "right" }}>
+                <MoneyLines strong amounts={f.balances.map((b) => ({ currency: b.currency, amount_minor: b.balance_minor }))} />
               </span>
               <ChevronRight size={14} color="#6B7280" />
             </button>
@@ -367,7 +368,7 @@ export function FinanceOverview(): ReactElement {
       >
         <IncomeExpenseChart series={d?.series ?? null} loading={ov.loading} />
       </SectionCard>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(420px, 100%), 1fr))", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(600px, 100%), 1fr))", gap: 16 }}>
         <ChannelsCard data={d} loading={ov.loading} />
         <FundBalancesCard data={d} loading={ov.loading} />
       </div>

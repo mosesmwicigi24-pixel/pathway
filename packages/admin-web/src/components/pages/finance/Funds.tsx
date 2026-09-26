@@ -64,14 +64,18 @@ export function FinanceFunds(): ReactElement {
       key: "fund",
       header: "Fund",
       cell: (f) => (
-        <span>
-          <span style={{ fontWeight: 600 }}>{f.name}</span>
-          {f.name_sw ? <span style={{ display: "block", fontSize: 11.5, color: FIN.muted }}>{f.name_sw}</span> : null}
+        <span style={{ display: "inline-flex", flexDirection: "column", gap: 2 }}>
+          <span className="inline-flex items-center" style={{ gap: 6, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 600 }}>{f.name}</span>
+            {!f.is_active ? <StatusChip status="inactive" /> : null}
+          </span>
+          <span style={{ fontSize: 11.5, color: FIN.muted }}>
+            <span style={{ fontFamily: FIN.mono }}>fund:{f.code}</span>
+            {f.name_sw ? ` · ${f.name_sw}` : ""}
+          </span>
         </span>
       ),
     },
-    { key: "code", header: "Account", cell: (f) => <span style={{ fontFamily: FIN.mono, fontSize: 11.5, color: FIN.muted }}>fund:{f.code}</span> },
-    { key: "status", header: "Status", cell: (f) => <StatusChip status={f.is_active ? "active" : "inactive"} /> },
     { key: "balance", header: "Balance", align: "right", cell: (f) => <MoneyLines strong amounts={f.balances.map((b) => ({ currency: b.currency, amount_minor: b.balance_minor }))} /> },
     { key: "income", header: "Income (period)", align: "right", cell: (f) => <MoneyLines amounts={f.income.filter((i) => i.period_minor !== 0).map((i) => ({ currency: i.currency, amount_minor: i.period_minor }))} /> },
     { key: "ytd", header: "Income (year)", align: "right", cell: (f) => <MoneyLines amounts={f.income.filter((i) => i.ytd_minor !== 0).map((i) => ({ currency: i.currency, amount_minor: i.ytd_minor }))} /> },
@@ -118,7 +122,7 @@ export function FinanceFunds(): ReactElement {
       }
       hero={
         <KpiStrip>
-          <KpiTile label="Held across funds" loading={first} value={page.data ? <PerCurrency amounts={page.data.totals} /> : "—"} hint="Σ fund balances, per currency" />
+          <KpiTile label="Held across funds" loading={first} value={page.data ? <PerCurrency amounts={page.data.totals} /> : "—"} hint="Every fund's balance added up, per currency" />
           <KpiTile label="Income in the period" loading={first} value={page.data ? <PerCurrency amounts={incomePeriod} /> : "—"} hint={fmtRange(period)} />
           <KpiTile label="Expenses this year" loading={first} value={page.data ? <PerCurrency amounts={expensesYtd} /> : "—"} hint="Approved, by the day spent" />
           <KpiTile label="Funds" loading={first} value={page.data ? `${active.length} active` : "—"} hint={page.data ? `${plural(rows.length - active.length, "inactive fund")}` : undefined} />
@@ -147,7 +151,7 @@ export function FinanceFunds(): ReactElement {
           loading={page.loading}
           error={page.error}
           onRetry={page.reload}
-          minWidth={1080}
+          minWidth={920}
           empty={caps.manage ? "No funds yet — create the first with New fund." : "No funds yet."}
         />
       </SectionCard>

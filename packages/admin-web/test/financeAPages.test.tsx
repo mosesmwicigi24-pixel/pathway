@@ -6,7 +6,7 @@
 // each page rendering its figures with the words that explain them.
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { Provider } from "react-redux";
 import { configureStore } from "@reduxjs/toolkit";
 import { AxiosError, AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
@@ -29,6 +29,7 @@ const api = vi.hoisted(() => ({
   expenseCategories: vi.fn(),
   ledger: vi.fn(),
   needs: vi.fn(),
+  journals: vi.fn(),
 }));
 vi.mock("../src/api/finance", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/api/finance")>();
@@ -45,6 +46,14 @@ import { FinanceOverview } from "../src/components/pages/finance/Overview";
 import { FinanceReconciliation } from "../src/components/pages/finance/Reconciliation";
 import { FinanceAudit } from "../src/components/pages/finance/Audit";
 import { FinanceSettings } from "../src/components/pages/finance/Settings";
+import { FinanceLedger } from "../src/components/pages/finance/Ledger";
+
+/** The router's current query string, for asserting what a click navigated to. */
+function Loc(): ReactElement {
+  const l = useLocation();
+  return <output data-testid="loc">{l.search}</output>;
+}
+const search = (): URLSearchParams => new URLSearchParams(screen.getByTestId("loc").textContent ?? "");
 
 function renderApp(ui: ReactElement, opts: { permissions?: string[] | null; route?: string } = {}): void {
   const store = configureStore({ reducer: { auth: authReducer } });
@@ -137,6 +146,62 @@ beforeEach(() => {
   api.funds.mockResolvedValue({ period: { from: "2026-09-01", to: "2026-09-26", ytd_from: "2026-01-01" }, data: [fundRow("tithe", "Tithe", 2_000_000)], next_cursor: null, totals: [] });
   api.ledger.mockResolvedValue(EMPTY_PAGE);
   api.needs.mockResolvedValue(EMPTY_PAGE);
+  api.journals.mockResolvedValue(EMPTY_PAGE);
+  api.audit.mockResolvedValue({ data: [], next_cursor: null });
+});
+
+// react-router hands every setSearchParams call the params of the render it was
+// made in, so two URL setters fired by one click keep only the last change.
+// Each Clear must reset EVERY filter in a single navigation.
+describe("Clear resets every filter at once (one navigation)", () => {
+  it("Transactions", async () => {
+    api.transaction.mockResolvedValue(detail({ transaction_id: "keep-me" }));
+    renderApp(
+      <>
+        <FinanceTransactions />
+        <Loc />
+      </>,
+      { route: "/finance/transactions?status=failed&channel=mpesa&source=app&pledged=yes&need=no&q=grace&fund=tithe&period=last_month&tx=keep-me" },
+    );
+    await waitFor(() => expect(api.transactions).toHaveBeenCalledWith(expect.objectContaining({ status: "failed", channel: "mpesa", q: "grace", pledged: "yes" })));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(api.transactions).toHaveBeenLastCalledWith(expect.objectContaining({ status: null, channel: null, source: null, q: null, fund: null, pledged: "any", need: "any" })));
+    const p = search();
+    for (const k of ["status", "channel", "source", "pledged", "need", "q", "fund", "period", "from", "to"]) expect(p.has(k), k).toBe(false);
+    expect(p.get("tx")).toBe("keep-me"); // an open drawer is not a filter
+    expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
+  });
+
+  it("Audit", async () => {
+    renderApp(
+      <>
+        <FinanceAudit />
+        <Loc />
+      </>,
+      { route: "/finance/audit?action=expense.&actor=System&period=this_month" },
+    );
+    await waitFor(() => expect(api.audit).toHaveBeenCalledWith(expect.objectContaining({ action_prefix: "expense.", actor: "System" })));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(api.audit).toHaveBeenLastCalledWith(expect.objectContaining({ action_prefix: null, actor: null })));
+    expect(search().toString()).toBe("");
+  });
+
+  it("Ledger → Journals", async () => {
+    renderApp(
+      <>
+        <FinanceLedger />
+        <Loc />
+      </>,
+      { route: "/finance/ledger?tab=journals&jkind=transfer&jperiod=last_month" },
+    );
+    await waitFor(() => expect(api.journals).toHaveBeenCalledWith(expect.objectContaining({ kind: "transfer" })));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(api.journals).toHaveBeenLastCalledWith(expect.objectContaining({ kind: null })));
+    const p = search();
+    expect(p.get("tab")).toBe("journals");
+    expect(p.has("jkind")).toBe(false);
+    expect(p.has("jperiod")).toBe(false);
+  });
 });
 
 describe("Transaction drawer — Reverse", () => {
@@ -322,7 +387,7 @@ describe("pages render their figures with the words that explain them", () => {
     expect(await screen.findByText("+20% vs KES 100,000.00 last year")).toBeTruthy();
     expect(screen.getByText("new — nothing this time last year")).toBeTruthy();
     expect(screen.getByText("3 claims waiting")).toBeTruthy();
-    expect(screen.getByText("1 books issue")).toBeTruthy();
+    expect(screen.getByText("1 issue in the books")).toBeTruthy();
     expect(screen.getByText("7 of 46")).toBeTruthy();
     expect(screen.getByText("Money in by channel")).toBeTruthy();
     expect(screen.getByText("Total KES")).toBeTruthy();

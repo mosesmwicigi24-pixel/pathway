@@ -21,7 +21,7 @@ import {
   type OfficeChannel,
   type WriteCurrency,
 } from "../../../api/finance";
-import { Button, Drawer, FIN, Field, MoneyInput, MoneyText, Notice, giverDisplayName, inputStyle, selectStyle, useDebounced, useIdempotencyKey } from "../kit";
+import { Button, Drawer, FIN, Field, MoneyInput, MoneyText, Notice, channelLabel, giverDisplayName, inputStyle, selectStyle, useDebounced, useIdempotencyKey } from "../kit";
 import { formatMinor, type ParsedAmount } from "../money";
 import { fmtDay, todayEAT } from "../dates";
 import {
@@ -376,7 +376,7 @@ export function RecordGiftDrawer({ funds, fundsLoading = false, onClose, onRecor
             <dt style={{ color: FIN.muted }}>Received</dt>
             <dd style={{ margin: 0 }}>
               {fmtDay(result.received_on)}
-              {result.channel ? ` · ${GIFT_CHANNELS.find((c) => c.value === result.channel)?.label ?? result.channel}` : ""}
+              {result.channel ? ` · ${channelLabel(result.channel)}` : ""}
               {result.reference ? <span style={{ fontFamily: FIN.mono }}> {result.reference}</span> : null}
             </dd>
             {result.pledge ? (
@@ -542,13 +542,15 @@ export function RecordGiftDrawer({ funds, fundsLoading = false, onClose, onRecor
             <Field
               label="Pledge"
               htmlFor={ids.pledge}
-              hint={
-                pledgesElsewhere.length > 0
-                  ? `${plural(pledgesElsewhere.length, "open pledge")} in ${Array.from(new Set(pledgesElsewhere.map((p) => p.currency))).join(", ")} — switch the currency to pay toward ${pledgesElsewhere.length === 1 ? "it" : "them"}.`
-                  : pledgesHere.length === 0
-                    ? `${giver.full_name} has no open pledge in ${currency}.`
-                    : "Optional — the gift then counts toward this pledge's instalments."
-              }
+              hint={(() => {
+                const elsewhere =
+                  pledgesElsewhere.length > 0
+                    ? `${plural(pledgesElsewhere.length, "open pledge")} in ${Array.from(new Set(pledgesElsewhere.map((p) => p.currency))).join(", ")} — switch the currency to pay toward ${pledgesElsewhere.length === 1 ? "it" : "them"}.`
+                    : "";
+                if (pledgesHere.length > 0) return `Optional — the gift then counts toward the pledge's instalments.${elsewhere ? ` Also ${elsewhere}` : ""}`;
+                if (elsewhere) return `None in ${currency}; ${elsewhere}`;
+                return `${giver.full_name} has no open pledge.`;
+              })()}
             >
               <select id={ids.pledge} value={pledge?.pledge_id ?? ""} onChange={(e) => setPledgeId(e.target.value)} disabled={pledgesHere.length === 0} style={{ ...selectStyle, width: "100%" }}>
                 <option value="">No pledge</option>

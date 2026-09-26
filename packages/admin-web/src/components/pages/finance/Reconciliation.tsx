@@ -307,7 +307,11 @@ export function FinanceReconciliation(): ReactElement {
     errorFallback: "Could not load the reconciliation.",
   });
   const d = rec.data;
-  const openExceptions = d ? Object.values(d.exception_counts).reduce((s, n) => s + n, 0) : null;
+  // Failed payments are information (nothing was posted, nothing to fix), so
+  // "open" counts only the kinds that need a person.
+  const openExceptions = d
+    ? (Object.entries(d.exception_counts) as [ReconciliationExceptionKind, number][]).filter(([k]) => k !== "failed").reduce((s, [, n]) => s + n, 0)
+    : null;
   const integrityOk = d ? d.integrity.every((i) => i.balanced) : null;
   const received = d ? totalsByCurrency(d.settlement.map((s) => ({ currency: s.currency, amount_minor: s.received_minor }))) : [];
   const reversed = d ? totalsByCurrency(d.settlement.filter((s) => s.reversed_minor > 0).map((s) => ({ currency: s.currency, amount_minor: s.reversed_minor }))) : [];
@@ -338,7 +342,7 @@ export function FinanceReconciliation(): ReactElement {
             loading={first}
             tone={openExceptions ? "warn" : "default"}
             value={openExceptions === null ? "—" : openExceptions.toLocaleString()}
-            hint="Need a person"
+            hint={d && d.exception_counts.failed > 0 ? `Need a person · plus ${plural(d.exception_counts.failed, "failed payment")} to note` : "Need a person"}
             onClick={() => setTab("exceptions")}
           />
           <KpiTile
@@ -346,7 +350,7 @@ export function FinanceReconciliation(): ReactElement {
             loading={first}
             tone={integrityOk === false ? "danger" : integrityOk ? "good" : "default"}
             value={integrityOk === null ? "—" : integrityOk ? "Balanced" : "Not balanced"}
-            hint="Σ debits = Σ credits"
+            hint="Every debit has its credit"
             onClick={() => setTab("integrity")}
           />
         </KpiStrip>

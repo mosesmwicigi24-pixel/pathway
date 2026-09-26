@@ -51,7 +51,7 @@ function Row({ label, children }: { label: string; children: ReactNode }): React
   );
 }
 
-function Legs({ legs }: { legs: FinanceLedgerLeg[] }): ReactElement {
+function Legs({ legs, fundName }: { legs: FinanceLedgerLeg[]; fundName: (code: string) => string | null }): ReactElement {
   const th = { fontSize: 10.5, fontWeight: 700, color: FIN.muted, textTransform: "uppercase" as const, letterSpacing: 0.6, padding: "8px 10px", whiteSpace: "nowrap" as const };
   const td = { padding: "8px 10px", fontSize: 12.5, color: FIN.navy };
   const byCurrency = new Map<string, { debit: number; credit: number }>();
@@ -80,7 +80,7 @@ function Legs({ legs }: { legs: FinanceLedgerLeg[] }): ReactElement {
           {legs.map((l) => (
             <tr key={l.entry_id} style={{ borderTop: `1px solid ${FIN.border}`, background: l.is_reversal ? "#FBF7FF" : undefined }}>
               <td style={td}>
-                <span style={{ fontWeight: 600 }}>{accountLabel(l.account)}</span>{" "}
+                <span style={{ fontWeight: 600 }}>{accountLabel(l.account, fundName)}</span>{" "}
                 <span style={{ fontFamily: FIN.mono, fontSize: 11, color: FIN.muted }}>{l.account}</span>
                 {l.is_reversal ? (
                   <span style={{ marginLeft: 6 }}>
@@ -162,7 +162,7 @@ function Body({ tx, legs }: { tx: Tx; legs: FinanceLedgerLeg[] }): ReactElement 
         </Row>
         <Row label="Channel">{channelText(tx)}</Row>
         {tx.office_reference ? (
-          <Row label={tx.office_channel === "mpesa" ? "M-Pesa code" : tx.office_channel === "cheque" ? "Cheque number" : "Reference"}>
+          <Row label={tx.office_channel === "mpesa" ? "M-Pesa code" : tx.office_channel === "cheque" ? "Cheque number" : tx.office_channel === "bank" ? "Bank reference" : "Reference"}>
             <span style={{ fontFamily: FIN.mono }}>{tx.office_reference}</span>
           </Row>
         ) : null}
@@ -212,7 +212,7 @@ function Body({ tx, legs }: { tx: Tx; legs: FinanceLedgerLeg[] }): ReactElement 
         <div style={{ fontSize: 12, color: FIN.muted, marginBottom: 10 }}>
           Every posting this transaction owns: the cash account it came into is debited, its fund credited — and, once reversed, the mirror pair.
         </div>
-        <Legs legs={legs} />
+        <Legs legs={legs} fundName={(code) => (code === tx.fund ? tx.fund_name : null)} />
       </div>
     </div>
   );

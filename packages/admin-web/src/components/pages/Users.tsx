@@ -260,7 +260,7 @@ function UserPermissionsDrawer({ user, roleName, onClose, onSaved, onError }: {
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2" style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: "var(--nuru-gold)" }}><Shield size={12} /> USER PERMISSIONS</div>
-              <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginTop: 2 }}>{user.full_name}</h2>
+              <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, marginTop: 2, color: "#fff" }}>{user.full_name}</h2>
               <div className="flex items-center gap-1.5 flex-wrap" style={{ fontSize: 12, color: "rgba(232,239,245,0.7)", marginTop: 4 }}>
                 {user.is_staff && <span className="inline-flex items-center gap-1 rounded px-1.5 py-0.5" style={{ background: "rgba(245,199,126,0.16)", color: "#F5C77E", fontSize: 9.5, fontWeight: 700 }}><Sparkles size={9} /> ELEVATED MEMBER</span>}
                 <span>{user.role_keys.length ? user.role_keys.map(roleName).join(", ") : "No role assigned"}</span>
