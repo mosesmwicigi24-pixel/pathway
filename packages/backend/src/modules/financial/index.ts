@@ -10,6 +10,7 @@ import { PartnersService } from "./partners.js";
 import { NotificationService } from "../notifications/service.js";
 import { invitationFor, recordShown, recordOutcome } from "./invitation.js";
 import { CampaignService, CampaignInput } from "./campaigns.js";
+import { registerFinanceBooks } from "./books-routes.js";
 import { buildPaymentGateway, type PaymentGateway } from "./gateway.js";
 import { buildMobileMoneyProviders, type MobileMoneyProviders } from "./providers.js";
 import { buildPayPalGateway, type PayPalGateway } from "./paypal.js";
@@ -250,6 +251,7 @@ export function registerFinancial(
 
   // ---- Admin finance reads (ERP, Contract Matrix B1; RBAC finance:view, §5.4) ----
   const perm = requirePermission(ctx.db.replica);
+  registerFinanceBooks(r, { pool: ctx.db.primary, read: ctx.db.replica, auth, perm, fin: svc });
   registerFinanceReports(r, { pool: ctx.db.primary, env: ctx.env, financial: svc, partners, auth, perm });
 
   // Recurring giving — who is committed, and whose collection is failing. There
