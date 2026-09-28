@@ -13,6 +13,7 @@ import { createCongregation, createUser } from "./helpers/factories.js";
 import { agent, bearer, testEnv } from "./helpers/app.js";
 import { signAccessToken } from "../src/modules/identity/tokens.js";
 import { FinancialService } from "../src/modules/financial/service.js";
+import { FakeMobileMoneyProvider } from "../src/modules/financial/providers.js";
 import { PartnersService } from "../src/modules/financial/partners.js";
 import { DepartmentsService } from "../src/modules/departments/service.js";
 import { NotificationService } from "../src/modules/notifications/service.js";
@@ -143,9 +144,9 @@ describe("the Partners statement on the wire", () => {
   beforeEach(async () => {
     await resetDb();
     cong = await createCongregation("Nairobi Central");
-    user = (await createUser({ congregationId: cong, fullName: "Amina Wanjiru" })).user_id;
+    user = (await createUser({ congregationId: cong, fullName: "Amina Wanjiru", phone: "+254711000301" })).user_id;
     other = (await createUser({ congregationId: cong })).user_id;
-    financial = new FinancialService(testPool(), new FakeGateway());
+    financial = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     partners = new PartnersService(testPool(), financial);
   });
   afterAll(async () => { await closeTestPool(); });
@@ -291,7 +292,7 @@ describe("the Partners statement on the wire", () => {
     expect(history.find((r) => r.transaction_id === tithe)).toMatchObject({ pledge_id: null, pledge_title: null, need_id: null });
     // Nothing removed: every field that was there before is still there.
     expect(Object.keys(history[0]!).sort()).toEqual([
-      "account_name", "amount_minor", "created_at", "currency", "fund", "method", "method_label", "need_id", "pledge_id", "pledge_title",
+      "account_name", "amount_minor", "created_at", "currency", "failure", "fund", "method", "method_label", "need_id", "pledge_id", "pledge_title",
       "provider_ref", "receipt_code", "settled_at", "status", "transaction_id",
     ]);
   });
@@ -349,8 +350,8 @@ describe("the Partners statement on the wire", () => {
     expect(empty).toContain("No pledge payments in 2026.");
     expect(empty).toContain("Pledged     KSh 0");
     // A recurring gift alone (phase 1's partner) is a partner too — even cancelled since.
-    const third = (await createUser({ congregationId: cong })).user_id;
-    const sched = await financial.createSchedule(third, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "card" });
+    const third = (await createUser({ congregationId: cong, phone: "+254711000302" })).user_id;
+    const sched = await financial.createSchedule(third, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "mpesa" });
     await financial.cancelSchedule(third, String(sched.schedule_id));
     expect((await partners.partnersStatementPdf(third, 2026, now)).pdf.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });

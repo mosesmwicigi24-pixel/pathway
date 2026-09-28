@@ -104,12 +104,19 @@ export class FakePayPalGateway implements PayPalGateway {
 }
 
 class NotConfiguredPayPalGateway implements PayPalGateway {
+  /** Marker for the methods endpoint: PayPal cannot take money here. */
+  readonly notConfigured = true;
   createOrder(): Promise<PayPalOrder> {
     throw new ApiError("UPSTREAM_UNAVAILABLE", "PayPal is not configured");
   }
   captureOrder(): Promise<{ status: "completed" | "pending" | "failed" }> {
     throw new ApiError("UPSTREAM_UNAVAILABLE", "PayPal is not configured");
   }
+}
+
+/** True when this PayPal gateway can actually take money on this server. */
+export function paypalIsLive(gw: PayPalGateway): boolean {
+  return !(gw as { notConfigured?: boolean }).notConfigured;
 }
 
 export function buildPayPalGateway(env: Env): PayPalGateway {

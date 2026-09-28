@@ -69,6 +69,8 @@ class StripeGateway implements PaymentGateway {
 }
 
 class NotConfiguredGateway implements PaymentGateway {
+  /** Marker for the methods endpoint: cards cannot take money here. */
+  readonly notConfigured = true;
   createIntent(): Promise<PaymentIntentResult> {
     throw new ApiError("UPSTREAM_UNAVAILABLE", "Payments are not configured");
   }

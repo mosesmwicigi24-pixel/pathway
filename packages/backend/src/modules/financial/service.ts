@@ -11,8 +11,12 @@ import { maybeOne, one, many, tx, audit, enqueueOutbox, type Queryable } from ".
 import { NotificationService } from "../notifications/service.js";
 import { ApiError, ProviderNotConfiguredError } from "../../http/errors.js";
 import type { PaymentGateway } from "./gateway.js";
-import { sanitizeAccountReference, type MobileMoneyKey, type MobileMoneyProviders } from "./providers.js";
-import type { PayPalGateway } from "./paypal.js";
+import {
+  sanitizeAccountReference, mobileMoneyFailure, providerIsLive, toMsisdn,
+  type GiftFailure, type GiftFailureCode, type MobileMoneyKey, type MobileMoneyProviders, type MobileMoneyStatus,
+} from "./providers.js";
+import { paypalIsLive, type PayPalGateway } from "./paypal.js";
+import { giftFailureCopy } from "./giftFailure.js";
 import { renderStatementPdf, renderReceiptPdf } from "./statementPdf.js";
 import { PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, methodLabel, giftMethodLabel } from "./constants.js";
 // partners.ts imports FinancialService as a TYPE only, so this is not a cycle.
@@ -33,13 +37,176 @@ export { methodLabel };
 
 const sha256 = (b: Buffer | string): string => createHash("sha256").update(b).digest("hex");
 
+/** The provider's own words for a failure, kept for Reconciliation. */
+function failureDetail(code: string | undefined, desc: string | undefined): string | null {
+  const text = [code ? `ResultCode ${code}` : null, desc ?? null].filter(Boolean).join(": ");
+  return text ? text.slice(0, 300) : null;
+}
+
+/** A Kenyan mobile-money number as E.164 (+2547XXXXXXXX / +2541XXXXXXXX), or
+ *  null when it is not one — the only numbers an M-Pesa prompt can reach. */
+export function kenyanMobileNumber(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const msisdn = toMsisdn(raw);
+  return /^254[17]\d{8}$/.test(msisdn) ? `+${msisdn}` : null;
+}
+
+/** "KSh 1,000" / "USD 12.50" — for messages a member reads. */
+const moneyWords = (minor: number, currency: string): string =>
+  currency === "KES"
+    ? `KSh ${(minor / 100).toLocaleString("en-KE", { maximumFractionDigits: 2 })}`
+    : `${currency} ${(minor / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+export interface FinancialOptions {
+  /**
+   * Card giving from the member apps. Neither app can confirm a card payment
+   * yet (no Stripe SDK), so a card intent nobody confirms sat "processing" for
+   * ever. Off in production unless CARD_GIVING_ENABLED=true; on elsewhere so
+   * tests and a future web checkout can use the Stripe path.
+   */
+  cardGiving?: boolean;
+}
+
+/** The outcome of one mobile-money prompt, as the provider confirmed it. */
+type MobileMoneyOutcome =
+  | { kind: "succeeded"; receipt?: string | undefined }
+  | { kind: "failed"; failure: GiftFailure; detail: string | null };
+
 export class FinancialService {
   constructor(
     private readonly pool: Pool,
     private readonly gateway: PaymentGateway,
     private readonly mobileMoney?: MobileMoneyProviders,
     private readonly paypal?: PayPalGateway,
+    private readonly options: FinancialOptions = {},
   ) {}
+
+  /**
+   * Each giving rail (Giving Cycle 1): what it settles in, its limits, whether
+   * a recurring gift can run on it, and whether it prompts a phone. M-Pesa
+   * takes whole shillings from KSh 1 (its own floor — a small gift is still a
+   * gift) up to its KSh 250,000 per-payment limit; PayPal settles in US
+   * dollars (it cannot hold KES), so a PayPal amount IS dollars.
+   */
+  static readonly RAILS = {
+    mpesa: { label: "M-Pesa", currency: "KES", min_minor: 100, max_minor: 25_000_000, whole_units: true, recurring: true, needs_phone: true },
+    airtel: { label: "Airtel Money", currency: "KES", min_minor: 100, max_minor: 15_000_000, whole_units: true, recurring: true, needs_phone: true },
+    paypal: { label: "PayPal", currency: "USD", min_minor: 100, max_minor: 1_000_000, whole_units: false, recurring: false, needs_phone: false },
+    card: { label: "Card", currency: null, min_minor: 100, max_minor: 100_000_000, whole_units: false, recurring: false, needs_phone: false },
+  } as const;
+
+  /** Can this rail take a member's money on this server right now? */
+  private railEnabled(method: keyof typeof FinancialService.RAILS): boolean {
+    if (method === "mpesa" || method === "airtel") {
+      const p = this.mobileMoney?.[method];
+      return Boolean(p && providerIsLive(p));
+    }
+    if (method === "paypal") return Boolean(this.paypal && paypalIsLive(this.paypal));
+    return this.options.cardGiving !== false && !(this.gateway as { notConfigured?: boolean }).notConfigured;
+  }
+
+  /**
+   * GET /giving/methods — the rails a member can use here, with their currency
+   * and limits, the number on file for a prompt, and which rail to start on.
+   * The apps draw their method list from this instead of hard-coding one, so
+   * a rail that cannot take money (Airtel, cards) is never offered as if it
+   * could (Giving Cycle 1: both apps offered Airtel, and Android offered cards).
+   */
+  async listMethods(userId: string): Promise<Record<string, unknown>> {
+    const u = await maybeOne<{ phone_number: string | null }>(
+      this.pool, `SELECT phone_number FROM users WHERE user_id = $1`, [userId],
+    );
+    const order: Array<keyof typeof FinancialService.RAILS> = ["mpesa", "airtel", "paypal", "card"];
+    const methods = order.map((key) => {
+      const r = FinancialService.RAILS[key];
+      const enabled = this.railEnabled(key);
+      return {
+        key,
+        label: r.label,
+        enabled,
+        unavailable_reason: enabled ? null : key === "mpesa" ? "unavailable" : "coming_soon",
+        currency: r.currency,
+        min_minor: r.min_minor,
+        max_minor: r.max_minor,
+        whole_units: r.whole_units,
+        recurring: r.recurring && enabled,
+        needs_phone: r.needs_phone,
+      };
+    });
+    return {
+      methods,
+      phone_on_file: kenyanMobileNumber(u?.phone_number),
+      default_method: methods.find((m) => m.enabled)?.key ?? null,
+    };
+  }
+
+  /**
+   * The checks every gift passes BEFORE anyone's phone rings (Giving Cycle 1):
+   * the rail is live, the currency is the rail's, the amount is inside its
+   * limits (and whole shillings for M-Pesa, which cannot take cents — Daraja
+   * rounded KSh 100.50 to 101 while we booked 100.50), and there is a real
+   * Kenyan number to prompt. Returns that number (E.164) for mobile money.
+   * A scheduled charge on a rail that is not live is OUR fault, never the
+   * giver's, so it raises the configuration error the scheduler handles.
+   */
+  private async checkGift(
+    userId: string,
+    method: keyof typeof FinancialService.RAILS,
+    amountMinor: number,
+    currency: string,
+    phoneHint: string | null | undefined,
+    scheduled: boolean,
+  ): Promise<{ phone: string | null }> {
+    const rail = FinancialService.RAILS[method];
+    if (!this.railEnabled(method)) {
+      if (scheduled) throw new ProviderNotConfiguredError(`${method} payments are not configured`);
+      throw new ApiError(
+        "METHOD_UNAVAILABLE",
+        method === "card"
+          ? "Card giving is coming soon. Please give with M-Pesa for now."
+          : method === "airtel"
+            ? "Airtel Money giving is coming soon. Please give with M-Pesa for now."
+            : `${rail.label} isn't available for giving right now.`,
+        { method },
+      );
+    }
+    if (rail.currency && currency !== rail.currency) {
+      throw new ApiError(
+        "METHOD_CURRENCY",
+        rail.currency === "USD"
+          ? "PayPal gifts are in US dollars. Enter the amount in dollars."
+          : `${rail.label} gifts are in Kenyan shillings.`,
+        { method, currency: rail.currency },
+      );
+    }
+    if (amountMinor < rail.min_minor || amountMinor > rail.max_minor) {
+      throw new ApiError(
+        "AMOUNT_OUT_OF_RANGE",
+        `${rail.label} gifts are from ${moneyWords(rail.min_minor, currency)} to ${moneyWords(rail.max_minor, currency)}.`,
+        { method, min_minor: rail.min_minor, max_minor: rail.max_minor },
+      );
+    }
+    if (rail.whole_units && amountMinor % 100 !== 0) {
+      throw new ApiError("AMOUNT_OUT_OF_RANGE", `${rail.label} takes whole shillings — no cents.`, {
+        method, step_minor: 100,
+      });
+    }
+    if (!rail.needs_phone) return { phone: null };
+    let phone = kenyanMobileNumber(phoneHint ?? null);
+    if (!phone && phoneHint) {
+      throw new ApiError("PHONE_REQUIRED", "That doesn't look like a Kenyan mobile number. Use 07XX XXX XXX or 01XX XXX XXX.", { method });
+    }
+    if (!phone) {
+      const u = await maybeOne<{ phone_number: string | null }>(
+        this.pool, `SELECT phone_number FROM users WHERE user_id = $1`, [userId],
+      );
+      phone = kenyanMobileNumber(u?.phone_number);
+    }
+    if (!phone) {
+      throw new ApiError("PHONE_REQUIRED", "Add the M-Pesa number to prompt for this gift.", { method });
+    }
+    return { phone };
+  }
 
   /** Lazily built so the money path carries no notification cost until a
    *  recurring gift actually fails (runDueSchedules is the only caller). */
@@ -94,6 +261,9 @@ export class FinancialService {
     userId: string,
     input: z.infer<typeof FinancialService.GivingIntent>,
     scheduleId?: string,
+    /** Scheduled charges only: the billing cycle this attempt belongs to, and
+     *  the schedule's own number to prompt (null = the profile number). */
+    scheduled?: { cycleAt: string; phone: string | null },
   ): Promise<Record<string, unknown>> {
     // Which pledge, if any, this gift counts toward: the caller's explicit
     // choice, else the pledge bound to the schedule that is charging.
@@ -140,12 +310,39 @@ export class FinancialService {
     const attribution = await this.intentAttribution({ code: fund.code, name: fund.name }, pledgeId);
 
     const currency = input.currency.toUpperCase();
+    // Direct (non-HTTP) callers may omit the method; the zod default is card.
+    const method = input.method ?? "card";
+    const { phone } = await this.checkGift(
+      userId, method, input.amount_minor, currency,
+      input.phone_number ?? scheduled?.phone ?? null, Boolean(scheduleId),
+    );
 
-    if (input.method === "mpesa" || input.method === "airtel") {
-      const phone =
-        input.phone_number ??
-        (await one<{ phone_number: string }>(this.pool, `SELECT phone_number FROM users WHERE user_id = $1`, [userId]))
-          .phone_number;
+    // One prompt at a time (Giving Cycle 1). A phone shows ONE M-Pesa prompt;
+    // a second push while the first is still on screen fails as "busy" (1001)
+    // and a double tap with a fresh key used to send exactly that. If a prompt
+    // for this member from the last 90 seconds is still unanswered — their own
+    // gift, or their recurring gift's prompt that is on the phone right now —
+    // say so instead of sending one that cannot succeed. Scheduled charges are
+    // staggered by the scheduler itself.
+    if (phone && !scheduleId) {
+      const inflight = await maybeOne<{ transaction_id: string }>(
+        this.pool,
+        `SELECT transaction_id FROM transactions
+          WHERE user_id = $1 AND provider IN ('mpesa','airtel') AND status = 'processing'
+            AND created_at > now() - interval '90 seconds'
+          ORDER BY created_at DESC LIMIT 1`,
+        [userId],
+      );
+      if (inflight) {
+        throw new ApiError(
+          "GIFT_IN_PROGRESS",
+          "A prompt from a moment ago is still waiting on your phone. Approve it, or wait a minute and try again.",
+          { transaction_id: inflight.transaction_id },
+        );
+      }
+    }
+
+    if ((input.method === "mpesa" || input.method === "airtel") && phone) {
       const charge = await this.provider(input.method).initiate({
         amountMinor: input.amount_minor,
         currency,
@@ -160,10 +357,10 @@ export class FinancialService {
       });
       const txn = await one<{ transaction_id: string; status: string }>(
         this.pool,
-        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id)
-         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10, $11)
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id, schedule_cycle_at)
+         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING transaction_id, status`,
-        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId],
+        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId, scheduled?.cycleAt ?? null],
       );
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor,
@@ -503,26 +700,107 @@ export class FinancialService {
   }
 
   /**
-   * Verified mobile-money callback (B7): HMAC check, idempotent dedupe in
-   * processed_webhooks, then settlement by provider_ref — the same trust model
-   * as the Stripe webhook (§3.5).
+   * A mobile-money callback (B7; Giving Cycle 1).
+   *
+   * Signed providers (the HMAC fakes) prove their callback, so its outcome is
+   * applied as before. Daraja signs NOTHING, and its callback URL is public, so
+   * a member who knew their own CheckoutRequestID (the app is told it) could
+   * post "ResultCode 0" and get a receipt, a ledger credit and a kept pledge
+   * without paying. So for an unsigned provider the callback is only a HINT:
+   *   · a ref that is not one of our waiting prompts costs one indexed read
+   *     and nothing else — no provider call, no write (spam is cheap);
+   *   · otherwise we ask Safaricom (STK Push Query) what really happened, at
+   *     most once every 10 seconds per prompt, and apply THAT;
+   *   · if Safaricom cannot say yet, nothing moves — the sweeper
+   *     (reconcileMobileMoney) asks again until it can.
    */
   async handleMobileMoneyCallback(
     providerKey: MobileMoneyKey,
     rawBody: Buffer | string,
     signature: string,
   ): Promise<Record<string, unknown>> {
-    const cb = this.provider(providerKey).verifyCallback(rawBody, signature);
-    return tx(this.pool, async (c) => {
-      const ins = await c.query(
-        `INSERT INTO processed_webhooks (event_id, provider, payload_hash)
-         VALUES ($1, $2, $3) ON CONFLICT (event_id) DO NOTHING RETURNING event_id`,
-        [cb.event_id, providerKey, sha256(rawBody)],
-      );
-      if (ins.rowCount === 0) return { duplicate: true };
+    const provider = this.provider(providerKey);
+    const cb = provider.verifyCallback(rawBody, signature);
+    if (provider.signedCallbacks) {
+      const outcome: MobileMoneyOutcome =
+        cb.status === "succeeded"
+          ? { kind: "succeeded", receipt: cb.receipt }
+          : { kind: "failed", failure: mobileMoneyFailure(cb.result_code), detail: failureDetail(cb.result_code, cb.result_desc) };
+      return this.applyMobileMoneyOutcome(providerKey, cb.ref, outcome, { eventId: cb.event_id, rawBody });
+    }
 
-      if (cb.status === "succeeded") {
-        await this.settle(c, { provider_ref: cb.ref });
+    const known = await maybeOne<{ status: string; checked_recently: boolean }>(
+      this.pool,
+      `SELECT status, (provider_checked_at IS NOT NULL AND provider_checked_at > now() - interval '10 seconds') AS checked_recently
+         FROM transactions WHERE provider = $1 AND provider_ref = $2`,
+      [providerKey, cb.ref],
+    );
+    if (!known) return { ignored: true };
+    if (known.status !== "processing") return { duplicate: true, status: known.status };
+    if (known.checked_recently) return { verified: false, status: "processing" };
+
+    const truth = await this.askProvider(providerKey, cb.ref);
+    if (truth.state === "pending") return { verified: false, status: "processing" };
+    const outcome: MobileMoneyOutcome =
+      truth.state === "succeeded"
+        // The receipt code rides the (unverifiable) callback; it is only kept
+        // once Safaricom itself has said the payment went through.
+        ? { kind: "succeeded", receipt: cb.receipt }
+        : { kind: "failed", failure: mobileMoneyFailure(truth.code), detail: failureDetail(truth.code, truth.desc) };
+    return this.applyMobileMoneyOutcome(providerKey, cb.ref, outcome, { eventId: cb.event_id, rawBody });
+  }
+
+  /** True when this provider's callbacks prove themselves (HMAC). */
+  mobileMoneySigned(providerKey: MobileMoneyKey): boolean {
+    return Boolean(this.mobileMoney?.[providerKey]?.signedCallbacks);
+  }
+
+  /** Ask the provider about one prompt; a provider that errors has not
+   *  answered. Stamps provider_checked_at either way (the throttle). */
+  private async askProvider(providerKey: MobileMoneyKey, ref: string): Promise<MobileMoneyStatus> {
+    let truth: MobileMoneyStatus;
+    try {
+      truth = await this.provider(providerKey).queryStatus(ref);
+    } catch {
+      truth = { state: "pending" };
+    }
+    await this.pool.query(`UPDATE transactions SET provider_checked_at = now() WHERE provider_ref = $1`, [ref]);
+    return truth;
+  }
+
+  /**
+   * Apply a CONFIRMED outcome to a mobile-money prompt, once. A success
+   * settles the ledger (settle() locks the row and skips a settled one); a
+   * failure records WHY (failure_code) and only ever moves a prompt that is
+   * still processing, so replays and the sweeper racing a callback cannot
+   * count one failure twice. A scheduled charge's outcome is fed back to its
+   * schedule in the same transaction; notifications go out after commit.
+   */
+  private async applyMobileMoneyOutcome(
+    providerKey: MobileMoneyKey,
+    ref: string,
+    outcome: MobileMoneyOutcome,
+    meta: { eventId?: string; rawBody?: Buffer | string } = {},
+  ): Promise<Record<string, unknown>> {
+    const after: Array<() => Promise<void>> = [];
+    const result = await tx(this.pool, async (c) => {
+      if (meta.eventId) {
+        const ins = await c.query(
+          `INSERT INTO processed_webhooks (event_id, provider, payload_hash)
+           VALUES ($1, $2, $3) ON CONFLICT (event_id) DO NOTHING RETURNING event_id`,
+          [meta.eventId, providerKey, sha256(meta.rawBody ?? meta.eventId)],
+        );
+        if (ins.rowCount === 0) return { duplicate: true };
+      }
+
+      if (outcome.kind === "succeeded") {
+        const before = await maybeOne<{ status: string; schedule_id: string | null; schedule_cycle_at: string | null }>(
+          c,
+          `SELECT status, schedule_id, schedule_cycle_at FROM transactions WHERE provider_ref = $1`,
+          [ref],
+        );
+        await this.settle(c, { provider_ref: ref });
+        await c.query(`UPDATE transactions SET verified_at = now() WHERE provider_ref = $1`, [ref]);
         // Capture the M-Pesa receipt code (from the SMS) for the member's
         // statement — display-only, set once, never overwrites, never touches
         // amount/status/ledger.
@@ -534,13 +812,13 @@ export class FinancialService {
         // row, so every provider retry failed the same way, forever. A
         // display-only field must never undo money that arrived. The clash is
         // left for Reconciliation (duplicate_receipt); anything else rethrows.
-        if (cb.receipt) {
+        if (outcome.receipt) {
           await c.query("SAVEPOINT receipt_capture");
           try {
             await c.query(
               `UPDATE transactions SET receipt_code = $2
                 WHERE provider_ref = $1 AND receipt_code IS NULL`,
-              [cb.ref, cb.receipt],
+              [ref, outcome.receipt],
             );
             await c.query("RELEASE SAVEPOINT receipt_capture");
           } catch (err) {
@@ -549,22 +827,201 @@ export class FinancialService {
             const holder = await maybeOne<{ transaction_id: string }>(
               c,
               `SELECT transaction_id FROM transactions WHERE receipt_code = $1 AND status <> 'failed' LIMIT 1`,
-              [cb.receipt],
+              [outcome.receipt],
             );
             console.warn(
-              `[giving] ${providerKey} receipt ${cb.receipt} (provider_ref ${cb.ref}) is already on transaction ` +
+              `[giving] ${providerKey} receipt ${outcome.receipt} (provider_ref ${ref}) is already on transaction ` +
                 `${holder?.transaction_id ?? "unknown"} — settled without capturing it; Reconciliation flags the duplicate`,
             );
           }
         }
-      } else {
-        await c.query(
-          `UPDATE transactions SET status = 'failed' WHERE provider_ref = $1 AND status <> 'succeeded'`,
-          [cb.ref],
-        );
+        if (before?.schedule_id && before.status !== "succeeded") {
+          await this.recordScheduleOutcome(c, before.schedule_id, before.schedule_cycle_at, null);
+        }
+        return { duplicate: false, status: "succeeded" };
       }
-      return { duplicate: false, status: cb.status };
+
+      const failed = await maybeOne<{ schedule_id: string | null; schedule_cycle_at: string | null }>(
+        c,
+        `UPDATE transactions
+            SET status = 'failed', failure_code = $2, failure_detail = $3, failed_at = now(), verified_at = now()
+          WHERE provider_ref = $1 AND status = 'processing'
+          RETURNING schedule_id, schedule_cycle_at`,
+        [ref, outcome.failure.code, outcome.detail],
+      );
+      if (failed?.schedule_id) {
+        const notice = await this.recordScheduleOutcome(c, failed.schedule_id, failed.schedule_cycle_at, outcome.failure);
+        if (notice) after.push(notice);
+      }
+      return { duplicate: false, status: "failed", failure_code: outcome.failure.code };
     });
+    for (const send of after) {
+      try {
+        await send();
+      } catch {
+        /* the ledger matters more than the notice */
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Feed a scheduled charge's REAL outcome back to its schedule (Giving
+   * Cycle 1). The scheduler used to call a cycle "done" the moment the prompt
+   * was SENT: a declined or ignored prompt never counted, nobody was told, the
+   * office saw a healthy schedule, and the church quietly missed the gift (in
+   * production, 14 of 15 scheduled charges had failed with every schedule
+   * showing zero failures).
+   *
+   * Now: a success clears the failure state. A failure counts one strike, and
+   *   · if it was not the member's answer (the phone was unreachable, the
+   *     prompt expired, another payment was in progress, M-Pesa faltered) the
+   *     cycle is tried ONCE more, two hours later and inside 08:00–20:00 EAT —
+   *     never once the next cycle is due;
+   *   · if it was the member's answer (cancelled, wrong PIN, not enough in the
+   *     account) nothing is re-sent — a machine does not keep asking someone
+   *     who said no;
+   *   · three strikes in a row pauses the schedule and asks the member.
+   * The member hears on the first strike and on the pause, with the reason.
+   * Returns the notice to send after commit.
+   */
+  private async recordScheduleOutcome(
+    c: PoolClient,
+    scheduleId: string,
+    cycleAt: string | null,
+    failure: GiftFailure | null,
+    now: Date = new Date(),
+  ): Promise<(() => Promise<void>) | null> {
+    if (!failure) {
+      await c.query(
+        `UPDATE giving_schedules
+            SET consecutive_failures = 0, last_error = NULL, last_failed_at = NULL, last_failure_code = NULL,
+                retry_cycle_at = NULL, retry_at = NULL, retry_after = NULL
+          WHERE schedule_id = $1`,
+        [scheduleId],
+      );
+      return null;
+    }
+    const s = await maybeOne<{
+      status: string; consecutive_failures: number; cycle_attempts: number; next_run_at: string;
+      user_id: string; fund: string; amount_minor: string; currency: string; method: string; frequency: string;
+    }>(
+      c,
+      `SELECT s.status, s.consecutive_failures, s.cycle_attempts, s.next_run_at, s.user_id, f.code AS fund,
+              s.amount_minor, s.currency, s.method, s.frequency
+         FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id
+        WHERE s.schedule_id = $1 FOR UPDATE OF s`,
+      [scheduleId],
+    );
+    if (!s || s.status === "cancelled") return null;
+    const copy = giftFailureCopy(failure.code)!;
+    const strikes = s.consecutive_failures + 1;
+    const paused = s.status === "active" && strikes >= FinancialService.SCHEDULE_MAX_ATTEMPTS;
+    const retryAt = FinancialService.daytimeEat(new Date(now.getTime() + 2 * 3_600_000));
+    const retry =
+      !paused && s.status === "active" && failure.retryable && s.cycle_attempts < 1 && cycleAt !== null &&
+      retryAt.getTime() < new Date(s.next_run_at).getTime();
+    await c.query(
+      `UPDATE giving_schedules
+          SET consecutive_failures = $2, last_error = $3, last_failure_code = $4, last_failed_at = $5,
+              retry_cycle_at = $6, retry_at = $7,
+              cycle_attempts = cycle_attempts + CASE WHEN $6::timestamptz IS NULL THEN 0 ELSE 1 END,
+              status = CASE WHEN $8 THEN 'paused' ELSE status END,
+              paused_at = CASE WHEN $8 THEN $5::timestamptz ELSE paused_at END
+        WHERE schedule_id = $1`,
+      [scheduleId, strikes, copy.reason, failure.code, now.toISOString(),
+       retry ? cycleAt : null, retry ? retryAt.toISOString() : null, paused],
+    );
+    if (strikes !== 1 && !paused) return null;
+    const payload = {
+      schedule_id: scheduleId,
+      fund: s.fund,
+      amount_minor: Number(s.amount_minor),
+      currency: s.currency,
+      method: s.method,
+      frequency: s.frequency,
+      failure_code: failure.code,
+      reason: copy.reason,
+      hint: copy.hint,
+      retry_at: retry ? retryAt.toISOString() : null,
+    };
+    return async () => {
+      await this.notifications.schedule({
+        userId: s.user_id,
+        channel: "push",
+        template: paused ? "giving_schedule_paused" : "giving_schedule_failed",
+        payload,
+      });
+    };
+  }
+
+  /** `at`, moved into 08:00–20:00 Africa/Nairobi: before 08:00 → 08:00 that
+   *  day; from 20:00 → 08:00 the next day. EAT has no DST (UTC+3). */
+  static daytimeEat(at: Date): Date {
+    const eat = new Date(at.getTime() + 3 * 3_600_000);
+    const hour = eat.getUTCHours();
+    if (hour >= 8 && hour < 20) return at;
+    const day = Date.UTC(eat.getUTCFullYear(), eat.getUTCMonth(), eat.getUTCDate() + (hour >= 20 ? 1 : 0), 8);
+    return new Date(day - 3 * 3_600_000);
+  }
+
+  /**
+   * The mobile-money sweeper (worker, every minute; Giving Cycle 1). A prompt
+   * whose callback never came — or whose callback arrived before Safaricom
+   * could confirm it — is asked about again: after 90 seconds, at most once a
+   * minute each, `limit` per run. One still waiting after 48 hours is closed
+   * as "no_answer" (as far as anyone can tell no money moved; a late M-Pesa
+   * statement line would be matched by the office). Returns what it did.
+   */
+  async reconcileMobileMoney(
+    now: Date = new Date(),
+    limit = 25,
+  ): Promise<{ checked: number; settled: number; failed: number; expired: number }> {
+    const out = { checked: 0, settled: 0, failed: 0, expired: 0 };
+    const cutoff = new Date(now.getTime() - 48 * 3_600_000).toISOString();
+    const stale = await many<{ provider: MobileMoneyKey; provider_ref: string }>(
+      this.pool,
+      `SELECT provider, provider_ref FROM transactions
+        WHERE status = 'processing' AND provider IN ('mpesa','airtel') AND provider_ref IS NOT NULL AND created_at < $1
+        ORDER BY created_at LIMIT 200`,
+      [cutoff],
+    );
+    for (const t of stale) {
+      await this.applyMobileMoneyOutcome(t.provider, t.provider_ref, {
+        kind: "failed",
+        failure: { code: "no_answer", retryable: false },
+        detail: "no provider answer within 48 hours",
+      });
+      out.expired += 1;
+    }
+    const waiting = await many<{ provider: MobileMoneyKey; provider_ref: string }>(
+      this.pool,
+      `SELECT provider, provider_ref FROM transactions
+        WHERE status = 'processing' AND provider IN ('mpesa','airtel') AND provider_ref IS NOT NULL
+          AND created_at < $1 AND created_at >= $2
+          AND (provider_checked_at IS NULL OR provider_checked_at < $3)
+        ORDER BY created_at LIMIT $4`,
+      [new Date(now.getTime() - 90_000).toISOString(), cutoff, new Date(now.getTime() - 60_000).toISOString(), limit],
+    );
+    for (const t of waiting) {
+      const p = this.mobileMoney?.[t.provider];
+      if (!p || !providerIsLive(p)) continue;
+      out.checked += 1;
+      const truth = await this.askProvider(t.provider, t.provider_ref);
+      if (truth.state === "pending") continue;
+      if (truth.state === "succeeded") {
+        await this.applyMobileMoneyOutcome(t.provider, t.provider_ref, { kind: "succeeded" });
+        out.settled += 1;
+      } else {
+        await this.applyMobileMoneyOutcome(t.provider, t.provider_ref, {
+          kind: "failed",
+          failure: mobileMoneyFailure(truth.code),
+          detail: failureDetail(truth.code, truth.desc),
+        });
+        out.failed += 1;
+      }
+    }
+    return out;
   }
 
   /**
@@ -726,7 +1183,7 @@ export class FinancialService {
               t.receipt_code, t.account_name,
               t.created_at, t.settled_at,
               t.pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "c" })} AS pledge_title,
-              t.need_id, t.office_channel
+              t.need_id, t.office_channel, t.failure_code
          FROM transactions t
          LEFT JOIN funds f ON f.fund_id = t.fund_id
          LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
@@ -738,11 +1195,19 @@ export class FinancialService {
     return rows.map((r) => {
       const provider = (r.provider as string | null) ?? "stripe";
       // office_channel only chooses the words; it is not part of the member's row.
-      const { provider: _omit, office_channel: _office, ...rest } = r;
+      const { provider: _omit, office_channel: _office, failure_code: _fc, ...rest } = r;
       void _omit;
       void _office;
+      void _fc;
       const method = provider === "stripe" ? "card" : provider;
-      return { ...rest, amount_minor: Number(r.amount_minor), method, method_label: giftMethodLabel(method, (r.office_channel as string | null) ?? null) };
+      return {
+        ...rest,
+        amount_minor: Number(r.amount_minor),
+        method,
+        method_label: giftMethodLabel(method, (r.office_channel as string | null) ?? null),
+        // Why it failed, in words the member can act on (Giving Cycle 1).
+        failure: r.status === "failed" ? giftFailureCopy((r.failure_code as string | null) ?? "declined") : null,
+      };
     });
   }
 
@@ -759,7 +1224,7 @@ export class FinancialService {
               t.provider, COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref,
               t.receipt_code, t.account_name,
               t.schedule_id, t.created_at, t.settled_at,
-              t.pledge_id, t.need_id, n.title AS need_title, t.office_channel,
+              t.pledge_id, t.need_id, n.title AS need_title, t.office_channel, t.failure_code,
               u.full_name AS member_name, c.name AS congregation
          FROM transactions t
          LEFT JOIN funds f ON f.fund_id = t.fund_id
@@ -784,11 +1249,12 @@ export class FinancialService {
     const pledgeTitle = pledgeId ? await pledgeTitleFor(this.pool, pledgeId) : null;
     const needId = (t.need_id as string | null) ?? null;
     const needTitle = (t.need_title as string | null) ?? null;
-    const { provider: _p, pledge_id: _pl, need_id: _n, need_title: _nt, ...rest } = t;
-    void _p; void _pl; void _n; void _nt;
+    const { provider: _p, pledge_id: _pl, need_id: _n, need_title: _nt, failure_code: _fc, ...rest } = t;
+    void _p; void _pl; void _n; void _nt; void _fc;
     return {
       ...rest,
       amount_minor: Number(t.amount_minor),
+      failure: t.status === "failed" ? giftFailureCopy((t.failure_code as string | null) ?? "declined") : null,
       method,
       method_label: giftMethodLabel(method, (t.office_channel as string | null) ?? null),
       pledge: pledgeId && pledgeTitle ? { pledge_id: pledgeId, title: pledgeTitle } : null,
@@ -941,10 +1407,15 @@ export class FinancialService {
     amount_minor: z.number().int().positive(),
     currency: z.string().length(3),
     frequency: z.enum(["weekly", "monthly"]),
-    method: z.enum(["card", "mpesa", "airtel", "paypal"]).default("card"),
+    // Recurring gifts run on mobile money (a card or PayPal schedule could
+    // never be charged — the card needs the member present, and the PayPal
+    // column was never allowed in the table). Default = M-Pesa.
+    method: z.enum(["card", "mpesa", "airtel", "paypal"]).default("mpesa"),
     idempotency_key: z.string().min(8).max(255).optional(),
     /** Bind this schedule to a pledge: every charge it makes is attributed. */
     pledge_id: z.string().uuid().nullish(),
+    /** The number to prompt each cycle; absent = the member's profile number. */
+    phone_number: z.string().min(7).max(32).nullish(),
   });
 
   /** The pledge a gift counts toward. An explicit pledge must be the caller's
@@ -1028,12 +1499,28 @@ export class FinancialService {
     input: z.infer<typeof FinancialService.CreateSchedule>,
   ): Promise<Record<string, unknown>> {
     const key = input.idempotency_key ?? randomUUID();
-    const existing = await maybeOne<{ schedule_id: string; status: string }>(
+    const existing = await maybeOne<{ schedule_id: string; status: string; next_run_at: string }>(
       this.pool,
-      `SELECT schedule_id, status FROM giving_schedules WHERE idempotency_key = $1 AND user_id = $2`,
+      `SELECT schedule_id, status, next_run_at FROM giving_schedules WHERE idempotency_key = $1 AND user_id = $2`,
       [key, userId],
     );
     if (existing) return { ...existing, reused: true };
+
+    // What can be charged every cycle (Giving Cycle 1): a live mobile-money
+    // rail, its currency, its limits, whole shillings, and a real number.
+    const rail = FinancialService.RAILS[input.method];
+    if (!rail.recurring || !this.railEnabled(input.method)) {
+      throw new ApiError(
+        "METHOD_UNAVAILABLE",
+        "Recurring gifts are collected with M-Pesa. Choose M-Pesa to set one up.",
+        { method: input.method },
+      );
+    }
+    const currency = input.currency.toUpperCase();
+    const { phone } = await this.checkGift(userId, input.method, input.amount_minor, currency, input.phone_number ?? null, false);
+    // Store a number only when the member chose one for THIS gift; otherwise
+    // every cycle follows their profile number, so a changed number is used.
+    const schedulePhone = input.phone_number ? phone : null;
 
     // A schedule started for a pledge is bound to it (ownership checked), and
     // is STORED on the pledge's fund — the same one every charge it makes
@@ -1042,32 +1529,63 @@ export class FinancialService {
     // Without a pledge, the client's fund stands.
     const boundPledge = await this.resolvePledgeId(userId, input.pledge_id ?? null, null);
     const fundCode = boundPledge ? await this.pledgeFundCode(boundPledge) : input.fund;
-    const fund = await maybeOne<{ fund_id: string }>(
+    const fund = await maybeOne<{ fund_id: string; name: string }>(
       this.pool,
-      `SELECT fund_id FROM funds WHERE code = $1 AND is_active`,
+      `SELECT fund_id, name FROM funds WHERE code = $1 AND is_active`,
       [fundCode],
     );
     if (!fund) throw new ApiError("VALIDATION_FAILED", "Unknown or inactive fund");
 
-    // First charge on the next cycle boundary; give now if you want to give now.
-    const firstRun = FinancialService.nextRun(new Date(), input.frequency);
-    const row = await one<{ schedule_id: string; next_run_at: string }>(
-      this.pool,
-      `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key, pledge_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING schedule_id, next_run_at`,
-      [userId, fund.fund_id, input.amount_minor, input.currency.toUpperCase(), input.frequency, input.method, firstRun.toISOString(), key, boundPledge],
-    );
-    await audit(this.pool, userId, "giving.schedule_created", "giving_schedules", row.schedule_id, {
-      fund: fundCode,
-      amount_minor: input.amount_minor,
-      frequency: input.frequency,
-      method: input.method,
+    const created = await tx(this.pool, async (c) => {
+      // One schedule decision per member at a time: two taps with two fresh
+      // keys (production has two such pairs — two identical prompts to one
+      // phone every week, each making the other fail as "busy") serialise
+      // here, and the second finds the first.
+      await c.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`giving_schedule:${userId}`]);
+      const twin = await maybeOne<{ schedule_id: string; status: string; next_run_at: string; fresh: boolean }>(
+        c,
+        `SELECT schedule_id, status, next_run_at, (created_at > now() - interval '10 minutes') AS fresh
+           FROM giving_schedules
+          WHERE user_id = $1 AND fund_id = $2 AND amount_minor = $3 AND currency = $4
+            AND frequency = $5 AND method = $6 AND pledge_id IS NOT DISTINCT FROM $7
+            AND status IN ('active', 'paused')
+          ORDER BY created_at DESC LIMIT 1`,
+        [userId, fund.fund_id, input.amount_minor, currency, input.frequency, input.method, boundPledge],
+      );
+      if (twin?.fresh) {
+        // The same gift a moment ago: the SAME schedule, not a second one.
+        return { schedule_id: twin.schedule_id, status: twin.status, next_run_at: twin.next_run_at, reused: true, duplicate_of: twin.schedule_id };
+      }
+      if (twin) {
+        throw new ApiError(
+          "SCHEDULE_EXISTS",
+          `You already give ${moneyWords(input.amount_minor, currency)} ${input.frequency === "weekly" ? "every week" : "every month"} to ${fund.name}. Change that gift instead of adding a second one.`,
+          { schedule_id: twin.schedule_id, status: twin.status },
+        );
+      }
+      // First charge on the next cycle boundary; give now if you want to give now.
+      const firstRun = FinancialService.nextRun(new Date(), input.frequency);
+      const row = await one<{ schedule_id: string; next_run_at: string }>(
+        c,
+        `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key, pledge_id, phone_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING schedule_id, next_run_at`,
+        [userId, fund.fund_id, input.amount_minor, currency, input.frequency, input.method, firstRun.toISOString(), key, boundPledge, schedulePhone],
+      );
+      if (boundPledge) {
+        await c.query(`UPDATE pledges SET schedule_id = $1, updated_at = now() WHERE pledge_id = $2 AND schedule_id IS NULL`, [row.schedule_id, boundPledge]);
+      }
+      return { schedule_id: row.schedule_id, status: "active", next_run_at: row.next_run_at, reused: false };
     });
-    if (boundPledge) {
-      await this.pool.query(`UPDATE pledges SET schedule_id = $1, updated_at = now() WHERE pledge_id = $2 AND schedule_id IS NULL`, [row.schedule_id, boundPledge]);
+    if (!created.reused) {
+      await audit(this.pool, userId, "giving.schedule_created", "giving_schedules", created.schedule_id, {
+        fund: fundCode,
+        amount_minor: input.amount_minor,
+        frequency: input.frequency,
+        method: input.method,
+      });
     }
-    return { schedule_id: row.schedule_id, status: "active", next_run_at: row.next_run_at, reused: false };
+    return created;
   }
 
   async listSchedules(userId: string): Promise<{ data: unknown[] }> {
@@ -1075,12 +1593,23 @@ export class FinancialService {
       this.pool,
       `SELECT s.schedule_id, f.code AS fund, s.amount_minor, s.currency, s.frequency, s.method,
               s.status, s.next_run_at, s.last_run_at, s.created_at,
-              s.consecutive_failures, s.last_failed_at, s.paused_at
+              s.consecutive_failures, s.last_failed_at, s.paused_at,
+              s.last_failure_code, s.retry_at, s.phone_number
          FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id
         WHERE s.user_id = $1 ORDER BY s.created_at DESC`,
       [userId],
     );
-    return { data: rows.map((r) => ({ ...r, amount_minor: Number(r.amount_minor) })) };
+    return {
+      data: rows.map((r) => {
+        const { last_failure_code: code, ...rest } = r;
+        return {
+          ...rest,
+          amount_minor: Number(r.amount_minor),
+          // The last charge's reason while the schedule is still failing.
+          last_failure: Number(r.consecutive_failures) > 0 ? giftFailureCopy((code as string | null) ?? "declined") : null,
+        };
+      }),
+    };
   }
 
   /**
@@ -1251,6 +1780,7 @@ export class FinancialService {
       `UPDATE giving_schedules
           SET status = 'active', paused_at = NULL, consecutive_failures = 0,
               retry_after = NULL, last_error = NULL, last_failed_at = NULL,
+              last_failure_code = NULL, retry_cycle_at = NULL, retry_at = NULL, cycle_attempts = 0,
               next_run_at = $3
         WHERE schedule_id = $1 AND user_id = $2`,
       [scheduleId, userId, nextRun.toISOString()],
@@ -1279,12 +1809,26 @@ export class FinancialService {
   }
 
   /**
-   * Scheduler hook: charge every due active schedule. The cycle's intent key is
-   * deterministic (schedule id + the due instant), so a crashed/overlapping run
-   * can never double-charge; next_run_at advances from the DUE time, not "now",
-   * so cadence never drifts.
+   * Scheduler hook: charge every due active schedule. Each cycle's FIRST
+   * prompt uses the deterministic key `sched:{id}:{due}`, so a crashed or
+   * overlapping run can never send it twice; next_run_at advances from the DUE
+   * time, not "now", so cadence never drifts.
+   *
+   * Sending a prompt is NOT collecting a gift (Giving Cycle 1). Whether the
+   * member paid, declined or never saw it arrives later — the callback or the
+   * sweeper — and recordScheduleOutcome feeds it back: strikes, the pause, the
+   * member's notice, and at most ONE retry of the cycle, which runs here with
+   * the key `sched:{id}:{cycle}:r{n}` once it has proved no attempt of that
+   * cycle succeeded or is still waiting on the phone.
+   *
+   * Two prompts must never race to one phone (the second fails as "busy" and
+   * can take the first down with it): a phone already prompted in this run, or
+   * with a prompt from the last two minutes still waiting, is deferred three
+   * minutes. That is not a failure — nobody said no.
    */
-  async runDueSchedules(now: Date = new Date()): Promise<{ run: number; failed: number; skipped: number }> {
+  async runDueSchedules(
+    now: Date = new Date(),
+  ): Promise<{ run: number; failed: number; skipped: number; retried: number; deferred: number }> {
     const due = await many<{
       schedule_id: string;
       user_id: string;
@@ -1293,63 +1837,143 @@ export class FinancialService {
       currency: string;
       frequency: "weekly" | "monthly";
       method: "card" | "mpesa" | "airtel";
-      next_run_at: string;
+      next_run_at: Date;
+      retry_after: Date | null;
       consecutive_failures: number;
+      retry_cycle_at: Date | null;
+      retry_at: Date | null;
+      cycle_attempts: number;
+      phone: string | null;
     }>(
       this.pool,
       `SELECT s.schedule_id, s.user_id, f.code AS fund, s.amount_minor, s.currency,
-              s.frequency, s.method, s.next_run_at, s.consecutive_failures
-         FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id
-        WHERE s.status = 'active' AND s.next_run_at <= $1
-          AND (s.retry_after IS NULL OR s.retry_after <= $1)
-        ORDER BY s.next_run_at`,
+              s.frequency, s.method, s.next_run_at, s.retry_after, s.consecutive_failures,
+              s.retry_cycle_at, s.retry_at, s.cycle_attempts,
+              COALESCE(s.phone_number, u.phone_number) AS phone
+         FROM giving_schedules s
+         JOIN funds f ON f.fund_id = s.fund_id
+         JOIN users u ON u.user_id = s.user_id
+        WHERE s.status = 'active'
+          AND ((s.next_run_at <= $1 AND (s.retry_after IS NULL OR s.retry_after <= $1))
+            OR (s.retry_cycle_at IS NOT NULL AND s.retry_at <= $1))
+        ORDER BY s.next_run_at
+        LIMIT 500`,
       [now.toISOString()],
     );
-    let run = 0;
-    let failed = 0;
-    let skipped = 0;
+    const counts = { run: 0, failed: 0, skipped: 0, retried: 0, deferred: 0 };
+    const prompted = new Set<string>();
     for (const s of due) {
-      // ── THE BACKLOG GUARD ────────────────────────────────────────────────
-      // A schedule can fall far behind — the provider was unconfigured for
-      // weeks, the worker was down, the church changed gateways. When it
-      // catches up, next_run_at advances by ONE interval per success, so a
-      // schedule ten weeks overdue would be charged ten times in quick
-      // succession on the next few passes.
-      //
-      // The double-charge guard does NOT protect against this: each stale
-      // cycle has its own idempotency key, so these are ten legitimately
-      // distinct charges, not a repeat of one.
-      //
-      // A member who set up "KSh 1,000 weekly" consented to a rhythm, not to a
-      // lump sum arriving without warning. So we do not collect the backlog:
-      // we roll the schedule forward to its next FUTURE occurrence and start
-      // the rhythm again from there. The church forgoes money it never
-      // collected — which is the right trade against surprising a partner with
-      // ten charges they did not expect.
-      //
-      // Discovered in production 2026-09-02: six real M-Pesa schedules from
-      // June had never collected once ("mpesa payments are not configured"),
-      // and configuring the provider would have triggered exactly this.
-      const dueAt = new Date(s.next_run_at);
-      const nextAfterDue = FinancialService.nextRun(dueAt, s.frequency);
-      if (nextAfterDue.getTime() <= now.getTime()) {
-        const rolled = FinancialService.rollForward(dueAt, s.frequency, now);
-        console.warn(
-          `[giving] schedule ${s.schedule_id} was ${Math.round(
-            (now.getTime() - dueAt.getTime()) / 86_400_000,
-          )} days behind; rolling to ${rolled.toISOString()} WITHOUT collecting the backlog`,
-        );
+      // The regular cycle wins over a retry of an older one: a new cycle
+      // supersedes whatever the last one left undone.
+      const regular =
+        new Date(s.next_run_at).getTime() <= now.getTime() &&
+        (!s.retry_after || new Date(s.retry_after).getTime() <= now.getTime());
+
+      if (regular) {
+        // ── THE BACKLOG GUARD ──────────────────────────────────────────────
+        // A schedule can fall far behind — the provider was unconfigured for
+        // weeks, the worker was down, the church changed gateways. When it
+        // catches up, next_run_at advances by ONE interval per success, so a
+        // schedule ten weeks overdue would be charged ten times in quick
+        // succession on the next few passes.
+        //
+        // The double-charge guard does NOT protect against this: each stale
+        // cycle has its own idempotency key, so these are ten legitimately
+        // distinct charges, not a repeat of one.
+        //
+        // A member who set up "KSh 1,000 weekly" consented to a rhythm, not to
+        // a lump sum arriving without warning. So we do not collect the
+        // backlog: we roll the schedule forward to its next FUTURE occurrence
+        // and start the rhythm again from there. The church forgoes money it
+        // never collected — the right trade against surprising a partner with
+        // ten charges they did not expect.
+        //
+        // Discovered in production 2026-09-02: six real M-Pesa schedules from
+        // June had never collected once ("mpesa payments are not configured"),
+        // and configuring the provider would have triggered exactly this.
+        const dueAt = new Date(s.next_run_at);
+        const nextAfterDue = FinancialService.nextRun(dueAt, s.frequency);
+        if (nextAfterDue.getTime() <= now.getTime()) {
+          const rolled = FinancialService.rollForward(dueAt, s.frequency, now);
+          console.warn(
+            `[giving] schedule ${s.schedule_id} was ${Math.round(
+              (now.getTime() - dueAt.getTime()) / 86_400_000,
+            )} days behind; rolling to ${rolled.toISOString()} WITHOUT collecting the backlog`,
+          );
+          await this.pool.query(
+            `UPDATE giving_schedules
+                SET next_run_at = $2, consecutive_failures = 0, retry_after = NULL,
+                    last_error = NULL, last_failed_at = NULL, last_failure_code = NULL,
+                    retry_cycle_at = NULL, retry_at = NULL, cycle_attempts = 0
+              WHERE schedule_id = $1`,
+            [s.schedule_id, rolled.toISOString()],
+          );
+          counts.skipped += 1;
+          continue;
+        }
+      }
+
+      // One prompt per phone at a time — unless this is a REPLAY of a prompt
+      // already sent for this very cycle (a crash between sending and moving
+      // the schedule on), which re-sends nothing: its key finds the prompt
+      // that exists, and the schedule simply moves on.
+      const phoneKey = kenyanMobileNumber(s.phone) ?? `user:${s.user_id}`;
+      const replay = regular
+        ? await maybeOne<{ n: number }>(
+            this.pool,
+            `SELECT 1 AS n FROM transactions WHERE idempotency_key = $1 LIMIT 1`,
+            [`sched:${s.schedule_id}:${s.next_run_at}`],
+          )
+        : null;
+      const waiting = replay
+        ? null
+        : await maybeOne<{ n: number }>(
+            this.pool,
+            `SELECT 1 AS n FROM transactions
+              WHERE user_id = $1 AND provider IN ('mpesa','airtel') AND status = 'processing'
+                AND created_at > $2 LIMIT 1`,
+            [s.user_id, new Date(now.getTime() - 2 * 60_000).toISOString()],
+          );
+      if (!replay && (prompted.has(phoneKey) || waiting)) {
+        const later = new Date(now.getTime() + 3 * 60_000).toISOString();
         await this.pool.query(
-          `UPDATE giving_schedules
-              SET next_run_at = $2, consecutive_failures = 0, retry_after = NULL,
-                  last_error = NULL, last_failed_at = NULL
-            WHERE schedule_id = $1`,
-          [s.schedule_id, rolled.toISOString()],
+          regular
+            ? `UPDATE giving_schedules SET retry_after = $2 WHERE schedule_id = $1`
+            : `UPDATE giving_schedules SET retry_at = $2 WHERE schedule_id = $1`,
+          [s.schedule_id, later],
         );
-        skipped += 1;
+        counts.deferred += 1;
         continue;
       }
 
+      let cycleAt: Date;
+      let key: string;
+      if (regular) {
+        cycleAt = new Date(s.next_run_at);
+        // Unchanged key shape: cycles already sent before this release keep
+        // their key, so none of them can be sent a second time.
+        key = `sched:${s.schedule_id}:${s.next_run_at}`;
+      } else {
+        cycleAt = new Date(s.retry_cycle_at!);
+        // A retry proves its cycle is still open: nothing of it succeeded and
+        // no attempt of it is still on the phone.
+        const open = await maybeOne<{ n: number }>(
+          this.pool,
+          `SELECT 1 AS n FROM transactions
+            WHERE schedule_id = $1 AND schedule_cycle_at = $2 AND status IN ('succeeded','processing') LIMIT 1`,
+          [s.schedule_id, cycleAt.toISOString()],
+        );
+        if (open) {
+          await this.pool.query(
+            `UPDATE giving_schedules SET retry_cycle_at = NULL, retry_at = NULL WHERE schedule_id = $1`,
+            [s.schedule_id],
+          );
+          continue;
+        }
+        key = `sched:${s.schedule_id}:${cycleAt.toISOString()}:r${s.cycle_attempts}`;
+      }
+
+      prompted.add(phoneKey);
       try {
         await this.createGivingIntent(
           s.user_id,
@@ -1358,105 +1982,141 @@ export class FinancialService {
             amount_minor: Number(s.amount_minor),
             currency: s.currency,
             method: s.method,
-            idempotency_key: `sched:${s.schedule_id}:${s.next_run_at}`,
+            idempotency_key: key,
           },
           s.schedule_id,
+          { cycleAt: cycleAt.toISOString(), phone: s.phone },
         );
-        await this.pool.query(
-          `UPDATE giving_schedules
-              SET last_run_at = $2, next_run_at = $3,
-                  consecutive_failures = 0, retry_after = NULL, last_error = NULL, last_failed_at = NULL
-            WHERE schedule_id = $1`,
-          [s.schedule_id, now.toISOString(), FinancialService.nextRun(new Date(s.next_run_at), s.frequency).toISOString()],
-        );
-        run += 1;
-      } catch (err) {
-        // A failed cycle is now VISIBLE, BOUNDED and RECOVERABLE (owner,
-        // 2026-08-28). It used to be `catch { failed += 1 }`: silent to the
-        // giver, silent to the church, and retried every five minutes forever.
-        //
-        // next_run_at deliberately does NOT move — it anchors this cycle's
-        // idempotency key (`sched:{id}:{next_run_at}`), so every retry inside
-        // the cycle reuses that key and can never charge twice. Backoff rides
-        // the separate retry_after gate instead.
-        failed += 1;
-        const reason = err instanceof Error ? err.message : String(err);
-
-        // OUR FAULT, NOT THEIRS. If the provider is not configured on this
-        // server, the giver's payment did not fail — we never asked for it.
-        // Telling them "your recurring gift didn't go through" alarms them
-        // about our plumbing and offers a retry that cannot possibly work, so
-        // a configuration failure:
-        //   · does NOT count toward their three strikes
-        //   · does NOT pause their schedule
-        //   · does NOT notify them at all
-        // It is recorded and shouted at the operator instead, because the
-        // people who can fix it are us. (Owner, 2026-09-02, on finding six real
-        // partners three hours from exactly that message.)
-        if (err instanceof ProviderNotConfiguredError) {
-          console.error(
-            `[giving] CONFIGURATION FAULT — schedule ${s.schedule_id} cannot be charged: ${reason}. ` +
-            `This is a server misconfiguration, not a failed payment. The giver has NOT been notified.`,
-          );
+        if (regular) {
+          // The prompt is out. Its OUTCOME is not known yet, so the failure
+          // state is left alone — only a confirmed payment clears it.
           await this.pool.query(
             `UPDATE giving_schedules
-                SET last_error = $2, last_failed_at = $3, retry_after = $4
+                SET last_run_at = $2, next_run_at = $3, retry_after = NULL,
+                    retry_cycle_at = NULL, retry_at = NULL, cycle_attempts = 0
               WHERE schedule_id = $1`,
-            [s.schedule_id, reason, now.toISOString(),
-             new Date(now.getTime() + 60 * 60_000).toISOString()],
+            [s.schedule_id, now.toISOString(), FinancialService.nextRun(new Date(s.next_run_at), s.frequency).toISOString()],
           );
-          continue;
+          counts.run += 1;
+        } else {
+          await this.pool.query(
+            `UPDATE giving_schedules SET retry_cycle_at = NULL, retry_at = NULL WHERE schedule_id = $1`,
+            [s.schedule_id],
+          );
+          counts.retried += 1;
         }
-
-        const attempts = s.consecutive_failures + 1;
-        console.error(
-          `[giving] schedule ${s.schedule_id} failed (attempt ${attempts}, ${s.method}): ${reason}`,
-        );
-        const paused = attempts >= FinancialService.SCHEDULE_MAX_ATTEMPTS;
-        const backoffMs = FinancialService.SCHEDULE_BACKOFF_MIN[
-          Math.min(attempts - 1, FinancialService.SCHEDULE_BACKOFF_MIN.length - 1)
-        ]! * 60_000;
-        await this.pool.query(
-          `UPDATE giving_schedules
-              SET consecutive_failures = $2,
-                  last_error = $3,
-                  last_failed_at = $4,
-                  retry_after = $5,
-                  status = CASE WHEN $6 THEN 'paused' ELSE status END,
-                  paused_at = CASE WHEN $6 THEN $4::timestamptz ELSE paused_at END
-            WHERE schedule_id = $1`,
-          [
-            s.schedule_id,
-            attempts,
-            reason.slice(0, 500),
-            now.toISOString(),
-            new Date(now.getTime() + backoffMs).toISOString(),
-            paused,
-          ],
-        );
-        // Tell the giver — once when it first fails, and again if we stop.
-        // Best-effort: a notification hiccup must never break the tick.
-        try {
-          if (attempts === 1 || paused) {
-            await this.notifications.schedule({
-              userId: s.user_id,
-              channel: "push",
-              template: paused ? "giving_schedule_paused" : "giving_schedule_failed",
-              payload: {
-                schedule_id: s.schedule_id,
-                fund: s.fund,
-                amount_minor: Number(s.amount_minor),
-                currency: s.currency,
-                method: s.method,
-              },
-            });
-          }
-        } catch {
-          /* the ledger matters more than the notice */
-        }
+      } catch (err) {
+        counts.failed += 1;
+        await this.scheduleSendFailed(s, err, regular, now);
       }
     }
-    return { run, failed, skipped };
+    return counts;
+  }
+
+  /**
+   * The prompt could not even be SENT. A failed cycle is VISIBLE, BOUNDED and
+   * RECOVERABLE (owner, 2026-08-28) — it used to be `catch { failed += 1 }`:
+   * silent to the giver, silent to the church, retried every five minutes
+   * forever.
+   *
+   * next_run_at deliberately does NOT move — it anchors this cycle's
+   * idempotency key, so every retry inside the cycle reuses that key and can
+   * never charge twice. Backoff rides the separate retry_after gate instead.
+   */
+  private async scheduleSendFailed(
+    s: { schedule_id: string; user_id: string; fund: string; amount_minor: string; currency: string; method: string; frequency: string; consecutive_failures: number },
+    err: unknown,
+    regular: boolean,
+    now: Date,
+  ): Promise<void> {
+    const reason = err instanceof Error ? err.message : String(err);
+    // OUR FAULT, NOT THEIRS. If the provider is not configured on this
+    // server — or Safaricom itself is down — the giver's payment did not fail:
+    // we never got to ask. Telling them "your recurring gift didn't go
+    // through" alarms them about our plumbing and offers a retry that cannot
+    // possibly work, so a configuration fault or an outage:
+    //   · does NOT count toward their three strikes
+    //   · does NOT pause their schedule
+    //   · does NOT notify them at all
+    // It is recorded and shouted at the operator instead, because the people
+    // who can fix it are us. (Owner, 2026-09-02, on finding six real partners
+    // three hours from exactly that message; outages added in Giving Cycle 1.)
+    const ours =
+      err instanceof ProviderNotConfiguredError ||
+      (err instanceof ApiError && err.code === "UPSTREAM_UNAVAILABLE");
+    if (ours) {
+      console.error(
+        `[giving] ${err instanceof ProviderNotConfiguredError ? "CONFIGURATION FAULT" : "PROVIDER OUTAGE"} — ` +
+          `schedule ${s.schedule_id} could not be prompted: ${reason}. The giver has NOT been notified.`,
+      );
+      await this.pool.query(
+        regular
+          ? `UPDATE giving_schedules SET last_error = $2, last_failed_at = $3, retry_after = $4 WHERE schedule_id = $1`
+          : `UPDATE giving_schedules SET last_error = $2, last_failed_at = $3, retry_at = $4 WHERE schedule_id = $1`,
+        [s.schedule_id, reason.slice(0, 500), now.toISOString(), new Date(now.getTime() + 60 * 60_000).toISOString()],
+      );
+      return;
+    }
+
+    // The giver's side: no usable number, an amount M-Pesa refuses, a rail
+    // the gift can no longer use. One strike each, with the reason in words.
+    const code: GiftFailureCode =
+      err instanceof ApiError && err.code === "PHONE_REQUIRED" ? "no_phone" : "declined";
+    const attempts = s.consecutive_failures + 1;
+    console.error(`[giving] schedule ${s.schedule_id} could not be prompted (attempt ${attempts}, ${s.method}): ${reason}`);
+    const paused = attempts >= FinancialService.SCHEDULE_MAX_ATTEMPTS;
+    const backoffMs = FinancialService.SCHEDULE_BACKOFF_MIN[
+      Math.min(attempts - 1, FinancialService.SCHEDULE_BACKOFF_MIN.length - 1)
+    ]! * 60_000;
+    await this.pool.query(
+      `UPDATE giving_schedules
+          SET consecutive_failures = $2,
+              last_error = $3,
+              last_failure_code = $7,
+              last_failed_at = $4,
+              retry_after = CASE WHEN $8 THEN $5::timestamptz ELSE retry_after END,
+              retry_cycle_at = CASE WHEN $8 THEN retry_cycle_at ELSE NULL END,
+              retry_at = CASE WHEN $8 THEN retry_at ELSE NULL END,
+              status = CASE WHEN $6 THEN 'paused' ELSE status END,
+              paused_at = CASE WHEN $6 THEN $4::timestamptz ELSE paused_at END
+        WHERE schedule_id = $1`,
+      [
+        s.schedule_id,
+        attempts,
+        reason.slice(0, 500),
+        now.toISOString(),
+        new Date(now.getTime() + backoffMs).toISOString(),
+        paused,
+        code,
+        regular,
+      ],
+    );
+    // Tell the giver — once when it first fails, and again if we stop.
+    // Best-effort: a notification hiccup must never break the tick.
+    try {
+      if (attempts === 1 || paused) {
+        const copy = giftFailureCopy(code)!;
+        await this.notifications.schedule({
+          userId: s.user_id,
+          channel: "push",
+          template: paused ? "giving_schedule_paused" : "giving_schedule_failed",
+          payload: {
+            schedule_id: s.schedule_id,
+            fund: s.fund,
+            amount_minor: Number(s.amount_minor),
+            currency: s.currency,
+            method: s.method,
+            frequency: s.frequency,
+            failure_code: code,
+            reason: err instanceof ApiError ? err.message : copy.reason,
+            hint: copy.hint,
+            retry_at: null,
+          },
+        });
+      }
+    } catch {
+      /* the ledger matters more than the notice */
+    }
   }
 
   /** Minutes to wait before re-attempting a failed cycle (1h, 6h, 24h). */

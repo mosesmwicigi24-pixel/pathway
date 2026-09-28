@@ -100,7 +100,9 @@ describe("financial / giving (§1.10 C, §3.5)", () => {
     const pp = new FakePayPalGateway("completed");
     const s = new FinancialService(testPool(), gw, undefined, pp);
     const intent = (await s.createGivingIntent(user, {
-      fund: "tithe", amount_minor: 5000, currency: "kes", method: "paypal", idempotency_key: "pp-1",
+      // PayPal settles in US dollars, so a PayPal gift is SENT in dollars
+      // (Giving Cycle 1: a KSh amount used to be charged as that many dollars).
+      fund: "tithe", amount_minor: 5000, currency: "usd", method: "paypal", idempotency_key: "pp-1",
     })) as { transaction_id: string; provider: string; provider_ref: string; approve_url: string };
     expect(intent.provider).toBe("paypal");
     expect(intent.approve_url).toContain("paypal.com");
@@ -163,9 +165,14 @@ describe("financial / giving (§1.10 C, §3.5)", () => {
     await expect(svc.handleWebhook(succeeded("pi_x"), "bad")).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
 
-  it("rejects an unknown fund", async () => {
+  it("refuses a gift below the method's floor, and takes one at it", async () => {
+    // One cent is not a gift a card can carry (Giving Cycle 1: every rail has
+    // a floor and a ceiling, named in the refusal).
     await expect(
       svc.createGivingIntent(user, { fund: "tithe", amount_minor: 1, currency: "kes", idempotency_key: "give-0005" }),
+    ).rejects.toMatchObject({ code: "AMOUNT_OUT_OF_RANGE" });
+    await expect(
+      svc.createGivingIntent(user, { fund: "tithe", amount_minor: 100, currency: "kes", idempotency_key: "give-0006" }),
     ).resolves.toBeTruthy();
   });
 

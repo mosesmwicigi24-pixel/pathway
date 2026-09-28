@@ -2635,10 +2635,30 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { description: "RATE_LIMITED — this gift has been polled too often." }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+  /giving/methods:
+    get:
+      tags: [giving]
+      summary: "The rails this member can give with here (Giving Cycle 1): currency, limits, whether a recurring gift can run on it, the number on file for a prompt, and which to start on. Draw the method list from this; never offer a rail with enabled false as if it could take money."
+      responses:
+        "200":
+          description: Methods
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GivingMethods" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /giving/intents:
     post:
       tags: [giving]
       summary: Create a payment intent (card via Stripe → client secret; mpesa/airtel → STK push). Idempotent.
+      description: >-
+        Checked before any phone rings (Giving Cycle 1): the method must be enabled
+        here (422 METHOD_UNAVAILABLE), in its own currency — M-Pesa KES, PayPal USD
+        (422 METHOD_CURRENCY) — inside its limits, whole shillings for M-Pesa
+        (422 AMOUNT_OUT_OF_RANGE, details min_minor/max_minor or step_minor), with a
+        real Kenyan mobile number for mobile money (422 PHONE_REQUIRED). A member's
+        own M-Pesa prompt from the last 90 seconds still unanswered refuses a second
+        one (409 GIFT_IN_PROGRESS, details.transaction_id) — a replay with the SAME
+        idempotency_key is not refused; it returns that transaction.
       requestBody:
         required: true
         content:
@@ -2651,12 +2671,24 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GivingIntentResult" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: "GIFT_IN_PROGRESS — a prompt from a moment ago is still waiting on the member's phone", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "422": { $ref: "#/components/responses/Unprocessable" }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
   /giving/schedules:
     post:
       tags: [giving]
       summary: Create a recurring giving schedule (weekly/monthly). The SERVER charges each cycle; managed online-only (money never queues offline).
+      description: >-
+        Recurring gifts run on mobile money (Giving Cycle 1): a card or PayPal
+        schedule is refused (422 METHOD_UNAVAILABLE), as are the wrong currency,
+        amounts outside the rail's limits and a missing or invalid number (same
+        codes as /giving/intents). The same gift sent twice within ten minutes (a
+        double tap with two fresh keys) is ONE schedule — the second answer carries
+        reused true and duplicate_of; the same gift while one already exists is
+        409 SCHEDULE_EXISTS with details.schedule_id. A charge's REAL outcome (paid,
+        declined, unreachable…) comes back from M-Pesa later: declines count toward
+        three strikes (then paused, the member told why); a phone that never got the
+        prompt is tried once more that day, 08:00–20:00 EAT.
       requestBody:
         required: true
         content:
@@ -2665,10 +2697,11 @@ paths:
       responses:
         "201": { description: Schedule created }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: "SCHEDULE_EXISTS — the same recurring gift already exists; change it instead", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "422": { $ref: "#/components/responses/Unprocessable" }
     get:
       tags: [giving]
-      summary: My recurring giving schedules.
+      summary: "My recurring giving schedules. Each carries phone_number (the schedule's own number, null = the profile's), retry_at (a retry of the current cycle, when armed) and last_failure (a GiftFailure while the schedule is failing, else null)."
       responses:
         "200": { description: Schedules }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -8441,12 +8474,21 @@ paths:
   /webhooks/mobilemoney/{provider}:
     post:
       tags: [system]
-      summary: M-Pesa/Airtel callback receiver; HMAC-verified + idempotent — settlement happens only here.
+      summary: M-Pesa/Airtel callback receiver — a hint that a prompt ended; money moves only on the provider's confirmed answer.
+      description: >-
+        Signed providers are HMAC-verified and applied. Safaricom's Daraja signs
+        nothing, so its callback is only a hint (Giving Cycle 1): a CheckoutRequestID
+        that is not one of our waiting prompts is ignored at the cost of one read;
+        otherwise the server asks Safaricom (STK Push Query, at most every 10 s per
+        prompt) and applies THAT answer — a forged "paid" moves nothing. If
+        Safaricom cannot say yet, the mobile-money sweeper asks again (every minute,
+        from 90 s; unanswered after 48 h closes as no_answer). The reply to an
+        unsigned caller is always { received: true }.
       security: []
       parameters:
         - { name: provider, in: path, required: true, schema: { type: string, enum: [mpesa, airtel] } }
       responses:
-        "200": { description: Acknowledged }
+        "200": { description: "Acknowledged — { received: true }" }
   /webhooks/website-contact:
     post:
       tags: [system]
@@ -11595,8 +11637,8 @@ components:
             where it landed. Also overridden for `need_id` (see there). Still required.
         amount_minor: { type: integer, format: int64, description: "Minor units, never floats" }
         currency: { type: string, minLength: 3, maxLength: 3 }
-        method: { type: string, enum: [card, mpesa, airtel], default: card }
-        phone_number: { type: string, description: "Mobile money only — where the STK push lands; defaults to the profile phone" }
+        method: { type: string, enum: [card, mpesa, airtel, paypal], default: card, description: "PayPal gifts are in USD (currency must be USD); M-Pesa/Airtel in KES." }
+        phone_number: { type: [string, "null"], description: "Mobile money only — where the STK push lands (07XX…, 01XX…, +2547…); defaults to the profile phone. Not a Kenyan mobile number → 422 PHONE_REQUIRED." }
         account_name:
           type: string
           maxLength: 60
@@ -11643,8 +11685,10 @@ components:
         amount_minor: { type: integer, format: int64 }
         currency: { type: string, minLength: 3, maxLength: 3 }
         frequency: { type: string, enum: [weekly, monthly] }
-        method: { type: string, enum: [card, mpesa, airtel], default: card }
+        method: { type: string, enum: [card, mpesa, airtel, paypal], default: mpesa, description: "Only an enabled recurring rail (M-Pesa) is accepted; others are 422 METHOD_UNAVAILABLE." }
         idempotency_key: { type: string, minLength: 8, maxLength: 255 }
+        pledge_id: { type: [string, "null"], format: uuid, description: "Bind the schedule to one of the member's open pledges." }
+        phone_number: { type: [string, "null"], description: "The number to prompt each cycle; absent = the member's profile number (followed if it changes)." }
     # ── Finance ERP · reports schemas — add below this line. ──
     FinanceChannel:
       type: string
@@ -12455,8 +12499,41 @@ components:
         pledge_id: { type: [string, "null"], format: uuid, description: The pledge this gift counted toward; null for a gift outside a pledge }
         pledge_title: { type: [string, "null"], description: "That pledge's title under the words its card shows (the member's own name for it, else the derived one) — so the Give statement can label pledge payments; null off-pledge" }
         need_id: { type: [string, "null"], format: uuid, description: "The department need this gift was given to (\"Give to this need\"); null otherwise. With pledge_id, what the apps' \"Repeat last gift\" checks to skip pledge and need gifts." }
+        failure: { oneOf: [{ $ref: "#/components/schemas/GiftFailure" }, { type: "null" }], description: "Why a failed gift failed, in words the member can act on; null unless status is failed." }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
+
+    GiftFailure:
+      type: object
+      description: "Why a gift did not go through (Giving Cycle 1) — from M-Pesa's own result code. retryable = the member never had a chance to answer (a recurring gift may try once more on its own)."
+      required: [code, reason, hint, retryable]
+      properties:
+        code: { type: string, enum: [cancelled, unreachable, expired, insufficient_funds, wrong_pin, busy, limit_exceeded, declined, system, no_answer, no_phone] }
+        reason: { type: string, description: "What happened, in one sentence." }
+        hint: { type: string, description: "What to do next, and whether money moved." }
+        retryable: { type: boolean }
+    GivingMethods:
+      type: object
+      required: [methods, phone_on_file, default_method]
+      properties:
+        methods:
+          type: array
+          items:
+            type: object
+            required: [key, label, enabled, unavailable_reason, currency, min_minor, max_minor, whole_units, recurring, needs_phone]
+            properties:
+              key: { type: string, enum: [mpesa, airtel, paypal, card] }
+              label: { type: string }
+              enabled: { type: boolean, description: "Can take a member's money on this server right now." }
+              unavailable_reason: { type: [string, "null"], enum: [coming_soon, unavailable, null] }
+              currency: { type: [string, "null"], description: "The rail's own currency (M-Pesa KES, PayPal USD); null = any." }
+              min_minor: { type: integer, format: int64 }
+              max_minor: { type: integer, format: int64 }
+              whole_units: { type: boolean, description: "Whole shillings only (no cents)." }
+              recurring: { type: boolean, description: "A recurring gift can run on it here." }
+              needs_phone: { type: boolean }
+        phone_on_file: { type: [string, "null"], description: "The profile number as E.164 when it is a Kenyan mobile number, else null." }
+        default_method: { type: [string, "null"], description: "The first enabled rail — where the Give form starts." }
 
     GivingDetail:
       type: object
@@ -12494,6 +12571,7 @@ components:
         receipt_code: { type: [string, "null"], description: M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL); null for older or non-mobile-money gifts }
         account_name: { type: [string, "null"], description: "Named giving: the member's own label for this gift, as entered; null when not used" }
         schedule_id: { type: [string, "null"], format: uuid }
+        failure: { oneOf: [{ $ref: "#/components/schemas/GiftFailure" }, { type: "null" }], description: "Why it failed (status failed), else null." }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
         ledger:

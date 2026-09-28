@@ -82,6 +82,13 @@ function main(): void {
     5 * 60_000,
   );
   stops.push(() => clearInterval(schedTimer));
+  // Giving Cycle 1: ask Safaricom about prompts whose callback never came (or
+  // came before it could be confirmed); close any unanswered after 48 hours.
+  const mmTimer = setInterval(
+    () => void financial.reconcileMobileMoney().catch((err) => log.error({ err }, "mobile-money reconcile failed")),
+    60_000,
+  );
+  stops.push(() => clearInterval(mmTimer));
 
   // Radio auto-air (ADDENDUM): air scheduled programs at their time + auto-end
   // live ones past their duration. Single worker → the is_live-guarded sweep is

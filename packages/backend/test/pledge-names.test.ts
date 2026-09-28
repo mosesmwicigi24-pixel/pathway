@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser } from "./helpers/factories.js";
 import { FinancialService } from "../src/modules/financial/service.js";
+import { FakeMobileMoneyProvider } from "../src/modules/financial/providers.js";
 import { PartnersService, type PledgeOption } from "../src/modules/financial/partners.js";
 import { CampaignService } from "../src/modules/financial/campaigns.js";
 import { DepartmentsService } from "../src/modules/departments/service.js";
@@ -52,10 +53,10 @@ describe("pledge names + pledge money routing", () => {
   beforeEach(async () => {
     await resetDb();
     cong = await createCongregation();
-    user = (await createUser({ congregationId: cong })).user_id;
+    user = (await createUser({ congregationId: cong, phone: "+254711000101" })).user_id;
     admin = (await createUser({ congregationId: cong })).user_id;
     leader = (await createUser({ congregationId: cong })).user_id;
-    financial = new FinancialService(testPool(), new FakeGateway());
+    financial = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     partners = new PartnersService(testPool(), financial);
     campaigns = new CampaignService(testPool());
     notifications = new NotificationService(testPool());
@@ -227,7 +228,7 @@ describe("pledge names + pledge money routing", () => {
   it("a schedule started for a pledge is STORED on the pledge's fund and its charges land there — the rail and the money agree", async () => {
     // A schedule started elsewhere for a mission-fund pledge, on a DIFFERENT fund chip.
     const pledge = await partners.createPledge(user, { shape: "monthly", amount_minor: 10_000, currency: "KES", due_day: 1, fund: "mission", reminders_enabled: true });
-    const sched = await financial.createSchedule(user, { fund: "tithe", amount_minor: 10_000, currency: "KES", frequency: "monthly", method: "card", pledge_id: String(pledge.pledge_id) });
+    const sched = await financial.createSchedule(user, { fund: "tithe", amount_minor: 10_000, currency: "KES", frequency: "monthly", method: "mpesa", pledge_id: String(pledge.pledge_id) });
     // Stored on the pledge's fund, bound to the pledge…
     const stored = await testPool().query<{ code: string; pledge_id: string }>(`SELECT f.code, s.pledge_id FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id WHERE s.schedule_id = $1`, [sched.schedule_id]);
     expect(stored.rows[0]).toEqual({ code: "mission", pledge_id: pledge.pledge_id });
@@ -242,7 +243,7 @@ describe("pledge names + pledge money routing", () => {
     const audit = await testPool().query<{ metadata: { fund: string } }>(`SELECT metadata FROM audit_log WHERE action = 'giving.schedule_created' AND entity_id = $1`, [sched.schedule_id]);
     expect(audit.rows[0]!.metadata.fund).toBe("mission");
     // Without a pledge, the client's fund stands.
-    const plain = await financial.createSchedule(user, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "weekly", method: "card" });
+    const plain = await financial.createSchedule(user, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "weekly", method: "mpesa" });
     const plainStored = await testPool().query<{ code: string; pledge_id: string | null }>(`SELECT f.code, s.pledge_id FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id WHERE s.schedule_id = $1`, [plain.schedule_id]);
     expect(plainStored.rows[0]).toEqual({ code: "tithe", pledge_id: null });
   });

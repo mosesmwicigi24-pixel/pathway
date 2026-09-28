@@ -40,7 +40,9 @@ export function registerFinancial(
   const gateway = gatewayOverride ?? buildPaymentGateway(ctx.env);
   const mobileMoney = mobileMoneyOverride ?? buildMobileMoneyProviders(ctx.env);
   const paypal = paypalOverride ?? buildPayPalGateway(ctx.env);
-  const svc = new FinancialService(ctx.db.primary, gateway, mobileMoney, paypal);
+  const svc = new FinancialService(ctx.db.primary, gateway, mobileMoney, paypal, {
+    cardGiving: ctx.env.CARD_GIVING_ENABLED ? ctx.env.CARD_GIVING_ENABLED === "true" : ctx.env.NODE_ENV !== "production",
+  });
   const partners = new PartnersService(ctx.db.primary, svc);
   const notifications = new NotificationService(ctx.db.primary);
   const auth = authenticate(ctx.env);
@@ -52,6 +54,17 @@ export function registerFinancial(
     handler(async (req, res) => {
       const body = parseBody(FinancialService.GivingIntent, req.body);
       res.status(201).json(await svc.createGivingIntent(requirePrincipal(req).userId, body));
+    }),
+  );
+
+  // The rails this member can give with here, their currency and limits, and
+  // the number on file for a prompt (Giving Cycle 1) — the apps draw their
+  // method list from this instead of hard-coding one.
+  r.get(
+    "/giving/methods",
+    auth,
+    handler(async (req, res) => {
+      res.json(await svc.listMethods(requirePrincipal(req).userId));
     }),
   );
 
@@ -392,7 +405,9 @@ export function registerFinancial(
       const signature = req.header("x-mm-signature") ?? "";
       const body: Buffer | string = Buffer.isBuffer(req.body) ? req.body : JSON.stringify(req.body ?? {});
       const result = await svc.handleMobileMoneyCallback(provider, body, signature);
-      res.json({ received: true, ...result });
+      // An unsigned provider's caller learns nothing from the answer — not
+      // whether a CheckoutRequestID is ours, nor what we did with it.
+      res.json(svc.mobileMoneySigned(provider) ? { received: true, ...result } : { received: true });
     }),
   );
 

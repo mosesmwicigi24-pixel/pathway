@@ -184,13 +184,18 @@ const PUSH_TEMPLATE_COPY: Record<
     title: "We couldn't match that payment",
     body: `The office could not find ${money(p)} toward ${str(p.title) ?? "your pledge"}. Reply in Community or give again from Partners.`,
   }),
-  giving_schedule_failed: () => ({
-    title: "Your recurring gift didn't go through",
-    body: "We couldn't collect it this time — we'll try again shortly. Open Give to check your number or method.",
+  // Giving Cycle 1: say WHY, and what happens next — a cancelled prompt is
+  // not a broken phone, and "we'll try again" is only said when we will.
+  giving_schedule_failed: (p) => ({
+    title: `Your ${str(p.frequency) === "weekly" ? "weekly" : str(p.frequency) === "monthly" ? "monthly" : "recurring"} gift didn't go through`,
+    body: [
+      str(p.reason) ?? "We couldn't collect it this time.",
+      str(p.retry_at) ? "We'll send the prompt once more later today." : str(p.hint) ?? "Open Give to give now or check your number.",
+    ].join(" "),
   }),
-  giving_schedule_paused: () => ({
+  giving_schedule_paused: (p) => ({
     title: "Your recurring gift is paused",
-    body: "We tried a few times and couldn't collect it, so we've stopped trying. Open Give to resume it whenever you're ready.",
+    body: `${str(p.reason) ? `${str(p.reason)} ` : ""}We've stopped sending prompts for now. Open Give to resume it whenever you're ready.`,
   }),
   reflection_approved: () => ({
     title: "Reflection approved",
