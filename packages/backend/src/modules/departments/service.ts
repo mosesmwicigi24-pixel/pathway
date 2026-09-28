@@ -21,9 +21,12 @@ export async function needRaisedMinor(c: Queryable, needId: string): Promise<num
 export async function needGiving(c: Queryable, needId: string): Promise<{ raised_minor: number; gifts: number }> {
   const r = await one<{ total: string | null; gifts: number }>(
     c,
+    // In the need's own currency (Giving Cycle 5): a gift in another
+    // currency used to add its cents to the need's shillings.
     `SELECT sum(t.amount_minor)::text AS total, count(*)::int AS gifts FROM transactions t
+       JOIN department_needs n ON n.need_id = $1
        LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
-      WHERE t.status = 'succeeded' AND (t.need_id = $1 OR p.need_id = $1)`,
+      WHERE t.status = 'succeeded' AND (t.need_id = $1 OR p.need_id = $1) AND t.currency = n.currency`,
     [needId],
   );
   return { raised_minor: Number(r.total ?? 0), gifts: r.gifts };

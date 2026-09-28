@@ -105,9 +105,15 @@ Both apps, one rule each; the portal drawer follows the same vocabulary later.
 - **Partner-only statement rule (both clients, from server facts):**
   Paid = Σ statement `payments[].amount_minor` where `pledge_id` is set.
   Pledged = Σ over pledges not cancelled: monthly → `amount_minor` × number of
-  `due_day` dates in that year from max(pledge `created_at`, 1 Jan) through
-  31 Dec; total → `target_minor` if `due_on` falls in that year, else 0.
-  Remaining = max(Pledged − Paid, 0). Gifts without a pledge are never shown
+  `due_day` dates in that year from max(pledge start, 1 Jan) through
+  min(`until_on`, 31 Dec) — the start is `starts_on` when set, else
+  `created_at` (Giving Cycle 5); total → `target_minor` if `due_on` falls in
+  that year, else 0.
+  Remaining = Σ over pledges of max(Pledged_i − Paid_i, 0) — what is still owed
+  on EACH pledge, added up (Giving Cycle 5, 2026-09-28: it was
+  max(Pledged − Paid, 0) over the year's totals, so money paid to a cancelled
+  or overpaid pledge hid what another still owed, and the headline did not foot
+  with the per-pledge `remaining_year_minor`). Gifts without a pledge are never shown
   on the Partners tab (they stay in the full statement). If the server ever
   exposes these totals, it must implement exactly this rule.
   **The server does (2026-09-25, §3c):** the rule lives in

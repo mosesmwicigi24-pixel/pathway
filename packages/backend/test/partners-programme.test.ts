@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser } from "./helpers/factories.js";
 import { FinancialService } from "../src/modules/financial/service.js";
+import { FakeMobileMoneyProvider } from "../src/modules/financial/providers.js";
 import { PartnersService } from "../src/modules/financial/partners.js";
 import type { PaymentGateway } from "../src/modules/financial/gateway.js";
 
@@ -26,9 +27,9 @@ describe("Partners programme", () => {
   beforeEach(async () => {
     await resetDb();
     const cong = await createCongregation();
-    user = (await createUser({ congregationId: cong })).user_id;
+    user = (await createUser({ congregationId: cong, phone: "+254711000401" })).user_id;
     other = (await createUser({ congregationId: cong })).user_id;
-    financial = new FinancialService(testPool(), new FakeGateway());
+    financial = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     partners = new PartnersService(testPool(), financial);
   });
   afterAll(async () => { await closeTestPool(); });

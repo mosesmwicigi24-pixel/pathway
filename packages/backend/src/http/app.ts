@@ -166,7 +166,7 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerProgress(ctx));
   v1.use(registerAssessment(ctx));
   v1.use(registerEngagement(ctx));
-  v1.use(registerFinancial(ctx));
+  v1.use(registerFinancial(ctx, undefined, undefined, undefined, rl));
   v1.use(registerDepartments(ctx));
   // Website giving (migration 202). Mounted BEFORE nothing in particular — its
   // paths don't overlap — but it takes the rate-limit store, because the buckets

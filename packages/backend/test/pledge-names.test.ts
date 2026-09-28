@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser } from "./helpers/factories.js";
 import { FinancialService } from "../src/modules/financial/service.js";
+import { FakeMobileMoneyProvider } from "../src/modules/financial/providers.js";
 import { PartnersService, type PledgeOption } from "../src/modules/financial/partners.js";
 import { CampaignService } from "../src/modules/financial/campaigns.js";
 import { DepartmentsService } from "../src/modules/departments/service.js";
@@ -52,10 +53,10 @@ describe("pledge names + pledge money routing", () => {
   beforeEach(async () => {
     await resetDb();
     cong = await createCongregation();
-    user = (await createUser({ congregationId: cong })).user_id;
+    user = (await createUser({ congregationId: cong, phone: "+254711000101" })).user_id;
     admin = (await createUser({ congregationId: cong })).user_id;
     leader = (await createUser({ congregationId: cong })).user_id;
-    financial = new FinancialService(testPool(), new FakeGateway());
+    financial = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     partners = new PartnersService(testPool(), financial);
     campaigns = new CampaignService(testPool());
     notifications = new NotificationService(testPool());
@@ -135,7 +136,7 @@ describe("pledge names + pledge money routing", () => {
     const st = await partners.statements(user);
     expect((st.by_pledge as { pledge_id: string | null; title: string }[]).find((x) => x.pledge_id === pledge.pledge_id)?.title).toBe("Kenya trip");
     expect((st.payments as { pledge_title: string | null }[])[0]!.pledge_title).toBe("Kenya trip");
-    await partners.createClaim(user, String(pledge.pledge_id), { amount_minor: 500, currency: "KES", paid_on: "2026-09-01" });
+    await partners.createClaim(user, String(pledge.pledge_id), { amount_minor: 500, currency: "KES", paid_on: "2026-09-01" }, new Date("2026-09-20T09:00:00Z"));
     expect((await partners.pendingClaims())[0]!.pledge_title).toBe("Kenya trip");
   });
 
@@ -227,7 +228,7 @@ describe("pledge names + pledge money routing", () => {
   it("a schedule started for a pledge is STORED on the pledge's fund and its charges land there — the rail and the money agree", async () => {
     // A schedule started elsewhere for a mission-fund pledge, on a DIFFERENT fund chip.
     const pledge = await partners.createPledge(user, { shape: "monthly", amount_minor: 10_000, currency: "KES", due_day: 1, fund: "mission", reminders_enabled: true });
-    const sched = await financial.createSchedule(user, { fund: "tithe", amount_minor: 10_000, currency: "KES", frequency: "monthly", method: "card", pledge_id: String(pledge.pledge_id) });
+    const sched = await financial.createSchedule(user, { fund: "tithe", amount_minor: 10_000, currency: "KES", frequency: "monthly", method: "mpesa", pledge_id: String(pledge.pledge_id) });
     // Stored on the pledge's fund, bound to the pledge…
     const stored = await testPool().query<{ code: string; pledge_id: string }>(`SELECT f.code, s.pledge_id FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id WHERE s.schedule_id = $1`, [sched.schedule_id]);
     expect(stored.rows[0]).toEqual({ code: "mission", pledge_id: pledge.pledge_id });
@@ -242,7 +243,7 @@ describe("pledge names + pledge money routing", () => {
     const audit = await testPool().query<{ metadata: { fund: string } }>(`SELECT metadata FROM audit_log WHERE action = 'giving.schedule_created' AND entity_id = $1`, [sched.schedule_id]);
     expect(audit.rows[0]!.metadata.fund).toBe("mission");
     // Without a pledge, the client's fund stands.
-    const plain = await financial.createSchedule(user, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "weekly", method: "card" });
+    const plain = await financial.createSchedule(user, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "weekly", method: "mpesa" });
     const plainStored = await testPool().query<{ code: string; pledge_id: string | null }>(`SELECT f.code, s.pledge_id FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id WHERE s.schedule_id = $1`, [plain.schedule_id]);
     expect(plainStored.rows[0]).toEqual({ code: "tithe", pledge_id: null });
   });
@@ -286,7 +287,9 @@ describe("pledge names + pledge money routing", () => {
     expect(await scheduleFund(fallback.schedule_id)).toEqual({ code: "general", pledge_id: fallback.pledge_id });
     // The default, once it is an active fund.
     await seedDiscipleship();
-    const general = await partners.createPledge(user, { shape: "monthly", amount_minor: 20_000, currency: "KES", due_day: 5, reminders_enabled: true, auto_schedule: { method: "mpesa", frequency: "monthly" } });
+    // (A different amount: the same pledge again within ten minutes is the
+    // SAME pledge — the double-tap rule, Giving Cycle 5.)
+    const general = await partners.createPledge(user, { shape: "monthly", amount_minor: 25_000, currency: "KES", due_day: 5, reminders_enabled: true, auto_schedule: { method: "mpesa", frequency: "monthly" } });
     expect(await scheduleFund(general.schedule_id)).toEqual({ code: DEFAULT_PLEDGE_FUND, pledge_id: general.pledge_id });
     // A campaign pledge's schedule follows the campaign's fund; a need pledge's, the department's.
     const forCampaign = await partners.createPledge(user, { shape: "monthly", amount_minor: 20_000, currency: "KES", due_day: 5, campaign_id: await liveCampaign("media"), reminders_enabled: true, auto_schedule: { method: "airtel", frequency: "monthly" } });
@@ -300,7 +303,7 @@ describe("pledge names + pledge money routing", () => {
 
   it("confirming an 'I paid another way' claim books the money to the pledge's fund through the same helper", async () => {
     const pledge = await partners.createPledge(user, { shape: "total", target_minor: 50_000, currency: "KES", due_on: "2099-01-01", campaign_id: await liveCampaign("media"), reminders_enabled: true });
-    const claim = await partners.createClaim(user, String(pledge.pledge_id), { amount_minor: 5_000, currency: "KES", paid_on: "2026-09-01" });
+    const claim = await partners.createClaim(user, String(pledge.pledge_id), { amount_minor: 5_000, currency: "KES", paid_on: "2026-09-01" }, new Date("2026-09-20T09:00:00Z"));
     const decided = await partners.decideClaim(admin, String(claim.claim_id), "confirm", notifications);
     expect(decided.status).toBe("confirmed");
     expect(await fundOf(decided.transaction_id)).toBe("media");
@@ -308,10 +311,10 @@ describe("pledge names + pledge money routing", () => {
     expect(ledger.rows).toEqual([{ account: "cash:manual", side: "debit" }, { account: "fund:media", side: "credit" }]);
     // A general pledge's claim: the first active fund by code without the default, the default with it.
     const general = await partners.createPledge(user, { shape: "total", target_minor: 50_000, currency: "KES", due_on: "2099-01-01", reminders_enabled: true });
-    const c2 = await partners.createClaim(user, String(general.pledge_id), { amount_minor: 5_000, currency: "KES", paid_on: "2026-09-02" });
+    const c2 = await partners.createClaim(user, String(general.pledge_id), { amount_minor: 5_000, currency: "KES", paid_on: "2026-09-02" }, new Date("2026-09-20T09:00:00Z"));
     expect(await fundOf((await partners.decideClaim(admin, String(c2.claim_id), "confirm", notifications)).transaction_id)).toBe("general");
     await seedDiscipleship();
-    const c3 = await partners.createClaim(user, String(general.pledge_id), { amount_minor: 5_000, currency: "KES", paid_on: "2026-09-03" });
+    const c3 = await partners.createClaim(user, String(general.pledge_id), { amount_minor: 5_000, currency: "KES", paid_on: "2026-09-03" }, new Date("2026-09-20T09:00:00Z"));
     expect(await fundOf((await partners.decideClaim(admin, String(c3.claim_id), "confirm", notifications)).transaction_id)).toBe(DEFAULT_PLEDGE_FUND);
   });
 });

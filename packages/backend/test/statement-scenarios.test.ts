@@ -263,7 +263,7 @@ describe("the member's statement right after money moves (real paths, no cache)"
   // ── (g) ──
   it("(g) an 'I paid another way' claim confirmed by the office appears as a manual payment and counts — settling the oldest instalment first", async () => {
     const g = await pledge({ shape: "monthly", amount_minor: 100_000, due_day: 15, title: "Choir" }, "2026-08-01 08:00:00+00"); // due 15 Aug, 15 Sep
-    const claim = (await partners.createClaim(user, g.pledge_id, { amount_minor: 100_000, currency: "KES", paid_on: "2026-09-14" })) as { claim_id: string };
+    const claim = (await partners.createClaim(user, g.pledge_id, { amount_minor: 100_000, currency: "KES", paid_on: "2026-09-14" }, now)) as { claim_id: string };
     const waiting = await statement();
     expect(waiting).toMatchObject({ paid_minor: 0, payments: [], pending: [] }); // a claim is not money until the office confirms it
     const decided = await partners.decideClaim(admin, claim.claim_id, "confirm", notifications);
@@ -406,7 +406,7 @@ describe("the member's statement right after money moves (real paths, no cache)"
     expect(((await partners.partnership(user, now)).pledges as { title: string }[])[0]!.title).toBe("General partnership");
     expect(((await financial.listGiving(user)) as { pledge_title: string | null }[])[0]!.pledge_title).toBe("General partnership");
     expect(((await financial.givingDetail(user, intent.transaction_id)).pledge as { title: string }).title).toBe("General partnership");
-    await partners.createClaim(user, l.pledge_id, { amount_minor: 500, currency: "KES", paid_on: "2026-09-19" });
+    await partners.createClaim(user, l.pledge_id, { amount_minor: 500, currency: "KES", paid_on: "2026-09-19" }, now);
     expect((await partners.pendingClaims())[0]!.pledge_title).toBe("General partnership");
     const pdf = (await partners.partnersStatementPdf(user, 2026, now)).pdf.toString("latin1");
     expect(pdf).toContain("General partnership");

@@ -8,6 +8,8 @@
 //
 // Every rule below is a real check with a stated reason. A rule with no reason
 // is a rule someone will delete.
+import { localMinuteOfDay } from "../notifications/service.js";
+import { nairobiDate } from "./partnerStatementMath.js";
 import type pg from "pg";
 import { maybeOne } from "../../db/db.js";
 import { givingTiers, type GivingTier } from "./tiers.js";
@@ -81,9 +83,10 @@ export async function invitationFor(
     created_at: string;
     quiet_from: string | null;
     quiet_to: string | null;
+    timezone: string | null;
   }>(
     pool,
-    `SELECT u.congregation_id, u.is_minor, u.created_at,
+    `SELECT u.congregation_id, u.is_minor, u.created_at, u.timezone,
             p.quiet_from::text AS quiet_from, p.quiet_to::text AS quiet_to
        FROM users u
        LEFT JOIN notification_preferences p ON p.user_id = u.user_id
@@ -101,16 +104,21 @@ export async function invitationFor(
 
   // Their own quiet window — the same one the notification outbox honours. An
   // appeal at 11pm is worse than no appeal.
-  if (inQuietHours(now, who.quiet_from ?? "21:00", who.quiet_to ?? "07:00")) {
+  if (inQuietHours(now, who.quiet_from ?? "21:00", who.quiet_to ?? "07:00", who.timezone ?? "Africa/Nairobi")) {
     return no("quiet_hours");
   }
 
   // A partner is never asked to become a partner. They get the thank-you
   // instead — see the Partners page. This is the mistake most apps make.
+  // A partner is anyone giving on a rhythm OR in the Partners programme
+  // (Giving Cycle 5: a programme partner with pledges and no schedule used to
+  // be asked to become one).
   const partner = await maybeOne<{ n: number }>(
     pool,
-    `SELECT 1 AS n FROM giving_schedules
-      WHERE user_id = $1 AND status IN ('active','paused') LIMIT 1`,
+    `SELECT 1 AS n FROM giving_schedules WHERE user_id = $1 AND status IN ('active','paused')
+     UNION ALL
+     SELECT 1 FROM partner_memberships WHERE user_id = $1 AND status IN ('active','paused')
+     LIMIT 1`,
     [userId],
   );
   if (partner) return no("already_partner");
@@ -127,7 +135,9 @@ export async function invitationFor(
       WHERE congregation_id = $1 AND status = 'live'
         AND starts_on <= $2::date AND ends_on >= $2::date
       ORDER BY ends_on LIMIT 1`,
-    [who.congregation_id, now.toISOString().slice(0, 10)],
+    // The church's day (Giving Cycle 5): the UTC date lags Nairobi by three
+    // hours, so a campaign starting today was invisible until 03:00.
+    [who.congregation_id, nairobiDate(now)],
   );
   if (!campaign) return no("no_campaign");
 
@@ -146,13 +156,13 @@ export async function invitationFor(
     // They already answered generously. Asking again is asking twice.
     if (log.outcome === "gave") return no("already_gave");
 
-    const daysLeft = daysBetween(now, new Date(`${campaign.ends_on}T23:59:59Z`));
+    const daysLeft = daysBetween(now, churchDayEnd(campaign.ends_on));
     const finalDays = daysLeft <= FINAL_DAYS;
     // A real deadline earns ONE extra showing — never an unlimited licence.
     if (log.times_shown >= MAX_SHOWINGS + (finalDays ? 1 : 0)) return no("shown_enough");
 
     if (log.last_shown_on) {
-      const since = daysBetween(new Date(`${log.last_shown_on}T00:00:00Z`), now);
+      const since = daysBetween(new Date(`${log.last_shown_on}T00:00:00+03:00`), now);
       if (since < 1) return no("shown_today");
       // The final days shorten the wave, but do not abolish it.
       if (since < (finalDays ? FINAL_DAYS : WAVE_DAYS)) return no("wave_too_soon");
@@ -160,17 +170,22 @@ export async function invitationFor(
   }
 
   // Only now, having decided we may ask, do we work out what to say.
+  // Raised exactly as the office's Campaigns page counts it (Giving Cycle 5):
+  // succeeded gifts to the fund, in the campaign's currency, between its first
+  // and last church days — it used to add every currency and every gift after
+  // the campaign ended.
   const raised = await maybeOne<{ total: string | null }>(
     pool,
     `SELECT sum(t.amount_minor) AS total
        FROM transactions t
        JOIN campaigns c ON c.campaign_id = $1
-      WHERE t.status = 'succeeded' AND t.fund_id = c.fund_id
-        AND t.created_at >= c.starts_on::timestamptz`,
+      WHERE t.status = 'succeeded' AND t.fund_id = c.fund_id AND t.currency = c.currency
+        AND t.created_at >= (c.starts_on::timestamp AT TIME ZONE 'Africa/Nairobi')
+        AND (c.ends_on IS NULL OR t.created_at < ((c.ends_on + 1)::timestamp AT TIME ZONE 'Africa/Nairobi'))`,
     [campaign.campaign_id],
   );
 
-  const daysLeft = Math.max(0, daysBetween(now, new Date(`${campaign.ends_on}T23:59:59Z`)));
+  const daysLeft = Math.max(0, daysBetween(now, churchDayEnd(campaign.ends_on)));
   return {
     show: true,
     // The showing this is about to become, not the one already recorded.
@@ -207,7 +222,9 @@ export async function invitationFor(
 export async function recordShown(
   pool: pg.Pool, userId: string, campaignId: string, now: Date = new Date(),
 ): Promise<void> {
-  const today = now.toISOString().slice(0, 10);
+  // The church's day, as the decision reads it (Giving Cycle 5: the UTC date
+  // made "shown today" roll over at 03:00 in Nairobi).
+  const today = nairobiDate(now);
   await pool.query(
     `INSERT INTO partner_invite_log (user_id, campaign_id, times_shown, last_shown_on)
      VALUES ($1, $2, 1, $3::date)
@@ -242,17 +259,23 @@ function daysBetween(a: Date, b: Date): number {
   return Math.floor((b.getTime() - a.getTime()) / 86_400_000);
 }
 
+/** The last second of a church (Nairobi) date — a campaign's final day ends
+ *  there, not three hours later at UTC midnight. */
+function churchDayEnd(ymd: string): Date {
+  return new Date(`${ymd}T23:59:59+03:00`);
+}
+
 /**
  * Is `now` inside the member's quiet window? The window usually WRAPS midnight
  * (21:00 → 07:00), which is why this is not a simple `from <= t && t < to`.
  *
- * NOTE: this compares in UTC, matching how the notification outbox stores these
- * times today. That is a known simplification shared with the existing quiet
- * hours implementation, not a new one introduced here — when per-user timezones
- * arrive, both should change together.
+ * In the member's own timezone (Giving Cycle 5), as the notification service
+ * has done since per-user timezones arrived — this still compared in UTC, so a
+ * Nairobi member was asked at 22:00 and never before 10:00. `timezone`
+ * defaults to UTC for callers that pass wall-clock instants.
  */
-export function inQuietHours(now: Date, from: string, to: string): boolean {
-  const minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+export function inQuietHours(now: Date, from: string, to: string, timezone = "UTC"): boolean {
+  const minutes = localMinuteOfDay(now.getTime(), timezone);
   const f = toMinutes(from);
   const t = toMinutes(to);
   return f <= t ? minutes >= f && minutes < t : minutes >= f || minutes < t;

@@ -13,6 +13,7 @@ import { createCongregation, createUser } from "./helpers/factories.js";
 import { agent, bearer, testEnv } from "./helpers/app.js";
 import { signAccessToken } from "../src/modules/identity/tokens.js";
 import { FinancialService } from "../src/modules/financial/service.js";
+import { FakeMobileMoneyProvider } from "../src/modules/financial/providers.js";
 import { PartnersService } from "../src/modules/financial/partners.js";
 import { DepartmentsService } from "../src/modules/departments/service.js";
 import { NotificationService } from "../src/modules/notifications/service.js";
@@ -143,9 +144,9 @@ describe("the Partners statement on the wire", () => {
   beforeEach(async () => {
     await resetDb();
     cong = await createCongregation("Nairobi Central");
-    user = (await createUser({ congregationId: cong, fullName: "Amina Wanjiru" })).user_id;
+    user = (await createUser({ congregationId: cong, fullName: "Amina Wanjiru", phone: "+254711000301" })).user_id;
     other = (await createUser({ congregationId: cong })).user_id;
-    financial = new FinancialService(testPool(), new FakeGateway());
+    financial = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     partners = new PartnersService(testPool(), financial);
   });
   afterAll(async () => { await closeTestPool(); });
@@ -196,7 +197,9 @@ describe("the Partners statement on the wire", () => {
     expect(st.paid_minor).toBe(400_000);         // the two instalments — never the tithe
     expect(st.remaining_minor).toBe(1_400_000);
     // by_pledge / by_fund as before.
-    expect(st.by_pledge.find((x) => x.pledge_id === null)).toEqual({ pledge_id: null, title: "Gifts outside a pledge", total_minor: 30_000 });
+    // Each group now names its currency (Giving Cycle 2: never a sum across currencies).
+    expect(st.by_pledge.find((x) => x.pledge_id === null)).toEqual({ pledge_id: null, title: "Gifts outside a pledge", currency: "KES", total_minor: 30_000 });
+    expect(st.totals).toEqual([{ currency: "KES", total_minor: 430_000 }]);
     expect(st.by_pledge.find((x) => x.pledge_id === monthlyPledge.pledge_id)?.total_minor).toBe(400_000);
     expect(st.by_fund.map((f) => [f.code, f.total_minor]).sort()).toEqual([["mission", 400_000], ["tithe", 30_000]]);
     // pledges[]: both, newest first; every field; the numbers foot.
@@ -291,7 +294,7 @@ describe("the Partners statement on the wire", () => {
     expect(history.find((r) => r.transaction_id === tithe)).toMatchObject({ pledge_id: null, pledge_title: null, need_id: null });
     // Nothing removed: every field that was there before is still there.
     expect(Object.keys(history[0]!).sort()).toEqual([
-      "account_name", "amount_minor", "created_at", "currency", "fund", "method", "method_label", "need_id", "pledge_id", "pledge_title",
+      "account_name", "amount_minor", "created_at", "currency", "failure", "fee_cover_minor", "fund", "method", "method_label", "need_id", "pledge_id", "pledge_title",
       "provider_ref", "receipt_code", "settled_at", "status", "transaction_id",
     ]);
   });
@@ -316,7 +319,10 @@ describe("the Partners statement on the wire", () => {
     const st = await partners.statements(user, 2026, now);
     expect(st.pledged_minor).toBe(300_000);
     expect(st.paid_minor).toBe(150_000);
-    expect(st.remaining_minor).toBe(150_000);
+    // Remaining is owed per pledge (Giving Cycle 5): the roof still needs
+    // 250,000 — the 100,000 paid to the cancelled promise never reduced it
+    // (it used to read 150,000).
+    expect(st.remaining_minor).toBe(250_000);
     // Kept counts instalments kept, not payments: the cancelled pledge's 1 Feb
     // instalment was paid on the day (kept) and Mar..Sep went unpaid (its
     // ledger is still read through today — cancellation does not rewrite it);
@@ -329,7 +335,7 @@ describe("the Partners statement on the wire", () => {
     // The same words on the history row and in the office's claims queue — one SQL rule.
     const history = (await financial.listGiving(user)) as { transaction_id: string; pledge_title: string | null }[];
     expect(history.find((r) => r.transaction_id === needGift)?.pledge_title).toBe("A department need");
-    await partners.createClaim(user, String(need.pledge_id), { amount_minor: 500, currency: "KES", paid_on: "2026-09-01" });
+    await partners.createClaim(user, String(need.pledge_id), { amount_minor: 500, currency: "KES", paid_on: "2026-09-01" }, now);
     expect((await partners.pendingClaims())[0]!.pledge_title).toBe("A department need");
     // The PDF shows both blocks.
     const body = (await partners.partnersStatementPdf(user, 2026, now)).pdf.toString("latin1");
@@ -338,7 +344,7 @@ describe("the Partners statement on the wire", () => {
     expect(body).toContain("KSh 3,000 by 30 Nov   -   Active");
     expect(body).toContain("Pledged     KSh 3,000");
     expect(body).toContain("Paid        KSh 1,500");
-    expect(body).toContain("Remaining   KSh 1,500");
+    expect(body).toContain("Remaining   KSh 2,500"); // per pledge (Giving Cycle 5)
     expect(body).toContain("FEBRUARY 2026   KSh 1,000");
     expect(body).toContain("JUNE 2026   KSh 500");
 
@@ -349,8 +355,8 @@ describe("the Partners statement on the wire", () => {
     expect(empty).toContain("No pledge payments in 2026.");
     expect(empty).toContain("Pledged     KSh 0");
     // A recurring gift alone (phase 1's partner) is a partner too — even cancelled since.
-    const third = (await createUser({ congregationId: cong })).user_id;
-    const sched = await financial.createSchedule(third, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "card" });
+    const third = (await createUser({ congregationId: cong, phone: "+254711000302" })).user_id;
+    const sched = await financial.createSchedule(third, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "mpesa" });
     await financial.cancelSchedule(third, String(sched.schedule_id));
     expect((await partners.partnersStatementPdf(third, 2026, now)).pdf.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });

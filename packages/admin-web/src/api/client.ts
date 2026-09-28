@@ -2193,7 +2193,30 @@ export interface AdminScheduleRow {
   last_failed_at: string | null;
   paused_at: string | null;
   created_at: string;
+  /** The office's rule (Giving Cycle 7): failing, stopped after failed
+   *  prompts, or our own last prompt could not be sent — never a member's
+   *  own pause or a pause that follows a paused pledge. */
   needs_attention: boolean;
+  /* Giving Cycle 7 — optional, so an older server still type-checks. */
+  fund_name?: string | undefined;
+  /** Why it is failing, in the words the member was told; null when it is not. */
+  last_failure?: { code?: string | undefined; reason: string; hint: string; retryable?: boolean | undefined } | null | undefined;
+  /** Our side, not theirs: the last prompt could not be SENT (M-Pesa down or
+   *  unconfigured). The giver was not told — only the office can know. */
+  office_alert?: string | null | undefined;
+  pause_reason?: "failures" | "member" | "pledge" | null | undefined;
+  /** A member's pause ends on this Nairobi date (YYYY-MM-DD). */
+  resume_on?: string | null | undefined;
+  heads_up?: boolean | undefined;
+  /** The schedule's own number to prompt; null = the member's profile number. */
+  prompt_number?: string | null | undefined;
+  retry_at?: string | null | undefined;
+  /** The pledge this gift collects, when it collects one. */
+  pledge?: { pledge_id: string; title: string } | null | undefined;
+  /** What the next prompt will ask: below amount_minor when a pledge is part
+   *  paid, 0 when it is already paid (the prompt is skipped), null when
+   *  nothing is coming. */
+  next_amount_minor?: number | null | undefined;
 }
 
 export interface PartnerPayment {
@@ -2259,6 +2282,11 @@ export interface PledgeClaimRow {
   created_at: string;
   /** The pledge's campaign title, fund name, or "Partnership". */
   pledge_title: string;
+  /** Giving Cycle 7: the pledge's currency, and whether this claim is in
+   *  another one — such a claim can only be rejected (the server refuses to
+   *  confirm it, 422 CURRENCY_MISMATCH). */
+  pledge_currency?: string | undefined;
+  currency_mismatch?: boolean | undefined;
 }
 
 export const PartnersApi = {

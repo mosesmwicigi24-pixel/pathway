@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createEnrollment, createUser } from "./helpers/factories.js";
 import { FinancialService } from "../src/modules/financial/service.js";
+import { FakeMobileMoneyProvider } from "../src/modules/financial/providers.js";
 import { PartnersService, monthStripLabel } from "../src/modules/financial/partners.js";
 import { DepartmentsService } from "../src/modules/departments/service.js";
 import { NotificationService } from "../src/modules/notifications/service.js";
@@ -276,9 +277,9 @@ describe("statement v2 on the wire", () => {
   beforeEach(async () => {
     await resetDb();
     cong = await createCongregation("Nairobi Central");
-    user = (await createUser({ congregationId: cong, fullName: "Amina Wanjiru" })).user_id;
+    user = (await createUser({ congregationId: cong, fullName: "Amina Wanjiru", phone: "+254711000201" })).user_id;
     other = (await createUser({ congregationId: cong })).user_id;
-    financial = new FinancialService(testPool(), new FakeGateway());
+    financial = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     partners = new PartnersService(testPool(), financial);
   });
   afterAll(async () => { await closeTestPool(); });
@@ -307,7 +308,7 @@ describe("statement v2 on the wire", () => {
   it("a partner's year: months, faithfulness, impact (carried 0), season, remaining per pledge — and a two-page PDF led by impact", async () => {
     // A recurring gift makes her a partner with a season; the church finished
     // one level since she began (church-wide, not hers).
-    const sched = await financial.createSchedule(user, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "card" });
+    const sched = await financial.createSchedule(user, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "mpesa" });
     await testPool().query(`UPDATE giving_schedules SET created_at = '2026-03-15 10:00:00+00' WHERE schedule_id = $1`, [sched.schedule_id]);
     const enr = await createEnrollment(other);
     await testPool().query(`UPDATE enrollments SET completed_at = '2026-06-01 10:00:00+00' WHERE enrollment_id = $1`, [enr]);
@@ -393,7 +394,10 @@ describe("statement v2 on the wire", () => {
     expect(two![0]).toBe("Partners statement · 2026");
     expect(two).toContain("   Pledged     KSh 18,300");
     expect(two).toContain("   Paid        KSh 9,500");
-    expect(two).toContain("   Remaining   KSh 8,800");
+    // Remaining foots with the per-pledge rows (Giving Cycle 5): 9,000 still
+    // owed on Kenya trip + 0 on the overpaid gift pledge — it used to net the
+    // overpayment against Kenya trip and read 8,800.
+    expect(two).toContain("   Remaining   KSh 9,000");
     expect(two).toContain("   5 Apr  Kenya trip  Card  Ref PLG00001  KSh 2,000");
     expect(two).toContain("   6 Sep  Kenya trip  Card  Ref PLG00005  KSh 2,000");
     // Page 2's per-pledge "N of M kept" is the same count as page 1's.
@@ -437,7 +441,7 @@ describe("statement v2 on the wire", () => {
     // … but she is a partner, so the statement's season runs from her join date.
     expect((await partners.statements(user, 2026, now)).season).toEqual({ from: "2026-02-01T08:00:00.000Z", levels_completed: 1, modules_completed: 0, plans_finished: 0 });
     // A recurring gift she started (and stopped) earlier moves the start back.
-    const sched = await financial.createSchedule(user, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "card" });
+    const sched = await financial.createSchedule(user, { fund: "tithe", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "mpesa" });
     await testPool().query(`UPDATE giving_schedules SET created_at = '2026-01-10 08:00:00+00' WHERE schedule_id = $1`, [sched.schedule_id]);
     await financial.cancelSchedule(user, String(sched.schedule_id));
     expect((await partners.statements(user, 2026, now)).season).toEqual({ from: "2026-01-10T08:00:00.000Z", levels_completed: 2, modules_completed: 0, plans_finished: 0 });

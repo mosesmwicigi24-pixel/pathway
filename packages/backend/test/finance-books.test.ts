@@ -193,7 +193,7 @@ describe("office gifts", () => {
     expect(a.rows[0].actor_id).toBe(superAdmin.id);
     expect(a.rows[0].metadata).toMatchObject({ receipt_code: g.receipt_code, fund: "tithe", channel: "onhand", giver: "member" });
     // The member sees it on their own statement, on the day it was received.
-    const partners = new PartnersService(testPool(), new FinancialService(testPool(), new FakeGateway()));
+    const partners = new PartnersService(testPool(), new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") }));
     const st = await partners.statements(member.id, Number(day.slice(0, 4)));
     expect((st.payments as any[]).map((p) => [p.transaction_id, p.method, p.receipt_code])).toEqual([[g.transaction_id, "manual", g.receipt_code]]);
   });
@@ -276,7 +276,7 @@ describe("office gifts", () => {
     expect(await count(`SELECT count(*) FROM ledger_entries`)).toBe(legs);
     expect((await testPool().query(`SELECT next FROM receipt_counters WHERE year = $1`, [thisYear()])).rows[0].next).toBe(2);
     // A member's app gift owns its key.
-    const fin = new FinancialService(testPool(), new FakeGateway());
+    const fin = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     await fin.createGivingIntent(member.id, { fund: "tithe", amount_minor: 1_000, currency: "KES", method: "card", idempotency_key: "member-owned-key-1" } as never);
     const clash = await post(superAdmin, "/admin/finance/gifts", gift({ idempotency_key: "member-owned-key-1" }));
     expect([clash.status, clash.body.error.code]).toEqual([409, "CONFLICT"]);
@@ -335,7 +335,7 @@ describe("office gifts", () => {
   });
 
   it("a pledge payment lands in the pledge's fund (the form's fund is ignored), shows on the member's statement and clears the instalment; reversal re-opens it", async () => {
-    const fin = new FinancialService(testPool(), new FakeGateway());
+    const fin = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     const partners = new PartnersService(testPool(), fin);
     const books = new FinanceBooks(testPool(), fin);
     const now = new Date("2026-09-14T09:00:00Z");
@@ -372,7 +372,7 @@ describe("office gifts", () => {
   });
 
   it("reversing the gift that fulfilled a total pledge puts the pledge back to active", async () => {
-    const fin = new FinancialService(testPool(), new FakeGateway());
+    const fin = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     const partners = new PartnersService(testPool(), fin);
     const pledge = await partners.createPledge(member.id, { shape: "total", target_minor: 300_000, currency: "KES", due_on: "2099-12-31", fund: "mission", reminders_enabled: true } as never);
     const g = await post(superAdmin, "/admin/finance/gifts", gift({ pledge_id: pledge.pledge_id, amount_minor: 300_000 }));
@@ -500,7 +500,7 @@ describe("funds", () => {
 
   it("switching off a fund money still routes to is 409 FUND_IN_USE with the counts, unless forced (audited); an unused fund switches off freely; reactivation never needs force", async () => {
     await post(manager, "/admin/finance/funds", { code: "building", name: "Building fund" });
-    const fin = new FinancialService(testPool(), new FakeGateway());
+    const fin = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     const partners = new PartnersService(testPool(), fin);
     // Two open pledges pay to it (one paused); a cancelled one no longer does.
     await partners.createPledge(member.id, { shape: "monthly", amount_minor: 10_000, currency: "KES", due_day: 5, fund: "building", reminders_enabled: true } as never);
@@ -509,7 +509,7 @@ describe("funds", () => {
     await testPool().query(`UPDATE pledges SET status = 'paused' WHERE pledge_id = $1`, [paused.pledge_id]);
     await testPool().query(`UPDATE pledges SET status = 'cancelled' WHERE pledge_id = $1`, [cancelled.pledge_id]);
     // A recurring gift, a department and a live campaign on it.
-    await fin.createSchedule(member.id, { fund: "building", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "card" } as never);
+    await fin.createSchedule(member.id, { fund: "building", amount_minor: 5_000, currency: "KES", frequency: "monthly", method: "mpesa" } as never);
     const departments = new DepartmentsService(testPool(), new NotificationService(testPool()));
     await departments.create(admin.id, cong, { name: "Building team", purpose: "The new hall", leader_user_id: member2.id, gift_keys: [], fund_code: "building", is_open_to_join: true } as never);
     const campaigns = new CampaignService(testPool());
@@ -834,7 +834,7 @@ describe("budgets", () => {
   });
 
   it("budget vs actual with known numbers — succeeded KES gifts by month, approved KES expenses by spent_on month, unbudgeted money shown, USD / reversed / void / unapproved left out", async () => {
-    const fin = new FinancialService(testPool(), new FakeGateway());
+    const fin = new FinancialService(testPool(), new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
     const books = new FinanceBooks(testPool(), fin);
     const now = new Date("2026-09-20T09:00:00Z");
     const give = async (over: Record<string, unknown>) => {

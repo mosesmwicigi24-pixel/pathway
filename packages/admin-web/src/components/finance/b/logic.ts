@@ -805,3 +805,30 @@ export function validateCampaignForm(f: CampaignForm): { errors: CampaignFormErr
     },
   };
 }
+
+/* ---------- Recurring gifts, the office's view (Giving Cycle 7) ---------- */
+
+type ScheduleFacts = { status: string; pause_reason?: "failures" | "member" | "pledge" | null | undefined; resume_on?: string | null | undefined };
+
+/** Why a gift is paused, as the office should read it: the member's own
+ *  choice (with its date), its pledge's, or stopped after failed prompts —
+ *  only the last is the office's to chase. Null when it is not paused. */
+export function pauseReasonLabel(r: ScheduleFacts): string | null {
+  if (r.status !== "paused") return null;
+  if (r.pause_reason === "member") return r.resume_on ? `The member paused it until ${fmtDay(r.resume_on)}` : "The member paused it";
+  if (r.pause_reason === "pledge") return "Paused with its pledge";
+  return "Stopped after failed prompts";
+}
+
+/** What the next prompt asks when that is not the gift's amount — a gift
+ *  that collects a pledge asks only what the pledge still owes. */
+export function nextAskLabel(r: { status: string; amount_minor: number; currency: string; next_amount_minor?: number | null | undefined }): string | null {
+  if (r.status !== "active" || r.next_amount_minor == null || r.next_amount_minor === r.amount_minor) return null;
+  if (r.next_amount_minor === 0) return "Next: nothing — the pledge is already paid";
+  return `Next: ${formatMinor(r.next_amount_minor, r.currency)} — the rest of the pledge`;
+}
+
+/** Tomorrow in Nairobi (YYYY-MM-DD) — the earliest a pause can end. */
+export function nairobiTomorrow(now: Date = new Date()): string {
+  return new Date(now.getTime() + 3 * 3_600_000 + 86_400_000).toISOString().slice(0, 10);
+}

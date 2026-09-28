@@ -15,6 +15,11 @@ export interface PayPalOrder {
 export interface PayPalGateway {
   /** Create a CAPTURE order; returns the order id + the approval URL to open. */
   createOrder(input: { amountMinor: number; reference: string }): Promise<PayPalOrder>;
+  /** Where the member approves an order already created (Giving Cycle 10):
+   *  a resent request answers with the order it made the first time, and the
+   *  app needs the page to reopen. Optional — a gateway without it answers
+   *  replays without one. */
+  approveUrlFor?(orderId: string): string;
   /** Capture an approved order; "completed" means the money moved. */
   captureOrder(orderId: string): Promise<{ status: "completed" | "pending" | "failed" }>;
 }
@@ -42,6 +47,11 @@ class LivePayPalGateway implements PayPalGateway {
     if (!json.access_token) throw new ApiError("UPSTREAM_UNAVAILABLE", "PayPal authorization failed");
     this.token = { value: json.access_token, expiresAt: Date.now() + (json.expires_in ?? 3000) * 1000 };
     return this.token.value;
+  }
+
+  approveUrlFor(orderId: string): string {
+    const site = this.base.includes("sandbox") ? "https://www.sandbox.paypal.com" : "https://www.paypal.com";
+    return `${site}/checkoutnow?token=${encodeURIComponent(orderId)}`;
   }
 
   async createOrder(input: { amountMinor: number; reference: string }): Promise<PayPalOrder> {
@@ -93,6 +103,9 @@ class LivePayPalGateway implements PayPalGateway {
 export class FakePayPalGateway implements PayPalGateway {
   readonly created: Array<{ amountMinor: number; reference: string }> = [];
   constructor(private readonly captureStatus: "completed" | "pending" | "failed" = "completed") {}
+  approveUrlFor(orderId: string): string {
+    return `https://sandbox.paypal.com/checkoutnow?token=${orderId}`;
+  }
   async createOrder(input: { amountMinor: number; reference: string }): Promise<PayPalOrder> {
     this.created.push(input);
     const orderId = `PP_ORDER_${this.created.length}`;
@@ -104,12 +117,19 @@ export class FakePayPalGateway implements PayPalGateway {
 }
 
 class NotConfiguredPayPalGateway implements PayPalGateway {
+  /** Marker for the methods endpoint: PayPal cannot take money here. */
+  readonly notConfigured = true;
   createOrder(): Promise<PayPalOrder> {
     throw new ApiError("UPSTREAM_UNAVAILABLE", "PayPal is not configured");
   }
   captureOrder(): Promise<{ status: "completed" | "pending" | "failed" }> {
     throw new ApiError("UPSTREAM_UNAVAILABLE", "PayPal is not configured");
   }
+}
+
+/** True when this PayPal gateway can actually take money on this server. */
+export function paypalIsLive(gw: PayPalGateway): boolean {
+  return !(gw as { notConfigured?: boolean }).notConfigured;
 }
 
 export function buildPayPalGateway(env: Env): PayPalGateway {

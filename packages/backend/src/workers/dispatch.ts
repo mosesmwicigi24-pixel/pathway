@@ -27,12 +27,21 @@ export interface DispatchProvider {
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
-/** "KSh 1,000" from a payload's amount_minor + currency. */
+/** "KSh 1,000" / "USD 12.50" from a payload's amount_minor + currency —
+ *  cents shown when there are any (Giving Cycle 5: USD 12.50 read "USD 13"). */
 function money(p: Record<string, unknown>): string {
   const minor = num(p.amount_minor) ?? 0;
   const cur = str(p.currency) ?? "KES";
-  const major = Math.round(minor / 100);
-  return `${cur === "KES" ? "KSh" : cur} ${major.toLocaleString("en-KE")}`;
+  const cents = minor % 100 !== 0;
+  const text = (minor / 100).toLocaleString("en-KE", { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: 2 });
+  return `${cur === "KES" ? "KSh" : cur} ${text}`;
+}
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+/** "5 October" for a payload's YYYY-MM-DD date (as given — no time-zone math). */
+function dayWords(ymd: string | undefined): string | undefined {
+  const m = ymd ? /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd) : null;
+  return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}` : ymd;
 }
 
 function num(v: unknown): number | undefined {
@@ -166,7 +175,7 @@ const PUSH_TEMPLATE_COPY: Record<
   },
   pledge_overdue: (p) => ({
     title: `A gentle nudge on ${str(p.title) ?? "your pledge"}`,
-    body: `${money(p)} was due on ${str(p.due_on) ?? "the due date"}. No pressure — give when you can, or tell us if you paid another way.`,
+    body: `${money(p)} was due on ${dayWords(str(p.due_on)) ?? "the due date"}. No pressure — give when you can, or tell us if you paid another way.`,
   }),
   pledge_reminder_manual: (p) => ({
     title: `From the church office: ${str(p.title) ?? "your pledge"}`,
@@ -174,7 +183,7 @@ const PUSH_TEMPLATE_COPY: Record<
   }),
   pledge_fulfilled: (p) => ({
     title: "Pledge fulfilled — thank you",
-    body: `You completed your ${str(p.title) ?? "pledge"}. Every shilling carried someone further. Open Partners to see it.`,
+    body: `You completed your ${str(p.title) ?? "pledge"}. Every shilling carried someone further.${p.schedule_stopped === true ? " Its automatic prompts have stopped." : ""} Open Partners to see it.`,
   }),
   pledge_claim_confirmed: (p) => ({
     title: "Your payment is recorded",
@@ -184,13 +193,64 @@ const PUSH_TEMPLATE_COPY: Record<
     title: "We couldn't match that payment",
     body: `The office could not find ${money(p)} toward ${str(p.title) ?? "your pledge"}. Reply in Community or give again from Partners.`,
   }),
-  giving_schedule_failed: () => ({
-    title: "Your recurring gift didn't go through",
-    body: "We couldn't collect it this time — we'll try again shortly. Open Give to check your number or method.",
+  // Giving Cycle 1: say WHY, and what happens next — a cancelled prompt is
+  // not a broken phone, and "we'll try again" is only said when we will.
+  giving_schedule_failed: (p) => ({
+    title: `Your ${str(p.frequency) === "weekly" ? "weekly" : str(p.frequency) === "monthly" ? "monthly" : "recurring"} gift didn't go through`,
+    body: [
+      str(p.reason) ?? "We couldn't collect it this time.",
+      str(p.retry_at) ? "We'll send the prompt once more later today." : str(p.hint) ?? "Open Give to give now or check your number.",
+    ].join(" "),
   }),
-  giving_schedule_paused: () => ({
+  // Giving Cycle 3: a member's own gift that failed where they could not see
+  // it (the prompt never reached them, or no answer came before they left).
+  giving_gift_failed: (p) => ({
+    title: "Your gift didn't go through",
+    body: `${str(p.reason) ?? "The payment didn't complete."} ${str(p.hint) ?? "Open Give to try again."}`,
+  }),
+  // Giving Cycle 4: minutes before a scheduled M-Pesa prompt, so it is
+  // expected rather than dismissed as a scam.
+  giving_schedule_heads_up: (p) => ({
+    title: `Your ${str(p.frequency) === "weekly" ? "weekly" : "monthly"} gift is ready`,
+    body: p.partial === true && str(p.pledge_title)
+      ? `An M-Pesa prompt for ${money(p)} — the rest of what's due on “${str(p.pledge_title)}” — is coming to your phone in a few minutes. Enter your PIN to give.`
+      : `An M-Pesa prompt for ${money(p)} to ${str(p.fund_name) ?? "the church"} is coming to your phone in a few minutes. Enter your PIN to give.`,
+  }),
+  // Giving Cycle 7: the church office changed a recurring gift at the
+  // member's request — they are always told, in words.
+  giving_schedule_office_change: (p) => {
+    const gift = `${str(p.frequency) === "weekly" ? "weekly" : "monthly"} gift of ${money(p)}${str(p.fund_name) ? ` to ${str(p.fund_name)}` : ""}`;
+    const action = str(p.action);
+    return {
+      title: action === "cancel" ? "Your recurring gift was cancelled" : action === "resume" ? "Your recurring gift is back on" : "Your recurring gift is paused",
+      body: action === "cancel"
+        ? `The church office cancelled your ${gift}, as you asked. Nothing more will be prompted.`
+        : action === "resume"
+          ? `The church office resumed your ${gift}, as you asked.`
+          : `The church office paused your ${gift}, as you asked${str(p.resume_on) ? ` — it starts again on ${dayWords(str(p.resume_on))}` : ""}.`,
+    };
+  },
+  // Giving Cycle 5: a pledge's collector skips a cycle already paid, and
+  // stops with its pledge — each said once, in words.
+  giving_schedule_covered: (p) => ({
+    title: `Nothing to pay this ${str(p.frequency) === "weekly" ? "week" : "month"}`,
+    body: `${str(p.title) ? `“${str(p.title)}”` : "Your pledge"} is already paid${str(p.covered_through) ? ` through ${dayWords(str(p.covered_through))}` : ""}, so no M-Pesa prompt is coming this time. Thank you.`,
+  }),
+  giving_schedule_stopped: (p) => {
+    const pledge = str(p.title) ? `“${str(p.title)}”` : "Your pledge";
+    const reason = str(p.reason);
+    return {
+      title: reason === "pledge_fulfilled" ? "Your pledge is complete" : reason === "pledge_ended" ? "Your pledge has ended" : "Automatic prompts stopped",
+      body: reason === "pledge_fulfilled"
+        ? `${pledge} is fulfilled, so its automatic M-Pesa prompts have stopped. Thank you for carrying it through.`
+        : reason === "pledge_ended"
+          ? `${pledge} ended${str(p.until_on) ? ` on ${dayWords(str(p.until_on))}` : ""}, so its automatic prompts have stopped. Open Partners to make a new pledge.`
+          : `${pledge} was cancelled, so its recurring gift has stopped too.`,
+    };
+  },
+  giving_schedule_paused: (p) => ({
     title: "Your recurring gift is paused",
-    body: "We tried a few times and couldn't collect it, so we've stopped trying. Open Give to resume it whenever you're ready.",
+    body: `${str(p.reason) ? `${str(p.reason)} ` : ""}We've stopped sending prompts for now. Open Give to resume it whenever you're ready.`,
   }),
   reflection_approved: () => ({
     title: "Reflection approved",
@@ -292,7 +352,15 @@ export const KNOWN_PUSH_TEMPLATES = Object.keys(PUSH_TEMPLATE_COPY);
 function pushCopy(msg: DispatchMessage, log?: Logger): { title: string; body: string } {
   const p = msg.payload;
   const generated = PUSH_TEMPLATE_COPY[msg.template]?.(p);
-  const title = str(p.title) ?? generated?.title ?? "Nuru Pathway";
+  // An explicit push title is a call site composing its own copy — it sets
+  // title AND body (chat, blessings, prayer chains, announcements). A payload
+  // with a title but no body is naming the THING the notice is about — a
+  // pledge, a department need — and the table's words come first (Giving
+  // Cycle 10: a pledge reminder's lock screen read "Kenya trip" instead of
+  // "Kenya trip — due in 3 days", a covered month "Kenya trip" instead of
+  // "Nothing to pay this month").
+  const composed = str(p.title) !== undefined && str(p.body) !== undefined;
+  const title = (composed ? str(p.title) : undefined) ?? generated?.title ?? str(p.title) ?? "Nuru Pathway";
   const body = str(p.body) ?? generated?.body ?? str(p.feedback);
   if (body) return { title, body };
 

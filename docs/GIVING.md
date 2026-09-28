@@ -1,0 +1,387 @@
+# Giving — how money comes in, and the rules that keep it right
+
+Owner request 2026-09-28: work directly on the existing Giving module (member
+apps, backend, office) through ten improvement cycles, each with at least ten
+realistic scenarios run end to end, diagnosing root causes and retesting. This
+document is the contract the backend, the iOS and Android member apps and the
+office surfaces build to; `docs/PARTNERS_PROGRAMME.md` (pledges, reminders,
+statements) and `docs/FINANCE_ERP.md` (the books) remain the specs for their
+parts. Section numbers are cited from code.
+
+## 1. Rails (GET /giving/methods)
+
+| Rail | Currency | Limits | Recurring | Prompts a phone | Live when |
+|---|---|---|---|---|---|
+| M-Pesa (Daraja STK push) | KES, whole shillings | KSh 1 – 250,000 | yes | yes | Daraja keys set |
+| Airtel Money | KES | KSh 1 – 150,000 | yes | yes | never in production (no real integration; the HMAC fake is test/dev only) |
+| PayPal | **USD** — the amount IS dollars | USD 1 – 10,000 | no | no | PayPal keys set |
+| Card (Stripe) | any | 1 – 1,000,000 major units | no | no | `CARD_GIVING_ENABLED=true` (default off in production: no app can confirm a card payment yet) |
+
+The apps draw their method list from `GET /giving/methods` and never offer a
+disabled rail as if it could take money. Every gift is checked before any phone
+rings: rail live (`METHOD_UNAVAILABLE`), its currency (`METHOD_CURRENCY`), its
+limits and whole shillings (`AMOUNT_OUT_OF_RANGE`), a real Kenyan mobile number
+for mobile money (`PHONE_REQUIRED`). One prompt per member at a time: a prompt
+from the last 90 seconds still unanswered refuses a second (`GIFT_IN_PROGRESS`,
+details.transaction_id); a replay with the same idempotency key returns the
+existing transaction.
+
+## 2. Settlement truth (Cycle 1)
+
+- Daraja signs nothing and its callback URL is public. A callback is only a
+  **hint**: an unknown CheckoutRequestID is ignored (one indexed read, no
+  provider call, no write); otherwise the server asks Safaricom (STK Push
+  Query, at most every 10 s per prompt) and applies **Safaricom's answer**. A
+  forged "paid" moves nothing. An unsigned caller always gets `{ received: true }`.
+- The **mobile-money sweeper** (worker, every minute) asks about prompts still
+  processing after 90 s (each at most once a minute, 25 per run) and closes any
+  unanswered after 48 h as `no_answer`.
+- Every failure records **why**: `failure_code` (our word) + `failure_detail`
+  (Safaricom's code and text). Members read `failure { code, reason, hint,
+  retryable }` on history and receipts — one table (`giftFailure.ts`):
+
+| M-Pesa ResultCode | failure_code | retryable |
+|---|---|---|
+| 1032 | cancelled | no |
+| 1037 | unreachable | yes |
+| 1019 | expired | yes |
+| 1 | insufficient_funds | no |
+| 2001 | wrong_pin | no |
+| 1001 | busy | yes |
+| 1025, 9999, 26, 17 | system | yes |
+| other | declined | no |
+| (none in 48 h) | no_answer | no |
+| (no usable number at send) | no_phone | no |
+
+- Production never builds the HMAC fakes (a stray `*_CALLBACK_SECRET` used to
+  switch on an "Airtel" that prompted no phone).
+
+## 3. Recurring gifts (Cycle 1)
+
+- Mobile money only; KES; whole shillings; a real number (the schedule's own
+  `phone_number` when the member chose one, else the profile number, followed if
+  it changes). The same gift twice within ten minutes is ONE schedule; the same
+  gift while one exists is `SCHEDULE_EXISTS`.
+- **Sending a prompt is not collecting a gift.** The outcome comes back from
+  M-Pesa and is fed to the schedule: success clears the strikes; a failure is a
+  strike with its reason. If the member never had a chance to answer
+  (unreachable, expired, busy, system) the cycle is tried **once** more, two
+  hours later inside prompt hours (07:00–21:00 Nairobi), never once the next cycle is due, with the
+  key `sched:{id}:{cycle}:r{n}` after proving no attempt of the cycle succeeded
+  or is still waiting. The member's own answer (cancelled, wrong PIN, not enough
+  money) is never re-sent. Three strikes pause the schedule; the member is told
+  on the first strike and on the pause, with the reason.
+- One prompt per phone at a time: a phone already prompted in the run, or with a
+  prompt from the last two minutes still waiting, is deferred three minutes (not
+  a strike). A replay of a prompt already sent for the cycle is not deferred.
+- A Safaricom outage or a missing configuration while prompting is **ours**: no
+  strike, no notice, back in an hour. A number M-Pesa refuses to prompt is the
+  gift's problem (`no_phone`), one strike, the member told.
+
+## 4. Cycle log
+
+The scenario suites are `packages/backend/test/giving-cycle-NN.test.ts` (each
+`it` is one scenario) plus the apps' unit tests; the running log of findings,
+fixes and results is kept in the PR descriptions.
+
+## 5. Honest money on paper and on the calendar (Cycle 2)
+
+- **Statements and receipts** date every gift on the Nairobi calendar and clock
+  (a gift at 00:30 on 1 January is 1 January, 12:30 AM — it used to print under
+  31 December in UTC while counting in the new year). Every amount is printed in
+  its own currency; totals are per currency ("KSh 3,500 + USD 20.00"), never one
+  sum. `GET /giving/statements` gains `totals[]` per currency, and `by_fund` /
+  `by_pledge` rows carry their currency; `total_minor`/`currency` are the first
+  entry (shillings first).
+- **A receipt tells the truth about its gift**: only settled money is "Received
+  with thanks … Official receipt". A gift still clearing says "Waiting for the
+  payment to clear"; a failed one says "This gift did not go through", gives the
+  reason and the hint, and reads "Not a receipt: no money has been received for
+  this gift" (a GIFT RECORD, not a GIVING RECEIPT).
+- **Cover the fee**: the intent may carry `cover_fee_minor` (≤ half the gift;
+  whole shillings for M-Pesa). `amount_minor` stays what was charged and booked
+  (the ledger is unchanged); history and detail carry `fee_cover_minor`, and the
+  receipt reads "Gift … Fee cover … covered by you … Total …". It used to print
+  "Fee: KSh 0" whatever the member added.
+- **Monthly gifts keep their day** (`anchor_day`, migration 219, backfilled from
+  the day each was set up, Nairobi): the next cycle is computed on the Nairobi
+  calendar, clamped to short months (31 Jan → 28/29 Feb → 31 Mar), at the same
+  Nairobi time. The old UTC arithmetic sent a gift on the 31st to the 3rd and let
+  one set up at 01:00 on the 1st creep back a day a month.
+- **Prompts keep to 07:00–21:00 Nairobi** (the platform's quiet hours): a first
+  prompt that would fall at night is moved to 20:00 (or 07:00) on the same day,
+  so a weekly gift keeps its weekday; a retry that would fall at night waits for
+  07:00.
+- A member can ask for one year's giving statement PDF (`?year=`).
+
+## 6. Recovery (Cycle 3)
+
+- **Try again** (`POST /giving/transactions/{id}/retry`): a new gift carrying
+  everything the failed one did — fund, amount, currency, method, the pledge or
+  need, the name, the fee cover — so a retry can never quietly lose its pledge.
+  Only the giver's own failed gift (404 / 422 otherwise); the pledge or need is
+  checked afresh (a pledge cancelled since is refused), every Cycle 1 check runs
+  again, and a retry while one is waiting is `GIFT_IN_PROGRESS`.
+- **The verdict while the member waits**: the app polls
+  `GET /giving/transactions/{id}`; once a prompt is 20 s old without a verdict,
+  reading it asks the provider (at most every 10 s per prompt) and applies the
+  answer as a callback would. The sweeper remains the safety net.
+- **A failure they could not see reaches them**: a member's own gift that failed
+  where they could not see it — the prompt never reached them, or no answer came
+  — and at least 45 s after they started it, sends `giving_gift_failed` with the
+  reason and the hint. Their own decline (cancelled, wrong PIN, not enough money)
+  is never re-announced; a recurring charge speaks through its schedule notice;
+  a stranger's website gift has nobody to notify.
+- **Nothing stays "processing" for ever**: PayPal orders nobody approved and card
+  intents nobody confirmed are closed after 48 h as `no_answer`; if a provider
+  later reports one paid, it still books (money that arrived always wins).
+- **The office sees why**: the transactions register and drawer carry `failure`
+  (the member's words) and `failure_detail` (M-Pesa's code and text), and
+  `fee_cover_minor`; the CSV appends `failure_reason, provider_detail, fee_cover`.
+
+## 7. A recurring gift the member controls (Cycle 4)
+
+- **Give now and every week/month** (`first_charge: "now"` on
+  `POST /giving/schedules`): the first prompt goes out at once as the schedule's
+  first cycle (key `sched:{id}:first`), while the member is looking at the
+  screen; the answer carries `first_charge` (the intent). If it cannot be sent,
+  the schedule still stands and `first_charge_error` says why; a prompt already
+  on the phone refuses the whole request (`GIFT_IN_PROGRESS`), creating nothing.
+  A first prompt the member declines while watching counts as a strike but sends
+  no push (the screen already says it).
+- **The heads-up**: minutes before each scheduled prompt (up to 15), a push says
+  it is coming — so it is expected, not dismissed as a scam. Claimed once per
+  cycle (`heads_up_cycle_at`), off per schedule (`heads_up: false`).
+- **Pausing on their own terms** (`POST /giving/schedules/{id}/pause`,
+  optional `resume_on` from tomorrow to a year ahead): nothing is prompted while
+  paused; on the date it resumes at its next occurrence on or after it, in prompt
+  hours. `pause_reason` says why a gift is paused: `failures` (three strikes —
+  the member resumes it), `member`, or `pledge` (it follows its pledge; resume the
+  pledge).
+- **Change instead of cancel** (`PATCH /giving/schedules/{id}`): amount (checked
+  like a new gift; a twin of another gift is `SCHEDULE_EXISTS`), day (monthly
+  1–31; weekly 0–6, Sunday 0 — the next prompt moves there), number (null =
+  back to the profile), heads-up.
+- **A resumed pledge never charges the cycle it skipped**: its schedule picks up
+  at the next occurrence from now (it used to charge the missed cycle at once).
+
+## 8. Partnership: a pledge's collector (Cycle 5)
+
+- **A schedule bound to a pledge collects it.** Each cycle asks what the pledge
+  still owes before the NEXT cycle — a monthly pledge's uncovered instalments
+  due until then (its one instalment ledger, arrears included), a total
+  pledge's rest of the target — never more than the schedule's amount, whole
+  shillings on M-Pesa. Already paid (Pay now, a confirmed claim): the cycle is
+  skipped and the member told (`giving_schedule_covered`); part-paid: the prompt
+  and its heads-up ask only the rest. It used to charge the full amount every
+  cycle — on top of a manual payment, past the target, past the end date.
+- **It stops with its pledge**: a total pledge that reaches its target is
+  fulfilled at once (every schedule collecting it stopped, one thank-you saying
+  so); a monthly pledge past `until_on`, or a cancelled one, stops its schedule
+  (`giving_schedule_stopped`, reason `pledge_fulfilled | pledge_ended |
+  pledge_cancelled`); a paused one pauses it. Instalments end at `until_on`
+  everywhere (they used to run on, pledged and then "missed").
+- **"Charge me automatically" keeps the apps' promise**: collected monthly on
+  the pledge's due day, from its first due day after today — never today — and
+  the pledge starts there (`pledges.starts_on`, migration 221). It used to fall
+  on the creation day every month and leave a pledge made on its own due day
+  behind from the next morning. Checked before the pledge is written (no half
+  pledge on a refusal); weekly and total-pledge auto-collection are refused; the
+  same pledge twice within ten minutes is one pledge.
+- **A collector follows its pledge**: the pledge's amount and due day move its
+  monthly schedules (an amount M-Pesa can't take changes nothing); changing them
+  on the schedule is refused with `details.pledge_id`; pause/cancel/resume reach
+  every bound schedule, and resuming a pledge resumes only what the pledge
+  paused.
+- **One currency per promise**: a gift or schedule toward a pledge or need must
+  be in its currency (`CURRENCY_MISMATCH`, `details.expected`); a need's raised
+  figure counts only its own currency; an older claim in another currency can
+  only be rejected.
+- **Claims the office can check**: pledge currency, paid today or within a year
+  (`INVALID_DATE`), told once and at most five waiting (`CONFLICT`).
+- **One voice per payment**: no "due soon" for a pledge its schedule will
+  collect by the due day (the heads-up says it), no overdue nudge while its
+  schedule failed in the last 36 hours (it already told them).
+- **Remaining foots**: Σ per pledge (see docs/PARTNERS_PROGRAMME.md §3a).
+- **The invitation**: never to a Partners-programme member; quiet hours in the
+  member's own timezone (it compared UTC — asked at 22:00, never before 10:00);
+  raised in the campaign's currency between its first and last Nairobi days;
+  day boundaries on the Nairobi calendar.
+- **Moving a gift's day** keeps the pending prompt in its own month or
+  Monday–Sunday week, so a period already given is never asked twice.
+
+## 9. Safe to give (Cycle 6)
+
+- **One request, one ring, one row.** A member's mobile-money gift is claimed
+  as a row under a per-member lock BEFORE the phone rings, then the prompt goes
+  out and the row learns its prompt ref. A client resending after a slow
+  Safaricom call (same key) gets the same gift; two taps at once (fresh keys)
+  get one prompt and `GIFT_IN_PROGRESS`. It used to be possible for both to
+  ring, and with the same key the second row failed to insert after its prompt
+  was out — approved, that money arrived with no record. A prompt that could
+  not be sent leaves no row; a row whose prompt never went out (the process
+  stopped in between) is closed after five minutes as `system` — "the prompt
+  was never sent". The website's donate button follows the same rule. PayPal
+  and card requests racing themselves book one row; the loser answers as a
+  replay, never a 500.
+- **Not a way to ring a stranger.** A prompt to a number that is not the
+  member's own spends the website's per-number bucket (three, then one every
+  ten minutes — the two paths can't be combined) and a per-member one (five
+  numbers, then one every half hour): `429 RATE_LIMITED`,
+  `details.retry_after_sec`. The member's own number is paced only by the
+  one-prompt-at-a-time rule; the scheduler's own prompts are not limited (a
+  give-now prompt the member starts is).
+- **The server's keys are the server's.** Member keys may not use `sched:`,
+  `claim:`, `pledge:`, `web:`, `website:` or `office:`; a key another gift
+  holds is `409 CONFLICT` before anything rings (it was an unhandled 500).
+  The scheduler's replay check reads only its own schedule's rows.
+- **Private documents**: receipts and statements are sent with
+  `Cache-Control: private, no-store` and `Referrer-Policy: no-referrer`; the
+  `?token=` fallback (the retired React Native app only) is logged when used,
+  so it can be removed.
+- **Every failure says why**: a PayPal payment that did not complete is
+  `declined`, "PayPal did not complete the payment".
+- Verified unchanged: every member giving route is owner-scoped (404 across
+  members), every office route is behind `finance:view`/`finance:manage`,
+  CSV exports neutralise spreadsheet formulas, PayPal money moves only on the
+  server's own capture.
+
+## 10. The office sees the truth and can act on it (Cycle 7)
+
+- **One attention rule** (`constants.ts` `SCHEDULE_ATTENTION_SQL`) for Finance →
+  Recurring gifts, its "Needs attention" filter and the Overview alert:
+  failing, stopped after failed prompts, or our own outage (the last prompt
+  could not be sent in the past day — the giver was never told). A member's
+  own pause, and one that follows a paused pledge, are choices, not problems
+  (they used to count, and sent the office chasing people who had simply
+  said "not this month").
+- **The register speaks**: the failure in the words the member was told, our
+  outage as an office alert, why a gift is paused (the member — until when —,
+  its pledge, or failures), the pledge it collects and what its next prompt
+  will ask. The partner drawer shows the same reasons.
+- **The office acts when a member asks**: `POST /admin/finance/schedules/{id}/
+  pause|resume|cancel` (finance:manage) with a required reason; pause may
+  carry an end date. Recorded as the member's own pause; the audit names the
+  officer and the reason; the member is always told
+  (`giving_schedule_office_change`). A gift paused with its pledge resumes
+  with the pledge.
+- **Claims**: the queue flags a claim in another currency than its pledge
+  (`currency_mismatch`, `pledge_currency`) — Confirm is disabled; it can only
+  be rejected.
+- **"Remind everyone behind"** skips a pledge whose automatic collection
+  failed in the last 36 hours (the member was just told why); a one-to-one
+  reminder stays the office's own choice.
+
+## 11. Giving at scale (Cycle 8)
+
+- **Indexes** (migration 222): `transactions` had none on `user_id` or
+  `fund_id`, so every member-scoped read — the Give tab's history, the
+  one-prompt-at-a-time check made before EVERY M-Pesa prompt, statements,
+  receipts, Try again, the office's per-partner totals — and every per-fund
+  total scanned the whole table. Now `(user_id, created_at DESC)` and
+  `(fund_id, status, created_at)`.
+- **Fixed-cost passes**: the reminder scan reads every candidate's payments,
+  the schedules collecting them and their recent reminders in four reads
+  (it was about four queries per pledge, every 15 minutes); the fulfilment
+  pass reads twice however many total pledges are open; one partner's page
+  evaluates that partner only (it evaluated every partner to show one).
+- **One run at a time** (`workers/oneAtATime.ts`): the scheduler (5 min), the
+  M-Pesa reconcile (1 min) and the reminder scan (15 min) skip a tick while
+  their last run is still going, and say so — a slow provider used to stack
+  runs over the same rows.
+- **Measured**: 1,000 gifts due in one minute go out in two passes of 500
+  (the runner's per-pass cap), once each; the database work is about 2 ms a
+  prompt. Known next threshold: the office's full Partners register still
+  evaluates each partner separately — fine at hundreds of partners; batch it
+  before thousands.
+
+## 12. Intelligence (Cycle 9)
+
+- **A total pledge's pace** (`pace` on the Pledge): what is still owed spread
+  over the monthly collections left — one today, then the same day each month
+  through its date — rounded up to whole shillings so the last is never short:
+  "KSh 5,000 a month (4 collections) reaches KSh 20,000 by 31 December". A
+  recurring gift bound to the pledge at that amount lands exactly on the
+  target (its last prompt asks only the rest) and stops there.
+- **How collection is going** (`GET /admin/finance/collection-health?days`,
+  the Recurring gifts page's first card): the window's prompts, paid, failed
+  by reason in the words members were told — their own answer, or it never
+  reached them — the success rate, the gifts our side could not send today,
+  and what the rest of the month should bring in: every active gift's
+  remaining prompts, each weighted by its own last six answers.
+- **M-Pesa looks unwell** (`collection_outage` on the Overview, with the
+  evidence in words): over the last hour, most answered prompts never reached
+  a phone (at least five answered, 60% or more), or three scheduled prompts
+  could not be sent at all. A member's own decline never counts.
+- **The Partners statement never adds currencies**: `summary_by_currency`
+  gives pledged / paid / remaining for each; the headline figures are the
+  shilling ones (`summary_currency`); disciples carried count shillings only;
+  a payment counts toward a pledge only in the pledge's currency; the PDF
+  prints "KSh 30,000 + USD 500".
+
+## 13. The whole journey, and the last rough edges (Cycle 10)
+
+- **A notice names what it is about in its own words.** An explicit push title
+  is a call site composing its own copy — title AND body (chat, blessings,
+  prayer chains, announcements). A payload with a `title` but no `body` is
+  naming the THING the notice is about — a pledge, a department need — and the
+  template's words come first. Pledge reminders, covered months, claim
+  answers and need notices used to show just the pledge's or need's name as
+  the lock-screen title ("Kenya trip" instead of "Kenya trip — due in 3
+  days"); a sweep over every template in the table now pins it.
+- **One notice, one row.** `GET /me/notifications` returns one row per notice
+  — a reminder sent on push, SMS and email is one row (the push row when
+  there is one) and one unread — and reading it reads every channel's row.
+  It used to show three times and count three.
+- **A resent PayPal gift can still be approved**: the replay of a waiting
+  order carries its `approve_url` again.
+- **The whole journey, end to end** (`test/giving-cycle-10.test.ts` S4): a
+  pledge collected automatically from its first due day, a declined prompt
+  (a strike, the member told), Try again counted toward the cycle, a month
+  paid by hand and confirmed by the office, a covered month skipped with a
+  notice, the office pausing at the member's request until a date and the
+  gift resuming by itself at its next occurrence, a dollar gift on the side
+  — and the statement, the register and collection health all agree.
+- **End to end on the portal** (local API, 2026-09-28): the collection-health
+  card, the register's reasons and office pause/resume with the audit and the
+  member's notice, verified in the browser.
+
+## 14. Four surfaces, one experience (Cycle 10 parity pass)
+
+The two member apps and the iPad office were compared screen by screen — the
+same member on the same local API (the pathway branch), iOS on a simulator,
+Android on an emulator, the iPad on a simulator — after the owner sent a
+Partners screenshot from Android where the STANDING card squeezed "Partner
+since Sep 2026" into a column of letters. What looking found that reading the
+code had not:
+
+- **A starved row is a class.** Compose measures a Row's unweighted children
+  before its weighted one, so a long unweighted chip took the width and the
+  weighted text column got what was left — one letter. iOS's HStack shares
+  the width. Every Row on Give that sets variable text beside a variable chip
+  now bounds the chip (Android).
+- **A pledge shows what collects it**, monthly or total — "Collected
+  automatically — next KSh 5,000 on 5 Oct". Android showed it only for a pledge
+  with a pace, so a monthly pledge collected by its recurring gift looked
+  unattended.
+- **"Repeat last gift" offers only a gift that went through.** iOS offered a
+  member's only gift — which had failed — beside Recent giving's "No gifts
+  yet". Both apps now take the newest ordinary gift that settled.
+- **Every notice the server sends has words in both apps.** The office's
+  change to a recurring gift (Cycle 7) and a department need's notices read
+  in the server's words; a need's `title` is the need's name, never the
+  notice's title. Giving notices wear Give's icon, not the security gear.
+- **The office on the iPad**: a Finance table that fitted could never fall
+  back to scrolling sideways when the window narrowed, so rotating to portrait
+  clipped the whole Recurring page — every Finance table now scrolls only when
+  it must; Recurring and the partner drawer grow with the text size instead
+  of cutting "Pa…" and "KES 1,…".
+- **Words agree**: RECURRING GIFTS (the rail lists paused gifts too, so not
+  "active schedules"); "0700 000 000", never "+254700000000", on screen; the
+  wire still carries E.164.
+
+Open for the owner: "Pay" on a DUE row for a plain recurring gift opens a
+separate one-time gift while the schedule still charges on its day — the
+member gives twice that cycle. The spec lists "Pay now / Resume" for
+schedules; the choice is to show the collection day instead of Pay for an
+active gift, or to build "pay this cycle now" on the server.
