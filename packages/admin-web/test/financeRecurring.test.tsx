@@ -18,7 +18,7 @@ vi.mock("../src/api/finance", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../src/api/finance")>();
   return {
     ...mod,
-    FinanceApi: { ...mod.FinanceApi, schedules: vi.fn(), scheduleAction: vi.fn(), claims: vi.fn(), config: vi.fn(), partner: vi.fn() },
+    FinanceApi: { ...mod.FinanceApi, schedules: vi.fn(), scheduleAction: vi.fn(), claims: vi.fn(), config: vi.fn(), partner: vi.fn(), collectionHealth: vi.fn() },
   };
 });
 
@@ -71,17 +71,42 @@ describe("the office's words for a recurring gift", () => {
   });
 });
 
+const HEALTH = {
+  window_days: 30, prompts: 13, paid: 6, failed: 6, waiting: 1, success_rate: 0.5,
+  by_reason: [
+    { code: "unreachable", count: 3, reason: "We couldn't reach the phone.", member_answered: false },
+    { code: "cancelled", count: 2, reason: "The M-Pesa prompt was cancelled.", member_answered: true },
+  ],
+  not_sent_by_us: 1,
+  outage: { suspected: true, evidence: "8 of the last 10 M-Pesa prompts in the past hour never reached the phone.", resolved: 10, unreached: 8, unsent: 0 },
+  month_end: "2026-09-30",
+  forecast: [{ currency: "KES", gifts: 2, prompts: 3, scheduled_minor: 700_000, expected_minor: 600_000 }],
+};
+
 describe("Finance → Recurring gifts", () => {
   beforeEach(() => {
     api.schedules.mockReset();
     api.scheduleAction.mockReset();
     api.config.mockResolvedValue({ funds: [{ code: "tithe", name: "Tithe", is_active: true }], providers: [], step_up_required: false });
+    api.collectionHealth.mockResolvedValue(HEALTH);
     api.schedules.mockResolvedValue([
       row({ schedule_id: "failing", full_name: "Failing Giver", consecutive_failures: 2, last_error: "raw provider text", last_failure: { reason: "There wasn't enough money in M-Pesa.", hint: "Top up." }, needs_attention: true }),
       row({ schedule_id: "ours", full_name: "Outage Giver", office_alert: "We couldn't send the last prompt (UPSTREAM). The giver has not been told; it tries again within the hour.", needs_attention: true }),
       row({ schedule_id: "mine", full_name: "Resting Giver", status: "paused", pause_reason: "member", resume_on: "2026-10-20", paused_at: "2026-09-20T06:00:00.000Z" }),
       row({ schedule_id: "pledged", full_name: "Pledge Giver", pledge: { pledge_id: "p-1", title: "Kenya trip" }, next_amount_minor: 300_000 }),
     ]);
+  });
+
+  it("says how collection is going: the outage in words, the success rate, why prompts failed, and the month's weighted forecast (Giving Cycle 9)", async () => {
+    renderPage(<FinanceRecurring />, { path: "/finance/recurring" });
+    expect(await screen.findByText("How collection is going")).toBeTruthy();
+    expect(screen.getByText(/8 of the last 10 M-Pesa prompts/)).toBeTruthy();
+    expect(screen.getByText("50%")).toBeTruthy();
+    expect(screen.getByText(/We couldn't reach the phone\./)).toBeTruthy();
+    expect(screen.getByText("(never reached them)")).toBeTruthy();
+    expect(screen.getByText("(their answer)")).toBeTruthy();
+    expect(screen.getByText(/not sent by us today/)).toBeTruthy();
+    expect(screen.getByText(/scheduled/)).toBeTruthy();
   });
 
   it("shows why: failure in words, our outage, whose pause, the pledge and its next ask", async () => {

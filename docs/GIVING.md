@@ -294,3 +294,27 @@ fixes and results is kept in the PR descriptions.
   prompt. Known next threshold: the office's full Partners register still
   evaluates each partner separately — fine at hundreds of partners; batch it
   before thousands.
+
+## 12. Intelligence (Cycle 9)
+
+- **A total pledge's pace** (`pace` on the Pledge): what is still owed spread
+  over the monthly collections left — one today, then the same day each month
+  through its date — rounded up to whole shillings so the last is never short:
+  "KSh 5,000 a month (4 collections) reaches KSh 20,000 by 31 December". A
+  recurring gift bound to the pledge at that amount lands exactly on the
+  target (its last prompt asks only the rest) and stops there.
+- **How collection is going** (`GET /admin/finance/collection-health?days`,
+  the Recurring gifts page's first card): the window's prompts, paid, failed
+  by reason in the words members were told — their own answer, or it never
+  reached them — the success rate, the gifts our side could not send today,
+  and what the rest of the month should bring in: every active gift's
+  remaining prompts, each weighted by its own last six answers.
+- **M-Pesa looks unwell** (`collection_outage` on the Overview, with the
+  evidence in words): over the last hour, most answered prompts never reached
+  a phone (at least five answered, 60% or more), or three scheduled prompts
+  could not be sent at all. A member's own decline never counts.
+- **The Partners statement never adds currencies**: `summary_by_currency`
+  gives pledged / paid / remaining for each; the headline figures are the
+  shilling ones (`summary_currency`); disciples carried count shillings only;
+  a payment counts toward a pledge only in the pledge's currency; the PDF
+  prints "KSh 30,000 + USD 500".

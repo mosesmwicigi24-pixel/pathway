@@ -404,6 +404,27 @@ export interface FinanceOverview {
   alerts: { kind: FinanceAlertKind; count: number; link: string; /** The server's own words, when it has them (collection_outage). */ message?: string | undefined }[];
 }
 
+/** GET /admin/finance/collection-health (Giving Cycle 9): how collection is
+ *  going over the window — M-Pesa prompts, paid, failed by reason in the
+ *  words members were told (whose answer it was), the success rate, the gifts
+ *  only the office can fix, the live outage check, and what the rest of this
+ *  Nairobi month should bring in, each gift weighted by its own record. */
+export interface CollectionHealth {
+  window_days: number;
+  prompts: number;
+  paid: number;
+  failed: number;
+  waiting: number;
+  /** paid ÷ (paid + failed), 3 decimals; null with nothing answered. */
+  success_rate: number | null;
+  by_reason: { code: string; count: number; reason: string; member_answered: boolean }[];
+  not_sent_by_us: number;
+  outage: { suspected: boolean; evidence: string | null; resolved: number; unreached: number; unsent: number };
+  /** YYYY-MM-DD — the last day of the month the forecast covers. */
+  month_end: string;
+  forecast: { currency: string; gifts: number; prompts: number; scheduled_minor: number; expected_minor: number }[];
+}
+
 /** FinanceTransactionRow — one transaction as the office sees it. */
 export interface FinanceTransactionRow {
   transaction_id: string;
@@ -1396,6 +1417,8 @@ export const FinanceApi = {
   trend: (months?: number) => get<FinanceTrend>(`${F}/trend`, { months }),
   /** GET /admin/finance/config — funds + provider availability. */
   config: () => get<FinanceConfig>(`${F}/config`),
+  /** GET /admin/finance/collection-health?days (1–90, default 30) — Giving Cycle 9. */
+  collectionHealth: (days?: number) => get<CollectionHealth>(`${F}/collection-health`, { days }),
   /** GET /admin/finance/schedules — recurring gifts with collection health. */
   schedules: (q: SchedulesQuery = {}) => get<{ data: AdminScheduleRow[] }>(`${F}/schedules`, q).then((r) => r.data),
 

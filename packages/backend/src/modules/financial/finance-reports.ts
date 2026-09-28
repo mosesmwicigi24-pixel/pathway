@@ -1385,13 +1385,17 @@ export class FinanceReportsService {
     const inc = new Map(income.map((r) => [r.currency, r]));
     const exp = new Map(expenses.map((r) => [r.currency, r]));
 
-    const alertsSrc: { kind: string; count: number; link: string }[] = [
+    const outage = await this.deps.financial.outageCheck(now);
+    const alertsSrc: { kind: string; count: number; link: string; message?: string | undefined }[] = [
       { kind: "pending_claims", count: counts?.pending_claims ?? 0, link: "/finance/claims" },
       { kind: "expenses_awaiting_approval", count: counts?.expenses_awaiting_approval ?? 0, link: "/finance/expenses?status=recorded" },
       { kind: "failing_schedules", count: counts?.failing_schedules ?? 0, link: "/finance/recurring?attention=true" },
       { kind: "stale_processing", count: staleCount, link: "/finance/reconciliation?tab=exceptions" },
       { kind: "integrity_issues", count: integrityCount, link: "/finance/reconciliation?tab=integrity" },
       { kind: "partners_behind", count: behind, link: "/finance/pledges?standing=behind" },
+      // Giving Cycle 9: M-Pesa looks unwell right now — the office learns why
+      // gifts are failing before members start calling.
+      ...(outage.suspected ? [{ kind: "collection_outage", count: 1, link: "/finance/recurring", message: outage.evidence ?? undefined }] : []),
     ];
 
     return {

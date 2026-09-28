@@ -13,7 +13,7 @@
 import { useState, type ReactElement } from "react";
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, Ban, Pause, Play, Repeat, TrendingUp } from "lucide-react";
-import { FinanceApi, type AdminScheduleRow, type SchedulesQuery } from "../../../api/finance";
+import { FinanceApi, type AdminScheduleRow, type CollectionHealth, type SchedulesQuery } from "../../../api/finance";
 import {
   Button,
   ConfirmDialog,
@@ -76,6 +76,7 @@ export function FinanceRecurring(): ReactElement {
   const firstLoad = res.loading && !res.data;
   const caps = useFinanceCaps();
   const toast = useFinanceToast();
+  const health = useResource(() => FinanceApi.collectionHealth(30), "collection-health", { errorFallback: "Could not load how collection is going." });
   const [pending, setPending] = useState<Pending | null>(null);
   const [until, setUntil] = useState("");
 
@@ -203,6 +204,7 @@ export function FinanceRecurring(): ReactElement {
         </KpiStrip>
       }
     >
+      {health.data ? <CollectionHealthCard h={health.data} /> : null}
       <FilterBar
         selects={[
           { key: "status", label: "Status", value: status ?? "", options: [{ value: "", label: "Active & paused" }, ...STATUSES], onChange: setStatus },
@@ -281,5 +283,64 @@ export function FinanceRecurring(): ReactElement {
         onCancel={() => setPending(null)}
       />
     </FinancePage>
+  );
+}
+
+/**
+ * How collection is going (Giving Cycle 9): an outage banner when M-Pesa
+ * itself looks unwell, then the window's success rate and failures by reason
+ * in the words members were told — whose answer it was — and what the rest of
+ * the month should bring in, each gift weighted by its own record.
+ */
+function CollectionHealthCard({ h }: { h: CollectionHealth }): ReactElement {
+  const answered = h.paid + h.failed;
+  return (
+    <SectionCard
+      title="How collection is going"
+      subtitle={`M-Pesa prompts in the last ${h.window_days} days — ${h.paid.toLocaleString()} paid of ${answered.toLocaleString()} answered${h.waiting ? `, ${h.waiting.toLocaleString()} still waiting` : ""}.`}
+    >
+      {h.outage.suspected ? (
+        <Notice tone="error">
+          <strong>M-Pesa looks unwell right now.</strong> {h.outage.evidence} Gifts may fail until it recovers — nothing to fix on our side.
+        </Notice>
+      ) : null}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16, marginTop: 8 }}>
+        <div>
+          <div style={{ fontSize: 11, color: FIN.muted, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700 }}>Success rate</div>
+          <div style={{ fontFamily: FIN.mono, fontSize: 22, color: FIN.navy, fontWeight: 700 }}>{h.success_rate === null ? "—" : `${Math.round(h.success_rate * 100)}%`}</div>
+          {h.not_sent_by_us > 0 ? (
+            <div style={{ fontSize: 12, color: FIN.danger }}>{h.not_sent_by_us.toLocaleString()} recurring {h.not_sent_by_us === 1 ? "gift" : "gifts"} not sent by us today — the givers were not told.</div>
+          ) : null}
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: FIN.muted, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700 }}>Why prompts failed</div>
+          {h.by_reason.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: FIN.muted }}>None failed.</div>
+          ) : (
+            <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "grid", gap: 4 }}>
+              {h.by_reason.map((r) => (
+                <li key={r.code} style={{ fontSize: 12.5, color: FIN.navy }}>
+                  <span style={{ fontFamily: FIN.mono, fontWeight: 700 }}>{r.count.toLocaleString()}</span> {r.reason}{" "}
+                  <span style={{ fontSize: 11, color: FIN.muted }}>{r.member_answered ? "(their answer)" : "(never reached them)"}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: FIN.muted, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700 }}>Rest of the month, expected</div>
+          {h.forecast.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: FIN.muted }}>No recurring prompts left this month.</div>
+          ) : (
+            h.forecast.map((f) => (
+              <div key={f.currency} style={{ fontSize: 12.5, color: FIN.navy }} title="Each gift's remaining prompts this month, weighted by how often that gift has been paid (its last six answered prompts).">
+                <MoneyText amount_minor={f.expected_minor} currency={f.currency} strong /> of {formatMinor(f.scheduled_minor, f.currency)} scheduled
+                <span style={{ color: FIN.muted }}> · {f.prompts.toLocaleString()} prompts, {f.gifts.toLocaleString()} gifts</span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </SectionCard>
   );
 }

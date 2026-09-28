@@ -395,6 +395,14 @@ export function registerFinancial(
     }));
   }
 
+  // How collection is going (Giving Cycle 9): prompts, paid, failed by
+  // reason, success rate, our own faults, the live outage check and the
+  // month's success-weighted forecast.
+  r.get("/admin/finance/collection-health", auth, perm("finance", "view"), handler(async (req, res) => {
+    const { days } = parseBody(z.object({ days: z.coerce.number().int().min(1).max(90).default(30) }), req.query);
+    res.json(await svc.collectionHealth(days));
+  }));
+
   r.get("/admin/finance/summary", auth, perm("finance", "view"), handler(async (_req, res) => {
     res.json(await svc.financeSummary());
   }));

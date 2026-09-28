@@ -3881,6 +3881,60 @@ paths:
         "200": { description: Recurring giving }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/collection-health:
+    get:
+      tags: [portal]
+      summary: "finance:view. How collection is going (Giving Cycle 9): the window's M-Pesa prompts, paid, failed by reason in the words members were told (member_answered = their own answer, else it never reached them), the success rate, recurring gifts our side could not send today, the live outage check, and what the rest of this Nairobi month should bring in — each active gift's remaining prompts weighted by its own last six answers; per currency."
+      parameters:
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 90, default: 30 } }
+      responses:
+        "200":
+          description: Collection health
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [window_days, prompts, paid, failed, waiting, success_rate, by_reason, not_sent_by_us, outage, month_end, forecast]
+                properties:
+                  window_days: { type: integer }
+                  prompts: { type: integer }
+                  paid: { type: integer }
+                  failed: { type: integer }
+                  waiting: { type: integer }
+                  success_rate: { type: [number, "null"], description: "paid ÷ (paid + failed), 3 decimals; null with nothing answered" }
+                  by_reason:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string }
+                        count: { type: integer }
+                        reason: { type: string }
+                        member_answered: { type: boolean }
+                  not_sent_by_us: { type: integer }
+                  outage:
+                    type: object
+                    description: "Suspected when, over the last hour, at least 5 prompts were answered and 60% or more never reached a phone (unreachable, expired, busy, M-Pesa's own error, no answer), or 3 or more scheduled prompts could not be sent at all. A member's own decline never counts."
+                    properties:
+                      suspected: { type: boolean }
+                      evidence: { type: [string, "null"] }
+                      resolved: { type: integer }
+                      unreached: { type: integer }
+                      unsent: { type: integer }
+                  month_end: { type: string, format: date }
+                  forecast:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        currency: { type: string }
+                        gifts: { type: integer }
+                        prompts: { type: integer }
+                        scheduled_minor: { type: integer, format: int64 }
+                        expected_minor: { type: integer, format: int64 }
+        "400": { description: "VALIDATION_FAILED — days outside 1–90", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/schedules/{id}/pause:
     post:
       tags: [portal]
@@ -11165,6 +11219,20 @@ components:
         until_on: { type: [string, "null"], description: "Monthly: the last day an instalment can fall due — none after it is pledged, owed or missed (Cycle 5); its collector stops after it." }
         starts_on: { type: [string, "null"], format: date, description: "Monthly: the first day an instalment can fall due when later than the creation day — a pledge collected automatically starts with its first collection (Cycle 5). Null = the creation day." }
         reused: { type: boolean, description: "Create only: true when this is the same pledge made a moment ago (a double tap or retried request within ten minutes) — no second pledge was created." }
+        pace:
+          type: [object, "null"]
+          description: >-
+            Total pledges (Giving Cycle 9): the pace that reaches the target on
+            time — what is still owed spread over the monthly collections left
+            (one today, then the same day each month through due_on), rounded UP
+            to whole shillings in KES so the last is never short. A recurring
+            gift bound to the pledge at this amount lands exactly on the target
+            (its last prompt asks only the rest) and stops there. Null for a
+            monthly pledge, or one not active, fully paid or past its date.
+          properties:
+            per_month_minor: { type: integer, format: int64 }
+            collections_left: { type: integer, minimum: 1 }
+            by: { type: string, format: date }
         auto_schedule_error: { type: string, description: "Create only: the pledge was made but its automatic collection could not be set up — say this; the member pays with Pay now." }
         fund: { type: [object, "null"], properties: { code: { type: string }, name: { type: string } } }
         campaign: { type: [object, "null"], properties: { campaign_id: { type: string }, title: { type: string } } }
@@ -11271,7 +11339,7 @@ components:
       description: "What the year's pledge money comes to at the owner's costing (tiers.ts: KSh 20,000 carries one disciple through one level). Rounded DOWN, never up. Clients never print \"0 disciples\": below the first, show toward_next_minor of per_disciple_minor."
       required: [paid_minor, per_disciple_minor, disciples_carried, toward_next_minor]
       properties:
-        paid_minor: { type: integer, format: int64, description: "The statement's paid_minor — the year's pledge-tied payments" }
+        paid_minor: { type: integer, format: int64, description: "The year's pledge-tied payments IN SHILLINGS (Giving Cycle 9: the costing is in shillings; other currencies used to be added in)" }
         per_disciple_minor: { type: integer, format: int64, description: "The costing constant (2000000 = KSh 20,000)" }
         disciples_carried: { type: integer, description: "floor(paid_minor ÷ per_disciple_minor)" }
         toward_next_minor: { type: integer, format: int64, description: "paid_minor mod per_disciple_minor" }
@@ -11330,7 +11398,7 @@ components:
         server-side by the rule in docs/PARTNERS_PROGRAMME.md §3a. The numbers
         foot: Σ pledges[].pledged_minor = pledged_minor and Σ pledges[].paid_minor
         = paid_minor.
-      required: [years, year, total_minor, currency, totals, pledged_minor, paid_minor, remaining_minor, by_pledge, by_fund, pledges, payments, impact, months, faithfulness, season, pending]
+      required: [years, year, total_minor, currency, totals, pledged_minor, paid_minor, remaining_minor, summary_currency, summary_by_currency, by_pledge, by_fund, pledges, payments, impact, months, faithfulness, season, pending]
       properties:
         years: { type: array, items: { type: integer }, description: "Years with a succeeded gift, newest first" }
         year: { type: integer }
@@ -11345,7 +11413,19 @@ components:
             properties:
               currency: { type: string }
               total_minor: { type: integer, format: int64 }
-        pledged_minor: { type: integer, format: int64, description: "Σ over pledges not cancelled: monthly → amount_minor × due_day dates in the year from max(created_at, 1 Jan) through 31 Dec; total → target_minor if due_on falls in the year" }
+        summary_currency: { type: string, description: "Giving Cycle 9: the currency pledged_minor / paid_minor / remaining_minor are in — KES whenever any pledge money is in shillings, else the first currency. They used to add every currency's minor units together." }
+        summary_by_currency:
+          type: array
+          description: "Giving Cycle 9: pledged / paid / remaining for EACH currency — that currency's pledges against that currency's payments; shillings first."
+          items:
+            type: object
+            required: [currency, pledged_minor, paid_minor, remaining_minor]
+            properties:
+              currency: { type: string }
+              pledged_minor: { type: integer, format: int64 }
+              paid_minor: { type: integer, format: int64 }
+              remaining_minor: { type: integer, format: int64 }
+        pledged_minor: { type: integer, format: int64, description: "In summary_currency. Σ over pledges not cancelled: monthly → amount_minor × due_day dates in the year from max(pledge start, 1 Jan) through min(until_on, 31 Dec); total → target_minor if due_on falls in the year" }
         paid_minor: { type: integer, format: int64, description: "Σ payments[].amount_minor where pledge_id is set" }
         remaining_minor: { type: integer, format: int64, description: "Σ over pledges of max(pledged_i − paid_i, 0) — what is still owed on EACH pledge, added up (Cycle 5; it used to net the year's totals, so money beyond one pledge hid what another still owed). Foots with pledges[].remaining_year_minor." }
         by_pledge:
@@ -12040,9 +12120,10 @@ components:
             type: object
             required: [kind, count, link]
             properties:
-              kind: { type: string, enum: [pending_claims, expenses_awaiting_approval, failing_schedules, stale_processing, integrity_issues, partners_behind] }
+              kind: { type: string, enum: [pending_claims, expenses_awaiting_approval, failing_schedules, stale_processing, integrity_issues, partners_behind, collection_outage], description: "Clients must tolerate a kind they do not know yet (Giving Cycle 7/9). collection_outage (Cycle 9): M-Pesa looks unwell right now — see message." }
               count: { type: integer }
               link: { type: string, example: /finance/claims, description: The web route that opens the queue. }
+              message: { type: string, description: "The server's own words for this alert, when it has them (collection_outage: the evidence)." }
     FinanceChannelTotal:
       type: object
       required: [channel, account, currency, count, received_minor, reversed_minor, net_minor]

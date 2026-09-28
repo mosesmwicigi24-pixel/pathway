@@ -3211,6 +3211,138 @@ export class FinancialService {
   }
 
   /**
+   * Is M-Pesa unwell right now? (Giving Cycle 9.) Over the last hour: most
+   * resolved prompts never reached a phone (unreachable, expired, busy,
+   * M-Pesa's own error, no answer at all), or several scheduled prompts could
+   * not even be sent. A failed gift the member declined, cancelled or lacked
+   * money for is their answer, not an outage — it never counts here. The
+   * Overview raises it as an alert, so the office knows WHY many gifts failed
+   * before members start calling.
+   */
+  async outageCheck(now: Date = new Date()): Promise<{ suspected: boolean; evidence: string | null; resolved: number; unreached: number; unsent: number }> {
+    const hourAgo = new Date(now.getTime() - 3_600_000).toISOString();
+    const r = await one<{ resolved: number; unreached: number }>(
+      this.pool,
+      `SELECT count(*) FILTER (WHERE status IN ('succeeded','failed'))::int AS resolved,
+              count(*) FILTER (WHERE status = 'failed' AND failure_code IN ('unreachable','system','busy','expired','no_answer'))::int AS unreached
+         FROM transactions
+        WHERE provider IN ('mpesa','airtel') AND created_at > $1 AND created_at <= $2`,
+      [hourAgo, now.toISOString()],
+    );
+    const s = await one<{ unsent: number }>(
+      this.pool,
+      `SELECT count(*)::int AS unsent FROM giving_schedules
+        WHERE last_error IS NOT NULL AND last_failure_code IS NULL AND last_failed_at > $1 AND last_failed_at <= $2`,
+      [hourAgo, now.toISOString()],
+    );
+    const unreachedShare = r.resolved >= FinancialService.OUTAGE_MIN_RESOLVED && r.unreached / r.resolved >= FinancialService.OUTAGE_SHARE;
+    const unsentMany = s.unsent >= FinancialService.OUTAGE_MIN_UNSENT;
+    const evidence = unreachedShare
+      ? `${r.unreached} of the last ${r.resolved} M-Pesa prompts in the past hour never reached the phone.`
+      : unsentMany
+        ? `${s.unsent} scheduled prompts in the past hour could not be sent to M-Pesa at all.`
+        : null;
+    return { suspected: unreachedShare || unsentMany, evidence, resolved: r.resolved, unreached: r.unreached, unsent: s.unsent };
+  }
+  /** At least this many resolved prompts in the hour before a share means anything. */
+  static readonly OUTAGE_MIN_RESOLVED = 5;
+  /** …of which this share never reached a phone. */
+  static readonly OUTAGE_SHARE = 0.6;
+  /** Or this many scheduled prompts we could not send at all. */
+  static readonly OUTAGE_MIN_UNSENT = 3;
+
+  /**
+   * How collection is going (Giving Cycle 9) — the office's one view of it:
+   * the window's M-Pesa prompts, paid, failed by reason in the words the
+   * members were told (theirs to answer, or never reached them), the success
+   * rate; the gifts only the office can fix (our own send failures); the live
+   * outage check; and what the rest of this Nairobi month should bring in —
+   * every active gift's remaining prompts, each weighted by ITS OWN record
+   * (its last six answered prompts), never one assumed rate. Money per
+   * currency, never summed across them.
+   */
+  async collectionHealth(days = 30, now: Date = new Date()): Promise<Record<string, unknown>> {
+    const since = new Date(now.getTime() - days * 86_400_000).toISOString();
+    const t = await one<{ prompts: number; paid: number; failed: number; waiting: number }>(
+      this.pool,
+      `SELECT count(*)::int AS prompts,
+              count(*) FILTER (WHERE status = 'succeeded')::int AS paid,
+              count(*) FILTER (WHERE status = 'failed')::int AS failed,
+              count(*) FILTER (WHERE status = 'processing')::int AS waiting
+         FROM transactions WHERE provider IN ('mpesa','airtel') AND created_at > $1 AND created_at <= $2`,
+      [since, now.toISOString()],
+    );
+    const reasons = await many<{ code: string; n: number }>(
+      this.pool,
+      `SELECT COALESCE(failure_code, 'declined') AS code, count(*)::int AS n
+         FROM transactions WHERE provider IN ('mpesa','airtel') AND status = 'failed' AND created_at > $1 AND created_at <= $2
+        GROUP BY 1 ORDER BY 2 DESC, 1`,
+      [since, now.toISOString()],
+    );
+    const resolved = t.paid + t.failed;
+    const successRate = resolved > 0 ? t.paid / resolved : null;
+    const ours = await one<{ n: number }>(
+      this.pool,
+      `SELECT count(*)::int AS n FROM giving_schedules
+        WHERE status = 'active' AND last_error IS NOT NULL AND last_failure_code IS NULL AND last_failed_at > $1`,
+      [new Date(now.getTime() - 86_400_000).toISOString()],
+    );
+
+    // The rest of the month: every active gift's prompts still to come before
+    // the Nairobi month ends, weighted by that gift's own last six answers (a
+    // gift with none yet takes the window's rate; with no data at all, 1).
+    const eatNow = new Date(now.getTime() + FinancialService.EAT_MS);
+    const monthEnd = new Date(Date.UTC(eatNow.getUTCFullYear(), eatNow.getUTCMonth() + 1, 1) - FinancialService.EAT_MS);
+    const gifts = await many<{ amount_minor: string; currency: string; frequency: "weekly" | "monthly"; next_run_at: Date; ok: number; answered: number }>(
+      this.pool,
+      `SELECT s.amount_minor::text, s.currency, s.frequency::text AS frequency, s.next_run_at,
+              COALESCE(h.ok, 0)::int AS ok, COALESCE(h.answered, 0)::int AS answered
+         FROM giving_schedules s
+         LEFT JOIN LATERAL (
+           SELECT count(*) FILTER (WHERE x.status = 'succeeded') AS ok, count(*) AS answered
+             FROM (SELECT t.status FROM transactions t
+                    WHERE t.schedule_id = s.schedule_id AND t.status IN ('succeeded','failed')
+                    ORDER BY t.created_at DESC LIMIT 6) x
+         ) h ON TRUE
+        WHERE s.status = 'active' AND s.next_run_at < $1`,
+      [monthEnd.toISOString()],
+    );
+    const forecast = new Map<string, { currency: string; gifts: number; prompts: number; scheduled_minor: number; expected_minor: number }>();
+    for (const g of gifts) {
+      let prompts = 0;
+      for (let at = new Date(g.next_run_at).getTime(); at < monthEnd.getTime() && prompts < 6; at += g.frequency === "weekly" ? 7 * 86_400_000 : Number.MAX_SAFE_INTEGER) {
+        if (at >= now.getTime() - 86_400_000) prompts += 1;
+        if (g.frequency !== "weekly") break;
+      }
+      if (prompts === 0) continue;
+      const weight = g.answered > 0 ? g.ok / g.answered : (successRate ?? 1);
+      const cur = g.currency.trim();
+      const f = forecast.get(cur) ?? { currency: cur, gifts: 0, prompts: 0, scheduled_minor: 0, expected_minor: 0 };
+      f.gifts += 1;
+      f.prompts += prompts;
+      f.scheduled_minor += Number(g.amount_minor) * prompts;
+      f.expected_minor += Math.round(Number(g.amount_minor) * prompts * weight);
+      forecast.set(cur, f);
+    }
+    return {
+      window_days: days,
+      prompts: t.prompts,
+      paid: t.paid,
+      failed: t.failed,
+      waiting: t.waiting,
+      success_rate: successRate === null ? null : Math.round(successRate * 1000) / 1000,
+      by_reason: reasons.map((r) => {
+        const copy = giftFailureCopy(r.code)!;
+        return { code: r.code, count: r.n, reason: copy.reason, member_answered: !copy.retryable };
+      }),
+      not_sent_by_us: ours.n,
+      outage: await this.outageCheck(now),
+      month_end: nairobiDate(new Date(monthEnd.getTime() - 1)),
+      forecast: [...forecast.values()].sort((a, b) => (a.currency === "KES" ? -1 : b.currency === "KES" ? 1 : a.currency.localeCompare(b.currency))),
+    };
+  }
+
+  /**
    * The office changes a member's recurring gift AT THE MEMBER'S REQUEST
    * (Giving Cycle 7) — "please stop my weekly gift" by phone or at the
    * office. There was no way to do it: the office could only watch. Pause

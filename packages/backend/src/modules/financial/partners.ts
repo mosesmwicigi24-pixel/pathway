@@ -255,9 +255,15 @@ export interface PartnerStatement {
   /** Every succeeded gift in the year, pledge-tied or not. */
   total_minor: number;
   currency: string;
+  /** Pledged / paid / remaining in `summary_currency` — shillings whenever
+   *  any pledge money is in shillings (Giving Cycle 9: they used to add
+   *  every currency's minor units together). Every currency's own figures
+   *  are in `summary_by_currency`. */
   pledged_minor: number;
   paid_minor: number;
   remaining_minor: number;
+  summary_currency: string;
+  summary_by_currency: { currency: string; pledged_minor: number; paid_minor: number; remaining_minor: number }[];
   /** Every currency given in the year, shillings first (Giving Cycle 2):
    *  `total_minor`/`currency` above are the first of these — never a sum
    *  across currencies. */
@@ -497,11 +503,11 @@ export class PartnersService {
   }
 
   private async shape(p: PledgeRow, now = new Date()): Promise<Record<string, unknown>> {
-    return this.shapeRow(p, await this.progress(p, now));
+    return this.shapeRow(p, await this.progress(p, now), now);
   }
 
   /** The wire `Pledge` for a row whose progress is already known. */
-  private shapeRow(p: PledgeRow, progress: PledgeProgress): Record<string, unknown> {
+  private shapeRow(p: PledgeRow, progress: PledgeProgress, now: Date = new Date()): Record<string, unknown> {
     return {
       pledge_id: p.pledge_id,
       shape: p.shape,
@@ -526,7 +532,34 @@ export class PartnersService {
       title: PartnersService.title(p),
       custom_title: p.title,
       pays_to: PartnersService.paysTo(p),
+      pace: PartnersService.pace(p, progress, nairobiDate(now)),
     };
+  }
+
+  /**
+   * The pace that reaches a total pledge on time (Giving Cycle 9): what is
+   * still owed, spread over the monthly collections left — one today, then
+   * the same day each month through due_on — rounded UP to whole shillings in
+   * KES so the last one is never short. "KSh 5,000 a month (4 collections)
+   * reaches KSh 20,000 by 31 December." Null when there is nothing to pace:
+   * a monthly pledge, not active, fully paid, or past its date.
+   */
+  static pace(p: PledgeRow, progress: PledgeProgress, today: string): { per_month_minor: number; collections_left: number; by: string } | null {
+    if (p.shape !== "total" || p.status !== "active" || !p.due_on || p.due_on < today) return null;
+    const owed = Math.max(0, Number(p.target_minor ?? 0) - progress.paid_minor);
+    if (owed === 0) return null;
+    const [y, m, d] = today.split("-").map(Number) as [number, number, number];
+    let collections = 0;
+    for (let k = 0; k < 120; k += 1) {
+      const last = new Date(Date.UTC(y, m - 1 + k + 1, 0)).getUTCDate();
+      const when = new Date(Date.UTC(y, m - 1 + k, Math.min(d, last))).toISOString().slice(0, 10);
+      if (when > p.due_on) break;
+      collections += 1;
+    }
+    const n = Math.max(1, collections);
+    const whole = p.currency.trim() === "KES" ? 100 : 1;
+    const per = Math.ceil(owed / n / whole) * whole;
+    return { per_month_minor: per, collections_left: n, by: p.due_on };
   }
 
   /** Where this pledge's money is booked — `{code, name}` of the fund
@@ -806,7 +839,7 @@ export class PartnersService {
     const due: Record<string, unknown>[] = [];
     for (const r of await this.pledgeRows(this.pool, `WHERE p.user_id = $1 AND p.status <> 'cancelled'`, [userId])) {
       const { progress: pr, owed_minor, arrears } = await this.progressDetail(r, now);
-      const shaped = this.shapeRow(r, pr);
+      const shaped = this.shapeRow(r, pr, now);
       pledges.push(shaped);
       if (r.status !== "active" || !pr.next_due) continue;
       // Overdue or due today → the row asks for the whole catch-up (every
@@ -936,7 +969,9 @@ export class PartnersService {
       const input = inputs[i]!;
       const { kept, due_count } = keptInYear(input, history, y, today);
       const pledged = pledgedInYear(input, y);
-      const paid = payments.filter((x) => x.pledge_id === p.pledge_id).reduce((a, x) => a + x.amount_minor, 0);
+      // Only money in the pledge's own currency counts toward it (Giving
+      // Cycle 9) — an older gift in another currency is not its shillings.
+      const paid = payments.filter((x) => x.pledge_id === p.pledge_id && x.currency.trim() === p.currency.trim()).reduce((a, x) => a + x.amount_minor, 0);
       return {
         pledge_id: p.pledge_id,
         title: PartnersService.title(p),
@@ -957,7 +992,23 @@ export class PartnersService {
         pays_to: PartnersService.paysTo(p),
       };
     });
-    const summary = statementSummary(y, inputs, payments);
+    // Pledged / paid / remaining per currency (Giving Cycle 9): each
+    // currency's pledges against that currency's payments, never one sum
+    // across them. The headline figures are the shilling ones whenever there
+    // are any — the church counts in shillings — else the first currency.
+    const currencies = [...new Set([...pledgeRows.map((p) => p.currency.trim()), ...payments.filter((x) => x.pledge_id).map((x) => x.currency.trim())])]
+      .sort((a, b) => (a === b ? 0 : a === "KES" ? -1 : b === "KES" ? 1 : a.localeCompare(b)));
+    const byCurrencySummary = currencies.map((c) => ({
+      currency: c,
+      ...statementSummary(
+        y,
+        inputs.filter((_, i) => pledgeRows[i]!.currency.trim() === c),
+        payments.filter((x) => x.currency.trim() === c),
+      ),
+    }));
+    const summaryCurrency = byCurrencySummary[0]?.currency ?? "KES";
+    const summary = byCurrencySummary[0] ?? { pledged_minor: 0, paid_minor: 0, remaining_minor: 0 };
+    const kesPaid = byCurrencySummary.find((c) => c.currency === "KES")?.paid_minor ?? 0;
     const months = statementMonths(y, inputs, history, today);
     return {
       years: ys,
@@ -968,11 +1019,14 @@ export class PartnersService {
       pledged_minor: summary.pledged_minor,
       paid_minor: summary.paid_minor,
       remaining_minor: summary.remaining_minor,
+      summary_currency: summaryCurrency,
+      summary_by_currency: byCurrencySummary,
       by_pledge: [...byPledge.values()],
       by_fund: [...byFund.values()],
       pledges,
       payments,
-      impact: statementImpact(summary.paid_minor),
+      // The costing is in shillings (tiers.ts): only shillings carry disciples.
+      impact: statementImpact(kesPaid),
       months,
       faithfulness: statementFaithfulness(y, inputs, history, today),
       season: await this.season(userId),
@@ -1123,7 +1177,13 @@ export class PartnersService {
     const st = await this.statements(userId, y, now);
 
     const money = (minor: number, currency: string): string =>
-      `${currency === "KES" ? "KSh" : currency} ${(minor / 100).toLocaleString("en-US")}`;
+      `${currency === "KES" ? "KSh" : currency} ${(minor / 100).toLocaleString("en-US", { minimumFractionDigits: minor % 100 === 0 ? 0 : 2, maximumFractionDigits: 2 })}`;
+    // Every currency on its own, shillings first — never one sum across them
+    // (Giving Cycle 9: the PDF added USD cents to shillings).
+    const perCurrency = (pick: (c: PartnerStatement["summary_by_currency"][number]) => number): string => {
+      const parts = st.summary_by_currency.filter((c) => pick(c) !== 0).map((c) => money(pick(c), c.currency));
+      return parts.length ? parts.join(" + ") : money(0, st.summary_currency);
+    };
     const ordinal = (n: number): string => {
       const s = ["th", "st", "nd", "rd"] as const;
       const v = n % 100;
@@ -1167,7 +1227,9 @@ export class PartnersService {
         const first = churchParts(asc[0]!.at);
         return {
           label: `${monthName(first.m).toUpperCase()} ${first.y}`,
-          totalLabel: money(asc.reduce((s, r) => s + r.amount_minor, 0), asc[0]!.currency),
+          totalLabel: [...new Set(asc.map((r) => r.currency))]
+            .map((c) => money(asc.filter((r) => r.currency === c).reduce((s, r) => s + r.amount_minor, 0), c))
+            .join(" + "),
           rows: asc.map((r) => {
             const ref = (r.receipt_code ?? "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
             return `${dayLabel(r.at)}  ${r.pledge_title ?? "Pledge"}  ${r.method_label ?? methodLabel(r.method)}${ref ? `  Ref ${ref}` : ""}  ${money(r.amount_minor, r.currency)}`;
@@ -1179,8 +1241,8 @@ export class PartnersService {
     // first, progress toward it; the costing is tiers.ts's, rounded down.
     const im = st.impact;
     const impactLabel = im.disciples_carried >= 1
-      ? `Carries ${im.disciples_carried === 1 ? "one disciple" : `${im.disciples_carried} disciples`} through a level${im.toward_next_minor > 0 ? ` · ${money(im.toward_next_minor, st.currency)} toward the next` : ""}`
-      : `${money(im.toward_next_minor, st.currency)} of ${(im.per_disciple_minor / 100).toLocaleString("en-US")} toward carrying one disciple through a level`;
+      ? `Carries ${im.disciples_carried === 1 ? "one disciple" : `${im.disciples_carried} disciples`} through a level${im.toward_next_minor > 0 ? ` · ${money(im.toward_next_minor, "KES")} toward the next` : ""}`
+      : `${money(im.toward_next_minor, "KES")} of ${(im.per_disciple_minor / 100).toLocaleString("en-US")} toward carrying one disciple through a level`;
     // One definition of kept (§3d): paid in full, on time or late — say how
     // many were late. Foots with page 2's per-pledge "N of M kept".
     const fa = st.faithfulness;
@@ -1202,7 +1264,7 @@ export class PartnersService {
       thanksLabel: firstName ? `Thank you, ${firstName}.` : "Thank you.",
       impactLabel,
       keptLabel,
-      givenLabel: `Given ${money(st.paid_minor, st.currency)} toward pledges`,
+      givenLabel: `Given ${perCurrency((c) => c.paid_minor)} toward pledges`,
       stripLabel: monthStripLabel(st.months),
       commitments,
       year: y,
@@ -1210,12 +1272,12 @@ export class PartnersService {
       member: me?.full_name ?? "",
       sinceLabel: sinceAt ? `Partner since ${monthName(churchParts(sinceAt).m, true)} ${churchParts(sinceAt).y}` : null,
       tierName: tier?.name ?? null,
-      pledgedLabel: money(st.pledged_minor, st.currency),
-      paidLabel: money(st.paid_minor, st.currency),
-      remainingLabel: money(st.remaining_minor, st.currency),
+      pledgedLabel: perCurrency((c) => c.pledged_minor),
+      paidLabel: perCurrency((c) => c.paid_minor),
+      remainingLabel: perCurrency((c) => c.remaining_minor),
       pledges,
       groups,
-      totalLabel: money(st.paid_minor, st.currency),
+      totalLabel: perCurrency((c) => c.paid_minor),
       count: tied.length,
       generatedAt: `${gen.d} ${monthName(gen.m)} ${gen.y}`,
     });
