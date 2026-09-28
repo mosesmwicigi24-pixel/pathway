@@ -3854,9 +3854,12 @@ paths:
         when Y = 0, as both apps' hero does — the day groups list
         gifts outside a pledge only, then a PARTNER PLEDGES section lists the
         pledge-tied payments under their pledge's title with a subtotal. Long
-        histories continue onto further pages.
+        histories continue onto further pages. Giving Cycle 2: days and times
+        are Nairobi's; every amount is in its own currency and totals are per
+        currency ("KSh 3,500 + USD 20.00"), never summed across currencies.
       parameters:
         - { name: token, in: query, required: false, schema: { type: string } }
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2100 }, description: "One church year (Nairobi); absent = the complete record." }
       responses:
         "200":
           description: PDF document
@@ -11136,12 +11139,21 @@ components:
         server-side by the rule in docs/PARTNERS_PROGRAMME.md §3a. The numbers
         foot: Σ pledges[].pledged_minor = pledged_minor and Σ pledges[].paid_minor
         = paid_minor.
-      required: [years, year, total_minor, currency, pledged_minor, paid_minor, remaining_minor, by_pledge, by_fund, pledges, payments, impact, months, faithfulness, season, pending]
+      required: [years, year, total_minor, currency, totals, pledged_minor, paid_minor, remaining_minor, by_pledge, by_fund, pledges, payments, impact, months, faithfulness, season, pending]
       properties:
         years: { type: array, items: { type: integer }, description: "Years with a succeeded gift, newest first" }
         year: { type: integer }
-        total_minor: { type: integer, format: int64, description: "Every succeeded gift in the year, pledge-tied or not" }
+        total_minor: { type: integer, format: int64, description: "Every succeeded gift in the year in `currency` — the first entry of `totals` (shillings first). Never a sum across currencies (Giving Cycle 2)." }
         currency: { type: string }
+        totals:
+          type: array
+          description: "The year's succeeded giving per currency, KES first — a member with a USD PayPal gift and KSh gifts sees both, never one sum."
+          items:
+            type: object
+            required: [currency, total_minor]
+            properties:
+              currency: { type: string }
+              total_minor: { type: integer, format: int64 }
         pledged_minor: { type: integer, format: int64, description: "Σ over pledges not cancelled: monthly → amount_minor × due_day dates in the year from max(created_at, 1 Jan) through 31 Dec; total → target_minor if due_on falls in the year" }
         paid_minor: { type: integer, format: int64, description: "Σ payments[].amount_minor where pledge_id is set" }
         remaining_minor: { type: integer, format: int64, description: "max(pledged_minor − paid_minor, 0)" }
@@ -11149,19 +11161,21 @@ components:
           type: array
           items:
             type: object
-            required: [pledge_id, title, total_minor]
+            required: [pledge_id, title, currency, total_minor]
             properties:
               pledge_id: { type: [string, "null"], format: uuid, description: "null for the \"Gifts outside a pledge\" row" }
               title: { type: string }
+              currency: { type: string, description: "One row per pledge per currency." }
               total_minor: { type: integer, format: int64 }
         by_fund:
           type: array
           items:
             type: object
-            required: [code, name, total_minor]
+            required: [code, name, currency, total_minor]
             properties:
               code: { type: string }
               name: { type: string }
+              currency: { type: string, description: "One row per fund per currency." }
               total_minor: { type: integer, format: int64 }
         pledges:
           type: array
@@ -11652,6 +11666,7 @@ components:
         idempotency_key: { type: string, minLength: 8, maxLength: 255, description: Client-supplied; replays return the same transaction }
         pledge_id: { type: [string, "null"], format: uuid, description: "Count this gift toward one of the member's open pledges (own pledge only, else 422). Omitted on a scheduled charge = the pledge bound to that schedule." }
         need_id: { type: [string, "null"], format: uuid, description: "Give to an approved department need (else 422). Server-authoritative fund: when the need's department names an active fund, the gift lands there regardless of `fund`, so a need never splits across funds by client." }
+        cover_fee_minor: { type: [integer, "null"], format: int64, minimum: 0, description: "\"Cover the fee\" (Giving Cycle 2): how much of amount_minor the member added to cover the M-Pesa fee. amount_minor is still what is charged and booked; this lets the receipt say gift / fee cover / total. At most half the gift; whole shillings for M-Pesa (else 422 AMOUNT_OUT_OF_RANGE)." }
     GivingIntentResult:
       type: object
       required: [transaction_id, status, idempotency_key, reused]
@@ -12500,6 +12515,7 @@ components:
         pledge_title: { type: [string, "null"], description: "That pledge's title under the words its card shows (the member's own name for it, else the derived one) — so the Give statement can label pledge payments; null off-pledge" }
         need_id: { type: [string, "null"], format: uuid, description: "The department need this gift was given to (\"Give to this need\"); null otherwise. With pledge_id, what the apps' \"Repeat last gift\" checks to skip pledge and need gifts." }
         failure: { oneOf: [{ $ref: "#/components/schemas/GiftFailure" }, { type: "null" }], description: "Why a failed gift failed, in words the member can act on; null unless status is failed." }
+        fee_cover_minor: { type: [integer, "null"], format: int64, description: "How much of amount_minor was the fee the member covered; null when none." }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
 
@@ -12572,6 +12588,7 @@ components:
         account_name: { type: [string, "null"], description: "Named giving: the member's own label for this gift, as entered; null when not used" }
         schedule_id: { type: [string, "null"], format: uuid }
         failure: { oneOf: [{ $ref: "#/components/schemas/GiftFailure" }, { type: "null" }], description: "Why it failed (status failed), else null." }
+        fee_cover_minor: { type: [integer, "null"], format: int64, description: "How much of amount_minor was the fee the member covered; null when none." }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
         ledger:

@@ -197,7 +197,9 @@ describe("the Partners statement on the wire", () => {
     expect(st.paid_minor).toBe(400_000);         // the two instalments — never the tithe
     expect(st.remaining_minor).toBe(1_400_000);
     // by_pledge / by_fund as before.
-    expect(st.by_pledge.find((x) => x.pledge_id === null)).toEqual({ pledge_id: null, title: "Gifts outside a pledge", total_minor: 30_000 });
+    // Each group now names its currency (Giving Cycle 2: never a sum across currencies).
+    expect(st.by_pledge.find((x) => x.pledge_id === null)).toEqual({ pledge_id: null, title: "Gifts outside a pledge", currency: "KES", total_minor: 30_000 });
+    expect(st.totals).toEqual([{ currency: "KES", total_minor: 430_000 }]);
     expect(st.by_pledge.find((x) => x.pledge_id === monthlyPledge.pledge_id)?.total_minor).toBe(400_000);
     expect(st.by_fund.map((f) => [f.code, f.total_minor]).sort()).toEqual([["mission", 400_000], ["tithe", 30_000]]);
     // pledges[]: both, newest first; every field; the numbers foot.
@@ -292,7 +294,7 @@ describe("the Partners statement on the wire", () => {
     expect(history.find((r) => r.transaction_id === tithe)).toMatchObject({ pledge_id: null, pledge_title: null, need_id: null });
     // Nothing removed: every field that was there before is still there.
     expect(Object.keys(history[0]!).sort()).toEqual([
-      "account_name", "amount_minor", "created_at", "currency", "failure", "fund", "method", "method_label", "need_id", "pledge_id", "pledge_title",
+      "account_name", "amount_minor", "created_at", "currency", "failure", "fee_cover_minor", "fund", "method", "method_label", "need_id", "pledge_id", "pledge_title",
       "provider_ref", "receipt_code", "settled_at", "status", "transaction_id",
     ]);
   });

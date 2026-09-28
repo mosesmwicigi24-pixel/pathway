@@ -51,6 +51,18 @@ export function kenyanMobileNumber(raw: string | null | undefined): string | nul
   return /^254[17]\d{8}$/.test(msisdn) ? `+${msisdn}` : null;
 }
 
+/** Settled money per currency, shillings first — "KSh 3,500" or
+ *  "KSh 3,500 + USD 20.00" — never one sum across currencies. Empty = KSh 0. */
+function perCurrencyLabel(rows: Array<{ amount_minor: number; currency: string }>): string {
+  const by = new Map<string, number>();
+  for (const r of rows) by.set(r.currency, (by.get(r.currency) ?? 0) + r.amount_minor);
+  if (by.size === 0) return moneyWords(0, "KES");
+  return [...by.entries()]
+    .sort((a, b) => (a[0] === "KES" ? -1 : b[0] === "KES" ? 1 : a[0].localeCompare(b[0])))
+    .map(([cur, minor]) => moneyWords(minor, cur))
+    .join(" + ");
+}
+
 /** "KSh 1,000" / "USD 12.50" — for messages a member reads. */
 const moneyWords = (minor: number, currency: string): string =>
   currency === "KES"
@@ -241,6 +253,10 @@ export class FinancialService {
       .optional()
       .transform((v) => (v && v.length > 0 ? v : undefined)),
     idempotency_key: z.string().min(8).max(255).optional(),
+    /** "Cover the fee" (Giving Cycle 2): how much of amount_minor the member
+     *  added to cover the M-Pesa fee. amount_minor is still what is charged
+     *  and booked; this only lets the receipt say how much was the fee cover. */
+    cover_fee_minor: z.number().int().min(0).nullish(),
   });
 
   private provider(key: MobileMoneyKey) {
@@ -316,6 +332,15 @@ export class FinancialService {
       userId, method, input.amount_minor, currency,
       input.phone_number ?? scheduled?.phone ?? null, Boolean(scheduleId),
     );
+    const feeCover = input.cover_fee_minor && input.cover_fee_minor > 0 ? input.cover_fee_minor : null;
+    if (feeCover !== null) {
+      if (feeCover * 2 > input.amount_minor) {
+        throw new ApiError("AMOUNT_OUT_OF_RANGE", "The fee cover can't be more than half of the gift.", { cover_fee_minor: feeCover });
+      }
+      if (FinancialService.RAILS[method].whole_units && feeCover % 100 !== 0) {
+        throw new ApiError("AMOUNT_OUT_OF_RANGE", "The fee cover must be whole shillings.", { cover_fee_minor: feeCover });
+      }
+    }
 
     // One prompt at a time (Giving Cycle 1). A phone shows ONE M-Pesa prompt;
     // a second push while the first is still on screen fails as "busy" (1001)
@@ -357,10 +382,10 @@ export class FinancialService {
       });
       const txn = await one<{ transaction_id: string; status: string }>(
         this.pool,
-        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id, schedule_cycle_at)
-         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10, $11, $12)
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id, schedule_cycle_at, fee_cover_minor)
+         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING transaction_id, status`,
-        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId, scheduled?.cycleAt ?? null],
+        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId, scheduled?.cycleAt ?? null, feeCover],
       );
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor,
@@ -385,10 +410,10 @@ export class FinancialService {
       const order = await this.paypalGw().createOrder({ amountMinor: input.amount_minor, reference: `${userId}:${fund.code}` });
       const txn = await one<{ transaction_id: string; status: string }>(
         this.pool,
-        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id)
-         VALUES ($1, $2, $3, 'USD', 'processing', 'paypal', $4, $5, $6, $7, $8, $9)
+        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id, fee_cover_minor)
+         VALUES ($1, $2, $3, 'USD', 'processing', 'paypal', $4, $5, $6, $7, $8, $9, $10)
          RETURNING transaction_id, status`,
-        [userId, fund.fund_id, input.amount_minor, order.orderId, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId],
+        [userId, fund.fund_id, input.amount_minor, order.orderId, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId, feeCover],
       );
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor, currency: "USD", fund: fund.code, method: "paypal", account_name: input.account_name ?? null,
@@ -413,10 +438,10 @@ export class FinancialService {
 
     const txn = await one<{ transaction_id: string; status: string }>(
       this.pool,
-      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, stripe_payment_intent, idempotency_key, schedule_id, account_name, pledge_id, need_id)
-       VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10)
+      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, stripe_payment_intent, idempotency_key, schedule_id, account_name, pledge_id, need_id, fee_cover_minor)
+       VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10, $11)
        RETURNING transaction_id, status`,
-      [userId, fund.fund_id, input.amount_minor, currency, intent.id, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId],
+      [userId, fund.fund_id, input.amount_minor, currency, intent.id, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId, feeCover],
     );
     await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
       amount_minor: input.amount_minor,
@@ -876,7 +901,7 @@ export class FinancialService {
    * Now: a success clears the failure state. A failure counts one strike, and
    *   · if it was not the member's answer (the phone was unreachable, the
    *     prompt expired, another payment was in progress, M-Pesa faltered) the
-   *     cycle is tried ONCE more, two hours later and inside 08:00–20:00 EAT —
+   *     cycle is tried ONCE more, two hours later and inside 07:00–21:00 EAT —
    *     never once the next cycle is due;
    *   · if it was the member's answer (cancelled, wrong PIN, not enough in the
    *     account) nothing is re-sent — a machine does not keep asking someone
@@ -955,14 +980,17 @@ export class FinancialService {
     };
   }
 
-  /** `at`, moved into 08:00–20:00 Africa/Nairobi: before 08:00 → 08:00 that
-   *  day; from 20:00 → 08:00 the next day. EAT has no DST (UTC+3). */
+  /** `at`, moved forward into prompt hours (07:00–21:00 Nairobi): before
+   *  07:00 → 07:00 that day; from 21:00 → 07:00 the next day. */
   static daytimeEat(at: Date): Date {
-    const eat = new Date(at.getTime() + 3 * 3_600_000);
+    const eat = new Date(at.getTime() + FinancialService.EAT_MS);
     const hour = eat.getUTCHours();
-    if (hour >= 8 && hour < 20) return at;
-    const day = Date.UTC(eat.getUTCFullYear(), eat.getUTCMonth(), eat.getUTCDate() + (hour >= 20 ? 1 : 0), 8);
-    return new Date(day - 3 * 3_600_000);
+    if (hour >= FinancialService.PROMPT_FROM_HOUR && hour < FinancialService.PROMPT_UNTIL_HOUR) return at;
+    const day = Date.UTC(
+      eat.getUTCFullYear(), eat.getUTCMonth(), eat.getUTCDate() + (hour >= FinancialService.PROMPT_UNTIL_HOUR ? 1 : 0),
+      FinancialService.PROMPT_FROM_HOUR,
+    );
+    return new Date(day - FinancialService.EAT_MS);
   }
 
   /**
@@ -1183,7 +1211,7 @@ export class FinancialService {
               t.receipt_code, t.account_name,
               t.created_at, t.settled_at,
               t.pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "c" })} AS pledge_title,
-              t.need_id, t.office_channel, t.failure_code
+              t.need_id, t.office_channel, t.failure_code, t.fee_cover_minor
          FROM transactions t
          LEFT JOIN funds f ON f.fund_id = t.fund_id
          LEFT JOIN pledges p ON p.pledge_id = t.pledge_id
@@ -1205,6 +1233,7 @@ export class FinancialService {
         amount_minor: Number(r.amount_minor),
         method,
         method_label: giftMethodLabel(method, (r.office_channel as string | null) ?? null),
+        fee_cover_minor: r.fee_cover_minor === null || r.fee_cover_minor === undefined ? null : Number(r.fee_cover_minor),
         // Why it failed, in words the member can act on (Giving Cycle 1).
         failure: r.status === "failed" ? giftFailureCopy((r.failure_code as string | null) ?? "declined") : null,
       };
@@ -1224,7 +1253,7 @@ export class FinancialService {
               t.provider, COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref,
               t.receipt_code, t.account_name,
               t.schedule_id, t.created_at, t.settled_at,
-              t.pledge_id, t.need_id, n.title AS need_title, t.office_channel, t.failure_code,
+              t.pledge_id, t.need_id, n.title AS need_title, t.office_channel, t.failure_code, t.fee_cover_minor,
               u.full_name AS member_name, c.name AS congregation
          FROM transactions t
          LEFT JOIN funds f ON f.fund_id = t.fund_id
@@ -1254,6 +1283,7 @@ export class FinancialService {
     return {
       ...rest,
       amount_minor: Number(t.amount_minor),
+      fee_cover_minor: t.fee_cover_minor === null || t.fee_cover_minor === undefined ? null : Number(t.fee_cover_minor),
       failure: t.status === "failed" ? giftFailureCopy((t.failure_code as string | null) ?? "declined") : null,
       method,
       method_label: giftMethodLabel(method, (t.office_channel as string | null) ?? null),
@@ -1273,7 +1303,7 @@ export class FinancialService {
    *  their pledge's title with a subtotal — so the total still foots with the
    *  member's bank and the church ledger. */
   async statementPdf(userId: string, year?: number): Promise<Buffer> {
-    const all = (await this.listGiving(userId)) as Array<{ amount_minor: number; status: string; fund: string; method: string; method_label?: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string; pledge_id: string | null; pledge_title: string | null }>;
+    const all = (await this.listGiving(userId)) as Array<{ amount_minor: number; currency: string; status: string; fund: string; method: string; method_label?: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string; pledge_id: string | null; pledge_title: string | null }>;
     // One church year (EAT, by created_at — the statements' own year rule)
     // when the office asks for one; otherwise the complete record.
     const rows = year === undefined
@@ -1286,12 +1316,18 @@ export class FinancialService {
       [userId],
     );
     const settled = (s: string): boolean => s === "succeeded" || s === "settled" || s === "completed";
-    const settledSum = (rs: typeof rows): number => rs.reduce((a, r) => a + (settled(r.status) ? r.amount_minor : 0), 0);
-    const ksh = (m: number): string => `KSh ${(m / 100).toLocaleString("en-US")}`;
+    // Every amount in its OWN currency, and totals per currency — KSh and US
+    // dollars are never added (Giving Cycle 2: a USD PayPal gift used to be
+    // printed and summed as shillings).
+    const settledLabel = (rs: typeof rows): string => perCurrencyLabel(rs.filter((r) => settled(r.status)));
+    const hasSettled = (rs: typeof rows): boolean => rs.some((r) => settled(r.status));
     const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v)); // pg returns timestamps as Date
-    const dayKey = (v: unknown): string => iso(v).slice(0, 10); // YYYY-MM-DD
-    const dayLabel = (v: unknown): string => new Date(iso(v)).toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
-    const timeLabel = (v: unknown): string => new Date(iso(v)).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    // Days and times on the NAIROBI calendar (Giving Cycle 2): a gift at 00:30
+    // on 1 January belongs to 1 January here, as it does in the year filter
+    // and the in-app statement — it used to print under 31 December (UTC).
+    const dayKey = (v: unknown): string => nairobiDate(new Date(iso(v)));
+    const dayLabel = (v: unknown): string => new Date(iso(v)).toLocaleDateString("en-US", { timeZone: "Africa/Nairobi", weekday: "short", day: "numeric", month: "short", year: "numeric" });
+    const timeLabel = (v: unknown): string => new Date(iso(v)).toLocaleTimeString("en-US", { timeZone: "Africa/Nairobi", hour: "numeric", minute: "2-digit" });
     // Prefer the real M-Pesa receipt code when present; fall back to the
     // trimmed provider_ref for older/non-mobile-money gifts.
     const refOf = (r: (typeof rows)[number]): string => r.receipt_code
@@ -1313,31 +1349,29 @@ export class FinancialService {
       .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([, recs]) => ({
         label: dayLabel(recs[0]!.created_at),
-        totalLabel: ksh(settledSum(recs)),
+        totalLabel: settledLabel(recs),
         rows: recs.map((r) => {
           const ref = refOf(r);
-          return `${fundLabel(r)}  ${ksh(r.amount_minor)}  ${timeLabel(r.created_at)}  ${r.method_label ?? methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}${r.account_name ? `  "${r.account_name}"` : ""}`;
+          return `${fundLabel(r)}  ${moneyWords(r.amount_minor, r.currency)}  ${timeLabel(r.created_at)}  ${r.method_label ?? methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}${r.account_name ? `  "${r.account_name}"` : ""}`;
         }),
       }));
     // Pledge-tied payments, newest first (listGiving's order), each dated and
     // tagged "<title> pledge" as the in-app history tags them.
     const pledges = pledgeRows.length === 0 ? null : {
-      totalLabel: ksh(settledSum(pledgeRows)),
+      totalLabel: settledLabel(pledgeRows),
       rows: pledgeRows.map((r) => {
         const ref = refOf(r);
-        return `${dayLabel(r.created_at)}  ${r.pledge_title ?? "General partnership"} pledge  ${fundLabel(r)}  ${ksh(r.amount_minor)}  ${r.method_label ?? methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}`;
+        return `${dayLabel(r.created_at)}  ${r.pledge_title ?? "General partnership"} pledge  ${fundLabel(r)}  ${moneyWords(r.amount_minor, r.currency)}  ${r.method_label ?? methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}`;
       }),
     };
-    const giftsTotal = settledSum(gifts);
-    const pledgesTotal = settledSum(pledgeRows);
     return renderStatementPdf({
       congregation: me?.congregation ?? "Nuru Pathway",
       member: me?.full_name ?? "",
       ...(year === undefined ? {} : { periodLabel: `Year ${year}` }),
-      giftsLabel: ksh(giftsTotal),
+      giftsLabel: settledLabel(gifts),
       // No pledge money (Y = 0): the header is just "Total given KSh X".
-      pledgesLabel: pledgesTotal > 0 ? ksh(pledgesTotal) : null,
-      totalLabel: ksh(giftsTotal + pledgesTotal),
+      pledgesLabel: hasSettled(pledgeRows) ? settledLabel(pledgeRows) : null,
+      totalLabel: settledLabel(rows),
       giftCount: gifts.length,
       pledgeCount: pledgeRows.length,
       generatedAt: new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" }),
@@ -1349,11 +1383,12 @@ export class FinancialService {
   /** Render ONE of the caller's gifts as a downloadable receipt PDF (the in-app
    *  "Giving receipt"). Owner-scoped (404 otherwise). Money stays server-side. */
   async receiptPdf(userId: string, transactionId: string): Promise<Buffer> {
-    const t = await maybeOne<{ amount_minor: number; currency: string; status: string; fund: string | null; fund_name: string | null; provider: string | null; provider_ref: string | null; receipt_code: string | null; account_name: string | null; pledge_id: string | null; need_title: string | null; office_channel: string | null; created_at: unknown; settled_at: unknown }>(
+    const t = await maybeOne<{ amount_minor: number; currency: string; status: string; fund: string | null; fund_name: string | null; provider: string | null; provider_ref: string | null; receipt_code: string | null; account_name: string | null; pledge_id: string | null; need_title: string | null; office_channel: string | null; created_at: unknown; settled_at: unknown; fee_cover_minor: string | null; failure_code: string | null }>(
       this.pool,
       `SELECT t.amount_minor, t.currency, t.status, f.code AS fund, f.name AS fund_name, t.provider,
               COALESCE(t.provider_ref, t.stripe_payment_intent) AS provider_ref, t.receipt_code, t.account_name,
-              t.pledge_id, n.title AS need_title, t.office_channel, t.created_at, t.settled_at
+              t.pledge_id, n.title AS need_title, t.office_channel, t.created_at, t.settled_at,
+              t.fee_cover_minor, t.failure_code
          FROM transactions t
          LEFT JOIN funds f ON f.fund_id = t.fund_id
          LEFT JOIN department_needs n ON n.need_id = t.need_id
@@ -1368,9 +1403,9 @@ export class FinancialService {
       `SELECT u.full_name, c.name AS congregation FROM users u LEFT JOIN congregations c ON c.congregation_id = u.congregation_id WHERE u.user_id = $1`,
       [userId],
     );
-    const ksh = (m: number): string => `KSh ${(m / 100).toLocaleString("en-US")}`;
+    const money = (m: number): string => moneyWords(m, t.currency);
     const iso = (v: unknown): string => (v instanceof Date ? v.toISOString() : String(v));
-    const stamp = (v: unknown): string => new Date(iso(v)).toLocaleString("en-US", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+    const stamp = (v: unknown): string => new Date(iso(v)).toLocaleString("en-US", { timeZone: "Africa/Nairobi", day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
     const settled = (s: string): boolean => s === "succeeded" || s === "settled" || s === "completed";
     const provider = (t.provider as string | null) ?? "stripe";
     const method = provider === "stripe" ? "card" : provider;
@@ -1379,19 +1414,35 @@ export class FinancialService {
     const fund = t.fund_name ?? (t.fund ? t.fund[0]!.toUpperCase() + t.fund.slice(1) : "Gift");
     // Prefer the real M-Pesa receipt code; fall back to provider_ref otherwise.
     const ref = (t.receipt_code ?? t.provider_ref ?? "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+    // A receipt tells the truth about its gift (Giving Cycle 2): only money
+    // that arrived is "received with thanks"; a gift still waiting on M-Pesa
+    // or one that failed says so, with why — it used to read "Received with
+    // thanks … Official receipt" whatever had happened.
+    const done = settled(t.status);
+    const failure = t.status === "failed" ? giftFailureCopy(t.failure_code ?? "declined") : null;
+    const feeCover = t.fee_cover_minor ? Number(t.fee_cover_minor) : 0;
+    const total = Number(t.amount_minor);
     return renderReceiptPdf({
       congregation: me?.congregation ?? "Nuru Place Church",
       member: me?.full_name ?? "",
       ref,
-      amountLabel: ksh(Number(t.amount_minor)),
+      headline: done
+        ? "Received with thanks"
+        : t.status === "failed" ? "This gift did not go through"
+          : t.status === "refunded" ? "This gift was refunded"
+            : "Waiting for the payment to clear",
+      notice: failure ? `${failure.reason} ${failure.hint}` : null,
+      official: done,
+      amountLabel: money(total),
       fund,
       giftName: t.account_name,
       pledgeTitle,
       needTitle: t.need_title,
       methodLabel: giftMethodLabel(method, t.office_channel),
       statusLabel: settled(t.status) ? "Completed" : t.status[0]!.toUpperCase() + t.status.slice(1),
-      feeLabel: ksh(0),
-      totalLabel: ksh(Number(t.amount_minor)),
+      giftLabel: feeCover > 0 ? money(total - feeCover) : null,
+      feeLabel: feeCover > 0 ? `${money(feeCover)} covered by you` : "none",
+      totalLabel: money(total),
       initiatedAt: stamp(t.created_at),
       settledAt: t.settled_at ? stamp(t.settled_at) : null,
       generatedAt: new Date().toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" }),
@@ -1487,11 +1538,53 @@ export class FinancialService {
     return open.need_id;
   }
 
-  private static nextRun(from: Date, frequency: "weekly" | "monthly"): Date {
-    const next = new Date(from);
-    if (frequency === "weekly") next.setUTCDate(next.getUTCDate() + 7);
-    else next.setUTCMonth(next.getUTCMonth() + 1);
-    return next;
+  /** Africa/Nairobi is UTC+3 all year (no DST). */
+  static readonly EAT_MS = 3 * 3_600_000;
+  /** Prompts go out 07:00–21:00 Nairobi — the platform's quiet hours are
+   *  21:00–07:00 for every nudge, and a PIN prompt is the loudest nudge. */
+  static readonly PROMPT_FROM_HOUR = 7;
+  static readonly PROMPT_UNTIL_HOUR = 21;
+
+  /**
+   * The next occurrence of a cadence after `from` (Giving Cycle 2). Weekly is
+   * +7 days (no DST, so the wall-clock time holds). Monthly is computed on the
+   * NAIROBI calendar, keeping the gift's own day of the month (`anchorDay`,
+   * default `from`'s day) clamped to short months — 31 Jan → 28/29 Feb →
+   * 31 Mar — at the same Nairobi time of day. It used to be setUTCMonth on a
+   * UTC instant: a gift on the 31st jumped to the 3rd of the month after next,
+   * and one set up at 01:00 EAT on the 1st (22:00 UTC the day before) crept
+   * back a day every month.
+   */
+  static nextRun(from: Date, frequency: "weekly" | "monthly", anchorDay?: number | null): Date {
+    if (frequency === "weekly") return new Date(from.getTime() + 7 * 86_400_000);
+    const eat = new Date(from.getTime() + FinancialService.EAT_MS);
+    const y = eat.getUTCFullYear();
+    const m = eat.getUTCMonth();
+    const anchor = anchorDay && anchorDay >= 1 && anchorDay <= 31 ? anchorDay : eat.getUTCDate();
+    const lastDayNext = new Date(Date.UTC(y, m + 2, 0)).getUTCDate();
+    const wall = Date.UTC(
+      y, m + 1, Math.min(anchor, lastDayNext),
+      eat.getUTCHours(), eat.getUTCMinutes(), eat.getUTCSeconds(), eat.getUTCMilliseconds(),
+    );
+    return new Date(wall - FinancialService.EAT_MS);
+  }
+
+  /** `at` kept on its own Nairobi day but inside prompt hours: before 07:00 →
+   *  07:00, from 21:00 → 20:00. A weekly gift keeps its weekday. */
+  static sameDayPromptHours(at: Date): Date {
+    const eat = new Date(at.getTime() + FinancialService.EAT_MS);
+    const h = eat.getUTCHours();
+    if (h >= FinancialService.PROMPT_FROM_HOUR && h < FinancialService.PROMPT_UNTIL_HOUR) return at;
+    const wall = Date.UTC(
+      eat.getUTCFullYear(), eat.getUTCMonth(), eat.getUTCDate(),
+      h < FinancialService.PROMPT_FROM_HOUR ? FinancialService.PROMPT_FROM_HOUR : FinancialService.PROMPT_UNTIL_HOUR - 1, 0, 0, 0,
+    );
+    return new Date(wall - FinancialService.EAT_MS);
+  }
+
+  /** Today's day of the month in Nairobi — a monthly gift's anchor. */
+  static eatDay(at: Date): number {
+    return new Date(at.getTime() + FinancialService.EAT_MS).getUTCDate();
   }
 
   async createSchedule(
@@ -1563,14 +1656,18 @@ export class FinancialService {
           { schedule_id: twin.schedule_id, status: twin.status },
         );
       }
-      // First charge on the next cycle boundary; give now if you want to give now.
-      const firstRun = FinancialService.nextRun(new Date(), input.frequency);
+      // First charge on the next cycle boundary; give now if you want to give
+      // now. Monthly gifts keep today's Nairobi day as their anchor; the
+      // prompt time is today's, kept inside prompt hours (Giving Cycle 2).
+      const now = new Date();
+      const anchor = input.frequency === "monthly" ? FinancialService.eatDay(now) : null;
+      const firstRun = FinancialService.nextRun(FinancialService.sameDayPromptHours(now), input.frequency, anchor);
       const row = await one<{ schedule_id: string; next_run_at: string }>(
         c,
-        `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key, pledge_id, phone_number)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key, pledge_id, phone_number, anchor_day)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING schedule_id, next_run_at`,
-        [userId, fund.fund_id, input.amount_minor, currency, input.frequency, input.method, firstRun.toISOString(), key, boundPledge, schedulePhone],
+        [userId, fund.fund_id, input.amount_minor, currency, input.frequency, input.method, firstRun.toISOString(), key, boundPledge, schedulePhone, anchor],
       );
       if (boundPledge) {
         await c.query(`UPDATE pledges SET schedule_id = $1, updated_at = now() WHERE pledge_id = $2 AND schedule_id IS NULL`, [row.schedule_id, boundPledge]);
@@ -1775,15 +1872,17 @@ export class FinancialService {
       [scheduleId, userId],
     );
     if (!current) throw new ApiError("NOT_FOUND", "Paused schedule not found");
-    const nextRun = FinancialService.nextRun(new Date(), current.frequency);
+    const now = new Date();
+    const anchor = current.frequency === "monthly" ? FinancialService.eatDay(now) : null;
+    const nextRun = FinancialService.nextRun(FinancialService.sameDayPromptHours(now), current.frequency, anchor);
     await this.pool.query(
       `UPDATE giving_schedules
           SET status = 'active', paused_at = NULL, consecutive_failures = 0,
               retry_after = NULL, last_error = NULL, last_failed_at = NULL,
               last_failure_code = NULL, retry_cycle_at = NULL, retry_at = NULL, cycle_attempts = 0,
-              next_run_at = $3
+              next_run_at = $3, anchor_day = $4
         WHERE schedule_id = $1 AND user_id = $2`,
-      [scheduleId, userId, nextRun.toISOString()],
+      [scheduleId, userId, nextRun.toISOString(), anchor],
     );
     await audit(this.pool, userId, "giving.schedule_resumed", "giving_schedules", scheduleId, {});
     return { schedule_id: scheduleId, status: "active", next_run_at: nextRun.toISOString() };
@@ -1800,10 +1899,10 @@ export class FinancialService {
    * beyond any real backlog, and reaching it means the data is wrong rather
    * than merely stale.
    */
-  static rollForward(from: Date, frequency: "weekly" | "monthly", now: Date): Date {
-    let next = FinancialService.nextRun(from, frequency);
+  static rollForward(from: Date, frequency: "weekly" | "monthly", now: Date, anchorDay?: number | null): Date {
+    let next = FinancialService.nextRun(from, frequency, anchorDay);
     for (let i = 0; i < 520 && next.getTime() <= now.getTime(); i += 1) {
-      next = FinancialService.nextRun(next, frequency);
+      next = FinancialService.nextRun(next, frequency, anchorDay);
     }
     return next;
   }
@@ -1844,11 +1943,12 @@ export class FinancialService {
       retry_at: Date | null;
       cycle_attempts: number;
       phone: string | null;
+      anchor_day: number | null;
     }>(
       this.pool,
       `SELECT s.schedule_id, s.user_id, f.code AS fund, s.amount_minor, s.currency,
               s.frequency, s.method, s.next_run_at, s.retry_after, s.consecutive_failures,
-              s.retry_cycle_at, s.retry_at, s.cycle_attempts,
+              s.retry_cycle_at, s.retry_at, s.cycle_attempts, s.anchor_day,
               COALESCE(s.phone_number, u.phone_number) AS phone
          FROM giving_schedules s
          JOIN funds f ON f.fund_id = s.fund_id
@@ -1892,9 +1992,9 @@ export class FinancialService {
         // June had never collected once ("mpesa payments are not configured"),
         // and configuring the provider would have triggered exactly this.
         const dueAt = new Date(s.next_run_at);
-        const nextAfterDue = FinancialService.nextRun(dueAt, s.frequency);
+        const nextAfterDue = FinancialService.nextRun(dueAt, s.frequency, s.anchor_day);
         if (nextAfterDue.getTime() <= now.getTime()) {
-          const rolled = FinancialService.rollForward(dueAt, s.frequency, now);
+          const rolled = FinancialService.sameDayPromptHours(FinancialService.rollForward(dueAt, s.frequency, now, s.anchor_day));
           console.warn(
             `[giving] schedule ${s.schedule_id} was ${Math.round(
               (now.getTime() - dueAt.getTime()) / 86_400_000,
@@ -1995,7 +2095,8 @@ export class FinancialService {
                 SET last_run_at = $2, next_run_at = $3, retry_after = NULL,
                     retry_cycle_at = NULL, retry_at = NULL, cycle_attempts = 0
               WHERE schedule_id = $1`,
-            [s.schedule_id, now.toISOString(), FinancialService.nextRun(new Date(s.next_run_at), s.frequency).toISOString()],
+            [s.schedule_id, now.toISOString(),
+             FinancialService.sameDayPromptHours(FinancialService.nextRun(new Date(s.next_run_at), s.frequency, s.anchor_day)).toISOString()],
           );
           counts.run += 1;
         } else {

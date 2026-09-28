@@ -66,7 +66,7 @@ existing transaction.
   M-Pesa and is fed to the schedule: success clears the strikes; a failure is a
   strike with its reason. If the member never had a chance to answer
   (unreachable, expired, busy, system) the cycle is tried **once** more, two
-  hours later inside 08:00–20:00 EAT, never once the next cycle is due, with the
+  hours later inside prompt hours (07:00–21:00 Nairobi), never once the next cycle is due, with the
   key `sched:{id}:{cycle}:r{n}` after proving no attempt of the cycle succeeded
   or is still waiting. The member's own answer (cancelled, wrong PIN, not enough
   money) is never re-sent. Three strikes pause the schedule; the member is told
@@ -83,3 +83,33 @@ existing transaction.
 The scenario suites are `packages/backend/test/giving-cycle-NN.test.ts` (each
 `it` is one scenario) plus the apps' unit tests; the running log of findings,
 fixes and results is kept in the PR descriptions.
+
+## 5. Honest money on paper and on the calendar (Cycle 2)
+
+- **Statements and receipts** date every gift on the Nairobi calendar and clock
+  (a gift at 00:30 on 1 January is 1 January, 12:30 AM — it used to print under
+  31 December in UTC while counting in the new year). Every amount is printed in
+  its own currency; totals are per currency ("KSh 3,500 + USD 20.00"), never one
+  sum. `GET /giving/statements` gains `totals[]` per currency, and `by_fund` /
+  `by_pledge` rows carry their currency; `total_minor`/`currency` are the first
+  entry (shillings first).
+- **A receipt tells the truth about its gift**: only settled money is "Received
+  with thanks … Official receipt". A gift still clearing says "Waiting for the
+  payment to clear"; a failed one says "This gift did not go through", gives the
+  reason and the hint, and reads "Not a receipt: no money has been received for
+  this gift" (a GIFT RECORD, not a GIVING RECEIPT).
+- **Cover the fee**: the intent may carry `cover_fee_minor` (≤ half the gift;
+  whole shillings for M-Pesa). `amount_minor` stays what was charged and booked
+  (the ledger is unchanged); history and detail carry `fee_cover_minor`, and the
+  receipt reads "Gift … Fee cover … covered by you … Total …". It used to print
+  "Fee: KSh 0" whatever the member added.
+- **Monthly gifts keep their day** (`anchor_day`, migration 219, backfilled from
+  the day each was set up, Nairobi): the next cycle is computed on the Nairobi
+  calendar, clamped to short months (31 Jan → 28/29 Feb → 31 Mar), at the same
+  Nairobi time. The old UTC arithmetic sent a gift on the 31st to the 3rd and let
+  one set up at 01:00 on the 1st creep back a day a month.
+- **Prompts keep to 07:00–21:00 Nairobi** (the platform's quiet hours): a first
+  prompt that would fall at night is moved to 20:00 (or 07:00) on the same day,
+  so a weekly gift keeps its weekday; a retry that would fall at night waits for
+  07:00.
+- A member can ask for one year's giving statement PDF (`?year=`).

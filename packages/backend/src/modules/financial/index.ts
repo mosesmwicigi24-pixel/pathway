@@ -103,9 +103,12 @@ export function registerFinancial(
     "/giving/statement.pdf",
     handler(async (req, res) => {
       const claims = verifyAccessToken(ctx.env, accessTokenOf(req));
-      const pdf = await svc.statementPdf(claims.sub);
+      // One church year when asked (Giving Cycle 2: the apps' year chips said
+      // "2025" and the PDF was every year); absent = the complete record.
+      const { year } = parseBody(z.object({ year: z.coerce.number().int().min(2000).max(2100).optional() }), req.query);
+      const pdf = await svc.statementPdf(claims.sub, year);
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", 'attachment; filename="nuru-giving-statement.pdf"');
+      res.setHeader("Content-Disposition", `attachment; filename="nuru-giving-statement${year ? `-${year}` : ""}.pdf"`);
       res.send(pdf);
     }),
   );

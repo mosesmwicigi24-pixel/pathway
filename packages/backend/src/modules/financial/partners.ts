@@ -255,8 +255,12 @@ export interface PartnerStatement {
   pledged_minor: number;
   paid_minor: number;
   remaining_minor: number;
-  by_pledge: { pledge_id: string | null; title: string; total_minor: number }[];
-  by_fund: { code: string; name: string; total_minor: number }[];
+  /** Every currency given in the year, shillings first (Giving Cycle 2):
+   *  `total_minor`/`currency` above are the first of these — never a sum
+   *  across currencies. */
+  totals: { currency: string; total_minor: number }[];
+  by_pledge: { pledge_id: string | null; title: string; currency: string; total_minor: number }[];
+  by_fund: { code: string; name: string; currency: string; total_minor: number }[];
   pledges: PartnerStatementPledge[];
   payments: StatementPayment[];
   /** Statement v2 (§3d): the year's pledge money in disciples carried. */
@@ -799,17 +803,23 @@ export class PartnersService {
         pledge_id: r.pledge_id, pledge_title: r.pledge_title,
       };
     });
-    const byPledge = new Map<string, { pledge_id: string | null; title: string; total_minor: number }>();
-    const byFund = new Map<string, { code: string; name: string; total_minor: number }>();
-    let total = 0;
+    // Per currency, always (Giving Cycle 2): a year with a USD PayPal gift and
+    // KSh gifts used to report one number labelled with whichever came first.
+    const byPledge = new Map<string, { pledge_id: string | null; title: string; currency: string; total_minor: number }>();
+    const byFund = new Map<string, { code: string; name: string; currency: string; total_minor: number }>();
+    const byCurrency = new Map<string, number>();
     for (const r of payments) {
-      total += r.amount_minor;
-      const pk = r.pledge_id ?? "none";
-      const pe = byPledge.get(pk) ?? { pledge_id: r.pledge_id, title: r.pledge_title ?? "Gifts outside a pledge", total_minor: 0 };
+      byCurrency.set(r.currency, (byCurrency.get(r.currency) ?? 0) + r.amount_minor);
+      const pk = `${r.pledge_id ?? "none"}|${r.currency}`;
+      const pe = byPledge.get(pk) ?? { pledge_id: r.pledge_id, title: r.pledge_title ?? "Gifts outside a pledge", currency: r.currency, total_minor: 0 };
       pe.total_minor += r.amount_minor; byPledge.set(pk, pe);
-      const fe = byFund.get(r.fund) ?? { code: r.fund, name: r.fund_name, total_minor: 0 };
-      fe.total_minor += r.amount_minor; byFund.set(r.fund, fe);
+      const fk = `${r.fund}|${r.currency}`;
+      const fe = byFund.get(fk) ?? { code: r.fund, name: r.fund_name, currency: r.currency, total_minor: 0 };
+      fe.total_minor += r.amount_minor; byFund.set(fk, fe);
     }
+    const totals = [...byCurrency.entries()]
+      .sort((a, b) => (a[0] === "KES" ? -1 : b[0] === "KES" ? 1 : a[0].localeCompare(b[0])))
+      .map(([currency, total_minor]) => ({ currency, total_minor }));
 
     // The pledges this year's statement is about: every one not cancelled
     // (the rule reads them all — a paused or fulfilled pledge still counts),
@@ -859,8 +869,9 @@ export class PartnersService {
     return {
       years: ys,
       year: y,
-      total_minor: total,
-      currency: payments[0]?.currency ?? "KES",
+      total_minor: totals[0]?.total_minor ?? 0,
+      currency: totals[0]?.currency ?? "KES",
+      totals,
       pledged_minor: summary.pledged_minor,
       paid_minor: summary.paid_minor,
       remaining_minor: summary.remaining_minor,
