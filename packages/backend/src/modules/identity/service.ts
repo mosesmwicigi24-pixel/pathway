@@ -80,6 +80,15 @@ interface UserAuthRow {
   congregation_id: string | null;
 }
 
+/** GET/PUT /me/notification-preferences — the member's channel toggles and
+ *  whether pushes make a sound (migration 223). */
+export interface NotificationPreferences {
+  push_enabled: boolean;
+  email_enabled: boolean;
+  sms_enabled: boolean;
+  sound_enabled: boolean;
+}
+
 export class IdentityService {
   constructor(
     private readonly pool: Pool,
@@ -761,34 +770,39 @@ export class IdentityService {
       push_enabled: z.boolean(),
       email_enabled: z.boolean(),
       sms_enabled: z.boolean(),
+      // Sound and vibration on pushes (migration 223). Optional so an app
+      // that predates it keeps whatever the member chose elsewhere.
+      sound_enabled: z.boolean().optional(),
     })
     .strict();
 
-  /** Channel toggles; table defaults (push/email on, sms off) when no row exists. */
-  async getNotificationPreferences(userId: string): Promise<{ push_enabled: boolean; email_enabled: boolean; sms_enabled: boolean }> {
-    const row = await maybeOne<{ push_enabled: boolean; email_enabled: boolean; sms_enabled: boolean }>(
+  /** Channel toggles; table defaults (push/email on, sms off, sound on) when no row exists. */
+  async getNotificationPreferences(userId: string): Promise<NotificationPreferences> {
+    const row = await maybeOne<NotificationPreferences>(
       this.pool,
-      `SELECT push_enabled, email_enabled, sms_enabled FROM notification_preferences WHERE user_id = $1`,
+      `SELECT push_enabled, email_enabled, sms_enabled, sound_enabled FROM notification_preferences WHERE user_id = $1`,
       [userId],
     );
-    return row ?? { push_enabled: true, email_enabled: true, sms_enabled: false };
+    return row ?? { push_enabled: true, email_enabled: true, sms_enabled: false, sound_enabled: true };
   }
 
-  /** Upsert the three channel toggles; quiet hours / caps keep their values. */
+  /** Upsert the channel toggles; quiet hours / caps keep their values, and
+   *  so does sound when the request leaves it out. */
   async putNotificationPreferences(
     userId: string,
     input: z.infer<typeof IdentityService.NotificationPreferencesSchema>,
-  ): Promise<{ push_enabled: boolean; email_enabled: boolean; sms_enabled: boolean }> {
-    return one<{ push_enabled: boolean; email_enabled: boolean; sms_enabled: boolean }>(
+  ): Promise<NotificationPreferences> {
+    return one<NotificationPreferences>(
       this.pool,
-      `INSERT INTO notification_preferences (user_id, push_enabled, email_enabled, sms_enabled)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO notification_preferences (user_id, push_enabled, email_enabled, sms_enabled, sound_enabled)
+       VALUES ($1, $2, $3, $4, COALESCE($5::boolean, TRUE))
        ON CONFLICT (user_id) DO UPDATE SET
          push_enabled = EXCLUDED.push_enabled,
          email_enabled = EXCLUDED.email_enabled,
-         sms_enabled = EXCLUDED.sms_enabled
-       RETURNING push_enabled, email_enabled, sms_enabled`,
-      [userId, input.push_enabled, input.email_enabled, input.sms_enabled],
+         sms_enabled = EXCLUDED.sms_enabled,
+         sound_enabled = COALESCE($5::boolean, notification_preferences.sound_enabled)
+       RETURNING push_enabled, email_enabled, sms_enabled, sound_enabled`,
+      [userId, input.push_enabled, input.email_enabled, input.sms_enabled, input.sound_enabled ?? null],
     );
   }
 

@@ -5,7 +5,7 @@
 // but (per the incident this file was rewritten to close, PR notes) that must
 // NEVER be mistaken for a real send: unconfigured email now fails the row
 // loudly instead of quietly "succeeding" into a log line.
-import type { Messaging } from "firebase-admin/messaging";
+import type { Message, Messaging } from "firebase-admin/messaging";
 import type { Logger } from "pino";
 import type { Env } from "../config/env.js";
 import { buildEmailProvider, type EmailProvider } from "../modules/identity/email.js";
@@ -18,6 +18,97 @@ export interface DispatchMessage {
   to: string; // device token, email address, or E.164 phone number
   template: string;
   payload: Record<string, unknown>;
+  /** Push only: whether it makes a sound and vibrates — the member's
+   *  `notification_preferences.sound_enabled` (migration 223). Absent = on. */
+  sound?: boolean;
+}
+
+/**
+ * How a push sounds (owner request 2026-09-28: "a beep sound / notification
+ * sound or vibrations on any message that comes in … and make calls ring and
+ * vibrate"). A chat message, a Live guest invite that RINGS like a call, or
+ * any other update. The member apps create the Android channels below —
+ * their ids are part of the contract, and immutable once on a phone.
+ */
+export type PushKind = "message" | "ring" | "update";
+export function pushKind(template: string): PushKind {
+  if (template === "live_guest_invite") return "ring";
+  if (template.startsWith("chat_")) return "message";
+  return "update";
+}
+export const PUSH_CHANNEL = {
+  message: "nuru_messages",
+  update: "nuru_updates",
+  ring: "nuru_live_invite",
+  quiet: "nuru_quiet",
+} as const;
+/** The ring bundled in the iOS app (≤ 30 s, iOS's limit for a push sound). */
+export const RING_SOUND = "nuru_ring.caf";
+/** A Live invite is worth ringing for a minute at most — after that it is
+ *  stale, and it is dropped rather than delivered late. */
+export const RING_TTL_MS = 60_000;
+
+/**
+ * The FCM message for one push — pure, so every case is pinned by a test.
+ *
+ * Every push's `data` carries the notification's own keys, its `template`,
+ * `nuru_kind` and `nuru_sound` ("on" | "off"), so an app can choose how to
+ * show it in the foreground. Before this, APNs alerts carried no `sound` —
+ * iOS delivered every push silently — and Android had one default channel.
+ *
+ * - message / update: a notification on its channel (`nuru_messages`,
+ *   heads-up; `nuru_updates`), `aps.sound` "default"; a chat message's
+ *   conversation groups its alerts (`thread-id`).
+ * - ring: DATA-ONLY on Android, so the app itself rings — an insistent,
+ *   full-screen invite for up to 30 s; an alert with the ring on iOS. Both
+ *   expire after a minute. `alert_title` / `alert_body` carry the invite's
+ *   words; `title` stays the stream's name.
+ * - muted (`sound: false`): the same push, quietly — `nuru_quiet`, no
+ *   `aps.sound`. It still arrives.
+ */
+export function fcmMessage(msg: DispatchMessage, copy: { title: string; body: string }, nowMs: number = Date.now()): Message {
+  const kind = pushKind(msg.template);
+  const sound = msg.sound !== false;
+  const data: Record<string, string> = {};
+  for (const [k, v] of Object.entries(msg.payload)) {
+    if (v != null) data[k] = typeof v === "string" ? v : JSON.stringify(v);
+  }
+  data.template ??= msg.template;
+  data.nuru_kind = kind;
+  data.nuru_sound = sound ? "on" : "off";
+  if (kind === "ring") {
+    // `title` stays the payload's (the stream's name); the invite's own words
+    // ride beside it for the app to show, and `body` for an app that predates
+    // ringing (it renders a data-only push from `title` + `body`).
+    data.alert_title = copy.title;
+    data.alert_body = copy.body;
+    data.body ??= copy.body;
+    return {
+      token: msg.to,
+      data,
+      android: { priority: "high", ttl: RING_TTL_MS },
+      apns: {
+        headers: { "apns-priority": "10", "apns-expiration": String(Math.floor((nowMs + RING_TTL_MS) / 1000)) },
+        payload: { aps: { alert: { title: copy.title, body: copy.body }, ...(sound ? { sound: RING_SOUND } : {}) } },
+      },
+    };
+  }
+  const threadId = str(msg.payload.conversation_id);
+  return {
+    token: msg.to,
+    notification: { title: copy.title, body: copy.body },
+    data,
+    android: {
+      priority: "high",
+      notification: sound
+        ? { channelId: PUSH_CHANNEL[kind], defaultSound: true, defaultVibrateTimings: true }
+        : { channelId: PUSH_CHANNEL.quiet },
+    },
+    apns: {
+      headers: { "apns-priority": "10" },
+      payload: { aps: { ...(sound ? { sound: "default" } : {}), ...(threadId ? { threadId } : {}) } },
+    },
+  };
 }
 
 export interface DispatchProvider {
@@ -401,19 +492,10 @@ class FcmDispatchProvider implements DispatchProvider {
 
   async send(msg: DispatchMessage): Promise<void> {
     if (msg.channel !== "push") return this.fallback.send(msg);
-    const { title, body } = pushCopy(msg, this.log);
-    const data: Record<string, string> = {};
-    for (const [k, v] of Object.entries(msg.payload)) {
-      if (v != null) data[k] = typeof v === "string" ? v : JSON.stringify(v);
-    }
+    const copy = pushCopy(msg, this.log);
     const messaging = await this.messagingClient();
     // Throws on invalid/expired token → the worker marks the row 'failed' and logs.
-    await messaging.send({
-      token: msg.to,
-      notification: { title, body },
-      data,
-      android: { priority: "high" },
-    });
+    await messaging.send(fcmMessage(msg, copy));
   }
 }
 
@@ -425,7 +507,7 @@ class LoggingPushDispatchProvider implements DispatchProvider {
   send(msg: DispatchMessage): Promise<void> {
     const { title, body } = pushCopy(msg, this.log);
     this.log?.info(
-      { channel: msg.channel, template: msg.template, to: msg.to, title, body },
+      { channel: msg.channel, template: msg.template, to: msg.to, title, body, kind: pushKind(msg.template), sound: msg.sound !== false },
       "notification (logged, no push provider)",
     );
     return Promise.resolve();
