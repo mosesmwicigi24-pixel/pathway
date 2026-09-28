@@ -19,6 +19,7 @@
 //     statement's own instalment ledger — never a second copy of that math.
 //   · Every list returns { data, next_cursor, totals } with totals over the
 //     WHOLE filtered set, never just the page.
+import { giftFailureCopy } from "./giftFailure.js";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { many, maybeOne, type Queryable } from "../../db/db.js";
@@ -264,6 +265,7 @@ const TXN_COLUMNS = `
        t.office_channel, t.office_reference,
        t.recorded_by, rb.full_name AS recorded_by_name,
        t.reversed_at, t.reversed_by, vb.full_name AS reversed_by_name, t.reversal_reason,
+       t.failure_code, t.failure_detail, t.fee_cover_minor,
        t.created_at, t.settled_at`;
 
 const TXN_DETAIL_JOINS = `
@@ -284,7 +286,15 @@ export interface FinanceTransactionRow extends Record<string, unknown> {
 function shapeTxn(r: Record<string, unknown>): FinanceTransactionRow {
   const { cursor_ts: _c, ...rest } = r;
   void _c;
-  return { ...rest, amount_minor: Number(r.amount_minor) } as FinanceTransactionRow;
+  return {
+    ...rest,
+    amount_minor: Number(r.amount_minor),
+    fee_cover_minor: r.fee_cover_minor === null || r.fee_cover_minor === undefined ? null : Number(r.fee_cover_minor),
+    // Why a gift failed, in the member's words, beside the provider's own
+    // (failure_detail) — the office can answer "why didn't my gift go through?"
+    // (Giving Cycle 3).
+    failure: r.status === "failed" ? giftFailureCopy((r.failure_code as string | null) ?? "declined") : null,
+  } as unknown as FinanceTransactionRow;
 }
 
 export interface CurrencyTotal { currency: string; amount_minor: number; count: number }

@@ -193,6 +193,12 @@ const PUSH_TEMPLATE_COPY: Record<
       str(p.retry_at) ? "We'll send the prompt once more later today." : str(p.hint) ?? "Open Give to give now or check your number.",
     ].join(" "),
   }),
+  // Giving Cycle 3: a member's own gift that failed where they could not see
+  // it (the prompt never reached them, or no answer came before they left).
+  giving_gift_failed: (p) => ({
+    title: "Your gift didn't go through",
+    body: `${str(p.reason) ?? "The payment didn't complete."} ${str(p.hint) ?? "Open Give to try again."}`,
+  }),
   giving_schedule_paused: (p) => ({
     title: "Your recurring gift is paused",
     body: `${str(p.reason) ? `${str(p.reason)} ` : ""}We've stopped sending prompts for now. Open Give to resume it whenever you're ready.`,

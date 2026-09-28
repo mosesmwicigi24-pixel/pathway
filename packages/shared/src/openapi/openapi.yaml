@@ -3817,6 +3817,12 @@ paths:
     get:
       tags: [giving]
       summary: Full detail for one of the caller's gifts, including the ledger trail.
+      description: >-
+        Giving Cycle 3: the app polls this while the member waits on a prompt.
+        Once a mobile-money prompt is more than 20 seconds old without a verdict,
+        reading it asks the provider (at most every 10 seconds per prompt) and
+        applies the answer exactly as a callback would — so "paid" or "why not"
+        arrives while the member is still on the screen.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -3827,6 +3833,37 @@ paths:
               schema: { $ref: "#/components/schemas/GivingDetail" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /giving/transactions/{id}/retry:
+    post:
+      tags: [giving]
+      summary: "\"Try again\" on one of the caller's FAILED gifts (Giving Cycle 3): a new gift carrying everything the failed one did — fund, amount, currency, method, pledge or need, name, fee cover — so a retry never loses its pledge. The pledge/need and every intent check run afresh."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                idempotency_key: { type: string, minLength: 8, maxLength: 255 }
+                phone_number: { type: [string, "null"], description: "Mobile money: another number to prompt this time; absent = the profile number." }
+      responses:
+        "201":
+          description: "The new gift, as POST /giving/intents answers, plus retry_of"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/GivingIntentResult" }
+                  - type: object
+                    required: [retry_of]
+                    properties:
+                      retry_of: { type: string, format: uuid }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "GIFT_IN_PROGRESS", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /giving/transactions/{id}/receipt.pdf:
     get:
       tags: [giving]

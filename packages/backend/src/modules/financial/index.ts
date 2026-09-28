@@ -68,6 +68,24 @@ export function registerFinancial(
     }),
   );
 
+  // "Try again" on a failed gift (Giving Cycle 3): a new gift with everything
+  // the failed one carried (fund, amount, pledge or need, name, fee cover).
+  r.post(
+    "/giving/transactions/:id/retry",
+    auth,
+    handler(async (req, res) => {
+      const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
+      const body = parseBody(
+        z.object({
+          idempotency_key: z.string().min(8).max(255).optional(),
+          phone_number: z.string().min(7).max(32).nullish(),
+        }),
+        req.body ?? {},
+      );
+      res.status(201).json(await svc.retryGift(requirePrincipal(req).userId, id, body));
+    }),
+  );
+
   // Capture a PayPal order the member approved in the PayPal flow; settles the ledger.
   r.post(
     "/giving/paypal/capture",

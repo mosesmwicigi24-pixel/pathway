@@ -113,3 +113,28 @@ fixes and results is kept in the PR descriptions.
   so a weekly gift keeps its weekday; a retry that would fall at night waits for
   07:00.
 - A member can ask for one year's giving statement PDF (`?year=`).
+
+## 6. Recovery (Cycle 3)
+
+- **Try again** (`POST /giving/transactions/{id}/retry`): a new gift carrying
+  everything the failed one did — fund, amount, currency, method, the pledge or
+  need, the name, the fee cover — so a retry can never quietly lose its pledge.
+  Only the giver's own failed gift (404 / 422 otherwise); the pledge or need is
+  checked afresh (a pledge cancelled since is refused), every Cycle 1 check runs
+  again, and a retry while one is waiting is `GIFT_IN_PROGRESS`.
+- **The verdict while the member waits**: the app polls
+  `GET /giving/transactions/{id}`; once a prompt is 20 s old without a verdict,
+  reading it asks the provider (at most every 10 s per prompt) and applies the
+  answer as a callback would. The sweeper remains the safety net.
+- **A failure they could not see reaches them**: a member's own gift that failed
+  where they could not see it — the prompt never reached them, or no answer came
+  — and at least 45 s after they started it, sends `giving_gift_failed` with the
+  reason and the hint. Their own decline (cancelled, wrong PIN, not enough money)
+  is never re-announced; a recurring charge speaks through its schedule notice;
+  a stranger's website gift has nobody to notify.
+- **Nothing stays "processing" for ever**: PayPal orders nobody approved and card
+  intents nobody confirmed are closed after 48 h as `no_answer`; if a provider
+  later reports one paid, it still books (money that arrived always wins).
+- **The office sees why**: the transactions register and drawer carry `failure`
+  (the member's words) and `failure_detail` (M-Pesa's code and text), and
+  `fee_cover_minor`; the CSV appends `failure_reason, provider_detail, fee_cover`.

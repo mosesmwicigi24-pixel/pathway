@@ -754,25 +754,43 @@ export class FinancialService {
       return this.applyMobileMoneyOutcome(providerKey, cb.ref, outcome, { eventId: cb.event_id, rawBody });
     }
 
+    return this.confirmPrompt(providerKey, cb.ref, { receipt: cb.receipt, eventId: cb.event_id, rawBody });
+  }
+
+  /**
+   * Ask the provider how one of OUR waiting prompts ended and apply that
+   * answer — the one path for an unsigned callback and for a member's app
+   * polling a gift (Giving Cycle 3). A ref that is not a waiting prompt of
+   * ours costs one read; the provider is asked at most every 10 seconds per
+   * prompt, however many callbacks or polls arrive.
+   */
+  private async confirmPrompt(
+    providerKey: MobileMoneyKey,
+    ref: string,
+    hint: { receipt?: string | undefined; eventId?: string; rawBody?: Buffer | string } = {},
+  ): Promise<Record<string, unknown>> {
     const known = await maybeOne<{ status: string; checked_recently: boolean }>(
       this.pool,
       `SELECT status, (provider_checked_at IS NOT NULL AND provider_checked_at > now() - interval '10 seconds') AS checked_recently
          FROM transactions WHERE provider = $1 AND provider_ref = $2`,
-      [providerKey, cb.ref],
+      [providerKey, ref],
     );
     if (!known) return { ignored: true };
     if (known.status !== "processing") return { duplicate: true, status: known.status };
     if (known.checked_recently) return { verified: false, status: "processing" };
 
-    const truth = await this.askProvider(providerKey, cb.ref);
+    const truth = await this.askProvider(providerKey, ref);
     if (truth.state === "pending") return { verified: false, status: "processing" };
     const outcome: MobileMoneyOutcome =
       truth.state === "succeeded"
         // The receipt code rides the (unverifiable) callback; it is only kept
         // once Safaricom itself has said the payment went through.
-        ? { kind: "succeeded", receipt: cb.receipt }
+        ? { kind: "succeeded", receipt: hint.receipt }
         : { kind: "failed", failure: mobileMoneyFailure(truth.code), detail: failureDetail(truth.code, truth.desc) };
-    return this.applyMobileMoneyOutcome(providerKey, cb.ref, outcome, { eventId: cb.event_id, rawBody });
+    return this.applyMobileMoneyOutcome(providerKey, ref, outcome, {
+      ...(hint.eventId ? { eventId: hint.eventId } : {}),
+      ...(hint.rawBody ? { rawBody: hint.rawBody } : {}),
+    });
   }
 
   /** True when this provider's callbacks prove themselves (HMAC). */
@@ -866,17 +884,40 @@ export class FinancialService {
         return { duplicate: false, status: "succeeded" };
       }
 
-      const failed = await maybeOne<{ schedule_id: string | null; schedule_cycle_at: string | null }>(
+      const failed = await maybeOne<{
+        transaction_id: string; user_id: string | null; schedule_id: string | null; schedule_cycle_at: string | null;
+        amount_minor: string; currency: string; fund: string | null; unseen: boolean;
+      }>(
         c,
-        `UPDATE transactions
+        `UPDATE transactions t
             SET status = 'failed', failure_code = $2, failure_detail = $3, failed_at = now(), verified_at = now()
-          WHERE provider_ref = $1 AND status = 'processing'
-          RETURNING schedule_id, schedule_cycle_at`,
+          WHERE t.provider_ref = $1 AND t.status = 'processing'
+          RETURNING t.transaction_id, t.user_id, t.schedule_id, t.schedule_cycle_at, t.amount_minor, t.currency,
+                    (SELECT f.code FROM funds f WHERE f.fund_id = t.fund_id) AS fund,
+                    (t.created_at < now() - interval '45 seconds') AS unseen`,
         [ref, outcome.failure.code, outcome.detail],
       );
       if (failed?.schedule_id) {
         const notice = await this.recordScheduleOutcome(c, failed.schedule_id, failed.schedule_cycle_at, outcome.failure);
         if (notice) after.push(notice);
+      } else if (failed?.user_id && failed.unseen && (outcome.failure.retryable || outcome.failure.code === "no_answer")) {
+        // A member's own gift that failed where they could not see it (Giving
+        // Cycle 3): the prompt never reached their phone, or no answer came
+        // before they left the Give screen. A decline they made themselves
+        // (cancelled, wrong PIN, not enough money) is not re-announced.
+        const copy = giftFailureCopy(outcome.failure.code)!;
+        const f = failed;
+        after.push(async () => {
+          await this.notifications.schedule({
+            userId: f.user_id!,
+            channel: "push",
+            template: "giving_gift_failed",
+            payload: {
+              transaction_id: f.transaction_id, amount_minor: Number(f.amount_minor), currency: f.currency,
+              fund: f.fund, failure_code: outcome.failure.code, reason: copy.reason, hint: copy.hint,
+            },
+          });
+        });
       }
       return { duplicate: false, status: "failed", failure_code: outcome.failure.code };
     });
@@ -1022,6 +1063,18 @@ export class FinancialService {
       });
       out.expired += 1;
     }
+    // PayPal orders nobody approved and card intents nobody confirmed have no
+    // callback to wait for (Giving Cycle 3): after 48 hours they are closed
+    // too. If the provider ever does report one paid later, settle() still
+    // books it — money that arrived always wins over a closed record.
+    const abandoned = await this.pool.query(
+      `UPDATE transactions
+          SET status = 'failed', failure_code = 'no_answer', failed_at = now(),
+              failure_detail = 'never completed within 48 hours'
+        WHERE status = 'processing' AND provider IN ('paypal', 'stripe') AND created_at < $1`,
+      [cutoff],
+    );
+    out.expired += abandoned.rowCount ?? 0;
     const waiting = await many<{ provider: MobileMoneyKey; provider_ref: string }>(
       this.pool,
       `SELECT provider, provider_ref FROM transactions
@@ -1240,6 +1293,57 @@ export class FinancialService {
     });
   }
 
+  /**
+   * "Try again" on a failed gift (Giving Cycle 3): a NEW gift with everything
+   * the failed one carried — fund, amount, currency, method, the pledge or
+   * need it counted toward, the gift's name and the fee cover — so a retry
+   * can never quietly lose its pledge. Owner-scoped (404); only a gift that
+   * failed (422 otherwise). The pledge and the need are checked afresh (a
+   * pledge cancelled since is refused, as any gift to it would be), and every
+   * Cycle 1 check runs again. A scheduled charge retried by hand is a one-off
+   * gift: the schedule keeps its own rhythm.
+   */
+  async retryGift(
+    userId: string,
+    transactionId: string,
+    input: { idempotency_key?: string | undefined; phone_number?: string | null | undefined },
+  ): Promise<Record<string, unknown>> {
+    const t = await maybeOne<{
+      status: string; provider: string | null; amount_minor: string; currency: string; fund: string | null;
+      pledge_id: string | null; need_id: string | null; account_name: string | null; fee_cover_minor: string | null;
+    }>(
+      this.pool,
+      `SELECT t.status, t.provider, t.amount_minor, t.currency, f.code AS fund, t.pledge_id, t.need_id,
+              t.account_name, t.fee_cover_minor
+         FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
+        WHERE t.transaction_id = $1 AND t.user_id = $2`,
+      [transactionId, userId],
+    );
+    if (!t) throw new ApiError("NOT_FOUND", "Gift not found");
+    if (t.status !== "failed") {
+      throw new ApiError("UNPROCESSABLE", t.status === "processing"
+        ? "That gift is still waiting on the payment. Approve the prompt, or wait a minute."
+        : "Only a gift that did not go through can be tried again.");
+    }
+    const method = t.provider === "stripe" || !t.provider ? "card" : t.provider;
+    if (method !== "mpesa" && method !== "airtel" && method !== "paypal" && method !== "card") {
+      throw new ApiError("UNPROCESSABLE", "This gift cannot be tried again from the app. Give again from Give.");
+    }
+    const result = await this.createGivingIntent(userId, {
+      fund: t.fund ?? "general",
+      amount_minor: Number(t.amount_minor),
+      currency: t.currency,
+      method,
+      phone_number: input.phone_number ?? null,
+      pledge_id: t.pledge_id,
+      need_id: t.need_id,
+      account_name: t.account_name ?? undefined,
+      cover_fee_minor: t.fee_cover_minor ? Number(t.fee_cover_minor) : null,
+      ...(input.idempotency_key ? { idempotency_key: input.idempotency_key } : {}),
+    });
+    return { ...result, retry_of: transactionId };
+  }
+
   /** Full detail for ONE of the caller's gifts — every field plus the balanced
    *  ledger trail (cash + fund accounts). Scoped to the owner (404 otherwise).
    *  Carries everything the in-app receipt prints so the apps render it from
@@ -1247,6 +1351,30 @@ export class FinancialService {
    *  need the gift counted toward (under the same words their cards show), the
    *  method's display label, and who gave where. */
   async givingDetail(userId: string, transactionId: string): Promise<Record<string, unknown>> {
+    // The app polls this while the member waits on the prompt (Giving Cycle
+    // 3). Past 20 seconds with no verdict, ask the provider now — callbacks
+    // can be slow or lost, and the sweeper only looks after 90 seconds — so
+    // the member sees "paid" or "why not" while still on the screen. The
+    // provider is asked at most every 10 seconds per prompt however hard the
+    // app polls; the verdict is applied exactly as a callback's would be.
+    const waiting = await maybeOne<{ provider: MobileMoneyKey; provider_ref: string }>(
+      this.pool,
+      `SELECT provider, provider_ref FROM transactions
+        WHERE transaction_id = $1 AND user_id = $2 AND status = 'processing'
+          AND provider IN ('mpesa','airtel') AND provider_ref IS NOT NULL
+          AND created_at < now() - interval '20 seconds'`,
+      [transactionId, userId],
+    );
+    if (waiting) {
+      const p = this.mobileMoney?.[waiting.provider];
+      if (p && providerIsLive(p)) {
+        try {
+          await this.confirmPrompt(waiting.provider, waiting.provider_ref);
+        } catch {
+          /* a provider hiccup must never break reading a gift */
+        }
+      }
+    }
     const t = await maybeOne<Record<string, unknown>>(
       this.pool,
       `SELECT t.transaction_id, t.amount_minor, t.currency, t.status, f.code AS fund, f.name AS fund_name,
