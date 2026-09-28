@@ -60,6 +60,7 @@ import { ConfirmDialog, FinanceToaster } from "../finance/kit";
 import { formatMinor } from "../finance/money";
 import { fmtDay } from "../finance/dates";
 import { PartnerFaithfulness } from "../finance/b/PartnerFaithfulness";
+import { pauseReasonLabel } from "../finance/b/logic";
 import { legacyPartnersRedirect } from "../shell/nav";
 
 /* ---------- tokens (the Finance kit's set — components/finance/kit.tsx FIN) ---------- */
@@ -1276,10 +1277,13 @@ function ScheduleRow({ s }: { s: AdminScheduleRow }): ReactElement {
       <td style={{ padding: "8px 12px", fontSize: 12, color: NAVY }}>{s.method ? titleCase(s.method) : "—"}</td>
       <td style={{ padding: "8px 12px" }}>
         <Pill chip={chip} />
+        {pauseReasonLabel(s) ? <div style={{ fontSize: 11, color: MUTED, marginTop: 3 }}>{pauseReasonLabel(s)}</div> : null}
       </td>
       <td style={{ padding: "8px 12px", fontSize: 12, fontFamily: MONO, color: NAVY, whiteSpace: "nowrap" }}>{fmtDateTime(s.next_run_at)}</td>
       <td style={{ padding: "8px 12px", fontSize: 12, fontFamily: MONO, color: s.consecutive_failures > 0 ? "#B42318" : NAVY }} title={s.last_error ?? undefined}>
         {s.consecutive_failures}
+        {/* Why, in the member's words (Giving Cycle 7). */}
+        {s.consecutive_failures > 0 && s.last_failure ? <div style={{ fontFamily: "inherit", fontSize: 11, maxWidth: 220 }}>{s.last_failure.reason}</div> : null}
       </td>
     </tr>
   );

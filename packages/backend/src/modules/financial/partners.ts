@@ -14,6 +14,7 @@ import type { NotificationService } from "../notifications/service.js";
 import { ApiError } from "../../http/errors.js";
 import type { FinancialService } from "./service.js";
 import { givingTiers } from "./tiers.js";
+import { giftFailureCopy } from "./giftFailure.js";
 import { methodLabel, giftMethodLabel, PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, PLEDGE_PAYS_TO_NAME } from "./constants.js";
 import {
   NAIROBI_OFFSET_MS, nairobiDate, partnerDate, keptInYear, pledgedInYear, statementSummary, firstDueAfter,
@@ -1383,7 +1384,20 @@ export class PartnersService {
   }
 
   /** The office reminds one partner (optionally one pledge). Spaced 12 h from ANY reminder. */
-  async adminRemind(adminId: string, userId: string, notifications: NotificationService, opts: { pledge_id?: string | null | undefined; message?: string | null | undefined } = {}, now = new Date()): Promise<{ reminded: number; skipped: number }> {
+  async adminRemind(
+    adminId: string,
+    userId: string,
+    notifications: NotificationService,
+    opts: {
+      pledge_id?: string | null | undefined;
+      message?: string | null | undefined;
+      /** The bulk "remind everyone behind" (Giving Cycle 7): leave a pledge
+       *  whose automatic collection failed in the last 36 hours — the member
+       *  was just told why, by that failure's own notice. */
+      sparePledgesJustFailed?: boolean | undefined;
+    } = {},
+    now = new Date(),
+  ): Promise<{ reminded: number; skipped: number }> {
     const where = opts.pledge_id ? `WHERE p.user_id = $1 AND p.pledge_id = $2 AND p.status = 'active'` : `WHERE p.user_id = $1 AND p.status = 'active'`;
     const rows = await this.pledgeRows(this.pool, where, opts.pledge_id ? [userId, opts.pledge_id] : [userId]);
     if (rows.length === 0) throw new ApiError("NOT_FOUND", "No open pledge to remind about");
@@ -1391,6 +1405,16 @@ export class PartnersService {
     for (const r of rows) {
       const last = await this.lastReminderAt(r.pledge_id);
       if (last && now.getTime() - last.getTime() < PartnersService.FOLLOW_UP_HOURS * 3_600_000) { skipped += 1; continue; }
+      if (opts.sparePledgesJustFailed) {
+        const failed = await maybeOne<{ n: number }>(
+          this.pool,
+          `SELECT 1 AS n FROM giving_schedules
+            WHERE (pledge_id = $1 OR schedule_id = $2) AND status = 'active'
+              AND last_failed_at IS NOT NULL AND last_failed_at > $3::timestamptz - interval '36 hours' LIMIT 1`,
+          [r.pledge_id, r.schedule_id, now.toISOString()],
+        );
+        if (failed) { skipped += 1; continue; }
+      }
       const { progress: pr, owed_minor } = await this.progressDetail(r, now);
       const payload = { pledge_id: r.pledge_id, title: PartnersService.title(r), amount_minor: owed_minor ?? 0, currency: r.currency, due_on: pr.next_due, message: opts.message ?? null };
       const channels = await this.fanOut(notifications, r.user_id, "pledge_reminder_manual", payload, "Africa/Nairobi");
@@ -1406,7 +1430,7 @@ export class PartnersService {
     const list = await this.adminList({ status: "behind", sort: "behind" }, now);
     let reminded = 0, skipped = 0;
     for (const d of list.data as { user_id: string }[]) {
-      const r = await this.adminRemind(adminId, d.user_id, notifications, {}, now).catch(() => ({ reminded: 0, skipped: 0 }));
+      const r = await this.adminRemind(adminId, d.user_id, notifications, { sparePledgesJustFailed: true }, now).catch(() => ({ reminded: 0, skipped: 0 }));
       reminded += r.reminded; skipped += r.skipped;
     }
     return { partners: (list.data as unknown[]).length, reminded, skipped };
@@ -1468,7 +1492,9 @@ export class PartnersService {
     return many(
       this.pool,
       `SELECT c.claim_id, c.pledge_id, c.user_id, u.full_name, c.amount_minor::text, c.currency, c.paid_on::text, c.note, c.status, c.created_at::text,
-              ${pledgeTitleSql({ pledge: "p", fund: "f", campaign: "cm" })} AS pledge_title
+              ${pledgeTitleSql({ pledge: "p", fund: "f", campaign: "cm" })} AS pledge_title,
+              -- Giving Cycle 7: the office sees at once a claim it can only reject.
+              p.currency AS pledge_currency, (trim(c.currency) <> trim(p.currency)) AS currency_mismatch
          FROM pledge_claims c
          JOIN users u ON u.user_id = c.user_id
          JOIN pledges p ON p.pledge_id = c.pledge_id
@@ -1639,10 +1665,16 @@ export class PartnersService {
     const p = await this.partnership(userId, now);
     const schedules = await many(
       this.pool,
-      `SELECT s.schedule_id, s.status, s.frequency, s.method, s.amount_minor::text, s.currency, s.next_run_at::text, s.last_run_at::text, s.consecutive_failures, s.pledge_id, f.code AS fund
+      `SELECT s.schedule_id, s.status, s.frequency, s.method, s.amount_minor::text, s.currency, s.next_run_at::text, s.last_run_at::text, s.consecutive_failures, s.pledge_id, f.code AS fund,
+              s.pause_reason, s.resume_on::text AS resume_on, s.last_failure_code
          FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id WHERE s.user_id = $1 ORDER BY s.created_at DESC`,
       [userId],
     );
+    // In words, as the member was told (Giving Cycle 7).
+    for (const s of schedules as Array<Record<string, unknown>>) {
+      s.last_failure = Number(s.consecutive_failures) > 0 ? giftFailureCopy((s.last_failure_code as string | null) ?? "declined") : null;
+      delete s.last_failure_code;
+    }
     const payments = await many(
       this.pool,
       `SELECT t.transaction_id, t.amount_minor::text, t.currency, t.created_at::text AS at, f.code AS fund, t.pledge_id, t.receipt_code, t.status::text AS status

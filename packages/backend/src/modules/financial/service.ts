@@ -19,7 +19,7 @@ import {
 import { paypalIsLive, type PayPalGateway } from "./paypal.js";
 import { giftFailureCopy } from "./giftFailure.js";
 import { renderStatementPdf, renderReceiptPdf } from "./statementPdf.js";
-import { PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, methodLabel, giftMethodLabel } from "./constants.js";
+import { PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, SCHEDULE_ATTENTION_SQL, methodLabel, giftMethodLabel } from "./constants.js";
 // partners.ts imports FinancialService as a TYPE only, so this is not a cycle.
 import { PartnersService, pledgeTitleFor, pledgeTitleSql } from "./partners.js";
 import { allocateInstalments, nairobiDate, type LedgerPaymentInput } from "./partnerStatementMath.js";
@@ -3136,7 +3136,18 @@ export class FinancialService {
    * was invisible to the church. `needs_attention` first: paused, then the most
    * failures, then soonest due.
    */
-  async listSchedulesAdmin(opts: { status?: string | undefined; attention?: boolean | undefined; limit?: number | undefined } = {}): Promise<{ data: unknown[] }> {
+  /**
+   * What makes a recurring gift the office's problem (Giving Cycle 7) — ONE
+   * SQL rule for the register, its filter and the Overview's alert: it
+   * stopped after failed prompts, it is failing now, or WE could not send its
+   * last prompt (M-Pesa down or unconfigured — the giver was never told, so
+   * only the office can know). A member's own pause and a pause that follows
+   * a paused pledge are choices, not problems: they used to count, and sent
+   * the office chasing people who had simply said "not this month".
+   */
+  static readonly SCHEDULE_ATTENTION_SQL = SCHEDULE_ATTENTION_SQL;
+
+  async listSchedulesAdmin(opts: { status?: string | undefined; attention?: boolean | undefined; limit?: number | undefined; id?: string | undefined } = {}): Promise<{ data: unknown[] }> {
     const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
     const params: unknown[] = [limit];
     let where = `WHERE s.status <> 'cancelled'`;
@@ -3144,30 +3155,130 @@ export class FinancialService {
       params.push(opts.status);
       where = `WHERE s.status = $${params.length}`;
     }
-    // Only the ones needing attention — the needs_attention rule below, never
-    // a cancelled schedule (Finance → Recurring gifts, Overview alert).
-    if (opts.attention) where += ` AND s.status <> 'cancelled' AND (s.status = 'paused' OR s.consecutive_failures > 0)`;
+    if (opts.id) {
+      params.push(opts.id);
+      where = `WHERE s.schedule_id = $${params.length}`;
+    }
+    if (opts.attention) where += ` AND s.status <> 'cancelled' AND (${FinancialService.SCHEDULE_ATTENTION_SQL})`;
     const rows = await many<Record<string, unknown>>(
       this.pool,
       `SELECT s.schedule_id, s.user_id, u.full_name, u.phone_number,
-              f.code AS fund, s.amount_minor, s.currency, s.frequency, s.method,
+              f.code AS fund, f.name AS fund_name, s.amount_minor, s.currency, s.frequency, s.method,
               s.status, s.next_run_at, s.last_run_at,
-              s.consecutive_failures, s.last_error, s.last_failed_at, s.paused_at, s.created_at
+              s.consecutive_failures, s.last_error, s.last_failed_at, s.paused_at, s.created_at,
+              s.last_failure_code, s.pause_reason, s.resume_on::text AS resume_on, s.heads_up, s.anchor_day,
+              s.phone_number AS prompt_number, s.retry_at,
+              s.pledge_id AS bound_pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "pc" })} AS bound_pledge_title,
+              (s.status = 'active' AND s.last_error IS NOT NULL AND s.last_failure_code IS NULL
+                AND s.last_failed_at > now() - interval '24 hours') AS our_fault,
+              (${FinancialService.SCHEDULE_ATTENTION_SQL}) AS needs_attention
          FROM giving_schedules s
          JOIN funds f ON f.fund_id = s.fund_id
          JOIN users u ON u.user_id = s.user_id
+         LEFT JOIN pledges p ON p.pledge_id = s.pledge_id
+         LEFT JOIN funds pf ON pf.fund_id = p.fund_id
+         LEFT JOIN campaigns pc ON pc.campaign_id = p.campaign_id
          ${where}
-        ORDER BY (s.status = 'paused') DESC, s.consecutive_failures DESC, s.next_run_at
+        ORDER BY (${FinancialService.SCHEDULE_ATTENTION_SQL}) DESC, (s.status = 'paused') DESC, s.consecutive_failures DESC, s.next_run_at
         LIMIT $1`,
       params,
     );
-    return {
-      data: rows.map((r) => ({
-        ...r,
-        amount_minor: Number(r.amount_minor),
-        needs_attention: r.status === "paused" || Number(r.consecutive_failures ?? 0) > 0,
-      })),
-    };
+    const data: unknown[] = [];
+    for (const r of rows) {
+      const { last_failure_code: code, bound_pledge_id: pledgeId, bound_pledge_title: pledgeTitle, our_fault: ours, ...rest } = r;
+      const amount = Number(r.amount_minor);
+      let next: number | null = r.status === "active" ? amount : null;
+      if (pledgeId && r.status === "active") {
+        const plan = await this.pledgeCyclePlan(r.schedule_id as string, new Date(r.next_run_at as string));
+        next = !plan ? amount : plan.action === "charge" ? plan.amount_minor : plan.action === "skip" ? 0 : null;
+      }
+      data.push({
+        ...rest,
+        amount_minor: amount,
+        // In words, as the member was told (Giving Cycle 7) — last_error stays
+        // for the detail.
+        last_failure: Number(r.consecutive_failures) > 0 ? giftFailureCopy((code as string | null) ?? "declined") : null,
+        // Our side, not theirs: the giver was NOT told; it retries by itself.
+        office_alert: ours
+          ? `We couldn't send the last prompt (${String(r.last_error)}). The giver has not been told; it tries again within the hour.`
+          : null,
+        pledge: pledgeId ? { pledge_id: pledgeId, title: pledgeTitle ?? "A pledge" } : null,
+        next_amount_minor: next,
+        needs_attention: Boolean(r.needs_attention),
+      });
+    }
+    return { data };
+  }
+
+  /**
+   * The office changes a member's recurring gift AT THE MEMBER'S REQUEST
+   * (Giving Cycle 7) — "please stop my weekly gift" by phone or at the
+   * office. There was no way to do it: the office could only watch. Pause
+   * (optionally until a date), resume, or cancel; a reason is required, the
+   * audit names who did it, and the member is told the office did it — a
+   * change to their money nobody told them about would be worse than none.
+   * A gift paused with its pledge resumes with the pledge.
+   */
+  async officeScheduleAction(
+    actorId: string,
+    scheduleId: string,
+    action: "pause" | "resume" | "cancel",
+    input: { note: string; resume_on?: string | null | undefined },
+  ): Promise<Record<string, unknown>> {
+    const s = await maybeOne<{ user_id: string; status: string; pause_reason: string | null; amount_minor: string; currency: string; frequency: string; fund_name: string }>(
+      this.pool,
+      `SELECT s.user_id, s.status::text AS status, s.pause_reason, s.amount_minor::text, s.currency, s.frequency::text AS frequency, f.name AS fund_name
+         FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id WHERE s.schedule_id = $1`,
+      [scheduleId],
+    );
+    if (!s) throw new ApiError("NOT_FOUND", "Schedule not found");
+    if (action === "pause") {
+      if (s.status !== "active") throw new ApiError("UNPROCESSABLE", "Only an active recurring gift can be paused.");
+      const resumeOn = input.resume_on ?? null;
+      if (resumeOn) {
+        const today = nairobiDate(new Date());
+        if (resumeOn <= today || resumeOn > nairobiDate(new Date(Date.now() + 366 * 86_400_000))) {
+          throw new ApiError("VALIDATION_FAILED", "Choose a date from tomorrow to a year from now.", { resume_on: resumeOn });
+        }
+      }
+      // As the member asked: their pause, until their date.
+      await this.pool.query(
+        `UPDATE giving_schedules
+            SET status = 'paused', paused_at = now(), pause_reason = 'member', resume_on = $2,
+                retry_cycle_at = NULL, retry_at = NULL, retry_after = NULL
+          WHERE schedule_id = $1 AND status = 'active'`,
+        [scheduleId, resumeOn],
+      );
+    } else if (action === "resume") {
+      if (s.status !== "paused") throw new ApiError("UNPROCESSABLE", "Only a paused recurring gift can be resumed.");
+      if (s.pause_reason === "pledge") throw new ApiError("UNPROCESSABLE", "This gift is paused with its pledge — resume the pledge instead.");
+      await this.rearmAfterPause(scheduleId);
+    } else {
+      if (s.status === "cancelled") throw new ApiError("UNPROCESSABLE", "This recurring gift is already cancelled.");
+      await this.pool.query(
+        `UPDATE giving_schedules SET status = 'cancelled', cancelled_at = now(), retry_cycle_at = NULL, retry_at = NULL, retry_after = NULL
+          WHERE schedule_id = $1 AND status <> 'cancelled'`,
+        [scheduleId],
+      );
+    }
+    await audit(this.pool, actorId, `giving.schedule_${action}d_by_office`, "giving_schedules", scheduleId, {
+      member: s.user_id, note: input.note, resume_on: input.resume_on ?? null,
+    });
+    try {
+      await this.notifications.schedule({
+        userId: s.user_id,
+        channel: "push",
+        template: "giving_schedule_office_change",
+        payload: {
+          schedule_id: scheduleId, action, resume_on: input.resume_on ?? null,
+          amount_minor: Number(s.amount_minor), currency: s.currency, frequency: s.frequency, fund_name: s.fund_name,
+        },
+      });
+    } catch {
+      /* the change stands; the notice is best-effort */
+    }
+    const [row] = (await this.listSchedulesAdmin({ id: scheduleId })).data as Record<string, unknown>[];
+    return row ?? { schedule_id: scheduleId };
   }
 
   /** Per-fund revenue: settled totals this month + all time (the "Fund Revenue" card). */

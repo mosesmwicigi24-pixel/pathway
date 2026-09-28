@@ -57,3 +57,17 @@ export function giftMethodLabel(method: string, officeChannel: string | null | u
   }
   return methodLabel(method);
 }
+
+/**
+ * What makes a recurring gift the office's problem (Giving Cycle 7) — ONE SQL
+ * rule, over giving_schedules aliased `s`, for Finance → Recurring gifts, its
+ * "needs attention" filter and the Overview's alert: it stopped after failed
+ * prompts, it is failing now, or WE could not send its last prompt (M-Pesa
+ * down or unconfigured — the giver was never told, so only the office can
+ * know). A member's own pause, and one that follows a paused pledge, are
+ * choices, not problems: they used to count, and sent the office chasing
+ * people who had simply said "not this month".
+ */
+export const SCHEDULE_ATTENTION_SQL = `(s.status = 'paused' AND COALESCE(s.pause_reason, 'failures') = 'failures')
+      OR (s.status = 'active' AND (s.consecutive_failures > 0
+          OR (s.last_error IS NOT NULL AND s.last_failure_code IS NULL AND s.last_failed_at > now() - interval '24 hours')))`;

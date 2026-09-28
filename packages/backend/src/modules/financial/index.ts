@@ -380,6 +380,21 @@ export function registerFinancial(
     res.json(await svc.listSchedulesAdmin(q));
   }));
 
+  // The office changes a member's recurring gift at the member's request
+  // (Giving Cycle 7): a reason is required, the audit names who, the member
+  // is told.
+  const OfficeScheduleBody = z.object({
+    note: z.string().trim().min(3).max(300),
+    resume_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+  });
+  for (const action of ["pause", "resume", "cancel"] as const) {
+    r.post(`/admin/finance/schedules/:id/${action}`, auth, perm("finance", "manage"), handler(async (req, res) => {
+      const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
+      const body = parseBody(OfficeScheduleBody, req.body);
+      res.json(await svc.officeScheduleAction(requirePrincipal(req).userId, id, action, body));
+    }));
+  }
+
   r.get("/admin/finance/summary", auth, perm("finance", "view"), handler(async (_req, res) => {
     res.json(await svc.financeSummary());
   }));

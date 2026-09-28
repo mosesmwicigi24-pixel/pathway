@@ -216,6 +216,20 @@ const PUSH_TEMPLATE_COPY: Record<
       ? `An M-Pesa prompt for ${money(p)} — the rest of what's due on “${str(p.pledge_title)}” — is coming to your phone in a few minutes. Enter your PIN to give.`
       : `An M-Pesa prompt for ${money(p)} to ${str(p.fund_name) ?? "the church"} is coming to your phone in a few minutes. Enter your PIN to give.`,
   }),
+  // Giving Cycle 7: the church office changed a recurring gift at the
+  // member's request — they are always told, in words.
+  giving_schedule_office_change: (p) => {
+    const gift = `${str(p.frequency) === "weekly" ? "weekly" : "monthly"} gift of ${money(p)}${str(p.fund_name) ? ` to ${str(p.fund_name)}` : ""}`;
+    const action = str(p.action);
+    return {
+      title: action === "cancel" ? "Your recurring gift was cancelled" : action === "resume" ? "Your recurring gift is back on" : "Your recurring gift is paused",
+      body: action === "cancel"
+        ? `The church office cancelled your ${gift}, as you asked. Nothing more will be prompted.`
+        : action === "resume"
+          ? `The church office resumed your ${gift}, as you asked.`
+          : `The church office paused your ${gift}, as you asked${str(p.resume_on) ? ` — it starts again on ${dayWords(str(p.resume_on))}` : ""}.`,
+    };
+  },
   // Giving Cycle 5: a pledge's collector skips a cycle already paid, and
   // stops with its pledge — each said once, in words.
   giving_schedule_covered: (p) => ({

@@ -347,7 +347,9 @@ export type FinanceAlertKind =
   | "failing_schedules"
   | "stale_processing"
   | "integrity_issues"
-  | "partners_behind";
+  | "partners_behind"
+  /** Giving Cycle 9: M-Pesa looks unwell right now (see `message`). */
+  | "collection_outage";
 
 /* ====================================================================== */
 /* Reads — "Finance ERP · reports" schemas                                  */
@@ -399,7 +401,7 @@ export interface FinanceOverview {
   /** 12 months per currency, oldest first, the last being `to`'s month. month = "YYYY-MM". */
   series: { currency: string; months: { month: string; income_minor: number; expenses_minor: number }[] }[];
   /** Only kinds with count > 0; `link` is the web route that opens the queue. */
-  alerts: { kind: FinanceAlertKind; count: number; link: string }[];
+  alerts: { kind: FinanceAlertKind; count: number; link: string; /** The server's own words, when it has them (collection_outage). */ message?: string | undefined }[];
 }
 
 /** FinanceTransactionRow — one transaction as the office sees it. */
@@ -1398,6 +1400,14 @@ export const FinanceApi = {
   schedules: (q: SchedulesQuery = {}) => get<{ data: AdminScheduleRow[] }>(`${F}/schedules`, q).then((r) => r.data),
 
   /* ---------- writes ---------- */
+
+  /** finance:manage. POST /admin/finance/schedules/:id/{pause|resume|cancel} —
+   *  the office changes a member's recurring gift AT THEIR REQUEST (Giving
+   *  Cycle 7): a reason is required (3–300), the audit names who, and the
+   *  member is told. Pause may carry resume_on (tomorrow to a year ahead).
+   *  Answers the register row. */
+  scheduleAction: (scheduleId: string, action: "pause" | "resume" | "cancel", body: { note: string; resume_on?: string | null | undefined }) =>
+    post<AdminScheduleRow>(`${F}/schedules/${id(scheduleId)}/${action}`, body),
 
   /** finance:manage. POST /admin/finance/gifts — record a gift the office received (201; a replay 200 with reused). */
   recordGift: (body: BooksGiftInput) => post<BooksGiftResult>(`${F}/gifts`, body),

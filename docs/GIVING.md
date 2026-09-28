@@ -245,3 +245,29 @@ fixes and results is kept in the PR descriptions.
   members), every office route is behind `finance:view`/`finance:manage`,
   CSV exports neutralise spreadsheet formulas, PayPal money moves only on the
   server's own capture.
+
+## 10. The office sees the truth and can act on it (Cycle 7)
+
+- **One attention rule** (`constants.ts` `SCHEDULE_ATTENTION_SQL`) for Finance →
+  Recurring gifts, its "Needs attention" filter and the Overview alert:
+  failing, stopped after failed prompts, or our own outage (the last prompt
+  could not be sent in the past day — the giver was never told). A member's
+  own pause, and one that follows a paused pledge, are choices, not problems
+  (they used to count, and sent the office chasing people who had simply
+  said "not this month").
+- **The register speaks**: the failure in the words the member was told, our
+  outage as an office alert, why a gift is paused (the member — until when —,
+  its pledge, or failures), the pledge it collects and what its next prompt
+  will ask. The partner drawer shows the same reasons.
+- **The office acts when a member asks**: `POST /admin/finance/schedules/{id}/
+  pause|resume|cancel` (finance:manage) with a required reason; pause may
+  carry an end date. Recorded as the member's own pause; the audit names the
+  officer and the reason; the member is always told
+  (`giving_schedule_office_change`). A gift paused with its pledge resumes
+  with the pledge.
+- **Claims**: the queue flags a claim in another currency than its pledge
+  (`currency_mismatch`, `pledge_currency`) — Confirm is disabled; it can only
+  be rejected.
+- **"Remind everyone behind"** skips a pledge whose automatic collection
+  failed in the last 36 hours (the member was just told why); a one-to-one
+  reminder stays the office's own choice.

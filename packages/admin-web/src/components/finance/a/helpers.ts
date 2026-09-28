@@ -583,7 +583,7 @@ export const ALERT_COPY: Readonly<Record<FinanceAlertKind, AlertCopy>> = {
   },
   failing_schedules: {
     title: (n) => `${plural(n, "recurring gift")} ${n === 1 ? "needs" : "need"} attention`,
-    hint: "Paused, or the last collection failed.",
+    hint: "Failing, stopped after failed prompts, or not sent by us — never a member's own pause.",
     fallbackLink: "/finance/recurring?attention=true",
     tone: "warn",
   },
@@ -605,13 +605,30 @@ export const ALERT_COPY: Readonly<Record<FinanceAlertKind, AlertCopy>> = {
     fallbackLink: "/finance/partners?status=behind",
     tone: "info",
   },
+  collection_outage: {
+    title: () => "M-Pesa looks unwell right now",
+    hint: "Most prompts in the past hour never reached members' phones — gifts may fail until it recovers. Nothing to fix here.",
+    fallbackLink: "/finance/recurring",
+    tone: "error",
+  },
 };
+
+/** The copy for an alert kind — a kind this portal does not know yet (a
+ *  newer server) gets plain words instead of breaking the Overview. */
+export function alertCopy(kind: string): AlertCopy {
+  return (ALERT_COPY as Readonly<Record<string, AlertCopy>>)[kind] ?? {
+    title: (n) => `${n} × ${kind.replace(/_/g, " ")}`,
+    hint: "",
+    fallbackLink: "/finance",
+    tone: "info",
+  };
+}
 
 /** Only an in-app path is followed ("/finance/…"); anything else from the wire
  *  falls back to the kind's own route. Integrity always opens the exceptions. */
 export function alertLink(kind: FinanceAlertKind, link: string | null | undefined): string {
   if (kind === "integrity_issues") return "/finance/reconciliation?tab=exceptions";
-  const copy = ALERT_COPY[kind];
+  const copy = alertCopy(kind);
   if (typeof link === "string" && link.startsWith("/") && !link.startsWith("//")) return link;
   return copy.fallbackLink;
 }

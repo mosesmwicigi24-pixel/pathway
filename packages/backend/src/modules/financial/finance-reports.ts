@@ -19,6 +19,7 @@
 //     statement's own instalment ledger — never a second copy of that math.
 //   · Every list returns { data, next_cursor, totals } with totals over the
 //     WHOLE filtered set, never just the page.
+import { SCHEDULE_ATTENTION_SQL } from "./constants.js";
 import { giftFailureCopy } from "./giftFailure.js";
 import type { Pool } from "pg";
 import { z } from "zod";
@@ -1309,8 +1310,10 @@ export class FinanceReportsService {
                   AND created_at >= ${eatStart("$1")} AND created_at < ${eatEnd("$2")}) AS failed_in_period,
               (SELECT count(*)::int FROM pledge_claims WHERE status = 'pending') AS pending_claims,
               (SELECT count(*)::int FROM expenses WHERE status = 'recorded') AS expenses_awaiting_approval,
-              (SELECT count(*)::int FROM giving_schedules
-                WHERE status <> 'cancelled' AND (status = 'paused' OR consecutive_failures > 0)) AS failing_schedules`,
+              -- The register's own rule (FinancialService.SCHEDULE_ATTENTION_SQL,
+              -- Giving Cycle 7): a member's own pause is not a failure.
+              (SELECT count(*)::int FROM giving_schedules s
+                WHERE s.status <> 'cancelled' AND (${SCHEDULE_ATTENTION_SQL})) AS failing_schedules`,
       [from, to],
     );
     const exceptions = await this.exceptions({ from, to }, now);

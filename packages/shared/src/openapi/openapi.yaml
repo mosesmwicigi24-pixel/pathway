@@ -3519,7 +3519,7 @@ paths:
   /admin/partners/claims:
     get:
       tags: [system]
-      summary: Admin. Pending "I paid another way" claims.
+      summary: Admin. Pending "I paid another way" claims — each with pledge_currency and currency_mismatch (Giving Cycle 7; a mismatched claim can only be rejected).
       responses:
         "200": { description: Claims }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
@@ -3548,7 +3548,7 @@ paths:
   /admin/partners/remind-behind:
     post:
       tags: [system]
-      summary: Admin. Remind every partner with a pledge that is behind — spaced 12 h from any other reminder.
+      summary: Admin. Remind every partner with a pledge that is behind — spaced 12 h from any other reminder; a pledge whose automatic collection failed in the last 36 h is skipped (the member was just told why — Giving Cycle 7).
       responses:
         "200": { description: Counts }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
@@ -3857,7 +3857,22 @@ paths:
   /admin/finance/schedules:
     get:
       tags: [portal]
-      summary: "finance:view. Recurring giving with collection health — member, amount, method, status, next run, consecutive_failures, last_error and needs_attention. Ordered paused first, then most failures, then soonest due. Optional ?status=active|paused|cancelled, ?attention=true (only the ones needing attention — paused, or with a consecutive failure; never cancelled) and ?limit (max 200)."
+      summary: "finance:view. Recurring giving with collection health — member, amount, method, status, next run, consecutive_failures, last_error and needs_attention. Ordered needs-attention first, then paused, then most failures, then soonest due. Optional ?status=active|paused|cancelled, ?attention=true (only the ones needing attention; never cancelled) and ?limit (max 200)."
+      description: >-
+        Giving Cycle 7: needs_attention is ONE server rule (constants.ts
+        SCHEDULE_ATTENTION_SQL, also the Overview's failing_schedules alert):
+        failing (consecutive_failures > 0), stopped after failed prompts (paused,
+        pause_reason failures or unknown), or our own outage — the last prompt
+        could not be SENT in the past 24 hours (last_error with no
+        last_failure_code). A member's own pause and a pause that follows a
+        paused pledge are NOT attention. Each row also carries fund_name,
+        last_failure (GiftFailure words, while failing), office_alert (our side
+        — the giver was not told), pause_reason, resume_on, heads_up,
+        prompt_number (the schedule's own number; null = the profile's),
+        retry_at, pledge ({pledge_id, title} it collects, or null) and
+        next_amount_minor (what the next prompt asks: below amount_minor when
+        its pledge is part paid, 0 when already paid, null when nothing is
+        coming).
       parameters:
         - { name: status, in: query, required: false, schema: { type: string, enum: [active, paused, cancelled] } }
         - { name: attention, in: query, required: false, schema: { type: boolean }, description: "true = only schedules needing attention (the same rule as needs_attention)." }
@@ -3866,6 +3881,60 @@ paths:
         "200": { description: Recurring giving }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/schedules/{id}/pause:
+    post:
+      tags: [portal]
+      summary: "finance:manage. The office pauses a member's recurring gift AT THE MEMBER'S REQUEST (Giving Cycle 7) — optionally until resume_on (a Nairobi date from tomorrow to a year ahead), when it resumes by itself. Recorded as the member's pause; the audit names the officer and the reason; the member is told (push giving_schedule_office_change). Answers the register row."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OfficeScheduleAction" }
+      responses:
+        "200": { description: "The schedule, as GET /admin/finance/schedules lists it" }
+        "400": { description: "VALIDATION_FAILED — a reason (3–300) is required; resume_on out of range", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "Not active", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /admin/finance/schedules/{id}/resume:
+    post:
+      tags: [portal]
+      summary: "finance:manage. The office resumes a member's paused recurring gift at the member's request (Giving Cycle 7): it picks up at its next occurrence — nothing missed is charged — with its failure state cleared. A gift paused with its pledge is 422 (resume the pledge). Audited; the member is told."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OfficeScheduleAction" }
+      responses:
+        "200": { description: "The schedule, as GET /admin/finance/schedules lists it" }
+        "400": { description: "VALIDATION_FAILED — a reason is required", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "Not paused, or paused with its pledge", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /admin/finance/schedules/{id}/cancel:
+    post:
+      tags: [portal]
+      summary: "finance:manage. The office cancels a member's recurring gift at the member's request (Giving Cycle 7). Nothing is prompted again. Audited; the member is told."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OfficeScheduleAction" }
+      responses:
+        "200": { description: "The schedule, as GET /admin/finance/schedules?status=cancelled lists it" }
+        "400": { description: "VALIDATION_FAILED — a reason is required", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "Already cancelled", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /giving/history:
     get:
       tags: [giving]
@@ -11076,6 +11145,12 @@ components:
       properties:
         modules: { type: array, items: { type: string }, description: "PERM_MODULES, server order." }
         capabilities: { type: array, items: { type: string }, description: "CAPABILITIES, server order (view, create, edit, delete, approve, export, go, manage)." }
+    OfficeScheduleAction:
+      type: object
+      required: [note]
+      properties:
+        note: { type: string, minLength: 3, maxLength: 300, description: "Why — the member's request, in a line (audited)." }
+        resume_on: { type: [string, "null"], format: date, description: "Pause only: resume by itself on this Nairobi date (tomorrow to a year ahead)." }
     Pledge:
       type: object
       required: [pledge_id, shape, currency, status, progress, title, custom_title, pays_to]
