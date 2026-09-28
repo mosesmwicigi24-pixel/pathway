@@ -271,3 +271,26 @@ fixes and results is kept in the PR descriptions.
 - **"Remind everyone behind"** skips a pledge whose automatic collection
   failed in the last 36 hours (the member was just told why); a one-to-one
   reminder stays the office's own choice.
+
+## 11. Giving at scale (Cycle 8)
+
+- **Indexes** (migration 222): `transactions` had none on `user_id` or
+  `fund_id`, so every member-scoped read — the Give tab's history, the
+  one-prompt-at-a-time check made before EVERY M-Pesa prompt, statements,
+  receipts, Try again, the office's per-partner totals — and every per-fund
+  total scanned the whole table. Now `(user_id, created_at DESC)` and
+  `(fund_id, status, created_at)`.
+- **Fixed-cost passes**: the reminder scan reads every candidate's payments,
+  the schedules collecting them and their recent reminders in four reads
+  (it was about four queries per pledge, every 15 minutes); the fulfilment
+  pass reads twice however many total pledges are open; one partner's page
+  evaluates that partner only (it evaluated every partner to show one).
+- **One run at a time** (`workers/oneAtATime.ts`): the scheduler (5 min), the
+  M-Pesa reconcile (1 min) and the reminder scan (15 min) skip a tick while
+  their last run is still going, and say so — a slow provider used to stack
+  runs over the same rows.
+- **Measured**: 1,000 gifts due in one minute go out in two passes of 500
+  (the runner's per-pass cap), once each; the database work is about 2 ms a
+  prompt. Known next threshold: the office's full Partners register still
+  evaluates each partner separately — fine at hundreds of partners; batch it
+  before thousands.

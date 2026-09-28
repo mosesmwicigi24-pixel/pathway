@@ -9,6 +9,7 @@ import type { Pool } from "pg";
 import type { Logger } from "pino";
 import { PartnersService } from "../modules/financial/partners.js";
 import type { NotificationService } from "../modules/notifications/service.js";
+import { oneAtATime } from "./oneAtATime.js";
 
 export class PledgeReminderScanner {
   private readonly partners: PartnersService;
@@ -24,7 +25,10 @@ export class PledgeReminderScanner {
   }
 
   start(intervalMs: number): () => void {
-    const tick = (): void => { void this.scanOnce().catch((e) => this.log?.error({ err: e }, "pledge reminder scan failed")); };
+    // One scan at a time (Giving Cycle 8): an overlapping scan could read the
+    // same due date before the first recorded its reminder.
+    const once = oneAtATime("pledge reminder scan", () => this.scanOnce(), this.log);
+    const tick = (): void => { void once(); };
     tick();
     const timer = setInterval(tick, intervalMs);
     return () => clearInterval(timer);

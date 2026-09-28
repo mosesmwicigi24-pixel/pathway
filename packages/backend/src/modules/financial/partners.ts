@@ -1267,10 +1267,26 @@ export class PartnersService {
         WHERE p.status = 'active' AND p.reminders_enabled AND COALESCE(pm.reminders_enabled, TRUE)`.replace("p.note, p.created_at::text", "p.note, u.timezone, p.created_at::text"),
       [],
     );
+    // Every candidate's payments in ONE read (Giving Cycle 8) — it used to be
+    // one query per pledge, every 15 minutes, for every open pledge.
+    const byPledge = await this.paymentsByPledge(rows.map((r) => r.pledge_id));
     const out: Array<{ row: PledgeRow; progress: PledgeProgress; owed_minor: number | null; timezone: string }> = [];
     for (const r of rows) {
-      const d = await this.progressDetail(r, now);
+      const d = await this.progressDetail(r, now, byPledge.get(r.pledge_id) ?? []);
       out.push({ row: r, progress: d.progress, owed_minor: d.owed_minor, timezone: r.timezone ?? "Africa/Nairobi" });
+    }
+    return out;
+  }
+
+  /** Succeeded payments toward each of `ids`, in ledger order, grouped by
+   *  pledge — the rows progressDetail would read one pledge at a time. */
+  private async paymentsByPledge(ids: string[]): Promise<Map<string, LedgerPaymentInput[]>> {
+    const out = new Map<string, LedgerPaymentInput[]>();
+    if (ids.length === 0) return out;
+    for (const x of await this.pledgeHistoryWhere(`t.pledge_id = ANY($1::uuid[])`, [ids])) {
+      const list = out.get(x.pledge_id!) ?? [];
+      list.push(x);
+      out.set(x.pledge_id!, list);
     }
     return out;
   }
@@ -1278,11 +1294,6 @@ export class PartnersService {
   private async lastReminderAt(pledgeId: string): Promise<Date | null> {
     const r = await maybeOne<{ sent_at: string }>(this.pool, `SELECT max(sent_at)::text AS sent_at FROM pledge_reminders WHERE pledge_id = $1`, [pledgeId]);
     return r?.sent_at ? new Date(r.sent_at) : null;
-  }
-
-  private async autoSent(pledgeId: string, dueOn: string, sequence: number): Promise<boolean> {
-    const r = await maybeOne(this.pool, `SELECT 1 FROM pledge_reminders WHERE pledge_id = $1 AND due_on = $2 AND sequence = $3 AND kind = 'auto'`, [pledgeId, dueOn, sequence]);
-    return r !== null;
   }
 
   /** Fan one reminder out on every channel; the notification service applies
@@ -1300,7 +1311,41 @@ export class PartnersService {
   async sendDueReminders(notifications: NotificationService, now = new Date()): Promise<{ due_soon: number; follow_ups: number }> {
     let dueSoon = 0, followUps = 0;
     const today = nairobiDate(now);
-    for (const { row, progress, owed_minor, timezone } of await this.reminderCandidates(now)) {
+    const candidates = await this.reminderCandidates(now);
+    // What the pass needs to know about every candidate, read once (Giving
+    // Cycle 8) — the schedules collecting them and their recent reminders —
+    // instead of three queries per pledge.
+    const ids = candidates.map((c) => c.row.pledge_id);
+    const collecting = new Map<string, { next_on: string | null; failed_recently: boolean }>();
+    const recent = new Map<string, Array<{ due_on: string; sequence: number; kind: string; sent_at: Date }>>();
+    if (ids.length) {
+      for (const r of await many<{ pledge_id: string; next_on: string | null; failed_recently: boolean | null }>(
+        this.pool,
+        `SELECT p.pledge_id, min((s.next_run_at AT TIME ZONE 'Africa/Nairobi')::date)::text AS next_on,
+                bool_or(s.last_failed_at IS NOT NULL AND s.last_failed_at > $2::timestamptz - interval '36 hours') AS failed_recently
+           FROM pledges p JOIN giving_schedules s ON (s.pledge_id = p.pledge_id OR s.schedule_id = p.schedule_id)
+          WHERE p.pledge_id = ANY($1::uuid[]) AND s.status = 'active'
+          GROUP BY p.pledge_id`,
+        [ids, now.toISOString()],
+      )) collecting.set(r.pledge_id, { next_on: r.next_on, failed_recently: Boolean(r.failed_recently) });
+      // Sixty days covers every due date a reminder can still be about (three
+      // days before it to a day and a half after) and the 12-hour spacing.
+      for (const r of await many<{ pledge_id: string; due_on: string; sequence: number; kind: string; sent_at: Date }>(
+        this.pool,
+        `SELECT pledge_id, due_on::text, sequence, kind, sent_at FROM pledge_reminders
+          WHERE pledge_id = ANY($1::uuid[]) AND sent_at > $2::timestamptz - interval '60 days'`,
+        [ids, now.toISOString()],
+      )) {
+        const list = recent.get(r.pledge_id) ?? [];
+        list.push(r);
+        recent.set(r.pledge_id, list);
+      }
+    }
+    const autoSent = (pledgeId: string, dueOn: string, seq: number): boolean =>
+      (recent.get(pledgeId) ?? []).some((x) => x.kind === "auto" && x.due_on === dueOn && x.sequence === seq);
+    const lastReminderAt = (pledgeId: string): Date | null =>
+      (recent.get(pledgeId) ?? []).reduce<Date | null>((m, x) => (m === null || new Date(x.sent_at) > m ? new Date(x.sent_at) : m), null);
+    for (const { row, progress, owed_minor, timezone } of candidates) {
       if (!progress.next_due || progress.label === "fulfilled" || progress.label === "paused") continue;
       const dueOn = progress.next_due;
       // What is still owed on that due date (a partial payment reduces it).
@@ -1311,21 +1356,14 @@ export class PartnersService {
       // about to charge needs no "due soon" (the schedule's heads-up says the
       // prompt is coming), and a scheduled charge that just failed has already
       // told the member — and may be retrying — so no overdue nudge on top.
-      const sched = await maybeOne<{ next_on: string | null; failed_recently: boolean | null }>(
-        this.pool,
-        `SELECT min((s.next_run_at AT TIME ZONE 'Africa/Nairobi')::date)::text AS next_on,
-                bool_or(s.last_failed_at IS NOT NULL AND s.last_failed_at > $2::timestamptz - interval '36 hours') AS failed_recently
-           FROM giving_schedules s
-          WHERE (s.pledge_id = $1 OR s.schedule_id = $3) AND s.status = 'active'`,
-        [row.pledge_id, now.toISOString(), row.schedule_id],
-      );
+      const sched = collecting.get(row.pledge_id) ?? null;
 
       if (!progress.overdue_since) {
         // Due soon: once, within the window before the due date.
         const daysAway = Math.round((nairobiStart(dueOn).getTime() - nairobiStart(today).getTime()) / 86_400_000);
         if (daysAway < 0 || daysAway > PartnersService.DUE_SOON_DAYS) continue;
         if (sched?.next_on && sched.next_on <= nairobiDate(new Date(nairobiStart(dueOn).getTime() + 86_400_000))) continue;
-        if (await this.autoSent(row.pledge_id, dueOn, 0)) continue;
+        if (autoSent(row.pledge_id, dueOn, 0)) continue;
         const channels = await this.fanOut(notifications, row.user_id, "pledge_due_soon", { ...payload, days_away: daysAway }, timezone);
         await this.pool.query(`INSERT INTO pledge_reminders (pledge_id, due_on, sequence, kind, channel, sent_at) VALUES ($1, $2, 0, 'auto', $3, $4) ON CONFLICT DO NOTHING`, [row.pledge_id, dueOn, channels.join(",") || "none", now.toISOString()]);
         dueSoon += 1;
@@ -1338,8 +1376,8 @@ export class PartnersService {
       for (let seq = 1; seq <= PartnersService.FOLLOW_UPS; seq++) {
         const at = dueEnd + seq * PartnersService.FOLLOW_UP_HOURS * 3_600_000;
         if (now.getTime() < at) break;
-        if (await this.autoSent(row.pledge_id, dueOn, seq)) continue;
-        const last = await this.lastReminderAt(row.pledge_id);
+        if (autoSent(row.pledge_id, dueOn, seq)) continue;
+        const last = lastReminderAt(row.pledge_id);
         if (last && now.getTime() - last.getTime() < PartnersService.FOLLOW_UP_HOURS * 3_600_000) break; // spacing against ANY reminder
         const channels = await this.fanOut(notifications, row.user_id, "pledge_overdue", { ...payload, sequence: seq, of: PartnersService.FOLLOW_UPS }, timezone);
         await this.pool.query(`INSERT INTO pledge_reminders (pledge_id, due_on, sequence, kind, channel, sent_at) VALUES ($1, $2, $3, 'auto', $4, $5) ON CONFLICT DO NOTHING`, [row.pledge_id, dueOn, seq, channels.join(",") || "none", now.toISOString()]);
@@ -1353,8 +1391,10 @@ export class PartnersService {
   /** Total pledges that reached their target flip to fulfilled, once, with a thank-you. */
   async fulfilCompleted(notifications: NotificationService, now = new Date()): Promise<number> {
     const rows = await this.pledgeRows(this.pool, `WHERE p.status = 'active' AND p.shape = 'total'`, []);
+    // Every open total pledge's payments in one read (Giving Cycle 8).
+    const byPledge = await this.paymentsByPledge(rows.map((r) => r.pledge_id));
     let n = 0;
-    for (const r of rows) if (await this.fulfilRow(notifications, r, now)) n += 1;
+    for (const r of rows) if (await this.fulfilRow(notifications, r, now, byPledge.get(r.pledge_id) ?? [])) n += 1;
     return n;
   }
 
@@ -1368,8 +1408,8 @@ export class PartnersService {
   /** Fulfilled once (the flip is guarded by status), every schedule paying it
    *  stopped — they used to keep charging past the target (Giving Cycle 5) —
    *  and the member thanked, told whether prompts stopped. */
-  private async fulfilRow(notifications: NotificationService, r: PledgeRow, now: Date): Promise<boolean> {
-    const pr = await this.progress(r, now);
+  private async fulfilRow(notifications: NotificationService, r: PledgeRow, now: Date, preloaded?: LedgerPaymentInput[]): Promise<boolean> {
+    const pr = (await this.progressDetail(r, now, preloaded)).progress;
     if (pr.label !== "fulfilled") return false;
     const done = await this.pool.query(`UPDATE pledges SET status = 'fulfilled', fulfilled_at = now(), updated_at = now() WHERE pledge_id = $1 AND status = 'active'`, [r.pledge_id]);
     if (!done.rowCount) return false;
@@ -1572,7 +1612,13 @@ export class PartnersService {
    *  view (and tests can pin it); routes pass none. "behind" is each pledge's
    *  progress label — for a monthly pledge, any instalment missed in its
    *  ledger, so a late payment that completes the missed one clears it. */
-  async adminList(query: z.infer<typeof PartnersService.AdminListQuery>, now: Date = new Date()): Promise<Record<string, unknown>> {
+  async adminList(
+    query: z.infer<typeof PartnersService.AdminListQuery>,
+    now: Date = new Date(),
+    /** One member only — the partner drawer (Giving Cycle 8: it used to
+     *  evaluate EVERY partner's pledges to show one). */
+    onlyUserId: string | null = null,
+  ): Promise<Record<string, unknown>> {
     const rows = await many<{ user_id: string; full_name: string; avatar_url: string | null; phone_number: string | null; email: string | null; cell_name: string | null; m_status: string | null; joined_at: string | null }>(
       this.pool,
       `SELECT u.user_id, u.full_name, u.avatar_url, u.phone_number, u.email, cg.name AS cell_name,
@@ -1584,8 +1630,9 @@ export class PartnersService {
           AND (pm.user_id IS NOT NULL
                OR EXISTS (SELECT 1 FROM pledges p WHERE p.user_id = u.user_id)
                OR EXISTS (SELECT 1 FROM giving_schedules s WHERE s.user_id = u.user_id AND s.status IN ('active','paused')))
-          AND ($1::text IS NULL OR u.full_name ILIKE '%' || $1 || '%' OR u.email ILIKE '%' || $1 || '%')`,
-      [query.q ?? null],
+          AND ($1::text IS NULL OR u.full_name ILIKE '%' || $1 || '%' OR u.email ILIKE '%' || $1 || '%')
+          AND ($2::uuid IS NULL OR u.user_id = $2)`,
+      [query.q ?? null, onlyUserId],
     );
     const year = Number(nairobiDate(now).slice(0, 4));
     const data: Record<string, unknown>[] = [];
@@ -1659,7 +1706,7 @@ export class PartnersService {
   }
 
   async adminDetail(userId: string, now: Date = new Date()): Promise<Record<string, unknown>> {
-    const list = await this.adminList({ status: "all", sort: "recent" }, now);
+    const list = await this.adminList({ status: "all", sort: "recent" }, now, userId);
     const member = (list.data as Record<string, unknown>[]).find((d) => d.user_id === userId);
     if (!member) throw new ApiError("NOT_FOUND", "Not a partner");
     const p = await this.partnership(userId, now);
