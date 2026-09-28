@@ -2659,7 +2659,9 @@ paths:
         own M-Pesa prompt from the last 90 seconds still unanswered refuses a second
         one (409 GIFT_IN_PROGRESS, details.transaction_id) — a replay with the SAME
         idempotency_key is not refused; it returns that transaction, with provider
-        and provider_ref (null while the prompt is still being sent). Giving Cycle
+        and provider_ref (null while the prompt is still being sent) — and, for a
+        PayPal order still waiting, its approve_url again (Giving Cycle 10), so an
+        app that lost the first answer can reopen the approval page. Giving Cycle
         6: the gift's row is claimed under a per-member lock BEFORE the phone
         rings, so a resend or a double tap can never ring twice or lose a row; a
         prompt that could not be sent leaves no row. A prompt to a number that is
@@ -6529,7 +6531,7 @@ paths:
   /me/notifications:
     get:
       tags: [progress]
-      summary: My notification center — recent notifications + unread badge count.
+      summary: My notification center — recent notifications + unread badge count. One row per NOTICE (Giving Cycle 10) — a notice sent on push, SMS and email (a pledge reminder) is one row (the push row when there is one) and counts once as unread; it is unread while any delivered row of it is.
       parameters:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
       responses:
@@ -6538,7 +6540,7 @@ paths:
   /me/notifications/read:
     post:
       tags: [progress]
-      summary: Mark all (or the given ids) read. Idempotent display state.
+      summary: Mark all (or the given ids) read. Idempotent display state. Reading a notice reads every channel's row of it (Giving Cycle 10); `marked` counts rows.
       requestBody:
         required: false
         content:

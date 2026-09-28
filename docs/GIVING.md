@@ -318,3 +318,30 @@ fixes and results is kept in the PR descriptions.
   shilling ones (`summary_currency`); disciples carried count shillings only;
   a payment counts toward a pledge only in the pledge's currency; the PDF
   prints "KSh 30,000 + USD 500".
+
+## 13. The whole journey, and the last rough edges (Cycle 10)
+
+- **A notice names what it is about in its own words.** An explicit push title
+  is a call site composing its own copy — title AND body (chat, blessings,
+  prayer chains, announcements). A payload with a `title` but no `body` is
+  naming the THING the notice is about — a pledge, a department need — and the
+  template's words come first. Pledge reminders, covered months, claim
+  answers and need notices used to show just the pledge's or need's name as
+  the lock-screen title ("Kenya trip" instead of "Kenya trip — due in 3
+  days"); a sweep over every template in the table now pins it.
+- **One notice, one row.** `GET /me/notifications` returns one row per notice
+  — a reminder sent on push, SMS and email is one row (the push row when
+  there is one) and one unread — and reading it reads every channel's row.
+  It used to show three times and count three.
+- **A resent PayPal gift can still be approved**: the replay of a waiting
+  order carries its `approve_url` again.
+- **The whole journey, end to end** (`test/giving-cycle-10.test.ts` S4): a
+  pledge collected automatically from its first due day, a declined prompt
+  (a strike, the member told), Try again counted toward the cycle, a month
+  paid by hand and confirmed by the office, a covered month skipped with a
+  notice, the office pausing at the member's request until a date and the
+  gift resuming by itself at its next occurrence, a dollar gift on the side
+  — and the statement, the register and collection health all agree.
+- **End to end on the portal** (local API, 2026-09-28): the collection-health
+  card, the register's reasons and office pause/resume with the audit and the
+  member's notice, verified in the browser.

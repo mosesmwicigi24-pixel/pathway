@@ -325,6 +325,11 @@ export class FinancialService {
         // The same shape the first answer had (Giving Cycle 6): a resend
         // learns which prompt it is — null while it is still being sent.
         ...(existing.provider ? { provider: existing.provider, provider_ref: existing.provider_ref } : {}),
+        // …and a PayPal order still waiting gets its approval page back
+        // (Giving Cycle 10: the app could not reopen it after a lost answer).
+        ...(existing.provider === "paypal" && existing.status === "processing" && existing.provider_ref && this.paypal?.approveUrlFor
+          ? { approve_url: this.paypal.approveUrlFor(existing.provider_ref) }
+          : {}),
         idempotency_key: key,
         reused: true,
         ...(await this.intentAttribution(
@@ -1920,7 +1925,13 @@ export class FinancialService {
       this.pool, `SELECT transaction_id, status, provider, provider_ref FROM transactions WHERE idempotency_key = $1 AND user_id = $2`, [key, userId],
     );
     if (!first) throw new ApiError("CONFLICT", "That request key is already in use. Try again.", { fields: [{ path: "idempotency_key", message: "in use" }] });
-    return { transaction_id: first.transaction_id, status: first.status, provider: first.provider, provider_ref: first.provider_ref, idempotency_key: key, reused: true };
+    return {
+      transaction_id: first.transaction_id, status: first.status, provider: first.provider, provider_ref: first.provider_ref,
+      ...(first.provider === "paypal" && first.status === "processing" && first.provider_ref && this.paypal?.approveUrlFor
+        ? { approve_url: this.paypal.approveUrlFor(first.provider_ref) }
+        : {}),
+      idempotency_key: key, reused: true,
+    };
   }
 
   /** Server-made keys (schedule cycles, confirmed claims, website and office

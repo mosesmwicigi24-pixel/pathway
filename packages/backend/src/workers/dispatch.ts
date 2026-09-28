@@ -352,7 +352,15 @@ export const KNOWN_PUSH_TEMPLATES = Object.keys(PUSH_TEMPLATE_COPY);
 function pushCopy(msg: DispatchMessage, log?: Logger): { title: string; body: string } {
   const p = msg.payload;
   const generated = PUSH_TEMPLATE_COPY[msg.template]?.(p);
-  const title = str(p.title) ?? generated?.title ?? "Nuru Pathway";
+  // An explicit push title is a call site composing its own copy — it sets
+  // title AND body (chat, blessings, prayer chains, announcements). A payload
+  // with a title but no body is naming the THING the notice is about — a
+  // pledge, a department need — and the table's words come first (Giving
+  // Cycle 10: a pledge reminder's lock screen read "Kenya trip" instead of
+  // "Kenya trip — due in 3 days", a covered month "Kenya trip" instead of
+  // "Nothing to pay this month").
+  const composed = str(p.title) !== undefined && str(p.body) !== undefined;
+  const title = (composed ? str(p.title) : undefined) ?? generated?.title ?? str(p.title) ?? "Nuru Pathway";
   const body = str(p.body) ?? generated?.body ?? str(p.feedback);
   if (body) return { title, body };
 
