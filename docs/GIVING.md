@@ -345,3 +345,43 @@ fixes and results is kept in the PR descriptions.
 - **End to end on the portal** (local API, 2026-09-28): the collection-health
   card, the register's reasons and office pause/resume with the audit and the
   member's notice, verified in the browser.
+
+## 14. Four surfaces, one experience (Cycle 10 parity pass)
+
+The two member apps and the iPad office were compared screen by screen — the
+same member on the same local API (the pathway branch), iOS on a simulator,
+Android on an emulator, the iPad on a simulator — after the owner sent a
+Partners screenshot from Android where the STANDING card squeezed "Partner
+since Sep 2026" into a column of letters. What looking found that reading the
+code had not:
+
+- **A starved row is a class.** Compose measures a Row's unweighted children
+  before its weighted one, so a long unweighted chip took the width and the
+  weighted text column got what was left — one letter. iOS's HStack shares
+  the width. Every Row on Give that sets variable text beside a variable chip
+  now bounds the chip (Android).
+- **A pledge shows what collects it**, monthly or total — "Collected
+  automatically — next KSh 5,000 on 5 Oct". Android showed it only for a pledge
+  with a pace, so a monthly pledge collected by its recurring gift looked
+  unattended.
+- **"Repeat last gift" offers only a gift that went through.** iOS offered a
+  member's only gift — which had failed — beside Recent giving's "No gifts
+  yet". Both apps now take the newest ordinary gift that settled.
+- **Every notice the server sends has words in both apps.** The office's
+  change to a recurring gift (Cycle 7) and a department need's notices read
+  in the server's words; a need's `title` is the need's name, never the
+  notice's title. Giving notices wear Give's icon, not the security gear.
+- **The office on the iPad**: a Finance table that fitted could never fall
+  back to scrolling sideways when the window narrowed, so rotating to portrait
+  clipped the whole Recurring page — every Finance table now scrolls only when
+  it must; Recurring and the partner drawer grow with the text size instead
+  of cutting "Pa…" and "KES 1,…".
+- **Words agree**: RECURRING GIFTS (the rail lists paused gifts too, so not
+  "active schedules"); "0700 000 000", never "+254700000000", on screen; the
+  wire still carries E.164.
+
+Open for the owner: "Pay" on a DUE row for a plain recurring gift opens a
+separate one-time gift while the schedule still charges on its day — the
+member gives twice that cycle. The spec lists "Pay now / Resume" for
+schedules; the choice is to show the collection day instead of Pay for an
+active gift, or to build "pay this cycle now" on the server.
