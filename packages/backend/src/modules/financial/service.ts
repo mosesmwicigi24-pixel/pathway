@@ -20,8 +20,17 @@ import { giftFailureCopy } from "./giftFailure.js";
 import { renderStatementPdf, renderReceiptPdf } from "./statementPdf.js";
 import { PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, methodLabel, giftMethodLabel } from "./constants.js";
 // partners.ts imports FinancialService as a TYPE only, so this is not a cycle.
-import { pledgeTitleFor, pledgeTitleSql } from "./partners.js";
-import { nairobiDate } from "./partnerStatementMath.js";
+import { PartnersService, pledgeTitleFor, pledgeTitleSql } from "./partners.js";
+import { allocateInstalments, nairobiDate, type LedgerPaymentInput } from "./partnerStatementMath.js";
+
+/** What one cycle of a schedule that pays a pledge should do (Giving Cycle 5,
+ *  FinancialService.pledgeCyclePlan). */
+export type PledgeCyclePlan =
+  | { action: "charge"; pledge_id: string; title: string; amount_minor: number; owed_minor: number }
+  | { action: "skip"; pledge_id: string; title: string; covered_through: string | null }
+  | { action: "fulfil"; pledge_id: string; title: string }
+  | { action: "pause"; pledge_id: string; title: string }
+  | { action: "stop"; pledge_id: string; title: string; reason: "pledge_fulfilled" | "pledge_ended" | "pledge_cancelled"; until_on: string | null };
 // The Finance ERP read side (docs/FINANCE_ERP.md §4) owns the admin registers;
 // the methods below that the older routes and tests call delegate to it, so
 // there is one implementation of each.
@@ -326,6 +335,7 @@ export class FinancialService {
     const attribution = await this.intentAttribution({ code: fund.code, name: fund.name }, pledgeId);
 
     const currency = input.currency.toUpperCase();
+    await this.assertSameCurrency(currency, pledgeId, needId);
     // Direct (non-HTTP) callers may omit the method; the zod default is card.
     const method = input.method ?? "card";
     const { phone } = await this.checkGift(
@@ -895,7 +905,9 @@ export class FinancialService {
           RETURNING t.transaction_id, t.user_id, t.schedule_id, t.schedule_cycle_at, t.amount_minor, t.currency,
                     (SELECT f.code FROM funds f WHERE f.fund_id = t.fund_id) AS fund,
                     (t.created_at < now() - interval '45 seconds') AS unseen,
-                    (t.idempotency_key LIKE 'sched:%:first') AS first_charge`,
+                    -- Watched: a give-now first prompt, or the member's own
+                    -- Try again of a scheduled charge (any key not the runner's).
+                    (t.idempotency_key LIKE 'sched:%:first' OR t.idempotency_key NOT LIKE 'sched:%') AS first_charge`,
         [ref, outcome.failure.code, outcome.detail],
       );
       if (failed?.schedule_id) {
@@ -1317,11 +1329,14 @@ export class FinancialService {
     const t = await maybeOne<{
       status: string; provider: string | null; amount_minor: string; currency: string; fund: string | null;
       pledge_id: string | null; need_id: string | null; account_name: string | null; fee_cover_minor: string | null;
+      schedule_id: string | null; schedule_cycle_at: string | null; schedule_open: boolean | null;
     }>(
       this.pool,
       `SELECT t.status, t.provider, t.amount_minor, t.currency, f.code AS fund, t.pledge_id, t.need_id,
-              t.account_name, t.fee_cover_minor
+              t.account_name, t.fee_cover_minor, t.schedule_id, t.schedule_cycle_at,
+              (s.status IN ('active','paused')) AS schedule_open
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
+         LEFT JOIN giving_schedules s ON s.schedule_id = t.schedule_id
         WHERE t.transaction_id = $1 AND t.user_id = $2`,
       [transactionId, userId],
     );
@@ -1347,6 +1362,16 @@ export class FinancialService {
       cover_fee_minor: t.fee_cover_minor ? Number(t.fee_cover_minor) : null,
       ...(input.idempotency_key ? { idempotency_key: input.idempotency_key } : {}),
     });
+    // A retried SCHEDULED charge is that cycle's attempt (Giving Cycle 5): paid,
+    // it clears the schedule's strikes and its automatic retry of the cycle;
+    // declined, it counts like any attempt the member watched. It used to be
+    // a stray one-off gift the schedule never heard about.
+    if (t.schedule_id && t.schedule_cycle_at && t.schedule_open && typeof result.transaction_id === "string") {
+      await this.pool.query(
+        `UPDATE transactions SET schedule_id = $2, schedule_cycle_at = $3 WHERE transaction_id = $1 AND schedule_id IS NULL`,
+        [result.transaction_id, t.schedule_id, t.schedule_cycle_at],
+      );
+    }
     return { ...result, retry_of: transactionId };
   }
 
@@ -1742,9 +1767,219 @@ export class FinancialService {
     return new Date(at.getTime() + FinancialService.EAT_MS).getUTCDate();
   }
 
+  /** A Nairobi date (YYYY-MM-DD) at `timeOf`'s Nairobi time of day, in
+   *  prompt hours — a pledge's first collection (Giving Cycle 5). */
+  static onDayAt(ymd: string, timeOf: Date): Date {
+    const t = new Date(timeOf.getTime() + FinancialService.EAT_MS);
+    const wall = Date.parse(`${ymd}T00:00:00Z`) + (t.getUTCHours() * 60 + t.getUTCMinutes()) * 60_000;
+    return FinancialService.sameDayPromptHours(new Date(wall - FinancialService.EAT_MS));
+  }
+
+  /** "5 October" (with the year when it is not this one) for a Nairobi date. */
+  static dayWords(ymd: string, now: Date = new Date()): string {
+    const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const [y, m, d] = ymd.split("-").map(Number);
+    const words = `${d} ${months[(m ?? 1) - 1]}`;
+    return String(y) === nairobiDate(now).slice(0, 4) ? words : `${words} ${y}`;
+  }
+
+  /** What can be charged every cycle (Giving Cycle 1): a live mobile-money
+   *  rail, its currency, its limits, whole shillings, and a real number. The
+   *  Partners programme checks a pledge's automatic collection with this
+   *  BEFORE making the pledge (Giving Cycle 5), so a refusal never leaves
+   *  half a pledge behind. */
+  async validateSchedule(
+    userId: string,
+    method: keyof typeof FinancialService.RAILS,
+    amountMinor: number,
+    currency: string,
+    phoneNumber: string | null,
+  ): Promise<{ phone: string | null }> {
+    const rail = FinancialService.RAILS[method];
+    if (!rail.recurring || !this.railEnabled(method)) {
+      throw new ApiError(
+        "METHOD_UNAVAILABLE",
+        "Recurring gifts are collected with M-Pesa. Choose M-Pesa to set one up.",
+        { method },
+      );
+    }
+    return this.checkGift(userId, method, amountMinor, currency.toUpperCase(), phoneNumber, false);
+  }
+
+  /** What a gift pays toward is counted in ITS currency (Giving Cycle 5): a
+   *  USD gift toward a KES pledge used to add its cents to the shillings (and
+   *  a need's raised figure the same). The office's record-a-gift already
+   *  refused this (books.ts); the member's own gift did not. */
+  private async assertSameCurrency(currency: string, pledgeId: string | null, needId: string | null): Promise<void> {
+    if (pledgeId) {
+      const p = await maybeOne<{ currency: string }>(this.pool, `SELECT currency FROM pledges WHERE pledge_id = $1`, [pledgeId]);
+      const want = p?.currency.trim();
+      if (want && want !== currency) {
+        throw new ApiError("CURRENCY_MISMATCH", `This pledge is in ${want}. Give toward it in ${want}.`, { expected: want });
+      }
+    }
+    if (needId) {
+      const n = await maybeOne<{ currency: string }>(this.pool, `SELECT currency FROM department_needs WHERE need_id = $1`, [needId]);
+      const want = n?.currency.trim();
+      if (want && want !== currency) {
+        throw new ApiError("CURRENCY_MISMATCH", `This need is in ${want}. Give toward it in ${want}.`, { expected: want });
+      }
+    }
+  }
+
+  /**
+   * One cycle of a schedule that pays a pledge (Giving Cycle 5). The schedule
+   * is the pledge's collector, so a cycle asks for what the pledge still owes
+   * BEFORE THE NEXT CYCLE — a monthly pledge's uncovered instalments due until
+   * then (its one instalment ledger, arrears included), a total pledge's rest
+   * of the target — never more than the schedule's own amount, rounded up to
+   * whole shillings on M-Pesa. Nothing, when the member already paid (Pay
+   * now, a claim the office confirmed): the cycle is skipped and they are
+   * told. A pledge that is fulfilled, cancelled or past its end stops the
+   * schedule; one that is paused pauses it; a total pledge that reached its
+   * target is fulfilled here. It used to charge the schedule's amount every
+   * cycle regardless — past the target, past the end date, on top of a
+   * manual payment. Null = not bound to a pledge (charge as set). Counts only
+   * succeeded money, as every pledge surface does; a prompt still on the
+   * phone is kept apart by the runner's one-prompt-per-phone rule.
+   */
+  async pledgeCyclePlan(scheduleId: string, cycleAt: Date): Promise<PledgeCyclePlan | null> {
+    const row = await maybeOne<{
+      amount_minor: string; currency: string; method: keyof typeof FinancialService.RAILS; frequency: "weekly" | "monthly"; anchor_day: number | null;
+      pledge_id: string; shape: "monthly" | "total"; p_amount: string | null; target: string | null; p_currency: string;
+      p_status: "active" | "paused" | "fulfilled" | "cancelled"; due_day: number | null; due_on: string | null; until_on: string | null;
+      starts_on: string | null; created_at: string;
+    }>(
+      this.pool,
+      `SELECT s.amount_minor::text, s.currency, s.method::text AS method, s.frequency::text AS frequency, s.anchor_day,
+              p.pledge_id, p.shape::text AS shape, p.amount_minor::text AS p_amount, p.target_minor::text AS target,
+              p.currency AS p_currency, p.status::text AS p_status, p.due_day, p.due_on::text, p.until_on::text,
+              p.starts_on::text, p.created_at::text
+         FROM giving_schedules s JOIN pledges p ON p.pledge_id = s.pledge_id
+        WHERE s.schedule_id = $1`,
+      [scheduleId],
+    );
+    if (!row) return null;
+    // A binding across currencies is refused at the door now; one made before
+    // is left to createGivingIntent to refuse, never counted in the wrong unit.
+    if (row.p_currency.trim() !== row.currency.trim()) return null;
+    const title = (await pledgeTitleFor(this.pool, row.pledge_id)) ?? "your pledge";
+    const base = { pledge_id: row.pledge_id, title };
+    if (row.p_status === "fulfilled") return { action: "stop", reason: "pledge_fulfilled", until_on: row.until_on, ...base };
+    if (row.p_status === "cancelled") return { action: "stop", reason: "pledge_cancelled", until_on: row.until_on, ...base };
+    if (row.p_status === "paused") return { action: "pause", ...base };
+
+    const cycleDay = nairobiDate(cycleAt);
+    const paid = await many<{ transaction_id: string; amount_minor: string; at: string }>(
+      this.pool,
+      `SELECT transaction_id, amount_minor::text, created_at::text AS at FROM transactions
+        WHERE pledge_id = $1 AND status = 'succeeded' ORDER BY created_at, transaction_id`,
+      [row.pledge_id],
+    );
+    const payments: LedgerPaymentInput[] = paid.map((x) => ({ transaction_id: x.transaction_id, pledge_id: row.pledge_id, amount_minor: Number(x.amount_minor), at: x.at }));
+    const scheduleAmount = Number(row.amount_minor);
+    let owed: number;
+    if (row.shape === "total") {
+      owed = Math.max(0, Number(row.target ?? 0) - payments.reduce((a, x) => a + x.amount_minor, 0));
+      if (owed === 0) return { action: "fulfil", ...base };
+    } else {
+      if (row.until_on && cycleDay > row.until_on) return { action: "stop", reason: "pledge_ended", until_on: row.until_on, ...base };
+      const nextCycleDay = nairobiDate(FinancialService.nextRun(cycleAt, row.frequency, row.anchor_day));
+      const ledger = allocateInstalments(
+        {
+          pledge_id: row.pledge_id, shape: "monthly", amount_minor: Number(row.p_amount ?? 0), target_minor: null,
+          status: row.p_status, due_day: row.due_day, due_on: row.due_on, created_at: row.created_at,
+          starts_on: row.starts_on, until_on: row.until_on,
+        },
+        payments, cycleDay, nextCycleDay,
+      );
+      owed = ledger.filter((i) => i.due < nextCycleDay).reduce((a, i) => a + (i.amount_minor - i.covered_minor), 0);
+      if (owed === 0) {
+        // Paid through this cycle (paid ahead, or to its end): skip it. A
+        // pledge paid to its end is skipped until the end passes, then stops.
+        return { action: "skip", covered_through: ledger.filter((i) => i.completed_on !== null).at(-1)?.due ?? null, ...base };
+      }
+    }
+    const rounded = FinancialService.RAILS[row.method]?.whole_units ? Math.ceil(owed / 100) * 100 : owed;
+    return { action: "charge", amount_minor: Math.min(scheduleAmount, rounded), owed_minor: owed, ...base };
+  }
+
+  /** Carry out a plan that is not a charge (runner, Giving Cycle 5). */
+  private async applyPledgePlan(
+    s: { schedule_id: string; user_id: string; amount_minor: string; currency: string; frequency: "weekly" | "monthly"; next_run_at: Date; anchor_day: number | null },
+    plan: Exclude<PledgeCyclePlan, { action: "charge" }>,
+    regular: boolean,
+    now: Date,
+  ): Promise<void> {
+    if (plan.action === "fulfil") {
+      // Flips the pledge, stops every schedule paying it, and thanks the member once.
+      await new PartnersService(this.pool).fulfilOne(this.notifications, plan.pledge_id, now);
+      return;
+    }
+    if (plan.action === "pause") {
+      await this.pool.query(
+        `UPDATE giving_schedules SET status = 'paused', paused_at = $2, pause_reason = 'pledge',
+                retry_cycle_at = NULL, retry_at = NULL, retry_after = NULL
+          WHERE schedule_id = $1 AND status = 'active'`,
+        [s.schedule_id, now.toISOString()],
+      );
+      return;
+    }
+    if (plan.action === "stop") {
+      const stopped = await this.pool.query(
+        `UPDATE giving_schedules SET status = 'cancelled', cancelled_at = $2,
+                retry_cycle_at = NULL, retry_at = NULL, retry_after = NULL
+          WHERE schedule_id = $1 AND status = 'active'`,
+        [s.schedule_id, now.toISOString()],
+      );
+      if (!stopped.rowCount) return;
+      await audit(this.pool, s.user_id, "giving.schedule_stopped", "giving_schedules", s.schedule_id, { reason: plan.reason, pledge_id: plan.pledge_id });
+      try {
+        await this.notifications.schedule({
+          userId: s.user_id, channel: "push", template: "giving_schedule_stopped",
+          payload: {
+            schedule_id: s.schedule_id, pledge_id: plan.pledge_id, title: plan.title, reason: plan.reason,
+            until_on: plan.until_on, amount_minor: Number(s.amount_minor), currency: s.currency, frequency: s.frequency,
+          },
+        });
+      } catch {
+        /* the stop matters more than the notice */
+      }
+      return;
+    }
+    // skip — the pledge is paid for this cycle.
+    if (!regular) {
+      // The retry's cycle has been paid since it failed: nothing to retry.
+      await this.pool.query(`UPDATE giving_schedules SET retry_cycle_at = NULL, retry_at = NULL WHERE schedule_id = $1`, [s.schedule_id]);
+      return;
+    }
+    const next = FinancialService.sameDayPromptHours(FinancialService.nextRun(new Date(s.next_run_at), s.frequency, s.anchor_day));
+    await this.pool.query(
+      `UPDATE giving_schedules
+          SET next_run_at = $2, retry_after = NULL, retry_cycle_at = NULL, retry_at = NULL, cycle_attempts = 0,
+              consecutive_failures = 0, last_error = NULL, last_failed_at = NULL, last_failure_code = NULL
+        WHERE schedule_id = $1`,
+      [s.schedule_id, next.toISOString()],
+    );
+    try {
+      await this.notifications.schedule({
+        userId: s.user_id, channel: "push", template: "giving_schedule_covered",
+        payload: {
+          schedule_id: s.schedule_id, pledge_id: plan.pledge_id, title: plan.title, frequency: s.frequency,
+          currency: s.currency, covered_through: plan.covered_through, next_prompt_at: next.toISOString(),
+        },
+      });
+    } catch {
+      /* a missed notice never blocks the ledger */
+    }
+  }
+
   async createSchedule(
     userId: string,
     raw: z.input<typeof FinancialService.CreateSchedule>,
+    /** The Partners programme only: a pledge's automatic collection falls on
+     *  the pledge's due day, from its first due date (never today). */
+    opts: { anchorDay?: number; firstRunOn?: string } = {},
   ): Promise<Record<string, unknown>> {
     // Direct callers (the Partners programme's "charge me automatically")
     // may leave the defaults out; the route has already applied them.
@@ -1762,18 +1997,8 @@ export class FinancialService {
     );
     if (existing) return { ...existing, reused: true };
 
-    // What can be charged every cycle (Giving Cycle 1): a live mobile-money
-    // rail, its currency, its limits, whole shillings, and a real number.
-    const rail = FinancialService.RAILS[input.method];
-    if (!rail.recurring || !this.railEnabled(input.method)) {
-      throw new ApiError(
-        "METHOD_UNAVAILABLE",
-        "Recurring gifts are collected with M-Pesa. Choose M-Pesa to set one up.",
-        { method: input.method },
-      );
-    }
     const currency = input.currency.toUpperCase();
-    const { phone } = await this.checkGift(userId, input.method, input.amount_minor, currency, input.phone_number ?? null, false);
+    const { phone } = await this.validateSchedule(userId, input.method, input.amount_minor, currency, input.phone_number ?? null);
     // Store a number only when the member chose one for THIS gift; otherwise
     // every cycle follows their profile number, so a changed number is used.
     const schedulePhone = input.phone_number ? phone : null;
@@ -1802,6 +2027,7 @@ export class FinancialService {
     // rail and the schedule detail never show a fund the money does not go to.
     // Without a pledge, the client's fund stands.
     const boundPledge = await this.resolvePledgeId(userId, input.pledge_id ?? null, null);
+    await this.assertSameCurrency(currency, boundPledge, null);
     const fundCode = boundPledge ? await this.pledgeFundCode(boundPledge) : input.fund;
     const fund = await maybeOne<{ fund_id: string; name: string }>(
       this.pool,
@@ -1841,8 +2067,13 @@ export class FinancialService {
       // now. Monthly gifts keep today's Nairobi day as their anchor; the
       // prompt time is today's, kept inside prompt hours (Giving Cycle 2).
       const now = new Date();
-      const anchor = input.frequency === "monthly" ? FinancialService.eatDay(now) : null;
-      const firstRun = FinancialService.nextRun(FinancialService.sameDayPromptHours(now), input.frequency, anchor);
+      const anchor = input.frequency === "monthly" ? (opts.anchorDay ?? FinancialService.eatDay(now)) : null;
+      // A pledge's automatic collection starts on its first due day (Giving
+      // Cycle 5): it used to start a month from today and then fall on
+      // today's date every month — not the due day both apps promise.
+      const firstRun = opts.firstRunOn
+        ? FinancialService.onDayAt(opts.firstRunOn, now)
+        : FinancialService.nextRun(FinancialService.sameDayPromptHours(now), input.frequency, anchor);
       const row = await one<{ schedule_id: string; next_run_at: string }>(
         c,
         `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key, pledge_id, phone_number, anchor_day, heads_up)
@@ -1870,12 +2101,30 @@ export class FinancialService {
     // as this schedule's first cycle, so its outcome counts like any other.
     // Its key is fixed per schedule, so a double tap (or the reused twin)
     // finds the same prompt instead of sending another.
+    const firstKey = `sched:${created.schedule_id}:first`;
+    let firstAmount = input.amount_minor;
+    if (boundPledge) {
+      // A pledge's schedule asks for what the pledge owes now (Giving Cycle 5).
+      // A replay finds its prompt by key and needs no plan.
+      const prior = await maybeOne<{ n: number }>(this.pool, `SELECT 1 AS n FROM transactions WHERE idempotency_key = $1 AND user_id = $2`, [firstKey, userId]);
+      const plan = prior ? null : await this.pledgeCyclePlan(created.schedule_id, new Date());
+      if (plan && plan.action !== "charge") {
+        return {
+          ...created,
+          first_charge: null,
+          first_charge_error: plan.action === "skip"
+            ? `Nothing is due on your pledge right now${plan.covered_through ? ` — it's paid through ${FinancialService.dayWords(plan.covered_through)}` : ""}. Your first prompt comes when the next payment is due.`
+            : "Your pledge isn't open for payments right now.",
+        };
+      }
+      if (plan) firstAmount = plan.amount_minor;
+    }
     try {
       const first = await this.createGivingIntent(
         userId,
         {
-          fund: fundCode, amount_minor: input.amount_minor, currency, method: input.method,
-          idempotency_key: `sched:${created.schedule_id}:first`,
+          fund: fundCode, amount_minor: firstAmount, currency, method: input.method,
+          idempotency_key: firstKey,
         },
         created.schedule_id,
         { cycleAt: new Date().toISOString(), phone: schedulePhone ?? phone },
@@ -1928,7 +2177,13 @@ export class FinancialService {
    * Cycle 1 check runs on the new amount and number; an amount that would make
    * it the twin of another of their gifts is SCHEDULE_EXISTS.
    */
-  async updateSchedule(userId: string, scheduleId: string, patch: z.infer<typeof FinancialService.UpdateSchedule>): Promise<Record<string, unknown>> {
+  async updateSchedule(
+    userId: string,
+    scheduleId: string,
+    patch: z.infer<typeof FinancialService.UpdateSchedule>,
+    /** The pledge itself is moving its collection (PartnersService.updatePledge). */
+    opts: { fromPledge?: boolean } = {},
+  ): Promise<Record<string, unknown>> {
     const s = await maybeOne<{
       fund_id: string; fund_name: string; amount_minor: string; currency: string; frequency: "weekly" | "monthly";
       method: "mpesa" | "airtel" | "card" | "paypal"; next_run_at: Date; anchor_day: number | null; pledge_id: string | null;
@@ -1942,6 +2197,22 @@ export class FinancialService {
       [scheduleId, userId],
     );
     if (!s) throw new ApiError("NOT_FOUND", "Schedule not found");
+    // A monthly pledge's automatic collection IS the pledge's amount on the
+    // pledge's due day (Giving Cycle 5): it follows the pledge, never the
+    // other way round — a schedule changed on its own drifted from its pledge
+    // and left it behind or overpaid every month.
+    const amountChange = patch.amount_minor !== undefined && patch.amount_minor !== Number(s.amount_minor);
+    if (!opts.fromPledge && s.pledge_id && (amountChange || patch.day !== undefined)) {
+      const bound = await maybeOne<{ shape: string }>(this.pool, `SELECT shape FROM pledges WHERE pledge_id = $1`, [s.pledge_id]);
+      if (bound?.shape === "monthly") {
+        const title = (await pledgeTitleFor(this.pool, s.pledge_id)) ?? "your pledge";
+        throw new ApiError(
+          "UNPROCESSABLE",
+          `This gift collects your pledge “${title}”. Change the pledge's ${amountChange ? "amount" : "due day"} and this gift follows it.`,
+          { pledge_id: s.pledge_id },
+        );
+      }
+    }
     const sets: string[] = [];
     const vals: unknown[] = [scheduleId];
     const set = (col: string, v: unknown): void => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
@@ -1997,7 +2268,11 @@ export class FinancialService {
    *  after `now`, at `timeOf`'s Nairobi time of day, in prompt hours. */
   static nextOnMonthDay(timeOf: Date, day: number, now: Date): Date {
     const t = new Date(timeOf.getTime() + FinancialService.EAT_MS);
-    const n = new Date(now.getTime() + FinancialService.EAT_MS);
+    // The pending gift moves within ITS OWN month (Giving Cycle 5): moving the
+    // 5th to the 20th on the 10th used to prompt again on the 20th — twice in
+    // a month already given. `timeOf` is the pending prompt.
+    const pendingMonth = Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 1);
+    const n = new Date(Math.max(now.getTime() + FinancialService.EAT_MS, pendingMonth));
     for (let add = 0; add < 3; add += 1) {
       const y = n.getUTCFullYear();
       const m = n.getUTCMonth() + add;
@@ -2013,7 +2288,11 @@ export class FinancialService {
    *  of day, in prompt hours. */
   static nextOnWeekday(timeOf: Date, weekday: number, now: Date): Date {
     const t = new Date(timeOf.getTime() + FinancialService.EAT_MS);
-    const n = new Date(now.getTime() + FinancialService.EAT_MS);
+    // Within the pending gift's own week, Monday–Sunday in Nairobi (Giving
+    // Cycle 5): Friday's gift moved to Sunday used to prompt again two days
+    // after Friday's. `timeOf` is the pending prompt.
+    const weekStart = Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate() - ((t.getUTCDay() + 6) % 7));
+    const n = new Date(Math.max(now.getTime() + FinancialService.EAT_MS, weekStart));
     for (let add = 0; add <= 7; add += 1) {
       const wall = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() + add, t.getUTCHours(), t.getUTCMinutes(), 0, 0);
       const d = new Date(wall);
@@ -2056,22 +2335,37 @@ export class FinancialService {
               s.status, s.next_run_at, s.last_run_at, s.created_at,
               s.consecutive_failures, s.last_failed_at, s.paused_at,
               s.last_failure_code, s.retry_at, s.phone_number,
-              s.pause_reason, s.resume_on::text AS resume_on, s.heads_up, s.anchor_day
+              s.pause_reason, s.resume_on::text AS resume_on, s.heads_up, s.anchor_day,
+              s.pledge_id AS bound_pledge_id, ${pledgeTitleSql({ pledge: "p", fund: "pf", campaign: "pc" })} AS bound_pledge_title
          FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id
+         LEFT JOIN pledges p ON p.pledge_id = s.pledge_id
+         LEFT JOIN funds pf ON pf.fund_id = p.fund_id
+         LEFT JOIN campaigns pc ON pc.campaign_id = p.campaign_id
         WHERE s.user_id = $1 ORDER BY s.created_at DESC`,
       [userId],
     );
-    return {
-      data: rows.map((r) => {
-        const { last_failure_code: code, ...rest } = r;
-        return {
-          ...rest,
-          amount_minor: Number(r.amount_minor),
-          // The last charge's reason while the schedule is still failing.
-          last_failure: Number(r.consecutive_failures) > 0 ? giftFailureCopy((code as string | null) ?? "declined") : null,
-        };
-      }),
-    };
+    const data: unknown[] = [];
+    for (const r of rows) {
+      const { last_failure_code: code, bound_pledge_id: pledgeId, bound_pledge_title: pledgeTitle, ...rest } = r;
+      const amount = Number(r.amount_minor);
+      // What the next prompt will ask for (Giving Cycle 5): a schedule that
+      // pays a pledge asks only what the pledge still owes — 0 when it is
+      // covered; null when nothing is coming (paused, cancelled, stopping).
+      let next: number | null = r.status === "active" ? amount : null;
+      if (pledgeId && r.status === "active") {
+        const plan = await this.pledgeCyclePlan(r.schedule_id as string, new Date(r.next_run_at as string));
+        next = !plan ? amount : plan.action === "charge" ? plan.amount_minor : plan.action === "skip" ? 0 : null;
+      }
+      data.push({
+        ...rest,
+        amount_minor: amount,
+        // The last charge's reason while the schedule is still failing.
+        last_failure: Number(r.consecutive_failures) > 0 ? giftFailureCopy((code as string | null) ?? "declined") : null,
+        pledge: pledgeId ? { pledge_id: pledgeId, title: pledgeTitle ?? "Your pledge" } : null,
+        next_amount_minor: next,
+      });
+    }
+    return { data };
   }
 
   /**
@@ -2443,13 +2737,27 @@ export class FinancialService {
         key = `sched:${s.schedule_id}:${cycleAt.toISOString()}:r${s.cycle_attempts}`;
       }
 
+      // A schedule that pays a pledge asks for what the pledge still owes
+      // (Giving Cycle 5) — nothing when it is paid, and it stops or pauses
+      // with its pledge. A replay re-sends nothing, so it needs no plan.
+      let amountMinor = Number(s.amount_minor);
+      if (!replay) {
+        const plan = await this.pledgeCyclePlan(s.schedule_id, cycleAt);
+        if (plan && plan.action !== "charge") {
+          await this.applyPledgePlan(s, plan, regular, now);
+          counts.skipped += 1;
+          continue;
+        }
+        if (plan) amountMinor = plan.amount_minor;
+      }
+
       prompted.add(phoneKey);
       try {
         await this.createGivingIntent(
           s.user_id,
           {
             fund: s.fund,
-            amount_minor: Number(s.amount_minor),
+            amount_minor: amountMinor,
             currency: s.currency,
             method: s.method,
             idempotency_key: key,
@@ -2610,13 +2918,19 @@ export class FinancialService {
     );
     for (const a of announced) {
       try {
+        // Announce what will actually be asked (Giving Cycle 5): a pledge's
+        // schedule may ask less than its amount, or nothing at all.
+        const plan = await this.pledgeCyclePlan(a.schedule_id, new Date(a.next_run_at));
+        if (plan && plan.action !== "charge") continue;
+        const amount = plan ? plan.amount_minor : Number(a.amount_minor);
         await this.notifications.schedule({
           userId: a.user_id,
           channel: "push",
           template: "giving_schedule_heads_up",
           payload: {
-            schedule_id: a.schedule_id, amount_minor: Number(a.amount_minor), currency: a.currency,
+            schedule_id: a.schedule_id, amount_minor: amount, currency: a.currency,
             frequency: a.frequency, fund_name: a.fund_name, prompt_at: new Date(a.next_run_at).toISOString(),
+            pledge_title: plan?.title ?? null, partial: plan ? amount < Number(a.amount_minor) : false,
           },
         });
       } catch {

@@ -27,12 +27,21 @@ export interface DispatchProvider {
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
-/** "KSh 1,000" from a payload's amount_minor + currency. */
+/** "KSh 1,000" / "USD 12.50" from a payload's amount_minor + currency —
+ *  cents shown when there are any (Giving Cycle 5: USD 12.50 read "USD 13"). */
 function money(p: Record<string, unknown>): string {
   const minor = num(p.amount_minor) ?? 0;
   const cur = str(p.currency) ?? "KES";
-  const major = Math.round(minor / 100);
-  return `${cur === "KES" ? "KSh" : cur} ${major.toLocaleString("en-KE")}`;
+  const cents = minor % 100 !== 0;
+  const text = (minor / 100).toLocaleString("en-KE", { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: 2 });
+  return `${cur === "KES" ? "KSh" : cur} ${text}`;
+}
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+/** "5 October" for a payload's YYYY-MM-DD date (as given — no time-zone math). */
+function dayWords(ymd: string | undefined): string | undefined {
+  const m = ymd ? /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd) : null;
+  return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}` : ymd;
 }
 
 function num(v: unknown): number | undefined {
@@ -166,7 +175,7 @@ const PUSH_TEMPLATE_COPY: Record<
   },
   pledge_overdue: (p) => ({
     title: `A gentle nudge on ${str(p.title) ?? "your pledge"}`,
-    body: `${money(p)} was due on ${str(p.due_on) ?? "the due date"}. No pressure — give when you can, or tell us if you paid another way.`,
+    body: `${money(p)} was due on ${dayWords(str(p.due_on)) ?? "the due date"}. No pressure — give when you can, or tell us if you paid another way.`,
   }),
   pledge_reminder_manual: (p) => ({
     title: `From the church office: ${str(p.title) ?? "your pledge"}`,
@@ -174,7 +183,7 @@ const PUSH_TEMPLATE_COPY: Record<
   }),
   pledge_fulfilled: (p) => ({
     title: "Pledge fulfilled — thank you",
-    body: `You completed your ${str(p.title) ?? "pledge"}. Every shilling carried someone further. Open Partners to see it.`,
+    body: `You completed your ${str(p.title) ?? "pledge"}. Every shilling carried someone further.${p.schedule_stopped === true ? " Its automatic prompts have stopped." : ""} Open Partners to see it.`,
   }),
   pledge_claim_confirmed: (p) => ({
     title: "Your payment is recorded",
@@ -203,8 +212,28 @@ const PUSH_TEMPLATE_COPY: Record<
   // expected rather than dismissed as a scam.
   giving_schedule_heads_up: (p) => ({
     title: `Your ${str(p.frequency) === "weekly" ? "weekly" : "monthly"} gift is ready`,
-    body: `An M-Pesa prompt for ${money(p)} to ${str(p.fund_name) ?? "the church"} is coming to your phone in a few minutes. Enter your PIN to give.`,
+    body: p.partial === true && str(p.pledge_title)
+      ? `An M-Pesa prompt for ${money(p)} — the rest of what's due on “${str(p.pledge_title)}” — is coming to your phone in a few minutes. Enter your PIN to give.`
+      : `An M-Pesa prompt for ${money(p)} to ${str(p.fund_name) ?? "the church"} is coming to your phone in a few minutes. Enter your PIN to give.`,
   }),
+  // Giving Cycle 5: a pledge's collector skips a cycle already paid, and
+  // stops with its pledge — each said once, in words.
+  giving_schedule_covered: (p) => ({
+    title: `Nothing to pay this ${str(p.frequency) === "weekly" ? "week" : "month"}`,
+    body: `${str(p.title) ? `“${str(p.title)}”` : "Your pledge"} is already paid${str(p.covered_through) ? ` through ${dayWords(str(p.covered_through))}` : ""}, so no M-Pesa prompt is coming this time. Thank you.`,
+  }),
+  giving_schedule_stopped: (p) => {
+    const pledge = str(p.title) ? `“${str(p.title)}”` : "Your pledge";
+    const reason = str(p.reason);
+    return {
+      title: reason === "pledge_fulfilled" ? "Your pledge is complete" : reason === "pledge_ended" ? "Your pledge has ended" : "Automatic prompts stopped",
+      body: reason === "pledge_fulfilled"
+        ? `${pledge} is fulfilled, so its automatic M-Pesa prompts have stopped. Thank you for carrying it through.`
+        : reason === "pledge_ended"
+          ? `${pledge} ended${str(p.until_on) ? ` on ${dayWords(str(p.until_on))}` : ""}, so its automatic prompts have stopped. Open Partners to make a new pledge.`
+          : `${pledge} was cancelled, so its recurring gift has stopped too.`,
+    };
+  },
   giving_schedule_paused: (p) => ({
     title: "Your recurring gift is paused",
     body: `${str(p.reason) ? `${str(p.reason)} ` : ""}We've stopped sending prompts for now. Open Give to resume it whenever you're ready.`,

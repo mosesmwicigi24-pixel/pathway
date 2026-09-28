@@ -16,7 +16,7 @@ import type { FinancialService } from "./service.js";
 import { givingTiers } from "./tiers.js";
 import { methodLabel, giftMethodLabel, PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS, PLEDGE_PAYS_TO_NAME } from "./constants.js";
 import {
-  NAIROBI_OFFSET_MS, nairobiDate, partnerDate, keptInYear, pledgedInYear, statementSummary,
+  NAIROBI_OFFSET_MS, nairobiDate, partnerDate, keptInYear, pledgedInYear, statementSummary, firstDueAfter,
   statementImpact, statementMonths, statementFaithfulness, allocateInstalments, instalmentsInYear,
   type StatementPledgeInput, type StatementImpact, type StatementMonth, type StatementFaithfulness, type LedgerPaymentInput,
   type Instalment,
@@ -32,6 +32,8 @@ interface PledgeRow {
   pledge_id: string; user_id: string; shape: PledgeShape;
   amount_minor: string | null; target_minor: string | null; currency: string;
   due_day: number | null; due_on: string | null; until_on: string | null;
+  /** First day an instalment can fall due (migration 221); null = creation day. */
+  starts_on: string | null;
   fund_id: string | null; fund_code: string | null; fund_name: string | null;
   campaign_id: string | null; campaign_title: string | null; need_id: string | null;
   status: PledgeStatus;
@@ -61,7 +63,7 @@ export interface PledgeOption {
 // "p.note, p.created_at::text" verbatim.
 const PLEDGE_SELECT = `
     SELECT p.pledge_id, p.user_id, p.shape, p.amount_minor::text, p.target_minor::text, p.currency,
-           p.due_day, p.due_on::text, p.until_on::text, p.fund_id, f.code AS fund_code, f.name AS fund_name,
+           p.due_day, p.due_on::text, p.until_on::text, p.starts_on::text, p.fund_id, f.code AS fund_code, f.name AS fund_name,
            p.campaign_id, c.title AS campaign_title, p.need_id, p.status, p.schedule_id, p.reminders_enabled, p.title,
            p.note, p.created_at::text, p.fulfilled_at::text, p.cancelled_at::text,
            ${PLEDGE_PAYS_TO_CODE} AS pays_to_code, ${PLEDGE_PAYS_TO_NAME} AS pays_to_name
@@ -332,6 +334,11 @@ export class PartnersService {
       if (v.shape === "monthly" && !v.amount_minor) ctx.addIssue({ code: "custom", message: "A monthly pledge needs amount_minor", path: ["amount_minor"] });
       if (v.shape === "total" && (!v.target_minor || !v.due_on)) ctx.addIssue({ code: "custom", message: "A total pledge needs target_minor and due_on", path: ["target_minor"] });
       if ([v.fund, v.campaign_id, v.need_id].filter(Boolean).length > 1) ctx.addIssue({ code: "custom", message: "A pledge points at one target at most", path: ["fund"] });
+      // Automatic collection is a monthly pledge's, once a month on its due
+      // day (Giving Cycle 5): "weekly" charged the MONTHLY amount every week,
+      // and on a total pledge it was silently ignored.
+      if (v.auto_schedule && v.shape !== "monthly") ctx.addIssue({ code: "custom", message: "Automatic collection is for monthly pledges", path: ["auto_schedule"] });
+      if (v.auto_schedule?.frequency === "weekly") ctx.addIssue({ code: "custom", message: "A monthly pledge is collected once a month, on its due day", path: ["auto_schedule", "frequency"] });
     });
 
   static readonly UpdatePledge = z.object({
@@ -503,6 +510,7 @@ export class PartnersService {
       due_day: p.due_day,
       due_on: p.due_on,
       until_on: p.until_on,
+      starts_on: p.starts_on,
       fund: p.fund_code ? { code: p.fund_code, name: p.fund_name } : null,
       campaign: p.campaign_id ? { campaign_id: p.campaign_id, title: p.campaign_title } : null,
       need_id: p.need_id,
@@ -545,6 +553,13 @@ export class PartnersService {
   }
 
   async createPledge(userId: string, input: z.infer<typeof PartnersService.CreatePledge>): Promise<Record<string, unknown>> {
+    const auto = input.auto_schedule && input.shape === "monthly" && input.amount_minor ? input.auto_schedule : null;
+    // Automatic collection is checked BEFORE anything is written (Giving
+    // Cycle 5): no number on the profile, M-Pesa off, an amount M-Pesa can't
+    // take — each used to fail AFTER the pledge was made, so the member was
+    // told "nothing has changed", tried again, and had two pledges.
+    if (auto) await this.fin.validateSchedule(userId, auto.method, input.amount_minor!, input.currency, null);
+
     // Joining is implicit: a pledge from someone outside the programme brings them in.
     await this.join(userId);
 
@@ -559,41 +574,91 @@ export class PartnersService {
       if (!c) throw new ApiError("NOT_FOUND", "Unknown campaign");
     }
     const dueDay = input.shape === "monthly" ? (input.due_day ?? Number(nairobiDate(new Date()).slice(8, 10)) ) : null;
-    const row = await one<{ pledge_id: string }>(
-      this.pool,
-      `INSERT INTO pledges (user_id, shape, amount_minor, target_minor, currency, due_day, due_on, until_on, fund_id, campaign_id, need_id, note, reminders_enabled, title)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING pledge_id`,
-      [
-        userId, input.shape,
-        input.shape === "monthly" ? input.amount_minor : null,
-        input.shape === "total" ? input.target_minor : null,
-        input.currency.toUpperCase(),
-        Math.min(dueDay ?? 1, 28),
-        input.shape === "total" ? input.due_on : null,
-        input.until_on ?? null,
-        fundId, input.campaign_id ?? null, input.need_id ?? null,
-        input.note ?? null, input.reminders_enabled,
-        input.title ?? null,
-      ],
-    );
-    await audit(this.pool, userId, "pledge.created", "pledges", row.pledge_id, { shape: input.shape });
-
-    // "Charge me automatically": a schedule bound to this pledge. Its fund is
-    // the pledge's own (server-authoritative, one rule with gifts and claims).
-    if (input.auto_schedule && input.shape === "monthly" && input.amount_minor) {
-      const fundCode = await this.fin.pledgeFundCode(row.pledge_id);
-      await this.fin.createSchedule(userId, {
-        fund: fundCode,
-        amount_minor: input.amount_minor,
-        currency: input.currency.toUpperCase(),
-        frequency: input.auto_schedule.frequency,
-        method: input.auto_schedule.method,
-        idempotency_key: `pledge:${row.pledge_id}`,
-        pledge_id: row.pledge_id,
-      });
+    const storedDueDay = Math.min(dueDay ?? 1, 28);
+    // Collected automatically, the pledge starts when its collection does: on
+    // its first due day after today — "never today", as both apps promise.
+    // (It used to start today, so a pledge made on its own due day was behind
+    // by the next morning and every collection settled last month late.)
+    const autoStart = auto ? firstDueAfter(nairobiDate(new Date()), storedDueDay) : null;
+    const made = await tx(this.pool, async (c) => {
+      // One pledge decision per member at a time; the same pledge a moment
+      // ago — a double tap, a retried request — is the SAME pledge, not a
+      // second one (Giving Cycle 5; the rule recurring gifts already keep).
+      await c.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`pledge:${userId}`]);
+      const twin = await maybeOne<{ pledge_id: string }>(
+        c,
+        `SELECT pledge_id FROM pledges
+          WHERE user_id = $1 AND shape = $2 AND amount_minor IS NOT DISTINCT FROM $3::bigint
+            AND target_minor IS NOT DISTINCT FROM $4::bigint AND currency = $5
+            AND fund_id IS NOT DISTINCT FROM $6::uuid AND campaign_id IS NOT DISTINCT FROM $7::uuid
+            AND need_id IS NOT DISTINCT FROM $8::uuid AND due_day IS NOT DISTINCT FROM $9::int
+            AND due_on IS NOT DISTINCT FROM $10::date
+            AND status = 'active' AND created_at > now() - interval '10 minutes'
+          ORDER BY created_at DESC LIMIT 1`,
+        [
+          userId, input.shape,
+          input.shape === "monthly" ? input.amount_minor : null,
+          input.shape === "total" ? input.target_minor : null,
+          input.currency.toUpperCase(), fundId, input.campaign_id ?? null, input.need_id ?? null,
+          storedDueDay, input.shape === "total" ? input.due_on : null,
+        ],
+      );
+      if (twin) return { pledge_id: twin.pledge_id, reused: true };
+      const row = await one<{ pledge_id: string }>(
+        c,
+        `INSERT INTO pledges (user_id, shape, amount_minor, target_minor, currency, due_day, due_on, until_on, fund_id, campaign_id, need_id, note, reminders_enabled, title, starts_on)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING pledge_id`,
+        [
+          userId, input.shape,
+          input.shape === "monthly" ? input.amount_minor : null,
+          input.shape === "total" ? input.target_minor : null,
+          input.currency.toUpperCase(),
+          storedDueDay,
+          input.shape === "total" ? input.due_on : null,
+          input.until_on ?? null,
+          fundId, input.campaign_id ?? null, input.need_id ?? null,
+          input.note ?? null, input.reminders_enabled,
+          input.title ?? null,
+          autoStart,
+        ],
+      );
+      return { pledge_id: row.pledge_id, reused: false };
+    });
+    if (made.reused) {
+      const [same] = await this.pledgeRows(this.pool, `WHERE p.pledge_id = $1`, [made.pledge_id]);
+      return { ...(await this.shape(same!)), reused: true };
     }
-    const [created] = await this.pledgeRows(this.pool, `WHERE p.pledge_id = $1`, [row.pledge_id]);
-    return this.shape(created!);
+    await audit(this.pool, userId, "pledge.created", "pledges", made.pledge_id, { shape: input.shape });
+
+    // "Charge me automatically": a schedule bound to this pledge, on its due
+    // day from its first due date. Its fund is the pledge's own
+    // (server-authoritative, one rule with gifts and claims).
+    let autoError: string | null = null;
+    if (auto && autoStart) {
+      try {
+        const fundCode = await this.fin.pledgeFundCode(made.pledge_id);
+        await this.fin.createSchedule(
+          userId,
+          {
+            fund: fundCode,
+            amount_minor: input.amount_minor!,
+            currency: input.currency.toUpperCase(),
+            frequency: "monthly",
+            method: auto.method,
+            idempotency_key: `pledge:${made.pledge_id}`,
+            pledge_id: made.pledge_id,
+          },
+          { anchorDay: storedDueDay, firstRunOn: autoStart },
+        );
+      } catch (err) {
+        // The pledge stands; only its collection could not be set up — say
+        // so. Without one it starts on its own first due date again.
+        autoError = err instanceof ApiError ? err.message : "Automatic collection couldn't be set up. Pay each month with Pay now.";
+        await this.pool.query(`UPDATE pledges SET starts_on = NULL WHERE pledge_id = $1`, [made.pledge_id]);
+      }
+    }
+    const [created] = await this.pledgeRows(this.pool, `WHERE p.pledge_id = $1`, [made.pledge_id]);
+    return { ...(await this.shape(created!)), ...(autoError ? { auto_schedule_error: autoError } : {}) };
   }
 
   async getPledge(userId: string, pledgeId: string): Promise<Record<string, unknown>> {
@@ -622,6 +687,19 @@ export class PartnersService {
     const [p] = await this.pledgeRows(this.pool, `WHERE p.pledge_id = $1 AND p.user_id = $2`, [pledgeId, userId]);
     if (!p) throw new ApiError("NOT_FOUND", "Pledge not found");
     if (p.status === "cancelled") throw new ApiError("UNPROCESSABLE", "A cancelled pledge cannot change");
+    // Every schedule paying this pledge follows it (Giving Cycle 5) — not
+    // only the first one bound — and a monthly pledge's collection follows
+    // its amount and due day, checked before anything changes.
+    const bound = await many<{ schedule_id: string; status: string; frequency: string; method: "mpesa" | "airtel" | "card" | "paypal"; currency: string; phone_number: string | null; pause_reason: string | null }>(
+      this.pool,
+      `SELECT schedule_id, status, frequency::text AS frequency, method::text AS method, currency, phone_number, pause_reason
+         FROM giving_schedules WHERE (pledge_id = $1 OR schedule_id = $2) AND status IN ('active','paused')`,
+      [pledgeId, p.schedule_id],
+    );
+    const follows = p.shape === "monthly" ? bound.filter((s) => s.frequency === "monthly") : [];
+    if (patch.amount_minor !== undefined && patch.amount_minor !== Number(p.amount_minor)) {
+      for (const s of follows) await this.fin.validateSchedule(userId, s.method, patch.amount_minor, s.currency, s.phone_number);
+    }
     const sets: string[] = ["updated_at = now()"]; const params: unknown[] = [];
     const push = (sql: string, v: unknown) => { params.push(v); sets.push(`${sql} = $${params.length}`); };
     if (patch.amount_minor !== undefined) push("amount_minor", patch.amount_minor);
@@ -637,18 +715,28 @@ export class PartnersService {
     params.push(pledgeId);
     await this.pool.query(`UPDATE pledges SET ${sets.join(", ")} WHERE pledge_id = $${params.length}`, params);
 
-    // A bound schedule follows the pledge: cancelled → cancelled, paused ↔ active.
-    if (p.schedule_id && patch.status) {
+    if (patch.amount_minor !== undefined && follows.length) {
+      await this.pool.query(`UPDATE giving_schedules SET amount_minor = $2 WHERE schedule_id = ANY($1::uuid[])`, [follows.map((s) => s.schedule_id), patch.amount_minor]);
+    }
+    if (patch.due_day !== undefined && patch.due_day !== p.due_day) {
+      for (const s of follows) await this.fin.updateSchedule(userId, s.schedule_id, { day: patch.due_day }, { fromPledge: true });
+    }
+    // Bound schedules follow the pledge: cancelled → cancelled, paused ↔ active.
+    const ids = bound.map((s) => s.schedule_id);
+    if (ids.length && patch.status) {
       if (patch.status === "cancelled") {
-        await this.pool.query(`UPDATE giving_schedules SET status = 'cancelled', cancelled_at = now() WHERE schedule_id = $1 AND status <> 'cancelled'`, [p.schedule_id]);
+        await this.pool.query(`UPDATE giving_schedules SET status = 'cancelled', cancelled_at = now(), retry_cycle_at = NULL, retry_at = NULL, retry_after = NULL WHERE schedule_id = ANY($1::uuid[]) AND status <> 'cancelled'`, [ids]);
       } else if (patch.status === "paused") {
-        await this.pool.query(`UPDATE giving_schedules SET status = 'paused', paused_at = now(), pause_reason = 'pledge', retry_cycle_at = NULL, retry_at = NULL WHERE schedule_id = $1 AND status = 'active'`, [p.schedule_id]);
+        await this.pool.query(`UPDATE giving_schedules SET status = 'paused', paused_at = now(), pause_reason = 'pledge', retry_cycle_at = NULL, retry_at = NULL WHERE schedule_id = ANY($1::uuid[]) AND status = 'active'`, [ids]);
       } else if (patch.status === "active") {
         // Giving Cycle 4: pick up at the next occurrence from NOW — resuming
-        // used to charge the cycle skipped while paused, at once.
-        const paused = await this.pool.query(`SELECT 1 FROM giving_schedules WHERE schedule_id = $1 AND status = 'paused'`, [p.schedule_id]);
-        if (paused.rowCount && this.financial) await this.financial.rearmAfterPause(p.schedule_id);
-        else await this.pool.query(`UPDATE giving_schedules SET status = 'active', paused_at = NULL, pause_reason = NULL, consecutive_failures = 0 WHERE schedule_id = $1 AND status = 'paused'`, [p.schedule_id]);
+        // used to charge the cycle skipped while paused, at once. Only what
+        // the PLEDGE paused resumes with it: a gift the member paused
+        // themselves, or one paused after failed prompts, stays as it is.
+        for (const s of bound) {
+          if (s.status !== "paused" || s.pause_reason !== "pledge") continue;
+          await this.fin.rearmAfterPause(s.schedule_id);
+        }
       }
     }
     await audit(this.pool, userId, "pledge.updated", "pledges", pledgeId, patch as Record<string, unknown>);
@@ -993,6 +1081,8 @@ export class PartnersService {
       due_day: p.due_day,
       due_on: p.due_on,
       created_at: p.created_at,
+      starts_on: p.starts_on,
+      until_on: p.until_on,
     };
   }
 
@@ -1216,10 +1306,24 @@ export class PartnersService {
       const amount = owed_minor ?? 0;
       const payload = { pledge_id: row.pledge_id, title: PartnersService.title(row), amount_minor: amount, currency: row.currency, due_on: dueOn };
 
+      // One voice per payment (Giving Cycle 5): a pledge its own schedule is
+      // about to charge needs no "due soon" (the schedule's heads-up says the
+      // prompt is coming), and a scheduled charge that just failed has already
+      // told the member — and may be retrying — so no overdue nudge on top.
+      const sched = await maybeOne<{ next_on: string | null; failed_recently: boolean | null }>(
+        this.pool,
+        `SELECT min((s.next_run_at AT TIME ZONE 'Africa/Nairobi')::date)::text AS next_on,
+                bool_or(s.last_failed_at IS NOT NULL AND s.last_failed_at > $2::timestamptz - interval '36 hours') AS failed_recently
+           FROM giving_schedules s
+          WHERE (s.pledge_id = $1 OR s.schedule_id = $3) AND s.status = 'active'`,
+        [row.pledge_id, now.toISOString(), row.schedule_id],
+      );
+
       if (!progress.overdue_since) {
         // Due soon: once, within the window before the due date.
         const daysAway = Math.round((nairobiStart(dueOn).getTime() - nairobiStart(today).getTime()) / 86_400_000);
         if (daysAway < 0 || daysAway > PartnersService.DUE_SOON_DAYS) continue;
+        if (sched?.next_on && sched.next_on <= nairobiDate(new Date(nairobiStart(dueOn).getTime() + 86_400_000))) continue;
         if (await this.autoSent(row.pledge_id, dueOn, 0)) continue;
         const channels = await this.fanOut(notifications, row.user_id, "pledge_due_soon", { ...payload, days_away: daysAway }, timezone);
         await this.pool.query(`INSERT INTO pledge_reminders (pledge_id, due_on, sequence, kind, channel, sent_at) VALUES ($1, $2, 0, 'auto', $3, $4) ON CONFLICT DO NOTHING`, [row.pledge_id, dueOn, channels.join(",") || "none", now.toISOString()]);
@@ -1227,6 +1331,7 @@ export class PartnersService {
         continue;
       }
 
+      if (sched?.failed_recently) continue;
       // Overdue: follow-ups at +12 h, +24 h, +36 h after the due day ends, then silence.
       const dueEnd = nairobiStart(dueOn).getTime() + 86_400_000;
       for (let seq = 1; seq <= PartnersService.FOLLOW_UPS; seq++) {
@@ -1248,16 +1353,33 @@ export class PartnersService {
   async fulfilCompleted(notifications: NotificationService, now = new Date()): Promise<number> {
     const rows = await this.pledgeRows(this.pool, `WHERE p.status = 'active' AND p.shape = 'total'`, []);
     let n = 0;
-    for (const r of rows) {
-      const pr = await this.progress(r, now);
-      if (pr.label !== "fulfilled") continue;
-      const done = await this.pool.query(`UPDATE pledges SET status = 'fulfilled', fulfilled_at = now(), updated_at = now() WHERE pledge_id = $1 AND status = 'active'`, [r.pledge_id]);
-      if (!done.rowCount) continue;
-      await this.fanOut(notifications, r.user_id, "pledge_fulfilled", { pledge_id: r.pledge_id, title: PartnersService.title(r), target_minor: Number(r.target_minor), currency: r.currency }, "Africa/Nairobi");
-      await audit(this.pool, r.user_id, "pledge.fulfilled", "pledges", r.pledge_id, {});
-      n += 1;
-    }
+    for (const r of rows) if (await this.fulfilRow(notifications, r, now)) n += 1;
     return n;
+  }
+
+  /** One total pledge that reached its target — the schedule runner calls
+   *  this the moment its charge completes one (Giving Cycle 5). */
+  async fulfilOne(notifications: NotificationService, pledgeId: string, now = new Date()): Promise<boolean> {
+    const [r] = await this.pledgeRows(this.pool, `WHERE p.pledge_id = $1 AND p.status = 'active' AND p.shape = 'total'`, [pledgeId]);
+    return r ? this.fulfilRow(notifications, r, now) : false;
+  }
+
+  /** Fulfilled once (the flip is guarded by status), every schedule paying it
+   *  stopped — they used to keep charging past the target (Giving Cycle 5) —
+   *  and the member thanked, told whether prompts stopped. */
+  private async fulfilRow(notifications: NotificationService, r: PledgeRow, now: Date): Promise<boolean> {
+    const pr = await this.progress(r, now);
+    if (pr.label !== "fulfilled") return false;
+    const done = await this.pool.query(`UPDATE pledges SET status = 'fulfilled', fulfilled_at = now(), updated_at = now() WHERE pledge_id = $1 AND status = 'active'`, [r.pledge_id]);
+    if (!done.rowCount) return false;
+    const stopped = await this.pool.query(
+      `UPDATE giving_schedules SET status = 'cancelled', cancelled_at = now(), retry_cycle_at = NULL, retry_at = NULL, retry_after = NULL
+        WHERE (pledge_id = $1 OR schedule_id = $2) AND status IN ('active','paused')`,
+      [r.pledge_id, r.schedule_id],
+    );
+    await this.fanOut(notifications, r.user_id, "pledge_fulfilled", { pledge_id: r.pledge_id, title: PartnersService.title(r), target_minor: Number(r.target_minor), currency: r.currency, schedule_stopped: (stopped.rowCount ?? 0) > 0 }, "Africa/Nairobi");
+    await audit(this.pool, r.user_id, "pledge.fulfilled", "pledges", r.pledge_id, { schedules_stopped: stopped.rowCount ?? 0 });
+    return true;
   }
 
   /** The office reminds one partner (optionally one pledge). Spaced 12 h from ANY reminder. */
@@ -1299,9 +1421,30 @@ export class PartnersService {
     note: z.string().trim().max(300).nullish(),
   });
 
-  async createClaim(userId: string, pledgeId: string, input: z.infer<typeof PartnersService.CreateClaim>): Promise<Record<string, unknown>> {
+  async createClaim(userId: string, pledgeId: string, input: z.infer<typeof PartnersService.CreateClaim>, now: Date = new Date()): Promise<Record<string, unknown>> {
     const [p] = await this.pledgeRows(this.pool, `WHERE p.pledge_id = $1 AND p.user_id = $2 AND p.status IN ('active','paused')`, [pledgeId, userId]);
     if (!p) throw new ApiError("NOT_FOUND", "Pledge not found");
+    // A claim the office can actually check (Giving Cycle 5): in the pledge's
+    // own currency, paid on a real day in the last year, told once.
+    if (input.currency.toUpperCase() !== p.currency) {
+      throw new ApiError("CURRENCY_MISMATCH", `This pledge is in ${p.currency}. Tell us the amount in ${p.currency}.`, { expected: p.currency });
+    }
+    const today = nairobiDate(now);
+    const yearAgo = nairobiDate(new Date(now.getTime() - 366 * 86_400_000));
+    if (input.paid_on > today || input.paid_on < yearAgo) {
+      throw new ApiError("INVALID_DATE", "Choose the day you paid — today or within the last year.", { paid_on: input.paid_on });
+    }
+    const pending = await many<{ amount_minor: string; paid_on: string }>(
+      this.pool,
+      `SELECT amount_minor::text, paid_on::text FROM pledge_claims WHERE pledge_id = $1 AND status = 'pending'`,
+      [pledgeId],
+    );
+    if (pending.some((c) => Number(c.amount_minor) === input.amount_minor && c.paid_on === input.paid_on)) {
+      throw new ApiError("CONFLICT", "You've already told us about this payment. The office is checking it.");
+    }
+    if (pending.length >= 5) {
+      throw new ApiError("CONFLICT", "Five payments are already waiting for the office. We'll get to them soon.");
+    }
     const row = await one<{ claim_id: string; status: string; created_at: string }>(
       this.pool,
       `INSERT INTO pledge_claims (pledge_id, user_id, amount_minor, currency, paid_on, note)
@@ -1356,6 +1499,15 @@ export class PartnersService {
         return { claim_id: claimId, status: "rejected" };
       }
 
+      // A claim is booked in its pledge's currency (Giving Cycle 5); an older
+      // one in another currency is never confirmed into the pledge's sums.
+      if (claim.currency.trim() !== p.currency.trim()) {
+        throw new ApiError(
+          "CURRENCY_MISMATCH",
+          `This claim is in ${claim.currency.trim()} but the pledge is in ${p.currency.trim()}. Reject it and ask the member to tell us again in ${p.currency.trim()}.`,
+          { expected: p.currency.trim() },
+        );
+      }
       // The fund the money went to: one rule with gifts and pledge schedules
       // (FinancialService.pledgeFundCode) — the pledge's own, its campaign's,
       // its need's department's, or the programme default.

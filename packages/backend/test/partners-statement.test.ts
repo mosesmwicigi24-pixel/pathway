@@ -319,7 +319,10 @@ describe("the Partners statement on the wire", () => {
     const st = await partners.statements(user, 2026, now);
     expect(st.pledged_minor).toBe(300_000);
     expect(st.paid_minor).toBe(150_000);
-    expect(st.remaining_minor).toBe(150_000);
+    // Remaining is owed per pledge (Giving Cycle 5): the roof still needs
+    // 250,000 — the 100,000 paid to the cancelled promise never reduced it
+    // (it used to read 150,000).
+    expect(st.remaining_minor).toBe(250_000);
     // Kept counts instalments kept, not payments: the cancelled pledge's 1 Feb
     // instalment was paid on the day (kept) and Mar..Sep went unpaid (its
     // ledger is still read through today — cancellation does not rewrite it);
@@ -332,7 +335,7 @@ describe("the Partners statement on the wire", () => {
     // The same words on the history row and in the office's claims queue — one SQL rule.
     const history = (await financial.listGiving(user)) as { transaction_id: string; pledge_title: string | null }[];
     expect(history.find((r) => r.transaction_id === needGift)?.pledge_title).toBe("A department need");
-    await partners.createClaim(user, String(need.pledge_id), { amount_minor: 500, currency: "KES", paid_on: "2026-09-01" });
+    await partners.createClaim(user, String(need.pledge_id), { amount_minor: 500, currency: "KES", paid_on: "2026-09-01" }, now);
     expect((await partners.pendingClaims())[0]!.pledge_title).toBe("A department need");
     // The PDF shows both blocks.
     const body = (await partners.partnersStatementPdf(user, 2026, now)).pdf.toString("latin1");
@@ -341,7 +344,7 @@ describe("the Partners statement on the wire", () => {
     expect(body).toContain("KSh 3,000 by 30 Nov   -   Active");
     expect(body).toContain("Pledged     KSh 3,000");
     expect(body).toContain("Paid        KSh 1,500");
-    expect(body).toContain("Remaining   KSh 1,500");
+    expect(body).toContain("Remaining   KSh 2,500"); // per pledge (Giving Cycle 5)
     expect(body).toContain("FEBRUARY 2026   KSh 1,000");
     expect(body).toContain("JUNE 2026   KSh 500");
 

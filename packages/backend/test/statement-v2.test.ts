@@ -394,7 +394,10 @@ describe("statement v2 on the wire", () => {
     expect(two![0]).toBe("Partners statement · 2026");
     expect(two).toContain("   Pledged     KSh 18,300");
     expect(two).toContain("   Paid        KSh 9,500");
-    expect(two).toContain("   Remaining   KSh 8,800");
+    // Remaining foots with the per-pledge rows (Giving Cycle 5): 9,000 still
+    // owed on Kenya trip + 0 on the overpaid gift pledge — it used to net the
+    // overpayment against Kenya trip and read 8,800.
+    expect(two).toContain("   Remaining   KSh 9,000");
     expect(two).toContain("   5 Apr  Kenya trip  Card  Ref PLG00001  KSh 2,000");
     expect(two).toContain("   6 Sep  Kenya trip  Card  Ref PLG00005  KSh 2,000");
     // Page 2's per-pledge "N of M kept" is the same count as page 1's.

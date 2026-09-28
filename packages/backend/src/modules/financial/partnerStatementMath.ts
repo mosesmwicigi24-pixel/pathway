@@ -6,9 +6,11 @@
 //   Paid      = Σ statement payments[].amount_minor where pledge_id is set
 //   Pledged   = Σ over pledges not cancelled:
 //                 monthly → amount_minor × number of due_day dates in the year
-//                           from max(pledge created_at, 1 Jan) through 31 Dec
+//                           from max(pledge start, 1 Jan) through
+//                           min(until_on, 31 Dec) — the start is starts_on
+//                           when set (Giving Cycle 5), else the creation day
 //                 total   → target_minor if due_on falls in the year, else 0
-//   Remaining = max(Pledged − Paid, 0)
+//   Remaining = Σ per pledge max(Pledged_i − Paid_i, 0)   (Giving Cycle 5)
 //
 // Gifts without a pledge are never counted here; they stay in the full
 // giving statement. Dates are the church's day (Africa/Nairobi, UTC+3, no
@@ -81,6 +83,24 @@ export interface StatementPledgeInput {
   due_on: string | null;
   /** ISO instant / timestamptz text; null falls back to the whole year. */
   created_at: string | null;
+  /** The first day an instalment can fall due (YYYY-MM-DD), when later than
+   *  the creation day — a pledge collected automatically from the next cycle
+   *  (Giving Cycle 5). Absent/null = the creation day. */
+  starts_on?: string | null;
+  /** The last day an instalment can fall due (YYYY-MM-DD); absent/null =
+   *  open-ended. A monthly pledge's instalments stop there (Giving Cycle 5:
+   *  they used to run on, counted as pledged and then as missed). */
+  until_on?: string | null;
+}
+
+/** The first day a pledge's instalments can fall due: the later of its
+ *  starts_on and its creation day (Nairobi). */
+export function pledgeStart(p: Pick<StatementPledgeInput, "created_at" | "starts_on">): string | null {
+  const created = partnerDate(p.created_at);
+  const starts = partnerDate(p.starts_on ?? null);
+  if (created === null) return starts;
+  if (starts === null) return created;
+  return starts > created ? starts : created;
 }
 
 /** The facts about one payment the rule reads — a subset of `payments[]`. */
@@ -102,7 +122,7 @@ export function pledgedInYear(p: StatementPledgeInput, year: number): number {
     const due = partnerDate(p.due_on);
     return due !== null && Number(due.slice(0, 4)) === year ? (p.target_minor ?? 0) : 0;
   }
-  return (p.amount_minor ?? 0) * dueDatesInYear(year, p.due_day ?? DEFAULT_DUE_DAY, partnerDate(p.created_at));
+  return (p.amount_minor ?? 0) * dueDatesInYear(year, p.due_day ?? DEFAULT_DUE_DAY, pledgeStart(p), partnerDate(p.until_on ?? null));
 }
 
 /** The pledge-tied payments only — the rows a Partners statement shows. */
@@ -114,9 +134,17 @@ export function pledgePayments<T extends StatementPaymentInput>(payments: T[]): 
  *  the year's succeeded payments (any pledge, or none); `pledges` are the
  *  member's pledges in any state (cancelled ones contribute nothing). */
 export function statementSummary(year: number, pledges: StatementPledgeInput[], payments: StatementPaymentInput[]): StatementSummary {
+  const paidBy = new Map<string, number>();
+  for (const x of pledgePayments(payments)) paidBy.set(x.pledge_id!, (paidBy.get(x.pledge_id!) ?? 0) + x.amount_minor);
   const pledged = pledges.reduce((a, p) => a + pledgedInYear(p, year), 0);
-  const paid = pledgePayments(payments).reduce((a, x) => a + x.amount_minor, 0);
-  return { pledged_minor: pledged, paid_minor: paid, remaining_minor: Math.max(pledged - paid, 0) };
+  const paid = [...paidBy.values()].reduce((a, b) => a + b, 0);
+  // Remaining is what is still owed on EACH pledge, added up (Giving Cycle 5).
+  // Netting the year's totals let money beyond one pledge — a cancelled
+  // pledge paid this year, or one paid ahead — hide what is still owed on
+  // another: KSh 3,000 still due on one pledge read as KSh 1,000 because
+  // KSh 2,000 had gone to a pledge since cancelled.
+  const remaining = pledges.reduce((a, p) => a + Math.max(pledgedInYear(p, year) - (paidBy.get(p.pledge_id) ?? 0), 0), 0);
+  return { pledged_minor: pledged, paid_minor: paid, remaining_minor: remaining };
 }
 
 /** "N of M kept" for one pledge in `year`, from its instalment ledger
@@ -236,6 +264,15 @@ function firstDueOnOrAfter(from: string, day: number): string {
   return m === 12 ? ymd(y + 1, 1, day) : ymd(y, m + 1, day);
 }
 
+/** The first `day`-of-the-month date strictly AFTER `from` — a pledge's
+ *  first automatic collection, which both apps promise is never today
+ *  (Giving Cycle 5). */
+export function firstDueAfter(from: string, day: number): string {
+  const d = Math.min(28, Math.max(1, Math.trunc(day)));
+  const first = firstDueOnOrAfter(from, d);
+  return first === from ? nextMonthly(from, d) : first;
+}
+
 /** The same `day` one month after `due`. */
 function nextMonthly(due: string, day: number): string {
   const y = Number(due.slice(0, 4));
@@ -292,7 +329,8 @@ export function allocateInstalments(
   const total = running;
 
   // A pledge with no recorded creation starts with the earliest year in play.
-  const created = partnerDate(p.created_at);
+  const created = pledgeStart(p);
+  const until = partnerDate(p.until_on ?? null);
   const start = created ?? `${Math.min(Number(today.slice(0, 4)), Number(through.slice(0, 4)), ...mine.map((x) => Number(x.on.slice(0, 4))))}-01-01`;
   const horizon = through > today ? through : today;
 
@@ -300,7 +338,7 @@ export function allocateInstalments(
   let due = firstDueOnOrAfter(start, day);
   let dueSoFar = 0;
   let seenIncomplete = false;
-  while (out.length < MAX_INSTALMENTS && !(due > horizon && seenIncomplete)) {
+  while (out.length < MAX_INSTALMENTS && !(due > horizon && seenIncomplete) && !(until !== null && due > until)) {
     const before = dueSoFar;
     dueSoFar += amount;
     const covered = Math.max(0, Math.min(amount, total - before));

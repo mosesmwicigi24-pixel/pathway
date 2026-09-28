@@ -164,3 +164,48 @@ fixes and results is kept in the PR descriptions.
   back to the profile), heads-up.
 - **A resumed pledge never charges the cycle it skipped**: its schedule picks up
   at the next occurrence from now (it used to charge the missed cycle at once).
+
+## 8. Partnership: a pledge's collector (Cycle 5)
+
+- **A schedule bound to a pledge collects it.** Each cycle asks what the pledge
+  still owes before the NEXT cycle — a monthly pledge's uncovered instalments
+  due until then (its one instalment ledger, arrears included), a total
+  pledge's rest of the target — never more than the schedule's amount, whole
+  shillings on M-Pesa. Already paid (Pay now, a confirmed claim): the cycle is
+  skipped and the member told (`giving_schedule_covered`); part-paid: the prompt
+  and its heads-up ask only the rest. It used to charge the full amount every
+  cycle — on top of a manual payment, past the target, past the end date.
+- **It stops with its pledge**: a total pledge that reaches its target is
+  fulfilled at once (every schedule collecting it stopped, one thank-you saying
+  so); a monthly pledge past `until_on`, or a cancelled one, stops its schedule
+  (`giving_schedule_stopped`, reason `pledge_fulfilled | pledge_ended |
+  pledge_cancelled`); a paused one pauses it. Instalments end at `until_on`
+  everywhere (they used to run on, pledged and then "missed").
+- **"Charge me automatically" keeps the apps' promise**: collected monthly on
+  the pledge's due day, from its first due day after today — never today — and
+  the pledge starts there (`pledges.starts_on`, migration 221). It used to fall
+  on the creation day every month and leave a pledge made on its own due day
+  behind from the next morning. Checked before the pledge is written (no half
+  pledge on a refusal); weekly and total-pledge auto-collection are refused; the
+  same pledge twice within ten minutes is one pledge.
+- **A collector follows its pledge**: the pledge's amount and due day move its
+  monthly schedules (an amount M-Pesa can't take changes nothing); changing them
+  on the schedule is refused with `details.pledge_id`; pause/cancel/resume reach
+  every bound schedule, and resuming a pledge resumes only what the pledge
+  paused.
+- **One currency per promise**: a gift or schedule toward a pledge or need must
+  be in its currency (`CURRENCY_MISMATCH`, `details.expected`); a need's raised
+  figure counts only its own currency; an older claim in another currency can
+  only be rejected.
+- **Claims the office can check**: pledge currency, paid today or within a year
+  (`INVALID_DATE`), told once and at most five waiting (`CONFLICT`).
+- **One voice per payment**: no "due soon" for a pledge its schedule will
+  collect by the due day (the heads-up says it), no overdue nudge while its
+  schedule failed in the last 36 hours (it already told them).
+- **Remaining foots**: Σ per pledge (see docs/PARTNERS_PROGRAMME.md §3a).
+- **The invitation**: never to a Partners-programme member; quiet hours in the
+  member's own timezone (it compared UTC — asked at 22:00, never before 10:00);
+  raised in the campaign's currency between its first and last Nairobi days;
+  day boundaries on the Nairobi calendar.
+- **Moving a gift's day** keeps the pending prompt in its own month or
+  Monday–Sunday week, so a period already given is never asked twice.

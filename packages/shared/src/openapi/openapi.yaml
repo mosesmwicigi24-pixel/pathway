@@ -2658,7 +2658,10 @@ paths:
         real Kenyan mobile number for mobile money (422 PHONE_REQUIRED). A member's
         own M-Pesa prompt from the last 90 seconds still unanswered refuses a second
         one (409 GIFT_IN_PROGRESS, details.transaction_id) — a replay with the SAME
-        idempotency_key is not refused; it returns that transaction.
+        idempotency_key is not refused; it returns that transaction. A gift toward a
+        pledge or a department need is in THAT pledge's or need's currency (422
+        CURRENCY_MISMATCH, details.expected — Cycle 5: a USD gift used to add its
+        cents to a KES pledge's shillings).
       requestBody:
         required: true
         content:
@@ -2688,7 +2691,15 @@ paths:
         409 SCHEDULE_EXISTS with details.schedule_id. A charge's REAL outcome (paid,
         declined, unreachable…) comes back from M-Pesa later: declines count toward
         three strikes (then paused, the member told why); a phone that never got the
-        prompt is tried once more that day, 08:00–20:00 EAT.
+        prompt is tried once more that day, 08:00–20:00 EAT. A schedule bound to a
+        pledge (pledge_id) must be in the pledge's currency (422 CURRENCY_MISMATCH,
+        details.expected) and collects it (Cycle 5): each cycle asks what the
+        pledge still owes before the next cycle, skips a cycle already paid (push
+        giving_schedule_covered), and stops when the pledge is fulfilled, ends
+        (until_on) or is cancelled (push giving_schedule_stopped) — a total pledge
+        that reaches its target is fulfilled at once. With first_charge "now" the
+        first prompt asks the same; when nothing is owed first_charge is null and
+        first_charge_error says so.
       requestBody:
         required: true
         content:
@@ -2701,14 +2712,14 @@ paths:
         "422": { $ref: "#/components/responses/Unprocessable" }
     get:
       tags: [giving]
-      summary: "My recurring giving schedules. Each carries phone_number (the schedule's own number, null = the profile's), retry_at (a retry of the current cycle, when armed), last_failure (a GiftFailure while the schedule is failing, else null), and (Cycle 4) pause_reason (failures | member | pledge), resume_on, heads_up and anchor_day."
+      summary: "My recurring giving schedules. Each carries phone_number (the schedule's own number, null = the profile's), retry_at (a retry of the current cycle, when armed), last_failure (a GiftFailure while the schedule is failing, else null), (Cycle 4) pause_reason (failures | member | pledge), resume_on, heads_up and anchor_day, and (Cycle 5) pledge — {pledge_id, title} of the pledge it collects, else null — and next_amount_minor: what the next prompt will ask. A schedule that collects a pledge asks only what the pledge still owes before the following cycle (never more than amount_minor; whole shillings on M-Pesa), so next_amount_minor may be below amount_minor, and is 0 when the pledge is already paid for that cycle (the prompt is skipped and the member told). Null when no prompt is coming (paused, cancelled, or stopping with its pledge)."
       responses:
         "200": { description: Schedules }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /giving/schedules/{id}:
     patch:
       tags: [giving]
-      summary: "Change one of my recurring gifts instead of cancelling it (Giving Cycle 4): amount (from the next cycle; checked like a new gift; a twin of another gift is 409 SCHEDULE_EXISTS), day (monthly 1–31, weekly 0–6 with Sunday 0 — the next prompt moves there, in prompt hours), phone_number (null = back to the profile number), heads_up. Answers the schedule row."
+      summary: "Change one of my recurring gifts instead of cancelling it (Giving Cycle 4): amount (from the next cycle; checked like a new gift; a twin of another gift is 409 SCHEDULE_EXISTS), day (monthly 1–31, weekly 0–6 with Sunday 0 — the pending prompt moves to that day WITHIN ITS OWN month or Monday–Sunday week, so a period already given is never asked twice (Cycle 5); in prompt hours), phone_number (null = back to the profile number), heads_up. A schedule collecting a MONTHLY pledge takes its amount and day from the pledge: changing either here is 422 UNPROCESSABLE with details.pledge_id — change the pledge (PATCH /giving/pledges/{id}) and the schedule follows. Answers the schedule row."
       parameters:
         - $ref: "#/components/parameters/IdPath"
       requestBody:
@@ -3443,7 +3454,8 @@ paths:
         "404": { description: Not found }
     patch:
       tags: [giving]
-      summary: Member. Pause, resume, cancel, rename or edit a pledge; a bound schedule follows.
+      summary: "Member. Pause, resume, cancel, rename or edit a pledge; every schedule collecting it follows (Cycle 5): cancelled → cancelled, paused → paused (reason pledge), resumed → only schedules the PLEDGE paused resume; a monthly pledge's new amount_minor / due_day move its monthly schedules too (an amount M-Pesa can't take is 422 AMOUNT_OUT_OF_RANGE and nothing changes)."
+
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -3472,6 +3484,11 @@ paths:
     post:
       tags: [giving]
       summary: Member. "I paid another way" — the office confirms before it counts.
+      description: >-
+        Cycle 5: in the pledge's own currency (422 CURRENCY_MISMATCH,
+        details.expected), paid today or within the last year in Nairobi (422
+        INVALID_DATE), told once — the same amount and day already waiting is
+        409 CONFLICT — and at most five waiting per pledge (409 CONFLICT).
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -3490,6 +3507,8 @@ paths:
         "201": { description: Claim (pending) }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: Pledge not found }
+        "409": { description: "CONFLICT — already told, or five already waiting", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "CURRENCY_MISMATCH | INVALID_DATE", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /admin/partners/claims:
     get:
       tags: [system]
@@ -3507,7 +3526,7 @@ paths:
         "200": { description: Confirmed }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { description: Not found }
-        "422": { description: Already decided }
+        "422": { description: "Already decided; or CURRENCY_MISMATCH — an older claim in another currency than its pledge can only be rejected (Cycle 5)" }
   /admin/partners/claims/{id}/reject:
     post:
       tags: [system]
@@ -10480,9 +10499,17 @@ components:
         reminders_enabled: { type: boolean, default: true }
         auto_schedule:
           type: [object, "null"]
+          description: >-
+            "Charge me automatically" — MONTHLY pledges only (a total pledge with
+            it is 400 VALIDATION_FAILED). Collected monthly on the pledge's due
+            day, from its first due day AFTER today — never today — so the
+            pledge's instalments start there too (Pledge.starts_on). Checked
+            before anything is written (Cycle 5): no usable number (422
+            PHONE_REQUIRED), M-Pesa off (422 METHOD_UNAVAILABLE) or an amount
+            M-Pesa can't take (422 AMOUNT_OUT_OF_RANGE) creates no pledge.
           properties:
             method: { type: string, enum: [mpesa, airtel] }
-            frequency: { type: string, enum: [weekly, monthly], default: monthly }
+            frequency: { type: string, enum: [monthly], default: monthly, description: "weekly is refused (400): it charged the monthly amount every week" }
     UpdatePledgeBody:
       type: object
       properties:
@@ -11053,7 +11080,10 @@ components:
         currency: { type: string }
         due_day: { type: [integer, "null"] }
         due_on: { type: [string, "null"] }
-        until_on: { type: [string, "null"] }
+        until_on: { type: [string, "null"], description: "Monthly: the last day an instalment can fall due — none after it is pledged, owed or missed (Cycle 5); its collector stops after it." }
+        starts_on: { type: [string, "null"], format: date, description: "Monthly: the first day an instalment can fall due when later than the creation day — a pledge collected automatically starts with its first collection (Cycle 5). Null = the creation day." }
+        reused: { type: boolean, description: "Create only: true when this is the same pledge made a moment ago (a double tap or retried request within ten minutes) — no second pledge was created." }
+        auto_schedule_error: { type: string, description: "Create only: the pledge was made but its automatic collection could not be set up — say this; the member pays with Pay now." }
         fund: { type: [object, "null"], properties: { code: { type: string }, name: { type: string } } }
         campaign: { type: [object, "null"], properties: { campaign_id: { type: string }, title: { type: string } } }
         need_id: { type: [string, "null"] }
@@ -11235,7 +11265,7 @@ components:
               total_minor: { type: integer, format: int64 }
         pledged_minor: { type: integer, format: int64, description: "Σ over pledges not cancelled: monthly → amount_minor × due_day dates in the year from max(created_at, 1 Jan) through 31 Dec; total → target_minor if due_on falls in the year" }
         paid_minor: { type: integer, format: int64, description: "Σ payments[].amount_minor where pledge_id is set" }
-        remaining_minor: { type: integer, format: int64, description: "max(pledged_minor − paid_minor, 0)" }
+        remaining_minor: { type: integer, format: int64, description: "Σ over pledges of max(pledged_i − paid_i, 0) — what is still owed on EACH pledge, added up (Cycle 5; it used to net the year's totals, so money beyond one pledge hid what another still owed). Foots with pledges[].remaining_year_minor." }
         by_pledge:
           type: array
           items:
