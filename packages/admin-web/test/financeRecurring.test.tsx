@@ -107,6 +107,13 @@ describe("Finance → Recurring gifts", () => {
     expect(screen.getByText("(their answer)")).toBeTruthy();
     expect(screen.getByText(/not sent by us today/)).toBeTruthy();
     expect(screen.getByText(/scheduled/)).toBeTruthy();
+    expect(screen.getByText(/· 3 prompts, 2 gifts/)).toBeTruthy();
+  });
+
+  it("counts one prompt and one gift in the singular (seen on the iPad, Giving Cycle 10)", async () => {
+    api.collectionHealth.mockResolvedValue({ ...HEALTH, forecast: [{ currency: "KES", gifts: 1, prompts: 1, scheduled_minor: 100_000, expected_minor: 50_000 }] });
+    renderPage(<FinanceRecurring />, { path: "/finance/recurring" });
+    expect(await screen.findByText(/· 1 prompt, 1 gift$/)).toBeTruthy();
   });
 
   it("shows why: failure in words, our outage, whose pause, the pledge and its next ask", async () => {

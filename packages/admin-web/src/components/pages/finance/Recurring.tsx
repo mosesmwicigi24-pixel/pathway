@@ -335,7 +335,7 @@ function CollectionHealthCard({ h }: { h: CollectionHealth }): ReactElement {
             h.forecast.map((f) => (
               <div key={f.currency} style={{ fontSize: 12.5, color: FIN.navy }} title="Each gift's remaining prompts this month, weighted by how often that gift has been paid (its last six answered prompts).">
                 <MoneyText amount_minor={f.expected_minor} currency={f.currency} strong /> of {formatMinor(f.scheduled_minor, f.currency)} scheduled
-                <span style={{ color: FIN.muted }}> · {f.prompts.toLocaleString()} prompts, {f.gifts.toLocaleString()} gifts</span>
+                <span style={{ color: FIN.muted }}> · {f.prompts.toLocaleString()} {f.prompts === 1 ? "prompt" : "prompts"}, {f.gifts.toLocaleString()} {f.gifts === 1 ? "gift" : "gifts"}</span>
               </div>
             ))
           )}
