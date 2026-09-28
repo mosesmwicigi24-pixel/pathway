@@ -2,8 +2,9 @@
 // member's reads use an index instead of the whole table; the reminder scan,
 // the fulfilment pass and one partner's page cost a fixed number of reads
 // however many pledges exist; a scheduler run that is still going is never
-// joined by a second; and a thousand recurring gifts due at once go out in
-// two passes, once each.
+// joined by a second; a thousand recurring gifts due at once go out in two
+// passes, once each; and the batched passes still say exactly what the
+// per-pledge rules say.
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import type { Pool } from "pg";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
@@ -214,4 +215,69 @@ describe("Cycle 8 — a thousand gifts due at once", () => {
     // Generous: the database work per prompt, with a provider that answers at once.
     expect(firstMs).toBeLessThan(120_000);
   }, 300_000);
+});
+
+describe("Cycle 8 — the batched passes say exactly what the per-pledge rules say", () => {
+  it("S8 at scale, a pledge its collector will pay gets no 'due soon', one whose collector just failed gets no nudge, the rest are reminded — four reads plus one write per reminder", async () => {
+    const who = await members(90);
+    const now = new Date("2026-10-03T06:00:00Z"); // 09:00 Nairobi
+    const setup = new PartnersService(testPool(), svc);
+    const kinds: Array<"collected" | "failed" | "plain"> = [];
+    for (const [i, u] of who.entries()) {
+      const kind = (["collected", "failed", "plain"] as const)[i % 3]!;
+      kinds.push(kind);
+      const dueDay = kind === "failed" ? 1 : 5; // the failed ones are overdue since 1 Oct; the others due in two days
+      const p = await setup.createPledge(u, { shape: "monthly", amount_minor: 100_000 + i * 100, currency: "KES", due_day: dueDay, reminders_enabled: true } as never);
+      await q(`UPDATE pledges SET created_at = '2026-09-20T09:00:00Z' WHERE pledge_id = $1`, [p.pledge_id]);
+      if (kind !== "plain") {
+        const s = await svc.createSchedule(u, { fund: "tithe", amount_minor: 100_000 + i * 100, currency: "KES", frequency: "monthly", method: "mpesa", pledge_id: String(p.pledge_id) } as never);
+        await q(
+          `UPDATE giving_schedules SET next_run_at = $2, last_failed_at = $3, consecutive_failures = $4 WHERE schedule_id = $1`,
+          kind === "collected"
+            ? [s.schedule_id, "2026-10-05T06:00:00Z", null, 0]
+            : [s.schedule_id, "2026-11-01T06:00:00Z", "2026-10-02T20:00:00Z", 1],
+        );
+      }
+    }
+    const counted = counting(testPool());
+    const partners = new PartnersService(counted.pool, svc);
+    const r = await partners.sendDueReminders(notifications, now);
+    // plain (30) → due soon; collected (30) → nothing; failed (30) → nothing.
+    expect(r).toEqual({ due_soon: 30, follow_ups: 0 });
+    expect(counted.count()).toBeLessThanOrEqual(4 + 30);
+  });
+
+  it("S9 the office's register over six hundred gifts answers in one page, attention first, without reading per gift", async () => {
+    const who = await members(600);
+    await q(
+      `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key, consecutive_failures, last_failure_code, heads_up)
+       SELECT u, (SELECT fund_id FROM funds WHERE code = 'tithe'), 50000, 'KES', 'weekly', 'mpesa', now() + interval '2 days', 'reg-' || u,
+              CASE WHEN row_number() OVER () % 10 = 0 THEN 1 ELSE 0 END,
+              CASE WHEN row_number() OVER () % 10 = 0 THEN 'insufficient_funds' END, false
+         FROM unnest($1::uuid[]) AS u`,
+      [who],
+    );
+    const counted = counting(testPool());
+    const office = new FinancialService(counted.pool, new FakeGateway(), { mpesa: new FakeMobileMoneyProvider("mpesa"), airtel: new FakeMobileMoneyProvider("airtel") });
+    const t0 = Date.now();
+    const page = (await office.listSchedulesAdmin({ limit: 200 })).data as Array<{ needs_attention: boolean }>;
+    expect(page).toHaveLength(200);
+    expect(page.slice(0, 60).every((r) => r.needs_attention)).toBe(true);
+    expect(page.slice(60).some((r) => r.needs_attention)).toBe(false);
+    expect(counted.count()).toBeLessThanOrEqual(2); // no pledge-bound gifts → no per-row plan reads
+    expect(Date.now() - t0).toBeLessThan(10_000);
+  });
+
+  it("S10 one member's Give tab over five years of weekly gifts returns every one of them, newest first", async () => {
+    const [me] = await members(1);
+    await q(
+      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, idempotency_key, created_at)
+       SELECT $1, (SELECT fund_id FROM funds WHERE code = 'tithe'), 50000, 'KES', 'succeeded', 'manual', 'hist-' || i, now() - (i * 7 || ' days')::interval
+         FROM generate_series(0, 259) AS i`,
+      [me],
+    );
+    const rows = (await svc.listGiving(me!)) as Array<{ created_at: string }>;
+    expect(rows).toHaveLength(260);
+    expect(new Date(rows[0]!.created_at).getTime()).toBeGreaterThan(new Date(rows[259]!.created_at).getTime());
+  });
 });
