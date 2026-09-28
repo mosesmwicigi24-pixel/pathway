@@ -10,6 +10,7 @@ import { z } from "zod";
 import { maybeOne, one, many, tx, audit, enqueueOutbox, type Queryable } from "../../db/db.js";
 import { NotificationService } from "../notifications/service.js";
 import { ApiError, ProviderNotConfiguredError } from "../../http/errors.js";
+import type { RateLimitStore } from "../../http/rateLimit.js";
 import type { PaymentGateway } from "./gateway.js";
 import {
   sanitizeAccountReference, mobileMoneyFailure, providerIsLive, toMsisdn,
@@ -86,6 +87,10 @@ export interface FinancialOptions {
    * tests and a future web checkout can use the Stripe path.
    */
   cardGiving?: boolean;
+  /** The rate-limit store the website's donate button uses (Giving Cycle 6):
+   *  a member's prompt to a number that is not their own spends the SAME
+   *  per-number bucket, so the app is not a second way to ring a stranger. */
+  promptLimiter?: RateLimitStore;
 }
 
 /** The outcome of one mobile-money prompt, as the provider confirmed it. */
@@ -287,9 +292,17 @@ export class FinancialService {
     input: z.infer<typeof FinancialService.GivingIntent>,
     scheduleId?: string,
     /** Scheduled charges only: the billing cycle this attempt belongs to, and
-     *  the schedule's own number to prompt (null = the profile number). */
-    scheduled?: { cycleAt: string; phone: string | null },
+     *  the schedule's own number to prompt (null = the profile number).
+     *  `watched`: the member is on the screen (a give-now first prompt). */
+    scheduled?: { cycleAt: string; phone: string | null; watched?: boolean },
   ): Promise<Record<string, unknown>> {
+    // Keys in the server's own namespaces are the server's (Giving Cycle 6): a
+    // member's key shaped like a schedule cycle's could make the scheduler
+    // think that cycle was already sent, and one shaped like a confirmed
+    // claim's would block the office from confirming it.
+    if (!scheduleId && input.idempotency_key && FinancialService.RESERVED_KEY.test(input.idempotency_key)) {
+      throw new ApiError("VALIDATION_FAILED", "That request key is reserved. Send a fresh one.", { fields: [{ path: "idempotency_key", message: "reserved" }] });
+    }
     // Which pledge, if any, this gift counts toward: the caller's explicit
     // choice, else the pledge bound to the schedule that is charging.
     const pledgeId = await this.resolvePledgeId(userId, input.pledge_id ?? null, scheduleId ?? null);
@@ -298,9 +311,9 @@ export class FinancialService {
 
     // Idempotent: the same client key returns the existing transaction — with
     // the fund and pledge it was BOOKED to, never what this replay asked for.
-    const existing = await maybeOne<{ transaction_id: string; status: string; pledge_id: string | null; fund_code: string | null; fund_name: string | null }>(
+    const existing = await maybeOne<{ transaction_id: string; status: string; pledge_id: string | null; fund_code: string | null; fund_name: string | null; provider: string | null; provider_ref: string | null }>(
       this.pool,
-      `SELECT t.transaction_id, t.status, t.pledge_id, f.code AS fund_code, f.name AS fund_name
+      `SELECT t.transaction_id, t.status, t.pledge_id, f.code AS fund_code, f.name AS fund_name, t.provider, t.provider_ref
          FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
         WHERE t.idempotency_key = $1 AND t.user_id = $2`,
       [key, userId],
@@ -309,6 +322,9 @@ export class FinancialService {
       return {
         transaction_id: existing.transaction_id,
         status: existing.status,
+        // The same shape the first answer had (Giving Cycle 6): a resend
+        // learns which prompt it is — null while it is still being sent.
+        ...(existing.provider ? { provider: existing.provider, provider_ref: existing.provider_ref } : {}),
         idempotency_key: key,
         reused: true,
         ...(await this.intentAttribution(
@@ -352,51 +368,95 @@ export class FinancialService {
       }
     }
 
-    // One prompt at a time (Giving Cycle 1). A phone shows ONE M-Pesa prompt;
-    // a second push while the first is still on screen fails as "busy" (1001)
-    // and a double tap with a fresh key used to send exactly that. If a prompt
-    // for this member from the last 90 seconds is still unanswered — their own
-    // gift, or their recurring gift's prompt that is on the phone right now —
-    // say so instead of sending one that cannot succeed. Scheduled charges are
-    // staggered by the scheduler itself.
-    if (phone && !scheduleId) {
-      const inflight = await maybeOne<{ transaction_id: string }>(
-        this.pool,
-        `SELECT transaction_id FROM transactions
-          WHERE user_id = $1 AND provider IN ('mpesa','airtel') AND status = 'processing'
-            AND created_at > now() - interval '90 seconds'
-          ORDER BY created_at DESC LIMIT 1`,
-        [userId],
-      );
-      if (inflight) {
-        throw new ApiError(
-          "GIFT_IN_PROGRESS",
-          "A prompt from a moment ago is still waiting on your phone. Approve it, or wait a minute and try again.",
-          { transaction_id: inflight.transaction_id },
-        );
-      }
-    }
-
     if ((input.method === "mpesa" || input.method === "airtel") && phone) {
-      const charge = await this.provider(input.method).initiate({
-        amountMinor: input.amount_minor,
-        currency,
-        phoneNumber: phone,
-        metadata: {
-          user_id: userId,
-          fund: fund.code, // the fund actually booked — it is the M-Pesa statement's fallback reference
-          // Named giving: only set `reference` when the member entered a name —
-          // absent, the provider falls back to its existing fund/default ref.
-          ...(input.account_name ? { reference: input.account_name } : {}),
-        },
+      // ── The row first, then the phone (Giving Cycle 6) ─────────────────
+      // A client that times out waiting on Safaricom and sends again (same
+      // key), or two taps (fresh keys), used to run this twice AT ONCE: both
+      // passed every check, both rang the phone, and with the same key the
+      // second row failed to insert AFTER its prompt was out — approved, that
+      // money arrived with no record at all. Now the member's row is claimed
+      // under a per-member lock before anything rings: a concurrent request
+      // waits, then finds it (same key → the same gift; another key →
+      // GIFT_IN_PROGRESS).
+      const claim = await tx(this.pool, async (c) => {
+        await c.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`giving_intent:${userId}`]);
+        const again = await maybeOne<{ transaction_id: string }>(
+          c, `SELECT transaction_id FROM transactions WHERE idempotency_key = $1 AND user_id = $2`, [key, userId],
+        );
+        if (again) return { reused: again.transaction_id };
+        await this.assertKeyFree(c, key);
+        // One prompt at a time (Giving Cycle 1). A phone shows ONE M-Pesa
+        // prompt; a second push while the first is still on screen fails as
+        // "busy" (1001). If a prompt for this member from the last 90 seconds
+        // is still unanswered — their own gift, or their recurring gift's
+        // prompt on the phone right now — say so instead of sending one that
+        // cannot succeed. Scheduled charges are staggered by the scheduler.
+        if (!scheduleId) {
+          const inflight = await maybeOne<{ transaction_id: string }>(
+            c,
+            `SELECT transaction_id FROM transactions
+              WHERE user_id = $1 AND provider IN ('mpesa','airtel') AND status = 'processing'
+                AND created_at > now() - interval '90 seconds'
+              ORDER BY created_at DESC LIMIT 1`,
+            [userId],
+          );
+          if (inflight) {
+            throw new ApiError(
+              "GIFT_IN_PROGRESS",
+              "A prompt from a moment ago is still waiting on your phone. Approve it, or wait a minute and try again.",
+              { transaction_id: inflight.transaction_id },
+            );
+          }
+        }
+        if (!scheduleId || scheduled?.watched) await this.limitPromptTo(c, userId, phone);
+        const row = await one<{ transaction_id: string; status: string }>(
+          c,
+          `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id, schedule_cycle_at, fee_cover_minor)
+           VALUES ($1, $2, $3, $4, 'processing', $5, NULL, $6, $7, $8, $9, $10, $11, $12)
+           RETURNING transaction_id, status`,
+          [userId, fund.fund_id, input.amount_minor, currency, input.method, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId, scheduled?.cycleAt ?? null, feeCover],
+        );
+        return { row };
       });
-      const txn = await one<{ transaction_id: string; status: string }>(
-        this.pool,
-        `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id, schedule_cycle_at, fee_cover_minor)
-         VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10, $11, $12, $13)
-         RETURNING transaction_id, status`,
-        [userId, fund.fund_id, input.amount_minor, currency, input.method, charge.ref, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId, scheduled?.cycleAt ?? null, feeCover],
-      );
+      if ("reused" in claim) {
+        const same = await maybeOne<{ status: string; pledge_id: string | null; fund_code: string | null; fund_name: string | null; provider_ref: string | null }>(
+          this.pool,
+          `SELECT t.status, t.pledge_id, t.provider_ref, f.code AS fund_code, f.name AS fund_name
+             FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id WHERE t.transaction_id = $1`,
+          [claim.reused],
+        );
+        return {
+          transaction_id: claim.reused,
+          status: same?.status ?? "processing",
+          provider: input.method,
+          provider_ref: same?.provider_ref ?? null,
+          idempotency_key: key,
+          reused: true,
+          ...(await this.intentAttribution(same?.fund_code && same.fund_name ? { code: same.fund_code, name: same.fund_name } : null, same?.pledge_id ?? null)),
+        };
+      }
+      const txn = claim.row;
+      let charge: { ref: string };
+      try {
+        charge = await this.provider(input.method).initiate({
+          amountMinor: input.amount_minor,
+          currency,
+          phoneNumber: phone,
+          metadata: {
+            user_id: userId,
+            fund: fund.code, // the fund actually booked — it is the M-Pesa statement's fallback reference
+            // Named giving: only set `reference` when the member entered a name —
+            // absent, the provider falls back to its existing fund/default ref.
+            ...(input.account_name ? { reference: input.account_name } : {}),
+          },
+        });
+      } catch (err) {
+        // It never reached the phone, so no money can move: the claimed row
+        // goes, as if it had never been asked.
+        await this.pool.query(`DELETE FROM transactions WHERE transaction_id = $1 AND provider_ref IS NULL AND status = 'processing'`, [txn.transaction_id]);
+        throw err;
+      }
+      await this.pool.query(`UPDATE transactions SET provider_ref = $2 WHERE transaction_id = $1`, [txn.transaction_id, charge.ref]);
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor,
         currency,
@@ -415,16 +475,23 @@ export class FinancialService {
       };
     }
 
+    // A key another gift already holds is a 409, never a 500 (Giving Cycle 6).
+    await this.assertKeyFree(this.pool, key);
+
     if (input.method === "paypal") {
       // PayPal can't transact KES — gifts settle in USD (amount treated as USD).
       const order = await this.paypalGw().createOrder({ amountMinor: input.amount_minor, reference: `${userId}:${fund.code}` });
-      const txn = await one<{ transaction_id: string; status: string }>(
+      const txn = await maybeOne<{ transaction_id: string; status: string }>(
         this.pool,
         `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key, schedule_id, account_name, pledge_id, need_id, fee_cover_minor)
          VALUES ($1, $2, $3, 'USD', 'processing', 'paypal', $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (idempotency_key) DO NOTHING
          RETURNING transaction_id, status`,
         [userId, fund.fund_id, input.amount_minor, order.orderId, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId, feeCover],
       );
+      // The same request raced itself (Giving Cycle 6): the first row stands and
+      // this order is never captured — capture looks orders up by our rows.
+      if (!txn) return this.keyReplay(userId, key);
       await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
         amount_minor: input.amount_minor, currency: "USD", fund: fund.code, method: "paypal", account_name: input.account_name ?? null,
       });
@@ -446,13 +513,15 @@ export class FinancialService {
       metadata: { user_id: userId, fund: fund.code },
     });
 
-    const txn = await one<{ transaction_id: string; status: string }>(
+    const txn = await maybeOne<{ transaction_id: string; status: string }>(
       this.pool,
       `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, stripe_payment_intent, idempotency_key, schedule_id, account_name, pledge_id, need_id, fee_cover_minor)
        VALUES ($1, $2, $3, $4, 'processing', $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (idempotency_key) DO NOTHING
        RETURNING transaction_id, status`,
       [userId, fund.fund_id, input.amount_minor, currency, intent.id, key, scheduleId ?? null, input.account_name ?? null, pledgeId, needId, feeCover],
     );
+    if (!txn) return this.keyReplay(userId, key);
     await audit(this.pool, userId, "giving.intent_created", "transactions", txn.transaction_id, {
       amount_minor: input.amount_minor,
       currency,
@@ -588,33 +657,54 @@ export class FinancialService {
     // sanitizer as named giving, because Daraja accepts 12 alphanumerics.
     const reference = sanitizeAccountReference(input.giver_name) ?? "WEBSITE";
 
-    const charge = await this.provider(input.method).initiate({
-      amountMinor: input.amount_minor,
-      currency,
-      phoneNumber: input.phone_number,
-      metadata: { source: "website", fund: input.fund, reference },
+    // The row first, then the phone (Giving Cycle 6) — the member path's
+    // rule: a resent request used to ring twice and lose the second row after
+    // its prompt was out. The key is claimed under a lock on the key itself.
+    const claim = await tx(this.pool, async (c) => {
+      await c.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`website_intent:${input.idempotency_key}`]);
+      const again = await maybeOne<{ transaction_id: string; status: string }>(
+        c, `SELECT transaction_id, status FROM transactions WHERE idempotency_key = $1 AND source = 'website'`, [input.idempotency_key],
+      );
+      if (again) return { reused: again };
+      await this.assertKeyFree(c, input.idempotency_key);
+      const row = await one<{ transaction_id: string; status: string }>(
+        c,
+        `INSERT INTO transactions
+           (user_id, fund_id, amount_minor, currency, status, provider, provider_ref,
+            idempotency_key, account_name, source, giver_name, giver_phone, giver_email)
+         VALUES (NULL, $1, $2, $3, 'processing', $4, NULL, $5, $6, 'website', $7, $8, $9)
+         RETURNING transaction_id, status`,
+        [
+          fund.fund_id,
+          input.amount_minor,
+          currency,
+          input.method,
+          input.idempotency_key,
+          input.giver_name ?? null,
+          input.giver_name ?? null,
+          input.phone_number,
+          input.giver_email ?? null,
+        ],
+      );
+      return { row };
     });
-
-    const txn = await one<{ transaction_id: string; status: string }>(
-      this.pool,
-      `INSERT INTO transactions
-         (user_id, fund_id, amount_minor, currency, status, provider, provider_ref,
-          idempotency_key, account_name, source, giver_name, giver_phone, giver_email)
-       VALUES (NULL, $1, $2, $3, 'processing', $4, $5, $6, $7, 'website', $8, $9, $10)
-       RETURNING transaction_id, status`,
-      [
-        fund.fund_id,
-        input.amount_minor,
+    if ("reused" in claim) {
+      return { transaction_id: claim.reused.transaction_id, status: claim.reused.status, idempotency_key: input.idempotency_key, reused: true };
+    }
+    const txn = claim.row;
+    let charge: { ref: string };
+    try {
+      charge = await this.provider(input.method).initiate({
+        amountMinor: input.amount_minor,
         currency,
-        input.method,
-        charge.ref,
-        input.idempotency_key,
-        input.giver_name ?? null,
-        input.giver_name ?? null,
-        input.phone_number,
-        input.giver_email ?? null,
-      ],
-    );
+        phoneNumber: input.phone_number,
+        metadata: { source: "website", fund: input.fund, reference },
+      });
+    } catch (err) {
+      await this.pool.query(`DELETE FROM transactions WHERE transaction_id = $1 AND provider_ref IS NULL AND status = 'processing'`, [txn.transaction_id]);
+      throw err;
+    }
+    await this.pool.query(`UPDATE transactions SET provider_ref = $2 WHERE transaction_id = $1`, [txn.transaction_id, charge.ref]);
 
     // actor null: nobody signed in did this. The metadata carries who it was as
     // far as we know them, which is a phone number and possibly a name.
@@ -728,7 +818,13 @@ export class FinancialService {
       return { status: "succeeded" };
     }
     if (result.status === "failed") {
-      await this.pool.query(`UPDATE transactions SET status = 'failed' WHERE provider_ref = $1 AND status <> 'succeeded'`, [orderId]);
+      // With its reason, like every other failed gift (Giving Cycle 6).
+      await this.pool.query(
+        `UPDATE transactions SET status = 'failed', failure_code = 'declined', failed_at = now(),
+                failure_detail = 'PayPal did not complete the payment'
+          WHERE provider_ref = $1 AND status = 'processing'`,
+        [orderId],
+      );
       return { status: "failed" };
     }
     return { status: "processing" };
@@ -1066,6 +1162,17 @@ export class FinancialService {
   ): Promise<{ checked: number; settled: number; failed: number; expired: number }> {
     const out = { checked: 0, settled: 0, failed: 0, expired: 0 };
     const cutoff = new Date(now.getTime() - 48 * 3_600_000).toISOString();
+    // A row claimed for a prompt that never went out — the process stopped
+    // between claiming it and ringing the phone (Giving Cycle 6). Nothing can
+    // settle it; say so instead of leaving it "processing" for 48 hours.
+    const unsent = await this.pool.query(
+      `UPDATE transactions
+          SET status = 'failed', failure_code = 'system', failed_at = now(), failure_detail = 'the prompt was never sent'
+        WHERE status = 'processing' AND provider IN ('mpesa','airtel') AND provider_ref IS NULL
+          AND created_at < $1`,
+      [new Date(now.getTime() - 5 * 60_000).toISOString()],
+    );
+    out.failed += unsent.rowCount ?? 0;
     const stale = await many<{ provider: MobileMoneyKey; provider_ref: string }>(
       this.pool,
       `SELECT provider, provider_ref FROM transactions
@@ -1806,6 +1913,66 @@ export class FinancialService {
     return this.checkGift(userId, method, amountMinor, currency.toUpperCase(), phoneNumber, false);
   }
 
+  /** A request that lost a same-key race to itself: the member's first row,
+   *  as a replay — or, if the key is someone else's, a conflict. */
+  private async keyReplay(userId: string, key: string): Promise<Record<string, unknown>> {
+    const first = await maybeOne<{ transaction_id: string; status: string; provider: string | null; provider_ref: string | null }>(
+      this.pool, `SELECT transaction_id, status, provider, provider_ref FROM transactions WHERE idempotency_key = $1 AND user_id = $2`, [key, userId],
+    );
+    if (!first) throw new ApiError("CONFLICT", "That request key is already in use. Try again.", { fields: [{ path: "idempotency_key", message: "in use" }] });
+    return { transaction_id: first.transaction_id, status: first.status, provider: first.provider, provider_ref: first.provider_ref, idempotency_key: key, reused: true };
+  }
+
+  /** Server-made keys (schedule cycles, confirmed claims, website and office
+   *  rows); a member's own key may not take their shape (Giving Cycle 6). */
+  static readonly RESERVED_KEY = /^(sched|claim|pledge|web|website|office):/i;
+
+  /** `transactions.idempotency_key` is unique across ALL givers: a key some
+   *  other row holds is refused as a conflict, before any phone rings or
+   *  order is made — it used to surface as a 500 after the fact. */
+  private async assertKeyFree(q: Queryable, key: string): Promise<void> {
+    const taken = await maybeOne<{ n: number }>(q, `SELECT 1 AS n FROM transactions WHERE idempotency_key = $1`, [key]);
+    if (taken) throw new ApiError("CONFLICT", "That request key is already in use. Try again.", { fields: [{ path: "idempotency_key", message: "in use" }] });
+  }
+
+  /**
+   * A prompt to a number that is not the member's own (Giving Cycle 6). The
+   * app used to ring ANY Kenyan number every 90 seconds — the harassment the
+   * website's donate button was built to stop. Such a prompt spends the SAME
+   * per-number bucket as the website (three, then one every ten minutes), so
+   * the two can't be combined, and a per-member bucket (five, then one every
+   * half hour) so one account can't work through a list of strangers. The
+   * member's own profile number is never limited here — the one-prompt-at-a-
+   * time rule already paces it. No store (a bare service in tests) = no limit.
+   */
+  private async limitPromptTo(c: Queryable, userId: string, phone: string): Promise<void> {
+    const store = this.options.promptLimiter;
+    if (!store) return;
+    // On the claim's own connection: a second pool connection inside the
+    // locked claim could starve the pool when many members give at once.
+    const own = await maybeOne<{ phone_number: string | null }>(c, `SELECT phone_number FROM users WHERE user_id = $1`, [userId]);
+    if (kenyanMobileNumber(own?.phone_number ?? null) === phone) return;
+    const refuse = (retryAfterSec: number): never => {
+      const minutes = Math.max(1, Math.ceil(retryAfterSec / 60));
+      throw new ApiError(
+        "RATE_LIMITED",
+        `We've sent several prompts to that number just now. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}, or give from your own number.`,
+        { retry_after_sec: retryAfterSec },
+      );
+    };
+    const member = await store.consume(`give:others:${userId}`, FinancialService.OTHERS_BURST, FinancialService.OTHERS_REFILL_PER_SEC);
+    if (!member.allowed) refuse(member.retryAfterSec);
+    // website.ts keys this bucket by toMsisdn (254…, no plus): the same key.
+    const number = await store.consume(`webgive:phone:${toMsisdn(phone)}`, FinancialService.PHONE_BURST, FinancialService.PHONE_REFILL_PER_SEC);
+    if (!number.allowed) refuse(number.retryAfterSec);
+  }
+  /** One number: three prompts, then one every ten minutes (website.ts's rule). */
+  static readonly PHONE_BURST = 3;
+  static readonly PHONE_REFILL_PER_SEC = 1 / 600;
+  /** One member, numbers not their own: five, then one every half hour. */
+  static readonly OTHERS_BURST = 5;
+  static readonly OTHERS_REFILL_PER_SEC = 1 / 1800;
+
   /** What a gift pays toward is counted in ITS currency (Giving Cycle 5): a
    *  USD gift toward a KES pledge used to add its cents to the shillings (and
    *  a need's raised figure the same). The office's record-a-gift already
@@ -2127,7 +2294,7 @@ export class FinancialService {
           idempotency_key: firstKey,
         },
         created.schedule_id,
-        { cycleAt: new Date().toISOString(), phone: schedulePhone ?? phone },
+        { cycleAt: new Date().toISOString(), phone: schedulePhone ?? phone, watched: true },
       );
       return { ...created, first_charge: first };
     } catch (err) {
@@ -2685,8 +2852,8 @@ export class FinancialService {
       const replay = regular
         ? await maybeOne<{ n: number }>(
             this.pool,
-            `SELECT 1 AS n FROM transactions WHERE idempotency_key = $1 LIMIT 1`,
-            [`sched:${s.schedule_id}:${s.next_run_at}`],
+            `SELECT 1 AS n FROM transactions WHERE idempotency_key = $1 AND schedule_id = $2 LIMIT 1`,
+            [`sched:${s.schedule_id}:${s.next_run_at}`, s.schedule_id],
           )
         : null;
       const waiting = replay

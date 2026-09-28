@@ -15,6 +15,7 @@ import { buildPaymentGateway, type PaymentGateway } from "./gateway.js";
 import { buildMobileMoneyProviders, type MobileMoneyProviders } from "./providers.js";
 import { buildPayPalGateway, type PayPalGateway } from "./paypal.js";
 import { verifyAccessToken } from "../identity/tokens.js";
+import type { RateLimitStore } from "../../http/rateLimit.js";
 import { ApiError } from "../../http/errors.js";
 import { registerFinanceReports } from "./finance-reports-routes.js";
 
@@ -22,13 +23,32 @@ export const financialRouter: Router = Router();
 
 /** The access token for a download route. These PDFs are opened via the OS
  *  browser/viewer (Linking.openURL), which cannot attach a bearer header, so
- *  they accept a `?token=` access JWT beside the Authorization header. */
+ *  they accept a `?token=` access JWT beside the Authorization header. Only
+ *  the retired React Native app still does that — both native apps send the
+ *  header — so a query token is counted (Giving Cycle 6) until it can go: a
+ *  token in a URL lands in browser history and proxy logs. */
+let queryTokenDownloads = 0;
 function accessTokenOf(req: Request): string {
   const header = req.header("authorization");
   const bearer = header?.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : null;
   const token = bearer ?? (typeof req.query.token === "string" ? req.query.token : null);
   if (!token) throw new ApiError("AUTH_REQUIRED", "Access token required");
+  if (!bearer) {
+    queryTokenDownloads += 1;
+    if (queryTokenDownloads === 1 || queryTokenDownloads % 100 === 0) {
+      console.warn(`[giving] PDF fetched with a ?token= access JWT (${queryTokenDownloads} since start) — the retired RN app; remove the fallback once this stays 0`);
+    }
+  }
   return token;
+}
+
+/** A private document: never cached by a proxy or the browser, never leaking
+ *  its URL (and any ?token=) to another site as a referrer (Giving Cycle 6). */
+function privatePdf(res: express.Response, filename: string): void {
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
 }
 
 export function registerFinancial(
@@ -36,12 +56,16 @@ export function registerFinancial(
   gatewayOverride?: PaymentGateway,
   mobileMoneyOverride?: MobileMoneyProviders,
   paypalOverride?: PayPalGateway,
+  /** The app's shared rate-limit store (Giving Cycle 6: prompts to numbers
+   *  that are not the member's own share the website's per-number bucket). */
+  promptLimiter?: RateLimitStore,
 ): Router {
   const gateway = gatewayOverride ?? buildPaymentGateway(ctx.env);
   const mobileMoney = mobileMoneyOverride ?? buildMobileMoneyProviders(ctx.env);
   const paypal = paypalOverride ?? buildPayPalGateway(ctx.env);
   const svc = new FinancialService(ctx.db.primary, gateway, mobileMoney, paypal, {
     cardGiving: ctx.env.CARD_GIVING_ENABLED ? ctx.env.CARD_GIVING_ENABLED === "true" : ctx.env.NODE_ENV !== "production",
+    ...(promptLimiter ? { promptLimiter } : {}),
   });
   const partners = new PartnersService(ctx.db.primary, svc);
   const notifications = new NotificationService(ctx.db.primary);
@@ -125,8 +149,7 @@ export function registerFinancial(
       // "2025" and the PDF was every year); absent = the complete record.
       const { year } = parseBody(z.object({ year: z.coerce.number().int().min(2000).max(2100).optional() }), req.query);
       const pdf = await svc.statementPdf(claims.sub, year);
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="nuru-giving-statement${year ? `-${year}` : ""}.pdf"`);
+      privatePdf(res, `nuru-giving-statement${year ? `-${year}` : ""}.pdf`);
       res.send(pdf);
     }),
   );
@@ -142,8 +165,7 @@ export function registerFinancial(
       const claims = verifyAccessToken(ctx.env, accessTokenOf(req));
       const q = parseBody(z.object({ year: z.coerce.number().int().min(2000).max(2999).optional() }), req.query);
       const { year, pdf } = await partners.partnersStatementPdf(claims.sub, q.year);
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="nuru-partners-statement-${year}.pdf"`);
+      privatePdf(res, `nuru-partners-statement-${year}.pdf`);
       res.send(pdf);
     }),
   );
@@ -156,8 +178,7 @@ export function registerFinancial(
       const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
       const claims = verifyAccessToken(ctx.env, accessTokenOf(req));
       const pdf = await svc.receiptPdf(claims.sub, id);
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", 'attachment; filename="nuru-giving-receipt.pdf"');
+      privatePdf(res, "nuru-giving-receipt.pdf");
       res.send(pdf);
     }),
   );

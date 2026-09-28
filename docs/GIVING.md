@@ -209,3 +209,39 @@ fixes and results is kept in the PR descriptions.
   day boundaries on the Nairobi calendar.
 - **Moving a gift's day** keeps the pending prompt in its own month or
   Monday–Sunday week, so a period already given is never asked twice.
+
+## 9. Safe to give (Cycle 6)
+
+- **One request, one ring, one row.** A member's mobile-money gift is claimed
+  as a row under a per-member lock BEFORE the phone rings, then the prompt goes
+  out and the row learns its prompt ref. A client resending after a slow
+  Safaricom call (same key) gets the same gift; two taps at once (fresh keys)
+  get one prompt and `GIFT_IN_PROGRESS`. It used to be possible for both to
+  ring, and with the same key the second row failed to insert after its prompt
+  was out — approved, that money arrived with no record. A prompt that could
+  not be sent leaves no row; a row whose prompt never went out (the process
+  stopped in between) is closed after five minutes as `system` — "the prompt
+  was never sent". The website's donate button follows the same rule. PayPal
+  and card requests racing themselves book one row; the loser answers as a
+  replay, never a 500.
+- **Not a way to ring a stranger.** A prompt to a number that is not the
+  member's own spends the website's per-number bucket (three, then one every
+  ten minutes — the two paths can't be combined) and a per-member one (five
+  numbers, then one every half hour): `429 RATE_LIMITED`,
+  `details.retry_after_sec`. The member's own number is paced only by the
+  one-prompt-at-a-time rule; the scheduler's own prompts are not limited (a
+  give-now prompt the member starts is).
+- **The server's keys are the server's.** Member keys may not use `sched:`,
+  `claim:`, `pledge:`, `web:`, `website:` or `office:`; a key another gift
+  holds is `409 CONFLICT` before anything rings (it was an unhandled 500).
+  The scheduler's replay check reads only its own schedule's rows.
+- **Private documents**: receipts and statements are sent with
+  `Cache-Control: private, no-store` and `Referrer-Policy: no-referrer`; the
+  `?token=` fallback (the retired React Native app only) is logged when used,
+  so it can be removed.
+- **Every failure says why**: a PayPal payment that did not complete is
+  `declined`, "PayPal did not complete the payment".
+- Verified unchanged: every member giving route is owner-scoped (404 across
+  members), every office route is behind `finance:view`/`finance:manage`,
+  CSV exports neutralise spreadsheet formulas, PayPal money moves only on the
+  server's own capture.

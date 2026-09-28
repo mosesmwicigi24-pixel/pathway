@@ -2658,7 +2658,12 @@ paths:
         real Kenyan mobile number for mobile money (422 PHONE_REQUIRED). A member's
         own M-Pesa prompt from the last 90 seconds still unanswered refuses a second
         one (409 GIFT_IN_PROGRESS, details.transaction_id) — a replay with the SAME
-        idempotency_key is not refused; it returns that transaction. A gift toward a
+        idempotency_key is not refused; it returns that transaction, with provider
+        and provider_ref (null while the prompt is still being sent). Giving Cycle
+        6: the gift's row is claimed under a per-member lock BEFORE the phone
+        rings, so a resend or a double tap can never ring twice or lose a row; a
+        prompt that could not be sent leaves no row. A prompt to a number that is
+        not the member's own is limited (429 RATE_LIMITED). A gift toward a
         pledge or a department need is in THAT pledge's or need's currency (422
         CURRENCY_MISMATCH, details.expected — Cycle 5: a USD gift used to add its
         cents to a KES pledge's shillings).
@@ -2674,8 +2679,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GivingIntentResult" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "409": { description: "GIFT_IN_PROGRESS — a prompt from a moment ago is still waiting on the member's phone", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "400": { description: "VALIDATION_FAILED — also an idempotency_key in the server's own namespaces (sched:, claim:, pledge:, web:, website:, office:)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "GIFT_IN_PROGRESS — a prompt from a moment ago is still waiting on the member's phone; CONFLICT — the idempotency_key is another gift's (send a fresh key)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { description: "RATE_LIMITED — several prompts have gone to that number (not the member's own) just now; details.retry_after_sec says when to try again. The number's allowance is shared with the website's donate button.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
   /giving/schedules:
     post:
@@ -3931,7 +3938,7 @@ paths:
       summary: One of the caller's gifts as a downloadable receipt PDF.
       description: >
         Rendered server-side and opened in the OS browser/viewer. Accepts the
-        access token either as a Bearer header or a `token` query parameter.
+        access token either as a Bearer header or a `token` query parameter. Giving Cycle 6: answered with Cache-Control private, no-store and Referrer-Policy no-referrer; the `token` query parameter is kept only for the retired React Native app (both native apps send the header) and is logged when used, to be removed.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: token, in: query, required: false, schema: { type: string } }
@@ -3954,7 +3961,7 @@ paths:
         pledge-tied payments under their pledge's title with a subtotal. Long
         histories continue onto further pages. Giving Cycle 2: days and times
         are Nairobi's; every amount is in its own currency and totals are per
-        currency ("KSh 3,500 + USD 20.00"), never summed across currencies.
+        currency ("KSh 3,500 + USD 20.00"), never summed across currencies. Giving Cycle 6: answered with Cache-Control private, no-store and Referrer-Policy no-referrer; the `token` query parameter is kept only for the retired React Native app (both native apps send the header) and is logged when used, to be removed.
       parameters:
         - { name: token, in: query, required: false, schema: { type: string } }
         - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2100 }, description: "One church year (Nairobi); absent = the complete record." }
@@ -3980,7 +3987,7 @@ paths:
         `/giving/statements` reports for that year. Below the first disciple
         carried it prints progress toward it ("KSh x of 20,000 toward carrying
         one disciple through a level"), never "0 disciples". A ledger longer
-        than a page continues onto a further page.
+        than a page continues onto a further page. Giving Cycle 6: answered with Cache-Control private, no-store and Referrer-Policy no-referrer; the `token` query parameter is kept only for the retired React Native app (both native apps send the header) and is logged when used, to be removed.
       parameters:
         - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 } }
         - { name: token, in: query, required: false, schema: { type: string } }
