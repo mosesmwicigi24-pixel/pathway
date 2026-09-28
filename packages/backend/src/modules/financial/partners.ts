@@ -642,9 +642,13 @@ export class PartnersService {
       if (patch.status === "cancelled") {
         await this.pool.query(`UPDATE giving_schedules SET status = 'cancelled', cancelled_at = now() WHERE schedule_id = $1 AND status <> 'cancelled'`, [p.schedule_id]);
       } else if (patch.status === "paused") {
-        await this.pool.query(`UPDATE giving_schedules SET status = 'paused', paused_at = now() WHERE schedule_id = $1 AND status = 'active'`, [p.schedule_id]);
+        await this.pool.query(`UPDATE giving_schedules SET status = 'paused', paused_at = now(), pause_reason = 'pledge', retry_cycle_at = NULL, retry_at = NULL WHERE schedule_id = $1 AND status = 'active'`, [p.schedule_id]);
       } else if (patch.status === "active") {
-        await this.pool.query(`UPDATE giving_schedules SET status = 'active', paused_at = NULL, consecutive_failures = 0 WHERE schedule_id = $1 AND status = 'paused'`, [p.schedule_id]);
+        // Giving Cycle 4: pick up at the next occurrence from NOW — resuming
+        // used to charge the cycle skipped while paused, at once.
+        const paused = await this.pool.query(`SELECT 1 FROM giving_schedules WHERE schedule_id = $1 AND status = 'paused'`, [p.schedule_id]);
+        if (paused.rowCount && this.financial) await this.financial.rearmAfterPause(p.schedule_id);
+        else await this.pool.query(`UPDATE giving_schedules SET status = 'active', paused_at = NULL, pause_reason = NULL, consecutive_failures = 0 WHERE schedule_id = $1 AND status = 'paused'`, [p.schedule_id]);
       }
     }
     await audit(this.pool, userId, "pledge.updated", "pledges", pledgeId, patch as Record<string, unknown>);

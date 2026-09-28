@@ -199,6 +199,12 @@ const PUSH_TEMPLATE_COPY: Record<
     title: "Your gift didn't go through",
     body: `${str(p.reason) ?? "The payment didn't complete."} ${str(p.hint) ?? "Open Give to try again."}`,
   }),
+  // Giving Cycle 4: minutes before a scheduled M-Pesa prompt, so it is
+  // expected rather than dismissed as a scam.
+  giving_schedule_heads_up: (p) => ({
+    title: `Your ${str(p.frequency) === "weekly" ? "weekly" : "monthly"} gift is ready`,
+    body: `An M-Pesa prompt for ${money(p)} to ${str(p.fund_name) ?? "the church"} is coming to your phone in a few minutes. Enter your PIN to give.`,
+  }),
   giving_schedule_paused: (p) => ({
     title: "Your recurring gift is paused",
     body: `${str(p.reason) ? `${str(p.reason)} ` : ""}We've stopped sending prompts for now. Open Give to resume it whenever you're ready.`,

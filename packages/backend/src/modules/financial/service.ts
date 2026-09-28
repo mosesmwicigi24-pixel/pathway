@@ -894,11 +894,13 @@ export class FinancialService {
           WHERE t.provider_ref = $1 AND t.status = 'processing'
           RETURNING t.transaction_id, t.user_id, t.schedule_id, t.schedule_cycle_at, t.amount_minor, t.currency,
                     (SELECT f.code FROM funds f WHERE f.fund_id = t.fund_id) AS fund,
-                    (t.created_at < now() - interval '45 seconds') AS unseen`,
+                    (t.created_at < now() - interval '45 seconds') AS unseen,
+                    (t.idempotency_key LIKE 'sched:%:first') AS first_charge`,
         [ref, outcome.failure.code, outcome.detail],
       );
       if (failed?.schedule_id) {
-        const notice = await this.recordScheduleOutcome(c, failed.schedule_id, failed.schedule_cycle_at, outcome.failure);
+        const quiet = Boolean((failed as { first_charge?: boolean }).first_charge) && !failed.unseen;
+        const notice = await this.recordScheduleOutcome(c, failed.schedule_id, failed.schedule_cycle_at, outcome.failure, new Date(), quiet);
         if (notice) after.push(notice);
       } else if (failed?.user_id && failed.unseen && (outcome.failure.retryable || outcome.failure.code === "no_answer")) {
         // A member's own gift that failed where they could not see it (Giving
@@ -957,6 +959,9 @@ export class FinancialService {
     cycleAt: string | null,
     failure: GiftFailure | null,
     now: Date = new Date(),
+    /** The member is watching this prompt (a "give now" first charge):
+     *  count it, but the screen tells them — no push. */
+    quiet = false,
   ): Promise<(() => Promise<void>) | null> {
     if (!failure) {
       await c.query(
@@ -993,12 +998,13 @@ export class FinancialService {
               retry_cycle_at = $6, retry_at = $7,
               cycle_attempts = cycle_attempts + CASE WHEN $6::timestamptz IS NULL THEN 0 ELSE 1 END,
               status = CASE WHEN $8 THEN 'paused' ELSE status END,
-              paused_at = CASE WHEN $8 THEN $5::timestamptz ELSE paused_at END
+              paused_at = CASE WHEN $8 THEN $5::timestamptz ELSE paused_at END,
+              pause_reason = CASE WHEN $8 THEN 'failures' ELSE pause_reason END
         WHERE schedule_id = $1`,
       [scheduleId, strikes, copy.reason, failure.code, now.toISOString(),
        retry ? cycleAt : null, retry ? retryAt.toISOString() : null, paused],
     );
-    if (strikes !== 1 && !paused) return null;
+    if ((strikes !== 1 && !paused) || (quiet && !paused)) return null;
     const payload = {
       schedule_id: scheduleId,
       fund: s.fund,
@@ -1595,6 +1601,27 @@ export class FinancialService {
     pledge_id: z.string().uuid().nullish(),
     /** The number to prompt each cycle; absent = the member's profile number. */
     phone_number: z.string().min(7).max(32).nullish(),
+    /** "Give now and every week/month" (Giving Cycle 4): the first prompt goes
+     *  out now, while the member is in the app; "next" waits for the next
+     *  cycle (the old behaviour, still the default for old clients). */
+    first_charge: z.enum(["now", "next"]).default("next"),
+    /** A push minutes before each prompt (default on). */
+    heads_up: z.boolean().default(true),
+  });
+
+  static readonly UpdateSchedule = z.object({
+    amount_minor: z.number().int().positive().optional(),
+    /** Monthly: day of the month 1–31 (clamped to short months). Weekly: day
+     *  of the week 0–6, Sunday = 0. The next prompt moves to that day. */
+    day: z.number().int().min(0).max(31).optional(),
+    /** Another number to prompt; null = back to the profile number. */
+    phone_number: z.string().min(7).max(32).nullable().optional(),
+    heads_up: z.boolean().optional(),
+  });
+
+  static readonly PauseSchedule = z.object({
+    /** Resume on its own on this Nairobi date (YYYY-MM-DD); absent = until resumed. */
+    resume_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
   });
 
   /** The pledge a gift counts toward. An explicit pledge must be the caller's
@@ -1717,8 +1744,16 @@ export class FinancialService {
 
   async createSchedule(
     userId: string,
-    input: z.infer<typeof FinancialService.CreateSchedule>,
+    raw: z.input<typeof FinancialService.CreateSchedule>,
   ): Promise<Record<string, unknown>> {
+    // Direct callers (the Partners programme's "charge me automatically")
+    // may leave the defaults out; the route has already applied them.
+    const input = {
+      ...raw,
+      method: raw.method ?? "mpesa",
+      first_charge: raw.first_charge ?? "next",
+      heads_up: raw.heads_up ?? true,
+    } as z.infer<typeof FinancialService.CreateSchedule>;
     const key = input.idempotency_key ?? randomUUID();
     const existing = await maybeOne<{ schedule_id: string; status: string; next_run_at: string }>(
       this.pool,
@@ -1742,6 +1777,24 @@ export class FinancialService {
     // Store a number only when the member chose one for THIS gift; otherwise
     // every cycle follows their profile number, so a changed number is used.
     const schedulePhone = input.phone_number ? phone : null;
+    const giveNow = input.first_charge === "now";
+    if (giveNow) {
+      // The first prompt would collide with one already on the phone.
+      const inflight = await maybeOne<{ transaction_id: string }>(
+        this.pool,
+        `SELECT transaction_id FROM transactions
+          WHERE user_id = $1 AND provider IN ('mpesa','airtel') AND status = 'processing'
+            AND created_at > now() - interval '90 seconds' LIMIT 1`,
+        [userId],
+      );
+      if (inflight) {
+        throw new ApiError(
+          "GIFT_IN_PROGRESS",
+          "A prompt from a moment ago is still waiting on your phone. Approve it, or wait a minute and try again.",
+          { transaction_id: inflight.transaction_id },
+        );
+      }
+    }
 
     // A schedule started for a pledge is bound to it (ownership checked), and
     // is STORED on the pledge's fund — the same one every charge it makes
@@ -1792,10 +1845,10 @@ export class FinancialService {
       const firstRun = FinancialService.nextRun(FinancialService.sameDayPromptHours(now), input.frequency, anchor);
       const row = await one<{ schedule_id: string; next_run_at: string }>(
         c,
-        `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key, pledge_id, phone_number, anchor_day)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `INSERT INTO giving_schedules (user_id, fund_id, amount_minor, currency, frequency, method, next_run_at, idempotency_key, pledge_id, phone_number, anchor_day, heads_up)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING schedule_id, next_run_at`,
-        [userId, fund.fund_id, input.amount_minor, currency, input.frequency, input.method, firstRun.toISOString(), key, boundPledge, schedulePhone, anchor],
+        [userId, fund.fund_id, input.amount_minor, currency, input.frequency, input.method, firstRun.toISOString(), key, boundPledge, schedulePhone, anchor, input.heads_up],
       );
       if (boundPledge) {
         await c.query(`UPDATE pledges SET schedule_id = $1, updated_at = now() WHERE pledge_id = $2 AND schedule_id IS NULL`, [row.schedule_id, boundPledge]);
@@ -1808,9 +1861,192 @@ export class FinancialService {
         amount_minor: input.amount_minor,
         frequency: input.frequency,
         method: input.method,
+        first_charge: input.first_charge,
       });
     }
-    return created;
+    if (!giveNow) return created;
+    // Give now (Giving Cycle 4): the first prompt goes out while the member is
+    // looking at the screen — the moment they are most likely to approve it —
+    // as this schedule's first cycle, so its outcome counts like any other.
+    // Its key is fixed per schedule, so a double tap (or the reused twin)
+    // finds the same prompt instead of sending another.
+    try {
+      const first = await this.createGivingIntent(
+        userId,
+        {
+          fund: fundCode, amount_minor: input.amount_minor, currency, method: input.method,
+          idempotency_key: `sched:${created.schedule_id}:first`,
+        },
+        created.schedule_id,
+        { cycleAt: new Date().toISOString(), phone: schedulePhone ?? phone },
+      );
+      return { ...created, first_charge: first };
+    } catch (err) {
+      // The schedule stands; only today's prompt could not go out. Say so —
+      // the member can give once now, and the rhythm starts next cycle.
+      return {
+        ...created,
+        first_charge: null,
+        first_charge_error: err instanceof ApiError ? err.message : "Today's prompt could not be sent.",
+      };
+    }
+  }
+
+  /**
+   * The member pauses their own recurring gift (Giving Cycle 4) — "this month
+   * is tight" — optionally until a date, when it resumes on its own at its
+   * next occurrence. Only an active schedule; a date must be tomorrow or later
+   * and within a year (Nairobi).
+   */
+  async pauseSchedule(userId: string, scheduleId: string, input: z.infer<typeof FinancialService.PauseSchedule>): Promise<Record<string, unknown>> {
+    const resumeOn = input.resume_on ?? null;
+    if (resumeOn) {
+      const today = nairobiDate(new Date());
+      const limit = nairobiDate(new Date(Date.now() + 366 * 86_400_000));
+      if (resumeOn <= today || resumeOn > limit) {
+        throw new ApiError("VALIDATION_FAILED", "Choose a date from tomorrow to a year from now.", { resume_on: resumeOn });
+      }
+    }
+    const row = await maybeOne<{ schedule_id: string }>(
+      this.pool,
+      `UPDATE giving_schedules
+          SET status = 'paused', paused_at = now(), pause_reason = 'member', resume_on = $3,
+              retry_cycle_at = NULL, retry_at = NULL, retry_after = NULL
+        WHERE schedule_id = $1 AND user_id = $2 AND status = 'active'
+        RETURNING schedule_id`,
+      [scheduleId, userId, resumeOn],
+    );
+    if (!row) throw new ApiError("NOT_FOUND", "Active schedule not found");
+    await audit(this.pool, userId, "giving.schedule_paused", "giving_schedules", scheduleId, { resume_on: resumeOn });
+    return { schedule_id: scheduleId, status: "paused", pause_reason: "member", resume_on: resumeOn };
+  }
+
+  /**
+   * Change a recurring gift instead of cancelling it and starting another
+   * (Giving Cycle 4 — SCHEDULE_EXISTS tells the member to do exactly this):
+   * the amount (from the next cycle), the day, the number, the heads-up. Every
+   * Cycle 1 check runs on the new amount and number; an amount that would make
+   * it the twin of another of their gifts is SCHEDULE_EXISTS.
+   */
+  async updateSchedule(userId: string, scheduleId: string, patch: z.infer<typeof FinancialService.UpdateSchedule>): Promise<Record<string, unknown>> {
+    const s = await maybeOne<{
+      fund_id: string; fund_name: string; amount_minor: string; currency: string; frequency: "weekly" | "monthly";
+      method: "mpesa" | "airtel" | "card" | "paypal"; next_run_at: Date; anchor_day: number | null; pledge_id: string | null;
+      phone_number: string | null; status: string;
+    }>(
+      this.pool,
+      `SELECT s.fund_id, f.name AS fund_name, s.amount_minor, s.currency, s.frequency, s.method, s.next_run_at,
+              s.anchor_day, s.pledge_id, s.phone_number, s.status
+         FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id
+        WHERE s.schedule_id = $1 AND s.user_id = $2 AND s.status IN ('active', 'paused')`,
+      [scheduleId, userId],
+    );
+    if (!s) throw new ApiError("NOT_FOUND", "Schedule not found");
+    const sets: string[] = [];
+    const vals: unknown[] = [scheduleId];
+    const set = (col: string, v: unknown): void => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
+
+    if (patch.amount_minor !== undefined && patch.amount_minor !== Number(s.amount_minor)) {
+      await this.checkGift(userId, s.method, patch.amount_minor, s.currency, s.phone_number, false);
+      const twin = await maybeOne<{ schedule_id: string }>(
+        this.pool,
+        `SELECT schedule_id FROM giving_schedules
+          WHERE user_id = $1 AND schedule_id <> $2 AND fund_id = $3 AND amount_minor = $4 AND currency = $5
+            AND frequency = $6 AND method = $7 AND pledge_id IS NOT DISTINCT FROM $8 AND status IN ('active','paused')
+          LIMIT 1`,
+        [userId, scheduleId, s.fund_id, patch.amount_minor, s.currency, s.frequency, s.method, s.pledge_id],
+      );
+      if (twin) {
+        throw new ApiError("SCHEDULE_EXISTS", `You already give ${moneyWords(patch.amount_minor, s.currency)} ${s.frequency === "weekly" ? "every week" : "every month"} to ${s.fund_name}.`, { schedule_id: twin.schedule_id });
+      }
+      set("amount_minor", patch.amount_minor);
+    }
+    if (patch.phone_number !== undefined) {
+      if (patch.phone_number === null) set("phone_number", null);
+      else {
+        const normalized = kenyanMobileNumber(patch.phone_number);
+        if (!normalized) throw new ApiError("PHONE_REQUIRED", "That doesn't look like a Kenyan mobile number. Use 07XX XXX XXX or 01XX XXX XXX.");
+        set("phone_number", normalized);
+      }
+    }
+    if (patch.heads_up !== undefined) set("heads_up", patch.heads_up);
+    if (patch.day !== undefined) {
+      const now = new Date();
+      if (s.frequency === "monthly") {
+        if (patch.day < 1) throw new ApiError("VALIDATION_FAILED", "A monthly gift's day is 1–31.");
+        set("anchor_day", patch.day);
+        set("next_run_at", FinancialService.nextOnMonthDay(new Date(s.next_run_at), patch.day, now).toISOString());
+      } else {
+        if (patch.day > 6) throw new ApiError("VALIDATION_FAILED", "A weekly gift's day is 0–6 (Sunday = 0).");
+        set("next_run_at", FinancialService.nextOnWeekday(new Date(s.next_run_at), patch.day, now).toISOString());
+      }
+      sets.push("retry_cycle_at = NULL", "retry_at = NULL", "cycle_attempts = 0", "heads_up_cycle_at = NULL");
+    }
+    if (sets.length === 0) return this.scheduleRow(userId, scheduleId);
+    await this.pool.query(`UPDATE giving_schedules SET ${sets.join(", ")} WHERE schedule_id = $1`, vals);
+    await audit(this.pool, userId, "giving.schedule_updated", "giving_schedules", scheduleId, { ...patch });
+    return this.scheduleRow(userId, scheduleId);
+  }
+
+  private async scheduleRow(userId: string, scheduleId: string): Promise<Record<string, unknown>> {
+    const all = (await this.listSchedules(userId)).data as Array<{ schedule_id: string }>;
+    return all.find((r) => r.schedule_id === scheduleId) ?? { schedule_id: scheduleId };
+  }
+
+  /** The next time a monthly gift falls on `day` (clamped to short months)
+   *  after `now`, at `timeOf`'s Nairobi time of day, in prompt hours. */
+  static nextOnMonthDay(timeOf: Date, day: number, now: Date): Date {
+    const t = new Date(timeOf.getTime() + FinancialService.EAT_MS);
+    const n = new Date(now.getTime() + FinancialService.EAT_MS);
+    for (let add = 0; add < 3; add += 1) {
+      const y = n.getUTCFullYear();
+      const m = n.getUTCMonth() + add;
+      const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+      const wall = Date.UTC(y, m, Math.min(day, last), t.getUTCHours(), t.getUTCMinutes(), 0, 0);
+      const at = FinancialService.sameDayPromptHours(new Date(wall - FinancialService.EAT_MS));
+      if (at.getTime() > now.getTime()) return at;
+    }
+    return FinancialService.nextRun(now, "monthly", day);
+  }
+
+  /** The next `weekday` (Sunday = 0) after `now`, at `timeOf`'s Nairobi time
+   *  of day, in prompt hours. */
+  static nextOnWeekday(timeOf: Date, weekday: number, now: Date): Date {
+    const t = new Date(timeOf.getTime() + FinancialService.EAT_MS);
+    const n = new Date(now.getTime() + FinancialService.EAT_MS);
+    for (let add = 0; add <= 7; add += 1) {
+      const wall = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() + add, t.getUTCHours(), t.getUTCMinutes(), 0, 0);
+      const d = new Date(wall);
+      if (d.getUTCDay() !== weekday) continue;
+      const at = FinancialService.sameDayPromptHours(new Date(wall - FinancialService.EAT_MS));
+      if (at.getTime() > now.getTime()) return at;
+    }
+    return new Date(now.getTime() + 7 * 86_400_000);
+  }
+
+  /**
+   * A schedule coming back from a pause — its pledge resumed, or the member's
+   * own pause ending — picks up at its next occurrence from NOW (Giving Cycle
+   * 4). Resuming a paused pledge used to leave the old due date in place, so a
+   * weekly gift resumed on a Tuesday charged the Sunday it had skipped, at
+   * once and unannounced.
+   */
+  async rearmAfterPause(scheduleId: string, from: Date = new Date()): Promise<void> {
+    const s = await maybeOne<{ next_run_at: Date; frequency: "weekly" | "monthly"; anchor_day: number | null }>(
+      this.pool, `SELECT next_run_at, frequency, anchor_day FROM giving_schedules WHERE schedule_id = $1`, [scheduleId],
+    );
+    if (!s) return;
+    const next = new Date(s.next_run_at).getTime() > from.getTime()
+      ? new Date(s.next_run_at)
+      : FinancialService.sameDayPromptHours(FinancialService.rollForward(new Date(s.next_run_at), s.frequency, from, s.anchor_day));
+    await this.pool.query(
+      `UPDATE giving_schedules
+          SET status = 'active', paused_at = NULL, pause_reason = NULL, resume_on = NULL, consecutive_failures = 0,
+              retry_after = NULL, retry_cycle_at = NULL, retry_at = NULL, cycle_attempts = 0,
+              last_error = NULL, last_failed_at = NULL, last_failure_code = NULL, next_run_at = $2
+        WHERE schedule_id = $1`,
+      [scheduleId, next.toISOString()],
+    );
   }
 
   async listSchedules(userId: string): Promise<{ data: unknown[] }> {
@@ -1819,7 +2055,8 @@ export class FinancialService {
       `SELECT s.schedule_id, f.code AS fund, s.amount_minor, s.currency, s.frequency, s.method,
               s.status, s.next_run_at, s.last_run_at, s.created_at,
               s.consecutive_failures, s.last_failed_at, s.paused_at,
-              s.last_failure_code, s.retry_at, s.phone_number
+              s.last_failure_code, s.retry_at, s.phone_number,
+              s.pause_reason, s.resume_on::text AS resume_on, s.heads_up, s.anchor_day
          FROM giving_schedules s JOIN funds f ON f.fund_id = s.fund_id
         WHERE s.user_id = $1 ORDER BY s.created_at DESC`,
       [userId],
@@ -1993,13 +2230,16 @@ export class FinancialService {
    * gap can give once, on purpose.
    */
   async resumeSchedule(userId: string, scheduleId: string): Promise<Record<string, unknown>> {
-    const current = await maybeOne<{ frequency: "weekly" | "monthly" }>(
+    const current = await maybeOne<{ frequency: "weekly" | "monthly"; pause_reason: string | null }>(
       this.pool,
-      `SELECT frequency FROM giving_schedules
+      `SELECT frequency, pause_reason FROM giving_schedules
         WHERE schedule_id = $1 AND user_id = $2 AND status = 'paused'`,
       [scheduleId, userId],
     );
     if (!current) throw new ApiError("NOT_FOUND", "Paused schedule not found");
+    if (current.pause_reason === "pledge") {
+      throw new ApiError("UNPROCESSABLE", "This gift follows its pledge. Resume the pledge to resume it.");
+    }
     const now = new Date();
     const anchor = current.frequency === "monthly" ? FinancialService.eatDay(now) : null;
     const nextRun = FinancialService.nextRun(FinancialService.sameDayPromptHours(now), current.frequency, anchor);
@@ -2008,7 +2248,7 @@ export class FinancialService {
           SET status = 'active', paused_at = NULL, consecutive_failures = 0,
               retry_after = NULL, last_error = NULL, last_failed_at = NULL,
               last_failure_code = NULL, retry_cycle_at = NULL, retry_at = NULL, cycle_attempts = 0,
-              next_run_at = $3, anchor_day = $4
+              pause_reason = NULL, resume_on = NULL, next_run_at = $3, anchor_day = $4
         WHERE schedule_id = $1 AND user_id = $2`,
       [scheduleId, userId, nextRun.toISOString(), anchor],
     );
@@ -2089,6 +2329,8 @@ export class FinancialService {
       [now.toISOString()],
     );
     const counts = { run: 0, failed: 0, skipped: 0, retried: 0, deferred: 0 };
+    await this.sendHeadsUps(now);
+    await this.resumeDuePauses(now);
     const prompted = new Set<string>();
     for (const s of due) {
       // The regular cycle wins over a retry of an older one: a new cycle
@@ -2307,7 +2549,8 @@ export class FinancialService {
               retry_cycle_at = CASE WHEN $8 THEN retry_cycle_at ELSE NULL END,
               retry_at = CASE WHEN $8 THEN retry_at ELSE NULL END,
               status = CASE WHEN $6 THEN 'paused' ELSE status END,
-              paused_at = CASE WHEN $6 THEN $4::timestamptz ELSE paused_at END
+              paused_at = CASE WHEN $6 THEN $4::timestamptz ELSE paused_at END,
+              pause_reason = CASE WHEN $6 THEN 'failures' ELSE pause_reason END
         WHERE schedule_id = $1`,
       [
         s.schedule_id,
@@ -2345,6 +2588,55 @@ export class FinancialService {
       }
     } catch {
       /* the ledger matters more than the notice */
+    }
+  }
+
+  /**
+   * The heads-up (Giving Cycle 4): a push minutes before each scheduled
+   * prompt, so the PIN prompt is expected rather than dismissed as a scam.
+   * Claimed with one UPDATE … RETURNING per cycle, so two scheduler runs never
+   * announce the same prompt twice. Off per schedule with heads_up = false.
+   */
+  private async sendHeadsUps(now: Date): Promise<void> {
+    const announced = await many<{ user_id: string; schedule_id: string; amount_minor: string; currency: string; frequency: string; fund_name: string; next_run_at: Date }>(
+      this.pool,
+      `UPDATE giving_schedules s SET heads_up_cycle_at = s.next_run_at
+         FROM funds f
+        WHERE f.fund_id = s.fund_id AND s.status = 'active' AND s.heads_up
+          AND s.next_run_at > $1 AND s.next_run_at <= $1::timestamptz + interval '15 minutes'
+          AND s.heads_up_cycle_at IS DISTINCT FROM s.next_run_at
+        RETURNING s.user_id, s.schedule_id, s.amount_minor, s.currency, s.frequency, f.name AS fund_name, s.next_run_at`,
+      [now.toISOString()],
+    );
+    for (const a of announced) {
+      try {
+        await this.notifications.schedule({
+          userId: a.user_id,
+          channel: "push",
+          template: "giving_schedule_heads_up",
+          payload: {
+            schedule_id: a.schedule_id, amount_minor: Number(a.amount_minor), currency: a.currency,
+            frequency: a.frequency, fund_name: a.fund_name, prompt_at: new Date(a.next_run_at).toISOString(),
+          },
+        });
+      } catch {
+        /* a missed heads-up never blocks the gift */
+      }
+    }
+  }
+
+  /** A member's own pause with a date ends on that date (Nairobi): the gift
+   *  picks up at its next occurrence on or after it, in prompt hours. */
+  private async resumeDuePauses(now: Date): Promise<void> {
+    const due = await many<{ schedule_id: string; resume_on: string }>(
+      this.pool,
+      `SELECT schedule_id, resume_on::text AS resume_on FROM giving_schedules
+        WHERE status = 'paused' AND pause_reason = 'member' AND resume_on IS NOT NULL AND resume_on <= $1::date`,
+      [nairobiDate(now)],
+    );
+    for (const d of due) {
+      const startOfDay = new Date(Date.parse(`${d.resume_on}T00:00:00Z`) - FinancialService.EAT_MS);
+      await this.rearmAfterPause(d.schedule_id, new Date(Math.max(startOfDay.getTime() - 1, now.getTime())));
     }
   }
 

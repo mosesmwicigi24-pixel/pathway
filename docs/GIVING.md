@@ -138,3 +138,29 @@ fixes and results is kept in the PR descriptions.
 - **The office sees why**: the transactions register and drawer carry `failure`
   (the member's words) and `failure_detail` (M-Pesa's code and text), and
   `fee_cover_minor`; the CSV appends `failure_reason, provider_detail, fee_cover`.
+
+## 7. A recurring gift the member controls (Cycle 4)
+
+- **Give now and every week/month** (`first_charge: "now"` on
+  `POST /giving/schedules`): the first prompt goes out at once as the schedule's
+  first cycle (key `sched:{id}:first`), while the member is looking at the
+  screen; the answer carries `first_charge` (the intent). If it cannot be sent,
+  the schedule still stands and `first_charge_error` says why; a prompt already
+  on the phone refuses the whole request (`GIFT_IN_PROGRESS`), creating nothing.
+  A first prompt the member declines while watching counts as a strike but sends
+  no push (the screen already says it).
+- **The heads-up**: minutes before each scheduled prompt (up to 15), a push says
+  it is coming — so it is expected, not dismissed as a scam. Claimed once per
+  cycle (`heads_up_cycle_at`), off per schedule (`heads_up: false`).
+- **Pausing on their own terms** (`POST /giving/schedules/{id}/pause`,
+  optional `resume_on` from tomorrow to a year ahead): nothing is prompted while
+  paused; on the date it resumes at its next occurrence on or after it, in prompt
+  hours. `pause_reason` says why a gift is paused: `failures` (three strikes —
+  the member resumes it), `member`, or `pledge` (it follows its pledge; resume the
+  pledge).
+- **Change instead of cancel** (`PATCH /giving/schedules/{id}`): amount (checked
+  like a new gift; a twin of another gift is `SCHEDULE_EXISTS`), day (monthly
+  1–31; weekly 0–6, Sunday 0 — the next prompt moves there), number (null =
+  back to the profile), heads-up.
+- **A resumed pledge never charges the cycle it skipped**: its schedule picks up
+  at the next occurrence from now (it used to charge the missed cycle at once).

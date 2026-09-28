@@ -2701,10 +2701,52 @@ paths:
         "422": { $ref: "#/components/responses/Unprocessable" }
     get:
       tags: [giving]
-      summary: "My recurring giving schedules. Each carries phone_number (the schedule's own number, null = the profile's), retry_at (a retry of the current cycle, when armed) and last_failure (a GiftFailure while the schedule is failing, else null)."
+      summary: "My recurring giving schedules. Each carries phone_number (the schedule's own number, null = the profile's), retry_at (a retry of the current cycle, when armed), last_failure (a GiftFailure while the schedule is failing, else null), and (Cycle 4) pause_reason (failures | member | pledge), resume_on, heads_up and anchor_day."
       responses:
         "200": { description: Schedules }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /giving/schedules/{id}:
+    patch:
+      tags: [giving]
+      summary: "Change one of my recurring gifts instead of cancelling it (Giving Cycle 4): amount (from the next cycle; checked like a new gift; a twin of another gift is 409 SCHEDULE_EXISTS), day (monthly 1–31, weekly 0–6 with Sunday 0 — the next prompt moves there, in prompt hours), phone_number (null = back to the profile number), heads_up. Answers the schedule row."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount_minor: { type: integer, format: int64 }
+                day: { type: integer, minimum: 0, maximum: 31 }
+                phone_number: { type: [string, "null"] }
+                heads_up: { type: boolean }
+      responses:
+        "200": { description: "The schedule, as GET /giving/schedules lists it" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "SCHEDULE_EXISTS", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /giving/schedules/{id}/pause:
+    post:
+      tags: [giving]
+      summary: "Pause one of my active recurring gifts myself (Giving Cycle 4), optionally until resume_on (a Nairobi date from tomorrow to a year ahead), when it resumes on its own at its next occurrence."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                resume_on: { type: [string, "null"], format: date }
+      responses:
+        "200": { description: Paused }
+        "400": { description: "VALIDATION_FAILED — resume_on not from tomorrow to a year ahead", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /giving/schedules/{id}/cancel:
     post:
       tags: [giving]
@@ -11741,6 +11783,8 @@ components:
         idempotency_key: { type: string, minLength: 8, maxLength: 255 }
         pledge_id: { type: [string, "null"], format: uuid, description: "Bind the schedule to one of the member's open pledges." }
         phone_number: { type: [string, "null"], description: "The number to prompt each cycle; absent = the member's profile number (followed if it changes)." }
+        first_charge: { type: string, enum: [now, next], default: next, description: "Giving Cycle 4: now = the first prompt goes out immediately as the schedule's first cycle (the answer carries first_charge: the intent, or first_charge null + first_charge_error when it could not be sent); next = wait for the next cycle. A prompt already waiting on the phone → 409 GIFT_IN_PROGRESS and nothing is created." }
+        heads_up: { type: boolean, default: true, description: "A push minutes before each scheduled prompt." }
     # ── Finance ERP · reports schemas — add below this line. ──
     FinanceChannel:
       type: string

@@ -180,6 +180,27 @@ export function registerFinancial(
     }),
   );
 
+  // Giving Cycle 4: change a recurring gift (amount, day, number, heads-up)
+  // instead of cancelling it; pause it yourself, optionally until a date.
+  r.patch(
+    "/giving/schedules/:id",
+    auth,
+    handler(async (req, res) => {
+      const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
+      const body = parseBody(FinancialService.UpdateSchedule, req.body ?? {});
+      res.json(await svc.updateSchedule(requirePrincipal(req).userId, id, body));
+    }),
+  );
+  r.post(
+    "/giving/schedules/:id/pause",
+    auth,
+    handler(async (req, res) => {
+      const { id } = parseBody(z.object({ id: z.string().uuid() }), req.params);
+      const body = parseBody(FinancialService.PauseSchedule, req.body ?? {});
+      res.json(await svc.pauseSchedule(requirePrincipal(req).userId, id, body));
+    }),
+  );
+
   // ── The partner invitation (phase 2) ───────────────────────────────────────
   // The client asks "may I show this?" and renders whatever comes back. Every
   // rule of restraint lives on the server (invitation.ts) so the two apps
