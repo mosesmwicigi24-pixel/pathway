@@ -6555,7 +6555,7 @@ paths:
   /me/notification-preferences:
     get:
       tags: [progress]
-      summary: My notification channel toggles (defaults push+email on, sms off when never saved).
+      summary: My notification channel toggles (defaults push+email on, sms off, sound on when never saved).
       responses:
         "200":
           description: Preferences
@@ -6565,7 +6565,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
     put:
       tags: [progress]
-      summary: Save my notification channel toggles (all three required; upsert).
+      summary: Save my notification channel toggles (push/email/sms required; sound_enabled optional — kept when left out; upsert).
       requestBody:
         required: true
         content:
@@ -13305,6 +13305,17 @@ components:
         push_enabled: { type: boolean }
         email_enabled: { type: boolean }
         sms_enabled: { type: boolean }
+        sound_enabled:
+          type: boolean
+          description: >-
+            Whether pushes make a sound and vibrate (default true; migration 223). Muted pushes still
+            arrive, quietly: no `aps.sound`, Android channel `nuru_quiet`. Always present in responses;
+            optional in a PUT, where leaving it out keeps the stored value. Every push's data carries
+            `template`, `nuru_kind` (message | ring | update — `live_guest_invite` rings, `chat_*` are
+            messages) and `nuru_sound` (on | off). A ring is data-only on Android (the app rings it, up to
+            30 s) and an alert with `aps.sound` nuru_ring.caf on iOS; its `title` is the stream's name and
+            `alert_title` / `alert_body` carry the invite's words. Android channels: nuru_messages,
+            nuru_updates, nuru_live_invite, nuru_quiet.
     PlanDayReflection:
       type: object
       required: [id, plan_id, day_number, body, created_at, updated_at]

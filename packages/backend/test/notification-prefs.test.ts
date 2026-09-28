@@ -1,6 +1,7 @@
 // /me/notification-preferences — member channel toggles (iOS contract:
-// push_enabled / email_enabled / sms_enabled). Defaults true/true/false when no
-// row exists; PUT upserts all three and returns the saved shape.
+// push_enabled / email_enabled / sms_enabled, and sound_enabled since migration
+// 223). Defaults true/true/false/true when no row exists; PUT upserts the three
+// channels (sound optional, kept when left out) and returns the saved shape.
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
@@ -20,10 +21,10 @@ afterAll(async () => {
 });
 
 describe("/me/notification-preferences", () => {
-  it("GET returns defaults (push+email on, sms off) when no row exists", async () => {
+  it("GET returns defaults (push+email on, sms off, sound on) when no row exists", async () => {
     const res = await agent().get("/v1/me/notification-preferences").set(auth(meTok));
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ push_enabled: true, email_enabled: true, sms_enabled: false });
+    expect(res.body).toEqual({ push_enabled: true, email_enabled: true, sms_enabled: false, sound_enabled: true });
   });
 
   it("PUT upserts and round-trips through GET", async () => {
@@ -32,17 +33,17 @@ describe("/me/notification-preferences", () => {
       .set(auth(meTok))
       .send({ push_enabled: false, email_enabled: true, sms_enabled: true });
     expect(put.status).toBe(200);
-    expect(put.body).toEqual({ push_enabled: false, email_enabled: true, sms_enabled: true });
+    expect(put.body).toEqual({ push_enabled: false, email_enabled: true, sms_enabled: true, sound_enabled: true });
 
     const get = await agent().get("/v1/me/notification-preferences").set(auth(meTok));
-    expect(get.body).toEqual({ push_enabled: false, email_enabled: true, sms_enabled: true });
+    expect(get.body).toEqual({ push_enabled: false, email_enabled: true, sms_enabled: true, sound_enabled: true });
 
     // Second PUT updates the same row (no duplicate).
     const again = await agent()
       .put("/v1/me/notification-preferences")
       .set(auth(meTok))
       .send({ push_enabled: true, email_enabled: false, sms_enabled: false });
-    expect(again.body).toEqual({ push_enabled: true, email_enabled: false, sms_enabled: false });
+    expect(again.body).toEqual({ push_enabled: true, email_enabled: false, sms_enabled: false, sound_enabled: true });
     const { rows } = await testPool().query(
       "SELECT count(*)::int n FROM notification_preferences WHERE user_id = $1",
       [me],
@@ -80,6 +81,30 @@ describe("/me/notification-preferences", () => {
       .set(auth(meTok))
       .send({ push_enabled: "yes", email_enabled: true, sms_enabled: false });
     expect(wrongType.status).toBe(400);
+  });
+
+  it("sound: muted and unmuted by PUT, and kept when a PUT leaves it out (an app that predates it)", async () => {
+    const muted = await agent()
+      .put("/v1/me/notification-preferences")
+      .set(auth(meTok))
+      .send({ push_enabled: true, email_enabled: true, sms_enabled: false, sound_enabled: false });
+    expect(muted.status).toBe(200);
+    expect(muted.body.sound_enabled).toBe(false);
+    const older = await agent()
+      .put("/v1/me/notification-preferences")
+      .set(auth(meTok))
+      .send({ push_enabled: true, email_enabled: false, sms_enabled: false });
+    expect(older.body).toEqual({ push_enabled: true, email_enabled: false, sms_enabled: false, sound_enabled: false });
+    const back = await agent()
+      .put("/v1/me/notification-preferences")
+      .set(auth(meTok))
+      .send({ push_enabled: true, email_enabled: false, sms_enabled: false, sound_enabled: true });
+    expect(back.body.sound_enabled).toBe(true);
+    const wrong = await agent()
+      .put("/v1/me/notification-preferences")
+      .set(auth(meTok))
+      .send({ push_enabled: true, email_enabled: true, sms_enabled: false, sound_enabled: "loud" });
+    expect(wrong.status).toBe(400);
   });
 
   it("requires a session", async () => {
