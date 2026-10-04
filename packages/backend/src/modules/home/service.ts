@@ -552,16 +552,19 @@ export class HomeService {
       }
     });
 
-    // The level review is open: every module done, exam published, not yet passed.
+    // The level review is open: every module done, exam published AND
+    // takeable (it has questions — EXPERIENCE.md §7.2 #1), not yet passed.
     await safe(async () => {
       const enr = await maybeOne<{ current_level: number }>(
         this.pool, `SELECT current_level FROM enrollments WHERE user_id = $1 LIMIT 1`, [userId],
       );
       if (!enr) return;
       const rows = (await this.curriculum.listModulesForLevel(userId, enr.current_level)) as Array<{
-        evaluation_kind?: string; status?: string;
+        evaluation_kind?: string; status?: string; exam_available?: boolean;
       }>;
-      const exam = rows.find((r) => r.evaluation_kind === "exit_exam" && r.status === "next");
+      const exam = rows.find(
+        (r) => r.evaluation_kind === "exit_exam" && r.status === "next" && r.exam_available !== false,
+      );
       if (exam) {
         out.push({
           id: `level_review:${enr.current_level}`, kind: "level_review",
