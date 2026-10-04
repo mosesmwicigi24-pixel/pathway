@@ -1,0 +1,99 @@
+# The Nuru Pathway experience — one product, not a set of pages
+
+Owner mandate (2026-10-04): ten complete top-to-bottom cycles over the whole
+member experience — **Home → Pathway → Plans → Events → Give → Partners &
+giving history → Cell & Community → You & Profile → notifications,
+announcements & supporting journeys → every shared component, state and
+cross-product journey** — each cycle implemented on **both member apps**
+(iOS `nuru-member-ios`, Android `nuru-android`), re-walked from Home, and
+recorded here with evidence. Business rules, money, permissions and the
+server's authority never change; the experience layer does.
+
+## 1. The questions every screen answers
+
+1. **Where am I?** 2. **What matters here?** 3. **What can I do?**
+4. **What happens next?** 5. **What have I completed?** 6. **What needs my attention?**
+
+A screen that cannot answer one of these in a glance is not finished.
+
+## 2. Principles
+
+- **One truth, shown everywhere.** A fact about the member (their level, their
+  next step, their giving, their cell) is derived once and every surface shows
+  the same words. Two cards never tell two stories.
+- **The server decides; the app explains.** The client never invents state;
+  it turns the server's state into one plain sentence and one next action.
+- **Honest states.** Loading, empty, offline, failed and done each have one
+  shared look and words that say what really happened — never raw server
+  text, never "check your connection" when it wasn't the connection.
+- **Calm by default.** One primary action per screen; celebration only when
+  something was truly achieved.
+- **Promise only what works.** A screen never names a feature, payment rail
+  or step the member cannot actually use.
+
+## 3. The member's journey state (Cycle 1 foundation)
+
+Derived once per app from `GET /me/pathway` (the CURRENT level's row:
+`status` ∈ active · completed · awaiting_review · locked, `exam_published`,
+`completed_modules`/`total_modules`) and the next incomplete module.
+**Modules a member earns alone; levels need a human discipler to usher them
+in** (exam pass → pending advancement → `awaiting_review` → ushered).
+
+| Stage | When (current level) | Pill | Next step (title · line · action) |
+|---|---|---|---|
+| `learning` | status `active` | `X of Y modules` | Continue (or Start, when X = 0): «module title» · "X of Y modules in Level N" · **Continue** → that module |
+| `examReady` | status `completed`, exam published | `Exam ready` | "Take the Level N exam" · "Every module is done — the exam opens the way to Level N+1." · **Begin the exam** → the exam |
+| `examSoon` | status `completed`, exam not published | `Exam opens soon` | "Level N complete" · "Every module is done. The exam opens soon — we'll let you know." · no action |
+| `awaitingUsher` | status `awaiting_review` | `Exam passed` | "Level N+1 is next" · "You passed the Level N exam. Your leader will open Level N+1 — you'll get a notice." · **See Level N** |
+| `finished` | the LAST level is `awaiting_review` (final exam passed) | `Commissioned` | "You have been commissioned" · "Sent to make disciples — Matthew 28:19" · **See your journey** |
+
+Rules: the summit celebration fires only at `finished` (it used to fire when
+every *published* module was done — Level 1 finishers were "commissioned"
+while Levels 2–6 had no modules yet). Journey progress is counted in levels
+(`(levels before the current + current fraction) / all levels`), never as a
+share of published modules. "Almost there" never shows at 100%. The growth
+score is a score ("45"), not a percent.
+
+Where it shows: the Home header pill, the Home continue card, the Home
+progress line, the Pathway hero card, the Pathway ring and the summit card.
+
+## 4. One state language (Cycle 1 foundation)
+
+| Cause | Title | Line | Action |
+|---|---|---|---|
+| No network / timeout | You're offline | Showing what you last saw — we'll refresh when you're back. (Nothing saved yet: "Connect to the internet, then try again.") | Try again |
+| Session ended (401 after refresh failed) | Your session has ended | Sign in again to pick up where you left off. | Sign in |
+| Server error (5xx) | Something went wrong on our side | It isn't you — please try again in a moment. | Try again |
+| Not found (404) | This isn't here any more | It may have been moved or removed. | Go back |
+| A member-facing refusal (400/409/422 with our own words) | the server's own words | — | as the screen needs |
+
+Raw server or exception text is never shown to a member. One shared view
+renders loading, empty and error states, full width, on every screen.
+
+## 5. Cycle log
+
+### Cycle 1 — Understand & establish the foundation (2026-10-04)
+
+**Walked** (iOS, local API, member Ada — Level 1, 20 of 20 modules, two
+pledges, a recurring gift, a claim; evidence `~/.nuru-e2e/shots/c1`): Home,
+Pathway, Plans, Events, Give, Partners, pledge pages, You (Community,
+Departments, Profile, Settings), notifications.
+
+**Found — the product had no single truth about the member:**
+- Home pill "Level 1 · 20 of 20 modules · Begin today"; Home card "100%
+  complete · Almost there — finish strong · Continue" (back into a finished
+  module); Home progress "0 modules left before Level 2"; Pathway "Continue
+  where you left off · Dev Module 20" and "You have been commissioned" — while
+  the truth was **take the Level 1 exam**, shown only as a row below twenty
+  finished modules.
+- The Pathway ring said 100% for a member at Level 1 of 6; Home's ring said
+  "45%" for a growth score of 45.
+- Errors: Pathway showed raw "Invalid or expired access token" in a narrow
+  column; Plans the same text in another style; Events "Check your
+  connection" when the connection was fine.
+- Home's giving card promised "M-Pesa, card and more" — card is not
+  available. Profile showed the phone as +254700000000 while Give shows
+  0700 000 000.
+
+**Decided:** §3 one journey state, §4 one state language, and the small
+truths (score not percent, rails that work, one phone format).
