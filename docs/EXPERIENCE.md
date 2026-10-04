@@ -189,6 +189,48 @@ unread — a false signal (Cycle 3/6). The Profile segment has no bell.
 - Android's growth delta ("▲100") never wraps.
 - Both apps label the rail "You" / "Next".
 
+## 7. Interaction design (Cycle 3)
+
+**Every tap lands where it points, every screen has a way out, and Back
+returns you where you were.** Cycle 3 tapped through every YOUR WEEK row, the
+bells, the inbox, a gift by M-Pesa (answered on time, late, and not at all),
+the six pledge steps, Events and You, on both apps.
+
+### 7.1 Rules
+1. **A tap lands where it points**, on the tab that owns it, at the thing it
+   names. A notice with nowhere to go shows only itself (its title, its words,
+   when) and Dismiss — never a greeting or "Continue my journey".
+2. **Offer only what will work.** An action shows only when the server says it
+   can succeed.
+3. **Every screen has a way out.** Every full-screen state has a visible exit,
+   and the last button never sits under the tab bar.
+4. **Leaving never loses what you typed without asking.** A flow with entries
+   asks before it discards them.
+5. **Back returns you where you were** — the same content at the same scroll.
+   A refresh updates in place: no skeleton, and no number (a "0") that isn't
+   true yet.
+6. **The primary action is the member's real next step.** When the church
+   collects automatically, paying is a choice, not the call to action.
+7. **The last tap before money moves names the money** ("Give KSh 1,000").
+8. **Signals tell the truth.** A bell's dot means something is unread.
+
+### 7.2 Changes
+| # | Where | Seen | Cycle 3 |
+|---|---|---|---|
+| 1 | The exam (contract + both apps) | `exam_published` with no questions → "Exam ready" → the exam answers 422. iOS: "The gate isn't open yet · …Finish every module…", no top back, "Back to Level" under the tab bar. Android: "No exam questions for this level · Try again" | **Server:** each `/me/pathway` level and the trail's exam row carry `exam_available` = published AND at least one active question in a published module of the level. Publishing an exam with no questions is refused: "Add at least one active question before publishing this exam." The exam's 422 says "Your Level N exam isn't ready yet — we'll let you know when it opens." **Apps:** `examReady` needs `exam_available` (absent = available, for an older server); otherwise the stage is `examSoon` (§3 words). The exam screen has a back at the top and its bottom button above the tab bar; a refusal there offers Go back, never Try again. |
+| 2 | Pledge page (both) | "Pay now" is the gold primary under "Collected automatically — next KSh 5,000 on 5 Oct" | With an active collector: "Pay early" and "Pause", both secondary. With none: "Pay now" stays primary. |
+| 3 | Inbox and pushes (both) | A Live notice opens a sheet with a greeting, journey chips and "Continue my journey" | The inbox and a tapped push share one router: `live_stream_started` and `live_guest_invite` open the Live exactly as a tapped push does (the player while live; a calm "This Live has ended" once over). The fallback sheet shows only the notice — title, full words, when — and Dismiss. iOS shows "Mark all read" only while something is unread (as Android). |
+| 4 | Bells (both) | Gold dots always on (Events, Plans, Give, Pathway); the Pathway bell opens nothing; Home shows a count | One bell everywhere: it opens the inbox, and shows one gold dot only while the inbox's unread count is above zero — one shared count, refreshed on foreground, on leaving the inbox and after marking read. |
+| 5 | M-Pesa wait (iOS) | "Check your phone" has no button; the watch stops at 60 s; a payment answered at 70 s never shows — the member must quit the app | A quiet "Close" from the start. While on screen the watch keeps going (every 10 s, up to 5 minutes), so a late answer still lands. After 60 s the line reads "Still processing — it will show in Recent giving once it clears." and "Done" becomes the primary. Android, which already has Done, uses the same line. |
+| 6 | M-Pesa number sheet (iOS) | "Give Now" | "Give KSh 1,000"; a recurring start keeps "Start Monthly Gift" |
+| 7 | New pledge (both) | ✕ on step 5 throws away five steps silently | Once anything is chosen past step 1: "Leave this pledge?" · "What you entered won't be kept." · Keep editing / Leave |
+| 8 | Back (Android) | Back from the exam rebuilds Home: top of page, skeletons, score "0" | Home keeps its content and scroll across a full-screen route, and refreshes in place |
+| 9 | Featured event (both) | The carousel can show the featured event beside its own card | Never twice on one screen |
+| 10 | Money in flight (Android) | Android's Giving row can ask for an instalment already on its way | iOS's rule: skip an instalment fully in flight; ask only the uncovered rest |
+| 11 | Tab bar (iOS) | Stays hidden when a notice switches tabs from an open thread | Restored whenever a notice switches tabs |
+| 12 | Notification permission (both) | Asked cold on first launch, from a plan reminder or the radio | Asked only when the member turns on something that needs it (a reminder, Live alerts), with one line saying why |
+| 13 | Tests (iOS) | ReaderPolishTests and ScriptureRefsTests never run | In the test target |
+
 ## 5. Cycle log
 
 ### Cycle 1 — Understand & establish the foundation (2026-10-04)
@@ -302,3 +344,34 @@ take 1.2 s with no skipped frames. A release build is measured in Cycle 7.
 **Carried to Cycle 4:** the week rows' type (iOS sans, Android serif) and
 icons differ; the rhythm tiles' "Pending"; Grow tile labels truncate;
 the Partners DUE amount wraps beside the chip.
+
+### Cycle 3 — Interaction design (2026-10-04)
+
+**Walked** (Ada, local API, both apps): every YOUR WEEK row; Home, Give,
+Events and Community bells; the inbox and a notice; Give KSh 1,000 by fake
+M-Pesa answered at once, at 70 s, and not at all; all six pledge steps and
+their ✕; Events → All events & calendar; You → Community.
+
+**Works:** the Giving row lands on the pledge, the Cell row on the cell, the
+quiet week on the calendar; a gift answered at once ends on "Thank you for
+your generosity · KSh 1,000 · Tithe · Ref …" and the year pill moves from
+KSh 13,500 to 14,500; the pledge steps read clearly and the review says
+"Nothing is charged by creating it."
+
+**Reconciled with production's shape:** production's Level 1 has a separate
+exam module (seq 900) counted in the total, so a finisher reads "10 of 11";
+both apps already take the trail's open exam row as `examReady`. The dead end
+needs an exam published with no active questions — the admin route allows
+it today. The local rig had every level published with no questions, which
+is how the walk found it.
+
+**Spec:** §7.
+
+**Carried to Cycle 4:** the inbox's empty white band above its header (iOS);
+the M-Pesa sheet's empty lower half; the pledge amount tiles are squares
+while Give's are pills; Home's greeting differs ("Happy Lord's Day, Ada." on
+iOS, "Good afternoon, Ada." on Android); inbox icons differ (gear / bell).
+
+**Carried to Cycle 5:** You → Community stacks three switchers (Community ·
+Departments · Profile → Talk · Pray → My Space · Chat · My Discipler · …) and
+repeats the verse of the day.
