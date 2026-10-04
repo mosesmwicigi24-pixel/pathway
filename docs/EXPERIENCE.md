@@ -165,6 +165,26 @@ With nothing in range, Events shows:
 
 The tabs, search and filters show only when there is something to filter.
 
+**§6 decisions where the table was silent (2026-10-04, both apps):**
+- Today's echo follows today's rhythm. The calendar's "happening now" card
+  stays between the video and the letter.
+- Grow is a 2×2 grid (Devotional · Hide His Word · My Prayer Room · Your
+  Calling) plus one "Your discipler" row. The separate disciplers card and
+  grow's reading-plan tile are gone (the week's Plans row covers it).
+- The Cell row is the member's OWN cell (their cell summary), never the
+  church's featured cell.
+- "This week" is today through the seventh day after. The Events row merges
+  the calendar, curated events and RSVPs, and skips a declined gathering
+  unless it's the only one.
+- Giving: overdue reads "KSh X overdue since EEE d MMM". The table's order is
+  the priority. A paused collector, or one prompting after the instalment,
+  counts as no collector.
+- With no journey loaded, the Pathway row reads "Your pathway · Level N".
+- A folded level shows "Show" and "· Hide".
+
+**Noted for later cycles:** every bell's gold dot is static, not tied to
+unread — a false signal (Cycle 3/6). The Profile segment has no bell.
+
 ### 6.6 Fixes carried from Cycle 1
 - Android's growth delta ("▲100") never wraps.
 - Both apps label the rail "You" / "Next".
