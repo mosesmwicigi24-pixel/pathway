@@ -256,3 +256,49 @@ All three are fixed.
 
 Checked and not a bug: `MAX_LEVEL = 5` in `levelAdvancement.ts` is "the last
 level you can be ushered FROM" (ushering 5 → 6 works; 6 → 7 is refused).
+
+### Cycle 2 — Information hierarchy (2026-10-04)
+
+**Built:**
+- iOS `feat/experience` a51b69c · 64d6df2 · 22e69c0 · ade896a — 345 → 388 tests.
+- Android `feat/experience` 7b6fd0d · 1674f73 · 6cbf76d · 5331fa4 — 796 → 835 tests.
+- The full §6 on both apps: the YOUR WEEK card (pure, tested `HomeWeek` /
+  `YourWeek`), Home re-ordered and freed of every duplicate pillar card, one
+  header (Events without its emoji and with its "Next" line, the Plans line,
+  the Give bell, the You segment without the band or a second gear), the
+  folded finished level and one exam step, "Collected on" for a pledge's
+  collector, and a quiet Events week.
+
+**Seen on screen** (Ada, both apps, the same five rows):
+- "Take the Level 1 exam · Level 1 · Exam ready"
+- "Start a reading plan · A few minutes a day — with the whole family of God."
+- "No gatherings this week · See the church calendar"
+- "Kenya trip · Collected on Mon 5 Oct"
+- "Dev Cell A · Next gathering not set · 6 members"
+
+Also seen: Partners DUE "Collected on Mon 5 Oct" for Kenya trip (Roof sheets
+keeps Pay); Pathway "20 of 20 modules done · Show" with the rail's You/Next;
+Events "Nothing planned this week" with one calm card and two compact rows;
+"▲100" on one line.
+
+**Found while building:**
+- iOS: an upcoming gathering opened from Home showed COMPLETED with no
+  check-in (no end time was read as long past). Fixed.
+- The old Home card showed a plan Ada never started as "Day 1 of 10" — the
+  week's honest "Start a reading plan" replaced it.
+
+**Checked, not a regression:** Android debug builds freeze 13–19 s on the
+first launch after an install, in the pre-programme build too; warm launches
+take 1.2 s with no skipped frames. A release build is measured in Cycle 7.
+
+**Carried to Cycle 3:**
+- Every bell opens the inbox, and its dot shows only when something is unread
+  (today: static dots; the Pathway bell is decorative).
+- Money already on its way: Android's Giving row adopts iOS's rule (skip an
+  instalment fully in flight, ask only the uncovered rest).
+- The featured event can show twice (carousel + featured gathering).
+- iOS's orphaned ReaderPolish/ScriptureRefs tests.
+
+**Carried to Cycle 4:** the week rows' type (iOS sans, Android serif) and
+icons differ; the rhythm tiles' "Pending"; Grow tile labels truncate;
+the Partners DUE amount wraps beside the chip.
