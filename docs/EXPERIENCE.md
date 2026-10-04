@@ -51,8 +51,16 @@ Rules: the summit celebration fires only at `finished` (it used to fire when
 every *published* module was done — Level 1 finishers were "commissioned"
 while Levels 2–6 had no modules yet). Journey progress is counted in levels
 (`(levels before the current + current fraction) / all levels`), never as a
-share of published modules. "Almost there" never shows at 100%. The growth
-score is a score ("45"), not a percent.
+share of published modules, and it never reads 100 before `finished` (capped
+at 99 while the last exam is unpassed). "Almost there" never shows at 100%.
+The growth score is a score ("45"), not a percent. A level the server reports
+as `awaiting_review` is its own state, never "locked" (Android used to decode
+it as locked — a member who had passed saw their own level locked). A locked
+next module opens its level page, never a module the server would refuse.
+Where §3 is silent the apps share these words: the kicker per stage
+("Continue · Level 1", "Exam ready · Level 1"…), "Start" when nothing is done
+yet, and "Modules open soon" / "Level N is being prepared" for a level with
+no modules.
 
 Where it shows: the Home header pill, the Home continue card, the Home
 progress line, the Pathway hero card, the Pathway ring and the summit card.
@@ -61,7 +69,8 @@ progress line, the Pathway hero card, the Pathway ring and the summit card.
 
 | Cause | Title | Line | Action |
 |---|---|---|---|
-| No network / timeout | You're offline | Showing what you last saw — we'll refresh when you're back. (Nothing saved yet: "Connect to the internet, then try again.") | Try again |
+| The device has no network | You're offline | Showing what you last saw — we'll refresh when you're back. (Nothing saved yet: "Connect to the internet, then try again.") | Try again |
+| A timeout or dropped answer while the device HAS a network | Something went wrong on our side | It isn't you — please try again in a moment. | Try again |
 | Session ended (401 after refresh failed) | Your session has ended | Sign in again to pick up where you left off. | Sign in |
 | Server error (5xx) | Something went wrong on our side | It isn't you — please try again in a moment. | Try again |
 | Not found (404) | This isn't here any more | It may have been moved or removed. | Go back |
