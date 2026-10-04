@@ -79,6 +79,96 @@ progress line, the Pathway hero card, the Pathway ring and the summit card.
 Raw server or exception text is never shown to a member. One shared view
 renders loading, empty and error states, full width, on every screen.
 
+## 6. Information hierarchy (Cycle 2)
+
+**Each pillar has one home, and Home points to it once.** Home had up to 25
+sections and told every pillar's story more than once (the Pathway ×3, the
+cell ×2, plans ×3, prayer ×4). It now has a fixed opening, one week block,
+the day, and the family.
+
+### 6.1 Home, top to bottom
+1. **Live and on-air banners** — unchanged, and only while live.
+2. **The owner's opening, in his order:** verse for today → featured video →
+   the Sunday letter → what needs you today (or the reflection strip) → the
+   liturgy. Unchanged.
+3. **YOUR WEEK** — one card, five rows in the journey's order. Each row is an
+   icon, a title (the next thing), one line (when or where it stands), and a
+   chevron; a tap opens that place.
+
+| Row | When | Title | Line | Opens |
+|---|---|---|---|---|
+| Pathway | always | journey next-step title ("Take the Level 1 exam") | "Level N · " + journey pill | the journey's destination |
+| Plans | an enrolled, unfinished plan | the plan's title | "Day X of Y · today's reading" | that plan's day |
+| Plans | none | "Start a reading plan" | "A few minutes a day — with the whole family of God." | Plans |
+| Events | the member is going to an upcoming gathering | its title | "EEE d MMM · h:mm a · You're going" | that event |
+| Events | an upcoming gathering, not RSVP'd | its title | "EEE d MMM · h:mm a" | that event |
+| Events | nothing upcoming | "No gatherings this week" | "See the church calendar" | Events |
+| Giving | a recurring gift or a pledge's collector prompts within 7 days | the pledge's title, or "Your weekly gift" / "Your monthly gift" | "Collected on EEE d MMM" | its pledge / the gift's sheet |
+| Giving | a pledge instalment is due, with no collector | the pledge's title | "KSh X due EEE d MMM" ("overdue" when past) | Partners |
+| Giving | otherwise | "Give" | the rails line ("Tithe & offering · M-Pesa") | Give |
+| Cell | in a cell | the cell's name | "Next gathering EEE d MMM" or "Next gathering not set · N members" | the cell page |
+| Cell | no cell | "Find your cell" | "Gather with believers near you." | Community |
+
+   A row whose data failed to load shows its "none" form; it never blocks the
+   card.
+
+4. **Today's rhythm** — the daily habits card, unchanged.
+5. **The family** — the prayer wall, celebrations, the featured carousel
+   (announcements and events), and the featured gathering.
+6. **Growing** — your progress (scores), grow your faith (devotional,
+   memory verses, prayer room, your calling, your discipler), and the
+   encouragement banner.
+7. **Support God's work** — the giving banner, shown only when the giving row
+   is "Give" (a member already giving isn't asked twice).
+
+**Gone from Home, because the week block covers them:**
+- the "For you today" hero card (the same ask as "what needs you today");
+- the continue-level card;
+- the minis row (reading plan and prayer room are in the week block and in
+  "grow");
+- the plan-resume banner;
+- the "Your cell" card and the cohort section;
+- the upcoming-events list.
+
+### 6.2 One header on every tab
+Every tab root answers *where am I · what matters here* in the same shape:
+an uppercase eyebrow, the serif title, one line of what matters now, and the
+bell always at the far right.
+- **Events:** the eyebrow is "EVENTS" (no emoji). The line is "Next: «title» ·
+  EEE d MMM" or "Nothing planned this week".
+- **Plans:** the line is the active plan ("Rooted: 10 Days in the Psalms · Day
+  1 of 10"), else the tagline.
+- **Give:** the bell sits at the right of the Give | Partners switch.
+- **You:** no empty band under the segment switch, and one settings gear (the
+  segment bar's) — Profile's second gear is gone.
+
+### 6.3 Pathway: a finished level folds away
+When the current level is not `learning`, its module list folds into one row:
+"20 of 20 modules done · Show" (it expands). The exam row at the foot of the
+trail is gone when the hero already shows the exam step. Both apps mark the
+rail "You" (the member's level) and "Next" (the following one).
+
+### 6.4 Partners: a pledge collected automatically says so
+The owner's 2026-09-28 rule ("Collected on Mon 5 Oct" instead of Pay for a
+running recurring gift) extends to a **pledge** whose collector prompts on or
+before the instalment's date: the DUE row shows "Collected on EEE d MMM", and
+a tap opens the pledge. A pledge with no collector keeps Pay; paying early by
+hand stays possible from the pledge page.
+
+### 6.5 Events: a quiet week is quiet
+With nothing in range, Events shows:
+- the header line "Nothing planned this week";
+- the week strip;
+- one calm card: "The calendar is quiet this week — gatherings the church
+  posts appear here.";
+- the calendar and check-in entries as two compact rows.
+
+The tabs, search and filters show only when there is something to filter.
+
+### 6.6 Fixes carried from Cycle 1
+- Android's growth delta ("▲100") never wraps.
+- Both apps label the rail "You" / "Next".
+
 ## 5. Cycle log
 
 ### Cycle 1 — Understand & establish the foundation (2026-10-04)
