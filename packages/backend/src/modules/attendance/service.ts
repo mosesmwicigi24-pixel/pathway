@@ -102,11 +102,15 @@ export const checkInSchema = z.object({
   // Contact registration. Optional on the wire: the app prefills them from the
   // profile, and if it sends nothing we fall back to the profile server-side so
   // a check-in can never fail for want of a field the member already gave us.
-  full_name: z.string().trim().min(1).max(255).optional(),
-  phone_number: z.string().trim().min(1).max(32).optional(),
+  // nullish, not optional: Android's kotlinx Json sends a blank name/phone and
+  // an unset attended_at as null — refusing it refused every Android check-in.
+  // null is "not given" here (the profile / now fills it); `email: null` keeps
+  // its own meaning below.
+  full_name: z.string().trim().min(1).max(255).nullish().transform((v) => v ?? undefined),
+  phone_number: z.string().trim().min(1).max(32).nullish().transform((v) => v ?? undefined),
   email: z.string().trim().email().max(255).nullable().optional(),
   /** When the member actually arrived — set by the offline queue on replay. */
-  attended_at: z.string().datetime({ offset: true }).optional(),
+  attended_at: z.string().datetime({ offset: true }).nullish().transform((v) => v ?? undefined),
 });
 export type CheckInInput = z.infer<typeof checkInSchema>;
 
