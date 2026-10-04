@@ -180,15 +180,18 @@ describe("what the invitation says", () => {
 
   it("reports what has really been raised, not what we hope", async () => {
     await liveCampaign();
+    // Given on the test's own day, inside the campaign (1–30 Sept): raised
+    // counts only the campaign's days, so a gift stamped with the real clock
+    // stopped counting once the real date passed 30 Sept.
     await testPool().query(
-      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, idempotency_key)
-       SELECT $1, fund_id, 250000, 'KES', 'succeeded', 'inv-raised-1' FROM funds WHERE code='tithe'`,
-      [user]);
+      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, idempotency_key, created_at)
+       SELECT $1, fund_id, 250000, 'KES', 'succeeded', 'inv-raised-1', $2 FROM funds WHERE code='tithe'`,
+      [user, MIDMORNING]);
     // A failed gift is not money raised.
     await testPool().query(
-      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, idempotency_key)
-       SELECT $1, fund_id, 999999, 'KES', 'failed', 'inv-raised-2' FROM funds WHERE code='tithe'`,
-      [user]);
+      `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, idempotency_key, created_at)
+       SELECT $1, fund_id, 999999, 'KES', 'failed', 'inv-raised-2', $2 FROM funds WHERE code='tithe'`,
+      [user, MIDMORNING]);
     const d = await invitationFor(testPool(), user, MIDMORNING);
     expect(d.campaign?.raised_minor).toBe(250000);
   });
