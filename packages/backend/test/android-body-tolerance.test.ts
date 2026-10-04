@@ -13,7 +13,8 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
-import { createCongregation, createUser } from "./helpers/factories.js";
+import { createCongregation, createUser, createChurchService } from "./helpers/factories.js";
+import { serviceScanToken } from "../src/modules/attendance/service.js";
 
 const auth = (t: string) => ({ Authorization: t });
 
@@ -90,6 +91,65 @@ describe("Android kotlinx body tolerance — full happy paths", () => {
   });
 });
 
+describe("Android kotlinx body tolerance — found 2026-10-04 (full happy paths)", () => {
+  it("POST /services/:id/attendance accepts the Android check-in: name/phone/email/attended_at as null", async () => {
+    const svc = await createChurchService(cong, {
+      checkinOpensAt: new Date(Date.now() - 3_600_000).toISOString(),
+      checkinClosesAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    // ServiceCheckInBody (nuru-android data/net/EventsDtos.kt): attended_at is
+    // never set and blank contact fields go out as null.
+    const res = await agent().post(`/v1/services/${svc.service_id}/attendance`).set(auth(tok)).send({
+      client_scan_id: randomUUID(),
+      scan_token: serviceScanToken(svc.qr_secret, svc.service_id),
+      full_name: null,
+      phone_number: null,
+      email: null,
+      attended_at: null,
+    });
+    expect(res.status).toBe(201);
+    // null name/phone fell back to the profile, as an absent field always did.
+    const row = await testPool().query(
+      `SELECT full_name, phone_number FROM service_attendance WHERE user_id = $1 AND service_id = $2`,
+      [userId, svc.service_id],
+    );
+    expect(row.rows[0].full_name).toBeTruthy();
+    expect(row.rows[0].phone_number).toBe("+254700000000");
+  });
+
+  // A formatted Selah span as Android sends it (SelahRichEditor): every
+  // attribute the span doesn't use goes out as null.
+  const androidSpans = [{ start: 0, end: 5, bold: true, italic: null, color: null, font: null, spacing: null }];
+
+  it("PUT /me/thoughts accepts formatted spans with null attributes and stores them like iOS's", async () => {
+    const id = randomUUID();
+    const res = await agent().put("/v1/me/thoughts").set(auth(tok)).send({
+      thought_id: id,
+      title: null,
+      body: "Grace upon grace",
+      body_spans: androidSpans,
+      client_mutation_id: randomUUID(),
+    });
+    expectParsed(res);
+    expect(res.status).toBeLessThan(300);
+    const row = await testPool().query(`SELECT body_spans FROM member_thoughts WHERE thought_id = $1`, [id]);
+    expect(row.rows[0].body_spans).toEqual([{ start: 0, end: 5, bold: true }]);
+  });
+
+  it("POST /sync/push replays a formatted Android thought instead of rejecting (and dropping) it", async () => {
+    const id = randomUUID();
+    const push = await agent().post("/v1/sync/push").set(auth(tok)).send({
+      device_id: null,
+      mutations: [{
+        mutation_id: randomUUID(), seq: 1, domain: "member_thoughts", op: "upsert",
+        payload: { thought_id: id, title: null, body: "Written offline", body_spans: androidSpans, client_mutation_id: randomUUID() },
+      }],
+    });
+    expect(push.status).toBe(200);
+    expect(push.body.results[0].status).toBe("applied");
+  });
+});
+
 describe("Android kotlinx body tolerance — parse layer (heavy-fixture endpoints)", () => {
   it("POST /modules/:id/complete accepts reflection_text: null", async () => {
     const res = await agent().post(`/v1/modules/${randomUUID()}/complete`).set(auth(tok))
@@ -126,15 +186,23 @@ describe("Android kotlinx body tolerance — parse layer (heavy-fixture endpoint
     expectParsed(res);
   });
 
-  it("POST /giving/intents accepts phone_number: null", async () => {
-    const res = await agent().post("/v1/giving/intents").set(auth(tok)).send({
-      fund: "tithe",
-      amount_minor: 1000,
-      currency: "KES",
-      method: "card",
-      phone_number: null,
-      idempotency_key: randomUUID(),
+  // The exact GiveBody an unnamed Android gift sends (nuru-android
+  // data/net/GivingDtos.kt): phone_number AND account_name as null; pledge_id
+  // and need_id are @EncodeDefault(NEVER), so absent. This test used to omit
+  // account_name, so the sweep missed it — and production refused every
+  // unnamed Android gift with VALIDATION_FAILED (2026-10-04).
+  for (const method of ["card", "mpesa"] as const) {
+    it(`POST /giving/intents accepts the unnamed Android gift (${method}): phone_number and account_name null`, async () => {
+      const res = await agent().post("/v1/giving/intents").set(auth(tok)).send({
+        fund: "tithe",
+        amount_minor: 100000,
+        currency: "KES",
+        method,
+        phone_number: null,
+        account_name: null,
+        idempotency_key: randomUUID(),
+      });
+      expectParsed(res);
     });
-    expectParsed(res);
-  });
+  }
 });
