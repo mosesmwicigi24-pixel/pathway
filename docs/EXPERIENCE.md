@@ -106,3 +106,43 @@ Departments, Profile, Settings), notifications.
 
 **Decided:** §3 one journey state, §4 one state language, and the small
 truths (score not percent, rails that work, one phone format).
+
+**Built** (both apps, 2026-10-04):
+- iOS `feat/experience` 5245f76 · 2d812a5 · cfd85ab — 313 → 345 tests.
+- Android `feat/experience` 7c035cd · 10772b2 · 77239b3 · 77b38b9 — 762 → 796 tests.
+- One journey model (`Journey.swift` / `Journey.kt`) behind the Home pill, the
+  Home continue card, the Home progress line, the Pathway hero, both rings, the
+  rail, the milestones and the summit.
+- One state language (`StateLanguage.swift` / `StateLanguage.kt`) with a shared
+  full-width state card on Pathway, Plans, Events, Partners, Departments and
+  Home, and on every Android screen built on `AsyncContent`.
+- Rails that work on Home's giving card; the score shown as a score; one phone
+  format.
+
+**Found while building:**
+- Android decoded `awaiting_review` as locked, so a member who had passed saw
+  their own level locked.
+- iOS's exam row never appeared: "every module done" was read as "level
+  passed".
+- iOS's "For you today · Open prayer journal" opened the Pathway tab.
+
+All three are fixed.
+
+**Seen on screen** (Ada, both apps, the same words):
+- Home: pill "Level 1 · Exam ready"; ring "45"; card "EXAM READY · LEVEL 1 —
+  Take the Level 1 exam — Every module is done — the exam opens the way to
+  Level 2. — Begin the exam"; progress line "Take the Level 1 exam".
+- Pathway: ring 17% (was 100%); the same exam step leads; the summit is no
+  longer reached, and no celebration fires.
+
+**Carried to Cycle 2:**
+- Home still carries up to 25 sections, each pillar repeated (Pathway ×3, Cell
+  ×2, Plans ×3).
+- Every tab opens with a different header.
+- iOS marks the rail "You"/"Next"; Android doesn't.
+- Android's growth delta "▲100" wraps to two lines.
+- Raw server text remains on secondary screens (Devotional, Memory Verse,
+  Quiz, Giving statement, Live…) and in Give's money flows.
+
+Checked and not a bug: `MAX_LEVEL = 5` in `levelAdvancement.ts` is "the last
+level you can be ushered FROM" (ushering 5 → 6 works; 6 → 7 is refused).
