@@ -6,7 +6,7 @@
 // automatically, a declined prompt, Try again, a month paid by hand, a claim
 // the office confirms, the office pausing at their request, a dollar gift on
 // the side — adds up the same on every surface.
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
 import { createCongregation, createUser } from "./helpers/factories.js";
 import { FinancialService } from "../src/modules/financial/service.js";
@@ -212,6 +212,12 @@ describe("Cycle 10 — a member's year, end to end", () => {
     await svc.handleMobileMoneyCallback("mpesa", cb(second.ref, 0), "");
     expect((await q(`SELECT status::text AS status, schedule_id FROM transactions WHERE transaction_id = $1`, [again.transaction_id])).rows[0]).toEqual({ status: "succeeded", schedule_id: sid });
     expect((await q(`SELECT consecutive_failures FROM giving_schedules WHERE schedule_id = $1`, [sid])).rows[0].consecutive_failures).toBe(0);
+    // Both prompts were written on the real clock; they belong to the
+    // scenario's 5 October (09:01 and 09:05 in Nairobi). Left on the real
+    // clock, the 20 Dec health check below stopped counting them after
+    // 20 Dec 2026, and the 2026 statement lost the Try-again payment in 2027.
+    await q(`UPDATE transactions SET created_at = '2026-10-05T06:01:00Z' WHERE transaction_id = $1`, [failedTx]);
+    await q(`UPDATE transactions SET created_at = '2026-10-05T06:05:00Z' WHERE transaction_id = $1`, [again.transaction_id]);
 
     // 4. She pays November by hand at the church office; she tells the app, the office confirms.
     const claim = await partners.createClaim(user, pid, { amount_minor: 500_000, currency: "KES", paid_on: "2026-11-01", note: "Cash at the office" } as never, new Date("2026-11-01T12:00:00Z"));
@@ -223,7 +229,17 @@ describe("Cycle 10 — a member's year, end to end", () => {
     expect((await q(`SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND template = 'giving_schedule_covered'`, [user])).rows[0].n).toBe(1);
 
     // 6. She calls the office in November: pause December, back in January.
-    await svc.officeScheduleAction(officer, sid, "pause", { note: "Travelling in December", resume_on: "2027-01-01" });
+    //    The office's date check reads the wall clock (it takes no `now`), so
+    //    the call is made on the scenario's own November day — on the real
+    //    clock, 1 Jan 2027 stopped being "from tomorrow" on 1 Jan 2027.
+    //    Fake Date only: faking timers too would stall the pg driver.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-20T09:00:00Z"));
+    try {
+      await svc.officeScheduleAction(officer, sid, "pause", { note: "Travelling in December", resume_on: "2027-01-01" });
+    } finally {
+      vi.useRealTimers();
+    }
     await svc.runDueSchedules(new Date("2026-12-05T06:01:00Z"));
     expect(safaricom.pushes).toHaveLength(2);
 
