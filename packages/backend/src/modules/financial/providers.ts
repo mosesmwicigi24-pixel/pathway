@@ -113,11 +113,15 @@ export class FakeMobileMoneyProvider implements MobileMoneyProvider {
   constructor(
     readonly key: MobileMoneyKey,
     private readonly secret = "test-mm-secret",
+    /** Set by a dev server (never in tests): the counter restarts with the
+     *  process, and a ref an earlier run already stored made every new
+     *  prompt a 500 — a per-run prefix keeps refs unique across restarts. */
+    private readonly runPrefix = "",
   ) {}
 
   async initiate(input: MobileMoneyCharge): Promise<{ ref: string }> {
     this.initiated.push(input);
-    return { ref: `${this.key}_co_${this.initiated.length}` };
+    return { ref: `${this.key}_co_${this.runPrefix}${this.initiated.length}` };
   }
 
   async queryStatus(ref: string): Promise<MobileMoneyStatus> {
@@ -441,11 +445,11 @@ export function buildMobileMoneyProviders(env: Env): MobileMoneyProviders {
           callbackUrl: env.MPESA_CALLBACK_URL!,
         })
       : fakesAllowed && env.MPESA_CALLBACK_SECRET
-        ? new FakeMobileMoneyProvider("mpesa", env.MPESA_CALLBACK_SECRET)
+        ? new FakeMobileMoneyProvider("mpesa", env.MPESA_CALLBACK_SECRET, `${Date.now().toString(36)}_`)
         : new NotConfiguredProvider("mpesa"),
     // There is no real Airtel Money integration yet — only the test fake.
     airtel: fakesAllowed && env.AIRTEL_CALLBACK_SECRET
-      ? new FakeMobileMoneyProvider("airtel", env.AIRTEL_CALLBACK_SECRET)
+      ? new FakeMobileMoneyProvider("airtel", env.AIRTEL_CALLBACK_SECRET, `${Date.now().toString(36)}_`)
       : new NotConfiguredProvider("airtel"),
   };
 }
