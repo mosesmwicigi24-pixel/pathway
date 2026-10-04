@@ -409,3 +409,65 @@ iOS, "Good afternoon, Ada." on Android); inbox icons differ (gear / bell).
 **Carried to Cycle 5:** You → Community stacks three switchers (Community ·
 Departments · Profile → Talk · Pray → My Space · Chat · My Discipler · …) and
 repeats the verse of the day.
+
+**Built:**
+- Server: `exam_available` on `/me/pathway` and the trail's exam row, the
+  empty exam's words, publishing an empty exam refused (92557c1); Home's
+  level-review nudge waits for a takeable exam (af0cc32).
+- iOS `feat/experience` 6a6f695 … 99e744f (14 commits) — 388 → 431 tests.
+- Android `feat/experience` 78709ac … d37d148 (15 commits) — 835 → 868 tests.
+- All 13 items of §7.2 and the §7.3 decisions.
+
+**Seen on screen** (Ada, local API, both apps — `shots/c3/{ios,android}`):
+- No questions: "Level 1 complete · Level 1 · Exam opens soon" in YOUR WEEK,
+  "Exam opens soon" on Home and Pathway, the level card's "Every module is
+  done. The exam opens soon — we'll let you know.", and the exam itself
+  answering "Your Level 1 exam isn't ready yet — we'll let you know when it
+  opens." with Go back. With questions (production's shape — an exam module
+  at seq 900, "20 of 21"): "Exam ready", "Take the Level 1 exam", and on iOS
+  the exam opening on the Pathway tab, back at the top, "Next Question"
+  above the tab bar.
+- Kenya trip (collected automatically): "Pay early" · "Pause"; Roof sheets
+  (no collector): gold "Pay now".
+- A Live notice: "This Live has ended · Ring check · Go back"; no
+  "All read" chip with nothing unread; every bell with no dot at 0 unread;
+  the Pathway bell opens the inbox.
+- M-Pesa, unanswered: "Check your phone" with Close; at 60 s "Still
+  processing — it will show in Recent giving once it clears." with Done;
+  answered at 87 s (iOS) and 127 s (Android): "Thank you for your
+  generosity". The number sheet says "Give KSh 1,000".
+- "Leave this pledge? · What you entered won't be kept. · Keep editing /
+  Leave"; the flow covers the tab bar on both apps.
+- Android: Home → exam → Go back is pixel-identical (same scroll, no
+  skeleton, no "0"); Home's "Turn on notifications" card.
+- iOS: a thread's hidden tab bar returns when a notice switches tabs; no
+  cold permission prompt on a fresh install; 15 yes-or-no confirmations
+  that hid an answer are alerts showing both.
+
+**Found while building — production (fixed and deployed the same day):**
+Android sent unset fields as `null`, and three schemas refused it — every
+unnamed Android gift, every Android QR service check-in, every formatted
+Selah thought (dropped when queued offline). pathway#499 (e6b6e63),
+deployed 2026-10-04 15:01 UTC on the owner's YES; ledger entry #501. Also:
+Android's M-Pesa wait said "Thank you for your generosity" before the
+server confirmed anything (live) — fixed in a2e40b8, ships with the next
+Android build. A dated test went red on 1 Oct (fixed at the root,
+feat/giving-cycles ca38a36).
+
+**Carried to Cycle 4 (visual language):** the inbox's empty white band
+(iOS); the M-Pesa sheet's empty lower half (iOS); pledge amount tiles are
+squares, Give's are pills; Home's greeting ("Happy Lord's Day, Ada." /
+"Good evening, Ada."); inbox icons (gear / bell); the level card navy (iOS) /
+gold (Android); the exam refusal full-screen (iOS) / a card (Android); the
+success line ("KSh 1,000 · Tithe · Ref …" / "Gift confirmed — receipt on its
+way. 🎉") and Android's extra "Thank you for sowing" overlay; Android's
+M-Pesa stages keep the tab bar; "Sign out" not in the destructive colour;
+plus Cycle 2's week-row type and icons, "Pending", Grow labels, the DUE wrap.
+
+**Carried to Cycle 5 (journeys):** "What needs you today" repeats YOUR WEEK's
+exam row and calls the exam a "review"; PayPal's waiting stage still
+celebrates on Android (check iOS); You → Community's three switchers and the
+repeated verse.
+
+**Carried to Cycle 7:** Android's debug build still freezes ("isn't
+responding") on a cold launch — measure the release build.
