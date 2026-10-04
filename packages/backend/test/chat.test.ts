@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, closeTestPool, testPool } from "./helpers/db.js";
-import { createCongregation, createCellGroup, createUser, createLeaderAssignment } from "./helpers/factories.js";
+import { createCongregation, createCellGroup, createUser, createLeaderAssignment, birthDateForAge } from "./helpers/factories.js";
 import { hashPassword } from "../src/modules/identity/passwords.js";
 
 let cong: string, cellA: string, cellB: string;
@@ -35,7 +35,7 @@ beforeEach(async () => {
   const a2 = await createUser({ congregationId: cong, cellGroupId: cellA, email: "a2@dev.local", fullName: "Ben" });
   const b = await createUser({ congregationId: cong, cellGroupId: cellB, email: "b@dev.local", fullName: "Cara" });
   const l = await createUser({ congregationId: cong, cellGroupId: cellA, role: "Instructor", email: "l@dev.local", fullName: "Lee" });
-  const minor = await createUser({ congregationId: cong, cellGroupId: cellA, email: "m@dev.local", fullName: "Kid", dateOfBirth: "2015-01-01" });
+  const minor = await createUser({ congregationId: cong, cellGroupId: cellA, email: "m@dev.local", fullName: "Kid", dateOfBirth: birthDateForAge(11) });
   expect(minor.is_minor).toBe(true);
   const admin = await createUser({ congregationId: cong, cellGroupId: cellB, role: "Admin", email: "admin@dev.local", fullName: "Admin" });
   aId = a.user_id; a2Id = a2.user_id; bId = b.user_id; lId = l.user_id; minorId = minor.user_id; adminId = admin.user_id;
@@ -516,7 +516,7 @@ describe("broadcast (staff → every congregation member as an individual DM)", 
     const sender = await createUser({ congregationId: cong2, role: "SuperAdmin", email: "pastor@dev.local", fullName: "Pastor Pat" });
     const m1 = await createUser({ congregationId: cong2, email: "m1@dev.local", fullName: "Member One" });
     const m2 = await createUser({ congregationId: cong2, email: "m2@dev.local", fullName: "Member Two" });
-    await createUser({ congregationId: cong2, email: "kid2@dev.local", fullName: "Kid Two", dateOfBirth: "2016-06-06" });
+    await createUser({ congregationId: cong2, email: "kid2@dev.local", fullName: "Kid Two", dateOfBirth: birthDateForAge(10) });
     const senderTok = staff(sender.user_id, "SuperAdmin", cong2);
     const m1Tok = bearer({ sub: m1.user_id, role: "Student", cong: cong2 });
     const m2Tok = bearer({ sub: m2.user_id, role: "Student", cong: cong2 });

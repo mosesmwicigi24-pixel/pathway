@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
-import { createCongregation, createUser } from "./helpers/factories.js";
+import { createCongregation, createUser, birthDateForAge } from "./helpers/factories.js";
 
 const auth = (t: string) => ({ Authorization: t });
 
@@ -34,7 +34,7 @@ beforeEach(async () => {
   const a = await createUser({ congregationId: cong, email: "rs-a@dev.local", fullName: "Ann Reader" });
   const b = await createUser({ congregationId: cong, email: "rs-b@dev.local", fullName: "Ben Reader" });
   const c = await createUser({ congregationId: cong, email: "rs-c@dev.local", fullName: "Cara Reader" });
-  const minor = await createUser({ congregationId: cong, email: "rs-m@dev.local", fullName: "Kid", dateOfBirth: "2015-01-01" });
+  const minor = await createUser({ congregationId: cong, email: "rs-m@dev.local", fullName: "Kid", dateOfBirth: birthDateForAge(11) });
   aId = a.user_id; bId = b.user_id; cId = c.user_id; minorId = minor.user_id;
   aTok = bearer({ sub: aId, role: "Student", cong });
   bTok = bearer({ sub: bId, role: "Student", cong });

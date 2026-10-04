@@ -33,11 +33,14 @@ async function liveCampaign(opts: {
   return rows[0]!.campaign_id;
 }
 
-/** Old enough to be asked — the settling-in rule is tested separately. */
+/** Old enough to be asked — the settling-in rule is tested separately. Sixty
+ *  days before the test's clock, not the database's: the rule reads
+ *  MIDMORNING, so an age counted back from the real day shrank by a day every
+ *  day, and from 2 Nov 2026 every member here was "too new" to be asked. */
 async function settledMember(): Promise<string> {
   const id = (await createUser({ congregationId: cong, phone: `+2547${Date.now() % 100000000}` })).user_id;
   await testPool().query(
-    `UPDATE users SET created_at = now() - interval '60 days' WHERE user_id = $1`, [id]);
+    `UPDATE users SET created_at = $2::timestamptz - interval '60 days' WHERE user_id = $1`, [id, MIDMORNING]);
   return id;
 }
 

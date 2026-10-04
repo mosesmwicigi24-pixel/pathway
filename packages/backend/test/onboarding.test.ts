@@ -7,7 +7,9 @@ import { OnboardingService } from "../src/modules/onboarding/service.js";
 import { testEnv } from "./helpers/app.js";
 
 const svc = () => new OnboardingService(testPool(), testEnv());
-const THIS_YEAR = 2026;
+// The real year: is_minor reads CURRENT_DATE, so a hard-coded 2026 would turn
+// the "~12 years old" minor below into an adult on 1 Jan 2032.
+const THIS_YEAR = new Date().getUTCFullYear();
 
 let cong: string, cell: string;
 async function freshUser(): Promise<string> {

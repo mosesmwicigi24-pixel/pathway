@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, closeTestPool, testPool } from "./helpers/db.js";
-import { createCongregation, createCellGroup, createUser } from "./helpers/factories.js";
+import { createCongregation, createCellGroup, createUser, birthDateForAge } from "./helpers/factories.js";
 
 let cong: string;
 let aId: string, aTok: string;
@@ -25,7 +25,7 @@ beforeEach(async () => {
   const a = await createUser({ congregationId: cong, cellGroupId: cell, email: "conn-a@dev.local", fullName: "Ann" });
   const b = await createUser({ congregationId: cong, cellGroupId: cell, email: "conn-b@dev.local", fullName: "Ben" });
   const cc = await createUser({ congregationId: cong, cellGroupId: cell, email: "conn-c@dev.local", fullName: "Cara" });
-  const minor = await createUser({ congregationId: cong, cellGroupId: cell, email: "conn-m@dev.local", fullName: "Kid", dateOfBirth: "2015-01-01" });
+  const minor = await createUser({ congregationId: cong, cellGroupId: cell, email: "conn-m@dev.local", fullName: "Kid", dateOfBirth: birthDateForAge(11) });
   const admin = await createUser({ congregationId: cong, role: "Admin", email: "conn-admin@dev.local", fullName: "Overseer" });
   aId = a.user_id; bId = b.user_id; cId = cc.user_id; minorId = minor.user_id; adminId = admin.user_id;
   aTok = bearer({ sub: aId, role: "Student", cong });
