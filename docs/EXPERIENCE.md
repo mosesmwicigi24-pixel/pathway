@@ -231,6 +231,40 @@ the six pledge steps, Events and You, on both apps.
 | 12 | Notification permission (both) | Asked cold on first launch, from a plan reminder or the radio | Asked only when the member turns on something that needs it (a reminder, Live alerts), with one line saying why |
 | 13 | Tests (iOS) | ReaderPolishTests and ScriptureRefsTests never run | In the test target |
 
+### 7.3 Decided while building (both apps say these words)
+- **A Live that has ended:** "This Live has ended" · the Live's name (when
+  known) · **Go back** — the same action as §4's "This isn't here any more".
+  A Live notice opens the stream it names (`stream_id`), never whichever
+  stream happens to be live now.
+- **The exam row while unavailable:** "Level exam · opens soon"; the level
+  page's card: "Level N complete · Every module is done. The exam opens soon
+  — we'll let you know."
+- **Asking for notifications** (rule 4 — never cold): plan reminder "Allow
+  notifications?" · "So your daily reading reminder can reach you." · Not now
+  / Continue; radio "So we can tell you when Nuru Radio goes live."; Settings
+  push "So devotionals, events and reminders reach this phone."; refused for
+  good: "Notifications are off" · "‹reason› Turn them on for Nuru Pathway in
+  Settings." · Open Settings. **Android only** also asks on a pledge's
+  "Remind me before it's due" ("So your pledge reminders reach this phone.")
+  and, while the phone has notifications off, shows one Home card — "Turn on
+  notifications" · "So messages, Live invites and reminders reach this
+  phone." · Turn on / Not now (hidden 14 days) — because Android carries real
+  pushes (messages, Live invites, giving notices) and no longer asks at
+  launch. iOS has no remote push yet, so it promises none (§2: promise only
+  what works).
+- **Waiting for M-Pesa** is never a celebration: "Check your phone", the PIN
+  line, "Prompt sent to …", a quiet Close; "Thank you for your generosity"
+  and its tick only on the server's confirmed success. Android showed
+  "Thank you" while the prompt was still waiting (live since before this
+  programme) — fixed to iOS's stages, cadence (3 s for a minute, then 10 s to
+  5 minutes) and words.
+- **"Request body failed validation"** is our side's fault, not a refusal in
+  a member's words: it reads as §4's "Something went wrong on our side".
+- **A paused collector** counts as no collector: the pledge keeps its gold
+  "Pay now". "Leave" in "Leave this pledge?" is the destructive colour.
+- **The new-pledge flow covers the tab bar** on both apps, so a tab switch
+  cannot throw away a half-made pledge.
+
 ## 5. Cycle log
 
 ### Cycle 1 — Understand & establish the foundation (2026-10-04)
