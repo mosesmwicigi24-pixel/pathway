@@ -8,12 +8,16 @@ import { PartitionMaintenance, refreshMinorFlags } from "../src/jobs/maintenance
 const partExists = async (name: string): Promise<boolean> =>
   (await testPool().query("SELECT 1 FROM pg_class WHERE relname=$1", [name])).rowCount === 1;
 
-const ym = (offsetMonths: number): string => {
-  const d = new Date();
-  d.setUTCDate(1);
-  d.setUTCMonth(d.getUTCMonth() + offsetMonths);
-  return `interaction_events_${d.getUTCFullYear()}_${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-};
+/** The partition for the DATABASE's current month + offset — the month the
+ *  provisioning function itself reads (CURRENT_DATE, in the server's zone).
+ *  Node's UTC month disagreed with it in the last three hours of every month
+ *  on a Nairobi-zoned server: harmless while the migrations' 2026 partitions
+ *  existed, a failure on every month-end evening from 31 Jan 2027. */
+const ym = async (offsetMonths: number): Promise<string> =>
+  (await testPool().query<{ name: string }>(
+    `SELECT 'interaction_events_' || to_char(date_trunc('month', CURRENT_DATE) + make_interval(months => $1), 'YYYY_MM') AS name`,
+    [offsetMonths],
+  )).rows[0]!.name;
 
 describe("partition maintenance (§2.4, §5.9)", () => {
   beforeEach(async () => {
@@ -26,8 +30,8 @@ describe("partition maintenance (§2.4, §5.9)", () => {
   it("provisions current + next 2 months and prunes partitions older than 13 months", async () => {
     const pm = new PartitionMaintenance(testPool());
     await pm.provision(2);
-    expect(await partExists(ym(0))).toBe(true);
-    expect(await partExists(ym(2))).toBe(true);
+    expect(await partExists(await ym(0))).toBe(true);
+    expect(await partExists(await ym(2))).toBe(true);
 
     // An old partition (well beyond 13 months) gets pruned; a current one survives.
     await testPool().query(
@@ -38,7 +42,7 @@ describe("partition maintenance (§2.4, §5.9)", () => {
 
     await pm.prune(13);
     expect(await partExists("interaction_events_2020_01")).toBe(false); // dropped
-    expect(await partExists(ym(0))).toBe(true); // kept
+    expect(await partExists(await ym(0))).toBe(true); // kept
   });
 });
 
