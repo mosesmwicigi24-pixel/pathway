@@ -8,6 +8,7 @@ import { many, maybeOne, one, tx, audit } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { cacheGetSet, cacheKeys } from "../../cache.js";
 import { loadEnrollment, loadModule, isModuleUnlocked, isEntryModule } from "../progress/gating.js";
+import { levelsWithExamQuestions } from "../assessment/exam.js";
 
 /** Authoring marker that splits a lesson body into mobile reader pages. */
 const PAGE_BREAK = /<!--\s*page-break\s*-->/;
@@ -91,6 +92,7 @@ export class CurriculumService {
       [userId],
     );
     const awaitingLevels = new Set(awaitingRows.map((r) => r.level_number));
+    const examPooled = await levelsWithExamQuestions(this.pool);
     const rows = await many<{
       level_number: number;
       title: string;
@@ -153,6 +155,10 @@ export class CurriculumService {
         // The level's final exam is live only once an admin publishes it — the
         // client hides the exam gate until then (the exam is "in review").
         exam_published: r.exam_status === "published",
+        // …and it can only be TAKEN once it has questions: published with an
+        // empty pool, the exam answers 422 — the apps offer it only when this
+        // is true (EXPERIENCE.md §7.2 #1).
+        exam_available: r.exam_status === "published" && examPooled.has(r.level_number),
       };
     });
     return { current_level: currentLevel, levels };
@@ -195,6 +201,8 @@ export class CurriculumService {
       [levelNumber],
     );
     const examPublished = !lvl || lvl.exam_status === "published";
+    // Published AND has questions — the only exam the member can take (§7.2 #1).
+    const examAvailable = examPublished && (await levelsWithExamQuestions(this.pool, levelNumber)).has(levelNumber);
     // Has this member already passed the level exam? Drives the exam row's
     // "completed" state (there is no "read to complete" for an exam container).
     const examPassed =
@@ -255,6 +263,7 @@ export class CurriculumService {
           status,
           progress: completed ? 100 : 0,
           locked: !unlocked,
+          exam_available: examAvailable,
         });
         continue;
       }

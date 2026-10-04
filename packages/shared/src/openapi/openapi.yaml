@@ -1063,12 +1063,15 @@ paths:
         but the discipler has not yet ushered reports status 'awaiting_review' and
         awaiting_review:true; the next level stays 'locked' until ushered.
       responses:
-        "200": { description: "Pathway summary — { current_level, levels: [{ level_number, title, theme, description, total_modules, completed_modules, minutes, status, awaiting_review }] }" }
+        "200": { description: "Pathway summary — { current_level, levels: [{ level_number, title, theme, description, total_modules, completed_modules, minutes, status, awaiting_review, exam_published, exam_available }] }. exam_published: an admin has published the level's exam. exam_available: it is published AND has at least one active question in a published module — the only exam a member can take (a published exam with no questions answers 422); apps offer the exam only when this is true." }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /levels/{n}/modules:
     get:
       tags: [curriculum]
-      summary: Modules for a level; locked ones return metadata + locked:true.
+      summary: >-
+        Modules for a level; locked ones return metadata + locked:true. The level's
+        exam row (evaluation_kind exit_exam, shown once the exam is published) also
+        carries exam_available — false while the exam has no active questions.
       parameters:
         - { name: n, in: path, required: true, schema: { type: integer, minimum: 1 } }
       responses:
@@ -1226,10 +1229,11 @@ paths:
                 exam_show_answers: { type: boolean }
                 exam_show_score: { type: boolean }
                 exam_shuffle: { type: boolean, description: Randomize answer-choice order at delivery (default true). }
-                exam_status: { type: string, enum: [review, published], description: "Publish gate — the exam is member-visible/takeable only when 'published'." }
+                exam_status: { type: string, enum: [review, published], description: "Publish gate — the exam is member-visible/takeable only when 'published'. Moving an exam INTO 'published' with no active question in a published module of the level is refused (422)." }
       responses:
         "200": { description: Configured }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /admin/levels/{n}/modules:
     get:
       tags: [curriculum]

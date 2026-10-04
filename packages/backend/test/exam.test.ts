@@ -13,6 +13,7 @@ import {
 import { ProgressService } from "../src/modules/progress/service.js";
 import { AssessmentService } from "../src/modules/assessment/service.js";
 import { ExamService } from "../src/modules/assessment/exam.js";
+import { agent, bearer } from "./helpers/app.js";
 
 const progress = () => new ProgressService(testPool());
 const assess = () => new AssessmentService(testPool());
@@ -159,6 +160,108 @@ describe("level exam (§1.9 rule 2)", () => {
     await testPool().query("UPDATE levels SET exam_status = 'published' WHERE level_number = 1");
     const ex = (await exam().assemble(student, 1)) as { question_count: number };
     expect(ex.question_count).toBe(1);
+  });
+});
+
+describe("exam availability (EXPERIENCE.md §7.2 #1)", () => {
+  // A published exam with no active questions answers 422; the member apps
+  // offer the exam only when /me/pathway (and the trail's exam row) say it is
+  // available — published AND at least one active question in a published module.
+  let student: string;
+  beforeEach(async () => {
+    await resetDb();
+    const cong = await createCongregation();
+    const cell = await createCellGroup(cong);
+    student = (await createUser({ congregationId: cong, cellGroupId: cell })).user_id;
+    await createEnrollment(student, 1);
+  });
+
+  type Level = { level_number: number; exam_published: boolean; exam_available: boolean };
+  const levelOne = async (): Promise<Level> => {
+    const { CurriculumService } = await import("../src/modules/curriculum/service.js");
+    const sum = (await new CurriculumService(testPool()).getPathwaySummary(student)) as { levels: Level[] };
+    return sum.levels.find((l) => l.level_number === 1)!;
+  };
+
+  it("is available only when the exam is published AND has an active question", async () => {
+    const m1 = await createModule(1, 1);
+    // Published, no questions anywhere in the level: published but not available.
+    expect(await levelOne()).toMatchObject({ exam_published: true, exam_available: false });
+
+    const qq = await addQuestion(m1, "A");
+    expect(await levelOne()).toMatchObject({ exam_published: true, exam_available: true });
+
+    // A deactivated pool is an empty pool.
+    await testPool().query("UPDATE question_bank SET is_active = FALSE WHERE question_id = $1", [qq]);
+    expect((await levelOne()).exam_available).toBe(false);
+
+    // Questions in an UNPUBLISHED module don't count (examQuestions skips them).
+    await testPool().query("UPDATE question_bank SET is_active = TRUE WHERE question_id = $1", [qq]);
+    await testPool().query("UPDATE modules SET status = 'draft' WHERE module_id = $1", [m1]);
+    expect((await levelOne()).exam_available).toBe(false);
+    await testPool().query("UPDATE modules SET status = 'published' WHERE module_id = $1", [m1]);
+
+    // In review it is neither published nor available.
+    await testPool().query("UPDATE levels SET exam_status = 'review' WHERE level_number = 1");
+    expect(await levelOne()).toMatchObject({ exam_published: false, exam_available: false });
+  });
+
+  it("marks the trail's exam row, and the empty exam refuses in the member's words", async () => {
+    const m1 = await createModule(1, 1);
+    await createModule(1, 11, { evaluationKind: "exit_exam", title: "Level 1 Review" });
+    await progress().completeModule(student, m1, null);
+    const { CurriculumService } = await import("../src/modules/curriculum/service.js");
+    type Row = { evaluation_kind: string; exam_available?: boolean };
+    const examRow = async () =>
+      ((await new CurriculumService(testPool()).listModulesForLevel(student, 1)) as Row[]).find(
+        (m) => m.evaluation_kind === "exit_exam",
+      )!;
+
+    expect((await examRow()).exam_available).toBe(false);
+    await expect(exam().assemble(student, 1)).rejects.toMatchObject({
+      code: "UNPROCESSABLE",
+      message: "Your Level 1 exam isn't ready yet — we'll let you know when it opens.",
+    });
+
+    await addQuestion(m1, "A");
+    expect((await examRow()).exam_available).toBe(true);
+    const ex = (await exam().assemble(student, 1)) as { question_count: number };
+    expect(ex.question_count).toBe(1);
+  });
+});
+
+describe("publishing an exam (EXPERIENCE.md §7.2 #1)", () => {
+  let adminTok: string;
+  beforeEach(async () => {
+    await resetDb();
+    const cong = await createCongregation();
+    const admin = await createUser({ congregationId: cong, role: "Admin", email: "admin@dev.local" });
+    adminTok = bearer({ sub: admin.user_id, role: "Admin", cong });
+    await testPool().query("UPDATE levels SET exam_status = 'review' WHERE level_number = 1");
+  });
+  const put = (body: Record<string, unknown>) =>
+    agent().put("/v1/admin/levels/1/exam").set({ Authorization: adminTok }).send({ required_exam_pass_mark: 80, ...body });
+  const status = async () =>
+    (await testPool().query("SELECT exam_status FROM levels WHERE level_number = 1")).rows[0].exam_status as string;
+
+  it("refuses to publish an exam with no active questions, and publishes once it has one", async () => {
+    const m1 = await createModule(1, 1);
+    const refused = await put({ exam_status: "published" });
+    expect(refused.status).toBe(422);
+    expect(refused.body.error.message).toBe("Add at least one active question before publishing this exam.");
+    expect(await status()).toBe("review");
+
+    await addQuestion(m1, "A");
+    expect((await put({ exam_status: "published" })).status).toBe(200);
+    expect(await status()).toBe("published");
+  });
+
+  it("never blocks saving settings on an exam that is already published", async () => {
+    await createModule(1, 1);
+    await testPool().query("UPDATE levels SET exam_status = 'published' WHERE level_number = 1");
+    expect((await put({ exam_status: "published", exam_shuffle: false })).status).toBe(200);
+    expect((await put({ exam_status: "review" })).status).toBe(200);
+    expect(await status()).toBe("review");
   });
 });
 
