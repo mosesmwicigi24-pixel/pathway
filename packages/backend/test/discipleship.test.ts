@@ -17,6 +17,7 @@ import {
   markReflected,
   setCellLeader,
   addInteractionDays,
+  birthDateForAge,
 } from "./helpers/factories.js";
 import { DiscipleshipService } from "../src/modules/discipleship/service.js";
 import type { Principal } from "../src/http/http.js";
@@ -131,7 +132,7 @@ describe("Discipleship Hub", () => {
         congregationId: cong,
         cellGroupId: cell,
         fullName: "Teen",
-        dateOfBirth: "2015-01-01",
+        dateOfBirth: birthDateForAge(11),
       });
       expect(minor.is_minor).toBe(true);
       await createEnrollment(minor.user_id, 1);

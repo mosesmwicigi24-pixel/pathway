@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
-import { createCongregation, createCellGroup, createUser, createEnrollment, createEvent, addInteractionDays } from "./helpers/factories.js";
+import { createCongregation, createCellGroup, createUser, createEnrollment, createEvent, addInteractionDays, birthDateForAge } from "./helpers/factories.js";
 
 let cong: string;
 let cell: string;
@@ -197,7 +197,7 @@ describe("dashboard reports", () => {
       cellGroupId: cell,
       role: "Student",
       email: "kid@dev.local",
-      dateOfBirth: "2015-06-01",
+      dateOfBirth: birthDateForAge(11),
     });
     await testPool().query(
       `INSERT INTO guardian_consents (user_id, guardian_name, guardian_contact, relationship, consent_text_version, granted_at)

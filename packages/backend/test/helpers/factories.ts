@@ -32,6 +32,16 @@ export interface CreateUserOpts {
   email?: string | null;
 }
 
+/** The date of birth of someone `age` years old today — a test's minor must
+ *  stay one. is_minor is computed against the real CURRENT_DATE, so a fixed
+ *  "2015-01-01" turns 18 on 1 Jan 2033 and silently flips every minor-safety
+ *  test that used it. */
+export function birthDateForAge(age: number): string {
+  const d = new Date();
+  d.setUTCFullYear(d.getUTCFullYear() - age);
+  return d.toISOString().slice(0, 10);
+}
+
 export async function createUser(opts: CreateUserOpts): Promise<{ user_id: string; is_minor: boolean }> {
   const { rows } = await testPool().query<{ user_id: string; is_minor: boolean }>(
     `INSERT INTO users (full_name, phone_number, date_of_birth, congregation_id, cell_group_id, role, email)

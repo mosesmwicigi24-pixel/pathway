@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, closeTestPool, testPool } from "./helpers/db.js";
-import { createCongregation, createCellGroup, createUser, createLeaderAssignment } from "./helpers/factories.js";
+import { createCongregation, createCellGroup, createUser, createLeaderAssignment, birthDateForAge } from "./helpers/factories.js";
 
 let cong: string, cell: string;
 let leaderId: string, leaderTok: string;
@@ -29,7 +29,7 @@ beforeEach(async () => {
   await createLeaderAssignment(leader.user_id, cell);
   const discipler2 = await createUser({ congregationId: cong, role: "Instructor", email: "da-d2@dev.local", fullName: "Dara" });
   const disciple = await createUser({ congregationId: cong, cellGroupId: cell, email: "da-disciple@dev.local", fullName: "Amy" });
-  const minor = await createUser({ congregationId: cong, cellGroupId: cell, email: "da-minor@dev.local", fullName: "Kid", dateOfBirth: "2015-01-01" });
+  const minor = await createUser({ congregationId: cong, cellGroupId: cell, email: "da-minor@dev.local", fullName: "Kid", dateOfBirth: birthDateForAge(11) });
   const outsider = await createUser({ congregationId: cong, role: "Instructor", email: "da-outsider@dev.local", fullName: "Out" });
   const admin = await createUser({ congregationId: cong, role: "Admin", email: "da-admin@dev.local", fullName: "Overseer" });
 

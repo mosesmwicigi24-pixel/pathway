@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { agent, bearer } from "./helpers/app.js";
 import { resetDb, closeTestPool, testPool } from "./helpers/db.js";
-import { createCongregation, createCellGroup, createUser } from "./helpers/factories.js";
+import { createCongregation, createCellGroup, createUser, birthDateForAge } from "./helpers/factories.js";
 
 let cong: string, cell: string;
 let memberId: string, memberTok: string;
@@ -29,7 +29,7 @@ beforeEach(async () => {
   const defaultPastor = await createUser({ congregationId: cong, role: "Instructor", email: "pa-default@dev.local", fullName: "Pastor Default" });
   // SuperAdmin, no explicit assignment to anyone — the last-resort fallback candidate.
   const superAdmin = await createUser({ congregationId: cong, role: "SuperAdmin", email: "pa-super@dev.local", fullName: "Pastor Fallback" });
-  const minor = await createUser({ congregationId: cong, cellGroupId: cell, email: "pa-minor@dev.local", fullName: "Kid", dateOfBirth: "2015-01-01" });
+  const minor = await createUser({ congregationId: cong, cellGroupId: cell, email: "pa-minor@dev.local", fullName: "Kid", dateOfBirth: birthDateForAge(11) });
   const admin = await createUser({ congregationId: cong, role: "Admin", email: "pa-admin@dev.local", fullName: "Overseer" });
 
   memberId = member.user_id; memberTok = bearer({ sub: memberId, role: "Student", cong });

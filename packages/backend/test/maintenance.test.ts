@@ -2,7 +2,7 @@
 // and the nightly is_minor refresh (§2.4, §5.9).
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { resetDb, testPool, closeTestPool } from "./helpers/db.js";
-import { createCongregation, createUser } from "./helpers/factories.js";
+import { createCongregation, createUser, birthDateForAge } from "./helpers/factories.js";
 import { PartitionMaintenance, refreshMinorFlags } from "../src/jobs/maintenance.js";
 
 const partExists = async (name: string): Promise<boolean> =>
@@ -49,7 +49,7 @@ describe("is_minor nightly refresh (§5.9)", () => {
 
   it("repairs a stale is_minor flag in both directions", async () => {
     const cong = await createCongregation();
-    const minor = (await createUser({ congregationId: cong, dateOfBirth: "2015-01-01" })).user_id; // ~child
+    const minor = (await createUser({ congregationId: cong, dateOfBirth: birthDateForAge(11) })).user_id; // ~child
     const adult = (await createUser({ congregationId: cong, dateOfBirth: "1990-01-01", email: "a@dev.local" })).user_id;
 
     // Force the flags stale WITHOUT touching date_of_birth (so the trigger doesn't fix them).
