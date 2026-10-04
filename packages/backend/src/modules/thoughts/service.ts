@@ -9,17 +9,22 @@ import { z } from "zod";
 import { many, maybeOne, recordChange, tx } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 
+// nullish, not optional: Android's kotlinx Json sends every attribute a span
+// doesn't use as null — refusing it refused every formatted Android thought
+// (and the offline replay dropped it). null is "not set", so a stored span
+// looks exactly like one from iOS.
+const absent = <T>(v: T | null | undefined): T | undefined => v ?? undefined;
 const ThoughtSpan = z.object({
   start: z.number().int().min(0),
   end: z.number().int().min(0),
-  bold: z.boolean().optional(),
-  italic: z.boolean().optional(),
-  color: z.string().max(20).optional(),
-  font: z.string().max(60).optional(),
+  bold: z.boolean().nullish().transform(absent),
+  italic: z.boolean().nullish().transform(absent),
+  color: z.string().max(20).nullish().transform(absent),
+  font: z.string().max(60).nullish().transform(absent),
   // Per-span line-height multiplier (1.0 = default, 2.5 = max). Lets a Selah
   // note carry its own line spacing so it round-trips — the global reading
   // spacing preference is applied on top of this at render time.
-  spacing: z.number().min(0.8).max(2.5).optional(),
+  spacing: z.number().min(0.8).max(2.5).nullish().transform(absent),
 });
 
 export interface ThoughtRow {

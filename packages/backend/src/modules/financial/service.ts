@@ -67,11 +67,13 @@ export class FinancialService {
     // gift — like an M-Pesa Paybill account name. Trimmed; empty → absent so
     // behavior is unchanged when the field isn't used. Sanitized separately
     // (providers.ts) before it rides the M-Pesa AccountReference.
+    // nullish, not optional: Android's kotlinx Json sends "account_name": null
+    // for an unnamed gift — refusing it refused every unnamed Android gift.
     account_name: z
       .string()
       .trim()
       .max(60)
-      .optional()
+      .nullish()
       .transform((v) => (v && v.length > 0 ? v : undefined)),
     idempotency_key: z.string().min(8).max(255).optional(),
   });
