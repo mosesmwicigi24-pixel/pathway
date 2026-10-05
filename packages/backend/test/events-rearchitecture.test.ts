@@ -539,6 +539,20 @@ describe("occurrence scoping (§8)", () => {
     expect(home.next_occurrence_id).toBeTruthy();
   });
 
+  it("only a repeating series is offered as a series to follow — a one-off event is an event (EXPERIENCE.md §9.2 #11)", async () => {
+    const oneOff = (await svc().createSeries(principal(admin, "Admin", cong), {
+      title: "Graduation Day",
+      timezone: "Africa/Nairobi",
+      dtstart_local: `${daysFromNow(9)}T10:00:00`,
+      duration_min: 180,
+      visibility: "congregation",
+    })) as { series_id: string };
+    const weekly = await weeklySince70Days("Sunday Classes", "FREQ=WEEKLY");
+    const ids = ((await agent().get("/v1/calendar/series").set(auth(memberTok))).body.data as Array<{ series_id: string }>).map((s) => s.series_id);
+    expect(ids).toContain(weekly.series_id);
+    expect(ids).not.toContain(oneOff.series_id);
+  });
+
   it("Events offers a series that has ended only to a member who follows it; a rare one still counts", async () => {
     const ended = await weeklySince70Days("Ended Classes", "FREQ=WEEKLY;COUNT=3");
     // Meets every 3 months: the next meeting is past Events' 45-day window, but it has not ended.

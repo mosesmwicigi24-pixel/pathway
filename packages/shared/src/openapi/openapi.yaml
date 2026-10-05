@@ -5051,7 +5051,8 @@ paths:
         Followable event series for the member (Events make "Series you
         follow") — cadence, next occurrence, following flag, new count. A
         series that will not meet again (looking two years ahead) is left out,
-        unless the member follows it.
+        unless the member follows it; so is a one-off event, which is not a
+        series to follow.
       responses:
         "200": { description: Series }
         "401": { $ref: "#/components/responses/Unauthorized" }

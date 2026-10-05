@@ -400,6 +400,9 @@ export class CalendarService {
       // follows one still finds it, to unfollow. "Ended" looks two years
       // ahead, not the 45-day window: a quarterly series has not ended.
       .filter((s) => followed.has(s.series_id) || this.nextMeeting(s, now) !== null)
+      // Only a repeating series is a series to follow; a one-off is an event
+      // and lives in the event lists (EXPERIENCE.md §9.2 #11).
+      .filter((s) => followed.has(s.series_id) || Boolean(s.rrule))
       .map((s) => {
         const occ = expandOccurrences(s, now, horizon, 8).filter((o) => new Date(o.start_at) >= now);
         const next = occ[0];
