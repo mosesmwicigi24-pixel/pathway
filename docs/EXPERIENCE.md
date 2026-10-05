@@ -61,8 +61,10 @@ short:
 - No cycle has yet scored every screen on the six questions, or re-walked
   all ten areas after building.
 
-From Cycle 4's close on, rules 1, 2 and 7 are done in full. Cycle 4's
-re-walk also covers what Cycle 3 skipped.
+On the owner's word (2026-10-05) Cycle 3 is finished before Cycle 4. Its
+skipped areas were walked on production's content (§7.4), and it closes with
+the full ten-area re-walk on both apps, every screen scored. From then on,
+rules 1, 2 and 7 are done in full every cycle.
 
 ## 3. The member's journey state (Cycle 1 foundation)
 
@@ -332,6 +334,36 @@ tapping "I've talked it over". Nobody is forced to post. The server rule
 | 15 | Community header (both) | "You're all caught up" beside a bell with unread notices | — | Say what it counts: "No new messages". |
 | 16 | The cell page | Android has no way forward; iOS has "Watch replays" and "Open community". Attendance reads "0/8 · you, this month" on iOS and "48% · last 8 meetings" on Android | 0 of 7 cells have a leader; 37 of 76 members have no cell | Android gets both actions; one attendance figure with the server's meaning, the same words on both. |
 | 17 | Home tab (iOS) | Tapping the Home tab showed a stale "not found" page left in its history | — | Tapping the current tab returns to its top. |
+
+**Decided while building part 2 (both apps say these words):**
+
+- **A post completes Talk it Over on the server** (`8e5341e`). Until now only
+  some app builds completed the part after a post. That is how 14 Android
+  members' posts left their days open (row 1). The apps' own call after a
+  post stays; it is idempotent.
+- **The streak card's tick agrees on every phone.** `/growth/plans` gives
+  each plan's `last_day_finished_at`: the moment the last part of a fully
+  read day was read (`272fba9`). Today is ticked when that falls on today's
+  Nairobi day, or when this phone saw the seal. The count beside it is still
+  the overnight streak (recomputed 04:00), unchanged.
+- **The whole promo page stands all day, fillers included** (`65b8959`).
+  Android saw three pages in three calls: showing a plan counts it, and the
+  filler picked the least-shown. A plan the member has begun is never
+  offered as "FROM THE LIBRARY".
+- **No success before the server says so.** A part's gold button ("I've
+  talked it over", "Finished", "I've read today's Word") waits for the
+  server. On failure the page stays and says "Couldn't save that." with the
+  §4 sentence. iOS used to return to the day first and fail silently.
+- **Starting a plan is one tap:** "Begin Day 1" starts the plan and opens
+  Day 1. Then "Continue · Day N"; a finished plan offers "Read again". A
+  failed start: "Couldn't start this plan" with the §4 sentence.
+- **The featured plan is the server's** first promo the member isn't
+  already reading, with the server's own label. "PLAN OF THE DAY" (the first
+  plan not begun) stands in only when the promos can't load.
+- **Recorded difference:** on Android "Open community" opens the cell's
+  chat room, because Android has no cell board.
+- **Bottom bars clear the gesture bar** (Android: the plan reader, the chat
+  composer and the plan page's buttons sat under it, as Talk's did).
 
 **Owner items found (not app work):** no cell has a leader in production
 (every cell page says "Not assigned yet"); 21 members (28%) passed the
