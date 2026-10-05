@@ -8,6 +8,7 @@ import { z } from "zod";
 import { many, maybeOne, one, recordChange, tx, recordActivityEvent, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { ScoresService } from "../scores/service.js";
+import { GrowthContentService } from "../growth-content/service.js";
 import type { AiProvider } from "../assistant/provider.js";
 
 export interface GiftProfile {
@@ -516,7 +517,7 @@ export class GrowthService {
     dayNumber: number,
     input: z.infer<typeof GrowthService.TalkPost>,
   ): Promise<unknown> {
-    return tx(this.pool, async (c) => {
+    const post = await tx(this.pool, async (c) => {
       await this.assertPlanExists(c, planId);
       const ins = await one<{ post_id: string }>(
         c,
@@ -529,6 +530,40 @@ export class GrowthService {
       await recordActivityEvent(c, userId, "reflection", { oncePerDayTz: "Africa/Nairobi" });
       return one(c, `${GrowthService.TALK_SELECT} WHERE p.post_id = $2`, [userId, ins.post_id]);
     });
+    await this.completeTalkParts(userId, planId, dayNumber);
+    return post;
+  }
+
+  /**
+   * A post in the day's conversation completes that day's Talk it Over. The
+   * owner's rule (2026-10-05): Talk is a required part of a day, completed by a
+   * post or by "I've talked it over" — nobody is forced to post. Until now a
+   * post completed nothing on the server, and only some app builds completed
+   * the part themselves (EXPERIENCE.md §7.4 #1). A day still behind an earlier
+   * one keeps its post and stays open (GATE_LOCKED); any other failure is
+   * logged, never thrown — the member's post already stands.
+   */
+  private async completeTalkParts(userId: string, planId: string, dayNumber: number): Promise<void> {
+    const segments = await many<{ segment_id: string }>(
+      this.pool,
+      `SELECT s.segment_id
+         FROM reading_plan_day_segments s
+         JOIN reading_plan_days d ON d.plan_day_id = s.plan_day_id
+        WHERE d.plan_id = $1 AND d.day_number = $2 AND s.kind = 'talk'`,
+      [planId, dayNumber],
+    );
+    const content = new GrowthContentService(this.pool);
+    for (const { segment_id } of segments) {
+      try {
+        await content.completeSegment(userId, segment_id);
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "GATE_LOCKED") continue;
+        console.error("talk post: the day's Talk it Over part was not completed", {
+          userId, planId, dayNumber, segmentId: segment_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /** Toggle my encouragement heart on a response. */
