@@ -476,7 +476,16 @@ Give, Partners, Community, Profile and Settings on both apps, side by side.
   and the same string in the named face with `ImageRenderer`; the pixels must
   match.
 
-## 9. Journeys (Cycle 5)
+## 9. Cycles 5–10, combined (owner, 2026-10-05: "combine all other cycles")
+
+The six remaining cycles run as **one**: one spec (this section), one build
+round per app, and one closing walk — the full ten areas on both apps, every
+screen scored, every persona's state and the error and offline states — that
+closes the programme. The themes keep their rules: journeys (§9.1–9.2),
+context (§9.3), states under stress (§9.4), one product across both apps
+(§9.5), fewer and better things (§9.6), and the final pass (§9.7).
+
+### Journeys (Cycle 5)
 
 **Every journey has a front door, one next step at a time, and an end the
 member can see — and every promise along it can be kept.** Cycle 5 follows a
@@ -524,6 +533,48 @@ check-in, and finding a cell.
 | 12 | Find your cell (server + both) | "Find your cell" opens Community, which has no way to find a cell — while 37 of 76 members in production have none | **Owner (2026-10-05): "Ask to be connected."** The member says where they live and when they're free ("Ask the church"); it goes to **their own pastor** in their pastoral thread, who assigns the cell with the tools they have. No list of cells or homes is shown. Server: `POST/GET /me/cell-connection` (ed1525d, no schema change). After asking: "Sent to your pastor on ‹date› — they'll connect you · Open the conversation". In a cell: the cell page. A minor: "Ask a parent or guardian to contact the church office." |
 | 13 | Community (both) | Three stacked switchers; the verse of the day repeated | One switcher; the verse once (Home owns it) |
 | 14 | PayPal (Android) | The waiting stage celebrates (Cycle 1 carry) | Never a celebration before the server confirms (§7.3) |
+
+### 9.3 Context (Cycle 6) — the app knows what is true right now
+1. **What is already happening is said first.** A claim the office is
+   checking sits on the DUE row it covers ("KSh 2,000 is being checked by the
+   office"), so nobody pays twice.
+2. **Nothing is urgent before it is.** "DUE" only within the fortnight; further
+   out it is "Coming up · 31 Dec".
+3. **Time of day agrees.** The greeting, the liturgy card and the rhythm say
+   the same part of the day ("Good afternoon" never sits over "EVENING").
+4. **A screen speaks to the member's state**, never a generic default —
+   Ben's, Cara's, Eli's and Ada's Home each lead with their own next step.
+
+### 9.4 States under stress (Cycle 7)
+Every screen is walked in the states production really has: a new member
+(Ben), a paused plan (Cara), behind on a pledge (Dee), awaiting the usher
+(Eli), exam ready (Ada); a failed and a paused recurring gift, a USD pledge
+with a claim being checked, a member with no cell; an empty day; **error and
+offline** on every tab (§4's one state language, captured on both apps); a
+slow network (loading never shows a fake fact). Android's debug build froze on
+a cold launch (Cycle 1) — measured on a local release-mode build, not a store
+build.
+
+### 9.5 One product (Cycle 8)
+1. The same words for the same thing on both apps — every journey word, state
+   line and button; the remaining differences in docs/PARITY.md are closed or
+   recorded with a reason (D-13: the cell board).
+2. The same order of the same things on every tab.
+3. Nothing that one app promises and the other cannot keep.
+
+### 9.6 Fewer, better things (Cycle 9)
+1. A card that repeats another card goes.
+2. Dead routes and screens go (Android `CommunityHubScreen`, PARITY D-12), each
+   with its evidence that nothing reaches it.
+3. One way to do each thing (You → Community's three switchers become one).
+4. Text grows with the phone's text size without cutting (a test at the
+   largest size on both apps).
+
+### 9.7 The final pass (Cycle 10)
+The closing walk: all ten areas on both apps, every screen scored on the six
+questions and the §8.1 rules, every persona's state, error and offline on
+every tab. Done when no question fails for a reason this programme can fix,
+and what remains is listed for the owner.
 
 ## 5. Cycle log
 
