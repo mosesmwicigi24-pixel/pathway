@@ -7007,7 +7007,12 @@ paths:
   /growth/plans:
     get:
       tags: [progress]
-      summary: Reading plans with my enrollment + progress.
+      summary: >-
+        Reading plans with my enrollment + progress. Each row carries
+        `last_day_finished_at` — when I last finished a day of the plan (the
+        moment the last part of a fully-read day was read), null when no day is
+        finished. The Plans streak card ticks today from it, so a day finished
+        on one device is ticked on every device.
       responses:
         "200": { description: Plans }
         "401": { $ref: "#/components/responses/Unauthorized" }

@@ -148,14 +148,30 @@ export class GrowthContentService {
   // ---- Reading plans ----
 
   async plans(userId: string): Promise<{ data: unknown[] }> {
+    // last_day_finished_at — when the member last finished a day of the plan:
+    // the moment the last part of a fully-read day was read. The Plans streak
+    // card ticks today from it, so a day finished on one phone is ticked on
+    // every phone (EXPERIENCE.md §7.4 #4); it used to be remembered only by
+    // the phone that saw the day seal.
     const data = await many(
       this.pool,
       `SELECT p.plan_id, p.code, p.title, p.subtitle, p.description, p.category, p.day_count,
               p.image_url,
               pr.current_day, pr.completed_days, (pr.user_id IS NOT NULL) AS enrolled,
-              pr.completed_at
+              pr.completed_at, lf.last_day_finished_at
          FROM reading_plans p
          LEFT JOIN reading_plan_progress pr ON pr.plan_id = p.plan_id AND pr.user_id = $1
+         LEFT JOIN LATERAL (
+           SELECT max(day_done.finished_at) AS last_day_finished_at
+             FROM (SELECT max(sp.completed_at) AS finished_at
+                     FROM reading_plan_days d
+                     JOIN reading_plan_day_segments s ON s.plan_day_id = d.plan_day_id
+                     LEFT JOIN reading_plan_segment_progress sp
+                            ON sp.segment_id = s.segment_id AND sp.user_id = $1
+                    WHERE d.plan_id = p.plan_id AND pr.user_id IS NOT NULL
+                    GROUP BY d.plan_day_id
+                   HAVING count(sp.user_id) = count(*)) day_done
+         ) lf ON true
         WHERE p.is_active
         ORDER BY p.sort, p.title`,
       [userId],
