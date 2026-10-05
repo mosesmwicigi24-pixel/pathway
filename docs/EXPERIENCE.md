@@ -31,6 +31,39 @@ A screen that cannot answer one of these in a glance is not finished.
 - **Promise only what works.** A screen never names a feature, payment rail
   or step the member cannot actually use.
 
+## 2a. How every cycle runs (the owner's rules, as a checklist)
+
+1. **Walk all ten areas, in order, on both apps:** Home → Pathway → Plans →
+   Events → Give → Partners & giving history → Cell & Community → You &
+   Profile → notifications, announcements & supporting journeys → shared
+   components and states. The cycle's theme decides what to look for; it
+   never shortens the walk.
+2. **Score every screen on the six questions** (§1): one line per question,
+   or "fails".
+3. **Spec first:** this document gets the cycle's rules and a numbered
+   change table (seen → change), in the same words for both apps.
+4. **Contract first:** a server change ships additive and absent-safe before
+   the apps read it.
+5. **Build both apps** from that one spec.
+6. **Verify on screen:** before and after screenshots of every change on
+   both apps, and green test suites.
+7. **Re-walk from Home:** the full ten-area walk again on both apps, scored
+   again. Anything new goes into the next cycle's list.
+8. **Record** the cycle in §5: built, seen, found, carried.
+9. **The gates never move.** Business rules, money, permissions and the
+   server's authority are untouched. Merging (which deploys), production data
+   writes and store builds wait for the owner's YES.
+
+**Audit, 2026-10-05.** Cycles 1–3 kept rules 3–6, 8 and 9. Two places fell
+short:
+- Cycle 3's walk skipped Plans' reading flow, giving history (receipts and
+  statements), announcements and the cell page.
+- No cycle has yet scored every screen on the six questions, or re-walked
+  all ten areas after building.
+
+From Cycle 4's close on, rules 1, 2 and 7 are done in full. Cycle 4's
+re-walk also covers what Cycle 3 skipped.
+
 ## 3. The member's journey state (Cycle 1 foundation)
 
 Derived once per app from `GET /me/pathway` (the CURRENT level's row:
