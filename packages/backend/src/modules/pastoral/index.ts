@@ -7,11 +7,31 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate, requireRole, requirePasswordStepUp } from "../../http/auth.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
 import { PastoralService } from "./service.js";
+import { CellConnection, CellRequestService } from "./cellRequest.js";
 
 export function registerPastoral(ctx: AppContext): Router {
   const svc = new PastoralService(ctx.db.primary);
   const auth = authenticate(ctx.env);
   const r = Router();
+
+  // "Ask to be connected" to a cell (EXPERIENCE.md §9.2 #12): the member's own
+  // request, into their own pastoral thread — see cellRequest.ts.
+  const cells = new CellRequestService(ctx.db.primary);
+  r.get(
+    "/me/cell-connection",
+    auth,
+    handler(async (req, res) => {
+      res.json(await cells.status(requirePrincipal(req).userId));
+    }),
+  );
+  r.post(
+    "/me/cell-connection",
+    auth,
+    handler(async (req, res) => {
+      const input = parseBody(CellConnection, req.body ?? {});
+      res.status(201).json(await cells.ask(requirePrincipal(req).userId, input));
+    }),
+  );
 
   // Member-facing: create-or-open MY thread with my CURRENT pastor. No
   // step-up here — this is the owner's own conversation, not oversight into

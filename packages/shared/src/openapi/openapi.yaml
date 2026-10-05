@@ -8234,6 +8234,30 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /me/cell-connection:
+    get:
+      tags: [chat]
+      summary: >-
+        Member. "Ask to be connected" to a cell — `{ in_cell, request }`, where
+        `request` is `{ requested_at, conversation_id }` for the member's latest
+        request (null when none, or when already in a cell).
+      responses:
+        "200": { description: Status }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [chat]
+      summary: >-
+        Member. Ask to be connected to a cell (`{ area, availability, note?,
+        client_mutation_id }`). Posts the request into the member's own
+        pastoral thread, to their pastor — no list of cells or homes is shown
+        to members. Idempotent on `client_mutation_id`. 409 when already in a
+        cell; 422 (in words) for a minor or when no pastor can receive it.
+      responses:
+        "201": { description: "Asked — { conversation_id, requested_at }" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: Already in a cell }
+        "422": { description: "Cannot be sent this way: a minor, or no pastor yet" }
   /chat/pastoral:
     post:
       tags: [progress]
