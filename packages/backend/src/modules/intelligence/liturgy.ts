@@ -36,6 +36,7 @@ import { personalTouch } from "./personalLiturgy.js";
 import type { AiProvider } from "../assistant/provider.js";
 import { LITURGY_SYSTEM } from "./prompts.js";
 import { markQuotesUsed, selectQuoteCandidates, type TeachingQuote } from "./teachingQuotes.js";
+import { natureArt } from "./nature.js";
 
 /** The legacy four-window clock label — kept ONLY for current().part, which
  *  existing clients read expecting exactly these four strings. Computed by
@@ -778,7 +779,7 @@ export class LiturgyService {
       is_sunday: isSunday,
       line: personalLine ?? line.line,
       scripture_ref: personalLine ? null : line.scripture,
-      art: pickBandArt("liturgy", band, dayKey),
+      art: natureArt("liturgy", now, { season }),
       charge,
       verse_line: verseLine,
       recorded_audio_url: recordedUrl,
