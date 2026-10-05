@@ -99,7 +99,7 @@ describe("plan promos earn their place", () => {
     expect(cellSlot.reason).toContain("2 people in your cell");
   });
 
-  it("memory: a plan just promoted is rested, and the least-shown rises", async () => {
+  it("memory: today's pick stands all day; the next day it rests and the least-shown rises", async () => {
     const cong = await createCongregation();
     const u = await createUser({ congregationId: cong, email: "g@dev.local" });
     const a = await plan("p1", "Plan A", "Growth", 1);
@@ -109,8 +109,15 @@ describe("plan promos earn their place", () => {
     expect(first).toHaveLength(1);
     expect(first[0]!.plan_id).toBe(a);               // library order on a blank slate
 
+    // Later the same day — another visit, or the other app: the same pick
+    // (it used to rotate per request; EXPERIENCE.md §7.4 #5).
+    const again = await planPromos(testPool(), u.user_id, 1);
+    expect(again[0]!.plan_id).toBe(a);
+
+    // The next day A is resting, so B gets its turn.
+    await testPool().query(`UPDATE plan_promo_log SET last_shown_on = last_shown_on - 1 WHERE user_id = $1`, [u.user_id]);
     const second = await planPromos(testPool(), u.user_id, 1);
-    expect(second[0]!.plan_id).toBe(b);              // A was just shown — B's turn
+    expect(second[0]!.plan_id).toBe(b);
 
     const log = await testPool().query<{ plan_id: string; times_shown: number }>(
       `SELECT plan_id, times_shown FROM plan_promo_log WHERE user_id = $1 ORDER BY plan_id`,

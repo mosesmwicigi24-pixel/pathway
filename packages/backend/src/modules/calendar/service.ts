@@ -542,6 +542,21 @@ export class CalendarService {
       }
       turnout = { rate: Math.round(avg(past) * 100) / 100, meetings: past.length, trend };
     }
+    // The member's own part in those same meetings. `attendance.expected` is
+    // a scoring baseline (cell_groups.meeting_cadence, "expected check-ins /
+    // 30d", 8 everywhere), not the cell's schedule — "0/8 this month" set a
+    // target a weekly cell never reaches. This counts real meetings
+    // (EXPERIENCE.md §7.4 #16).
+    let you: { attended: number; meetings: number } | null = null;
+    if (past.length > 0) {
+      const mine = await one<{ n: number }>(
+        this.pool,
+        `SELECT count(DISTINCT a.event_id)::int AS n FROM attendance_logs a
+          WHERE a.user_id = $1 AND a.event_id = ANY($2::varchar[])`,
+        [userId, past.map((p) => p.event_id)],
+      );
+      you = { attended: mine.n, meetings: past.length };
+    }
     // Leader view: only for this cell's leader, and only once two recent
     // meetings exist to judge against — first names of members who missed both.
     const isCellLeader = cell.leader_user_id === userId || scope.leaderCells.includes(me.cell_group_id);
@@ -565,7 +580,7 @@ export class CalendarService {
         name: cell.name,
         members: members.n,
         leader: leaderName ? { name: leaderName, role: cell.discipler_role, avatar_url: cell.leader_avatar_url } : null,
-        attendance: { attended: attended.n, expected: cell.meeting_cadence },
+        attendance: { attended: attended.n, expected: cell.meeting_cadence, you },
         next,
         focus: cell.focus,
         level_label: cell.level_label,

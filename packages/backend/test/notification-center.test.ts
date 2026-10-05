@@ -40,6 +40,21 @@ describe("notification center (D1)", () => {
     expect(res.body.data.map((n: { template: string }) => n.template)).not.toContain("nudge");
   });
 
+  it("keeps a notice out of the inbox until it is due (EXPERIENCE.md §7.4 #13)", async () => {
+    // An RSVP schedules its reminders days ahead; they appeared at once, as "now".
+    await testPool().query(
+      `INSERT INTO notifications (user_id, channel, template, payload, status, scheduled_for) VALUES
+        ($1,'push','event_reminder_1h','{"title":"Sunday Service"}','scheduled', now() + interval '6 days'),
+        ($1,'push','event_reminder_24h','{"title":"Sunday Service"}','scheduled', now() - interval '1 minute')`,
+      [me],
+    );
+    const res = await agent().get("/v1/me/notifications").set(auth(meTok));
+    const templates = res.body.data.map((n: { template: string }) => n.template);
+    expect(templates).not.toContain("event_reminder_1h"); // six days away
+    expect(templates.filter((t: string) => t === "event_reminder_24h")).toHaveLength(2); // due, even if not sent yet
+    expect(res.body.unread).toBe(2); // only sent notices count
+  });
+
   it("marks all read idempotently; unread drops to zero", async () => {
     const first = await agent().post("/v1/me/notifications/read").set(auth(meTok)).send({});
     expect(first.body.marked).toBe(2);

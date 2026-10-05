@@ -402,14 +402,19 @@ export class AnnouncementService {
   async memberDetail(userId: string, id: string): Promise<unknown> {
     const row = await maybeOne(
       this.pool,
+      // Any recipient may read it, whichever channel reached them: a push-
+      // or email-only announcement's notice used to open "not found" for the
+      // very people it was sent to (EXPERIENCE.md §7.4 #10). One row per
+      // announcement however many channels delivered it.
       `SELECT a.announcement_id, a.title, a.body, a.sent_at, a.banner_expires_at,
               a.primary_image_url, a.gallery_image_urls, a.video_url,
-              d.opened_at IS NOT NULL AS opened
+              bool_or(d.opened_at IS NOT NULL) AS opened
          FROM announcement_deliveries d
          JOIN announcements a USING (announcement_id)
-        WHERE d.user_id = $1 AND d.channel = 'banner' AND a.status = 'sent' AND a.deleted_at IS NULL
+        WHERE d.user_id = $1 AND a.status = 'sent' AND a.deleted_at IS NULL
           AND a.archived_at IS NULL
-          AND a.announcement_id = $2`,
+          AND a.announcement_id = $2
+        GROUP BY a.announcement_id`,
       [userId, id],
     );
     if (!row) throw new ApiError("NOT_FOUND", "Announcement not found");
@@ -571,6 +576,14 @@ export class AnnouncementService {
       [announcementId, userId],
     );
     if (known.n === 0) throw new ApiError("NOT_FOUND", "Announcement not found for this member");
+    // Reading the announcement reads its notices too — the bell kept its dot
+    // for something already read (EXPERIENCE.md §7.4 #11).
+    await this.pool.query(
+      `UPDATE notifications SET read_at = now()
+        WHERE user_id = $1 AND status = 'sent' AND read_at IS NULL
+          AND template LIKE 'announcement%' AND payload->>'announcement_id' = $2`,
+      [userId, announcementId],
+    );
     return { opened: (res.rowCount ?? 0) > 0 };
   }
 

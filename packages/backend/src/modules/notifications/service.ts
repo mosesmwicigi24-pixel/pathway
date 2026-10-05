@@ -167,7 +167,9 @@ export class NotificationService {
                          OVER (PARTITION BY template, payload, date_trunc('minute', scheduled_for))
                        THEN NULL ELSE read_at END AS read_at
              FROM notifications
-            WHERE user_id = $1 AND status <> 'suppressed'
+            -- A notice appears once it is due: an event's reminders were in
+            -- the inbox days early, as "now" (EXPERIENCE.md §7.4 #13).
+            WHERE user_id = $1 AND status <> 'suppressed' AND scheduled_for <= now()
             ORDER BY template, payload, date_trunc('minute', scheduled_for), (channel = 'push') DESC, (status = 'sent') DESC, notification_id
          ) one_per_notice
         ORDER BY scheduled_for DESC, notification_id
