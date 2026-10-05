@@ -11,7 +11,7 @@ import { many, maybeOne, one, tx, recordChange, audit, enqueueOutbox, type Query
 import { ApiError } from "../../http/errors.js";
 import { assertCellInScope } from "../../http/auth.js";
 import type { Principal } from "../../http/http.js";
-import { validateRrule, expandOccurrences, type Occurrence } from "./recurrence.js";
+import { validateRrule, expandOccurrences, type Occurrence, type SeriesSpec } from "./recurrence.js";
 import { NotificationService } from "../notifications/service.js";
 
 const MAX_RANGE_DAYS = 92;
@@ -395,6 +395,14 @@ export class CalendarService {
     const horizon = new Date(now.getTime() + 45 * 86_400_000);
     const soon = new Date(now.getTime() + 14 * 86_400_000);
     return series
+      // A series that will not meet again is not offered — Events listed five
+      // ended series with "Follow" (Cycle 3's closing walk). A member who
+      // follows one still finds it, to unfollow. "Ended" looks two years
+      // ahead, not the 45-day window: a quarterly series has not ended.
+      .filter((s) => followed.has(s.series_id) || this.nextMeeting(s, now) !== null)
+      // Only a repeating series is a series to follow; a one-off is an event
+      // and lives in the event lists (EXPERIENCE.md §9.2 #11).
+      .filter((s) => followed.has(s.series_id) || Boolean(s.rrule))
       .map((s) => {
         const occ = expandOccurrences(s, now, horizon, 8).filter((o) => new Date(o.start_at) >= now);
         const next = occ[0];
@@ -542,6 +550,21 @@ export class CalendarService {
       }
       turnout = { rate: Math.round(avg(past) * 100) / 100, meetings: past.length, trend };
     }
+    // The member's own part in those same meetings. `attendance.expected` is
+    // a scoring baseline (cell_groups.meeting_cadence, "expected check-ins /
+    // 30d", 8 everywhere), not the cell's schedule — "0/8 this month" set a
+    // target a weekly cell never reaches. This counts real meetings
+    // (EXPERIENCE.md §7.4 #16).
+    let you: { attended: number; meetings: number } | null = null;
+    if (past.length > 0) {
+      const mine = await one<{ n: number }>(
+        this.pool,
+        `SELECT count(DISTINCT a.event_id)::int AS n FROM attendance_logs a
+          WHERE a.user_id = $1 AND a.event_id = ANY($2::varchar[])`,
+        [userId, past.map((p) => p.event_id)],
+      );
+      you = { attended: mine.n, meetings: past.length };
+    }
     // Leader view: only for this cell's leader, and only once two recent
     // meetings exist to judge against — first names of members who missed both.
     const isCellLeader = cell.leader_user_id === userId || scope.leaderCells.includes(me.cell_group_id);
@@ -565,7 +588,7 @@ export class CalendarService {
         name: cell.name,
         members: members.n,
         leader: leaderName ? { name: leaderName, role: cell.discipler_role, avatar_url: cell.leader_avatar_url } : null,
-        attendance: { attended: attended.n, expected: cell.meeting_cadence },
+        attendance: { attended: attended.n, expected: cell.meeting_cadence, you },
         next,
         focus: cell.focus,
         level_label: cell.level_label,
@@ -1551,18 +1574,41 @@ export class CalendarService {
     });
   }
 
-  /** The single homepage-featured event for the mobile Home screen (or null). */
+  /** The single homepage-featured event for the mobile Home screen (or null).
+   *  Only a series that meets again: Home used to feature one that had ended,
+   *  at its FIRST date ("Sun, Aug 30" five weeks after the last class —
+   *  EXPERIENCE.md, Cycle 3's closing walk on both apps). `next_at` is the
+   *  next meeting; `dtstart_local` stays as it was for builds already out. */
   async featuredEvent(congregationId: string | null): Promise<unknown | null> {
-    return (
-      (await maybeOne(
-        this.pool,
-        `SELECT series_id, title, description, location, category, primary_image_url, gallery_image_urls, dtstart_local
-           FROM event_series
-          WHERE is_featured = true AND deleted_at IS NULL AND congregation_id = $1
-          LIMIT 1`,
-        [congregationId],
-      )) ?? null
+    const s = await maybeOne<Record<string, unknown> & {
+      series_id: string; timezone: string; dtstart_wall: string; duration_min: number; rrule: string | null;
+    }>(
+      this.pool,
+      `SELECT series_id, title, description, location, category, primary_image_url, gallery_image_urls, dtstart_local,
+              timezone, to_char(dtstart_local, 'YYYY-MM-DD"T"HH24:MI:SS') AS dtstart_wall, duration_min, rrule
+         FROM event_series
+        WHERE is_featured = true AND deleted_at IS NULL AND status = 'active' AND is_paused = FALSE
+          AND congregation_id = $1
+        LIMIT 1`,
+      [congregationId],
     );
+    if (!s) return null;
+    const { timezone, dtstart_wall, duration_min, rrule, ...card } = s;
+    const next = this.nextMeeting({ timezone, dtstart_local: dtstart_wall, duration_min, rrule }, new Date());
+    if (!next) return null;
+    return {
+      ...card,
+      next_at: next.start_at,
+      next_end_at: next.end_at,
+      next_occurrence_id: occurrenceId(s.series_id, next.start_at),
+    };
+  }
+
+  /** When a series next meets — looking two years ahead, so a yearly series
+   *  still counts — or null when it will not meet again. */
+  private nextMeeting(s: SeriesSpec, now: Date): Occurrence | null {
+    const horizon = new Date(now.getTime() + 2 * 366 * 86_400_000);
+    return expandOccurrences(s, now, horizon, 2).find((o) => new Date(o.start_at) >= now) ?? null;
   }
 
   // ---------------- Home "Upcoming events" list (up to 5, portal-curated) ----------------

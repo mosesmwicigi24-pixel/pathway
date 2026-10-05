@@ -65,6 +65,8 @@ describe("Discipleship Hub", () => {
       // A level-2 curriculum: 2 published modules, one completed.
       const m1 = await createModule(2, 1, { title: "L2 M1" });
       await createModule(2, 2, { title: "L2 M2" });
+      // The level's exam container is never counted as a module (EXPERIENCE.md §8.2 #4).
+      await createModule(2, 900, { title: "L2 Exam", evaluationKind: "exit_exam" });
       await completeModule(student, m1);
 
       const hub = await svc().myHub(student);

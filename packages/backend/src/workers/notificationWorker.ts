@@ -27,10 +27,15 @@ export class NotificationWorker {
         payload: Record<string, unknown>;
         email: string | null;
         phone_number: string | null;
+        sound_enabled: boolean;
       }>(
         c,
-        `SELECT n.notification_id, n.user_id, n.channel, n.template, n.payload, u.email, u.phone_number
+        // Whether the member's pushes make a sound (migration 223) — on for
+        // a member with no preferences row.
+        `SELECT n.notification_id, n.user_id, n.channel, n.template, n.payload, u.email, u.phone_number,
+                COALESCE(np.sound_enabled, TRUE) AS sound_enabled
            FROM notifications n JOIN users u ON u.user_id = n.user_id
+           LEFT JOIN notification_preferences np ON np.user_id = n.user_id
           WHERE n.status = 'scheduled' AND n.scheduled_for <= now()
           ORDER BY n.scheduled_for
           FOR UPDATE OF n SKIP LOCKED
@@ -92,7 +97,7 @@ export class NotificationWorker {
               }
             }
           }
-          await this.provider.send({ channel: r.channel, to, template: r.template, payload: r.payload });
+          await this.provider.send({ channel: r.channel, to, template: r.template, payload: r.payload, sound: r.sound_enabled });
           await c.query(`UPDATE notifications SET status = 'sent', sent_at = now() WHERE notification_id = $1`, [
             r.notification_id,
           ]);

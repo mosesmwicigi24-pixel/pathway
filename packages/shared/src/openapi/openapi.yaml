@@ -1065,12 +1065,15 @@ paths:
         published levels, plus every level at or below the member's own (a
         drafted level hides only the road ahead).
       responses:
-        "200": { description: "Pathway summary — { current_level, levels: [{ level_number, title, theme, description, total_modules, completed_modules, minutes, status, awaiting_review }] }" }
+        "200": { description: "Pathway summary — { current_level, levels: [{ level_number, title, theme, description, total_modules, completed_modules, minutes, status, awaiting_review, exam_published, exam_available, lessons_total, lessons_completed }] }. lessons_total / lessons_completed count lessons only — the exam is a step of its own, never a module (total_modules / completed_modules include the published exam container and stay as they are for older apps). exam_published: an admin has published the level's exam. exam_available: it is published AND has at least one active question in a published module — the only exam a member can take (a published exam with no questions answers 422); apps offer the exam only when this is true." }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /levels/{n}/modules:
     get:
       tags: [curriculum]
-      summary: Modules for a level; locked ones return metadata + locked:true.
+      summary: >-
+        Modules for a level; locked ones return metadata + locked:true. The level's
+        exam row (evaluation_kind exit_exam, shown once the exam is published) also
+        carries exam_available — false while the exam has no active questions.
       parameters:
         - { name: n, in: path, required: true, schema: { type: integer, minimum: 1 } }
       responses:
@@ -1228,10 +1231,11 @@ paths:
                 exam_show_answers: { type: boolean }
                 exam_show_score: { type: boolean }
                 exam_shuffle: { type: boolean, description: Randomize answer-choice order at delivery (default true). }
-                exam_status: { type: string, enum: [review, published], description: "Publish gate — the exam is member-visible/takeable only when 'published'." }
+                exam_status: { type: string, enum: [review, published], description: "Publish gate — the exam is member-visible/takeable only when 'published'. Moving an exam INTO 'published' with no active question in a published module of the level is refused (422)." }
       responses:
         "200": { description: Configured }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /admin/levels/{n}/modules:
     get:
       tags: [curriculum]
@@ -1625,7 +1629,7 @@ paths:
   /levels/{n}/exam:
     get:
       tags: [assessment]
-      summary: Assemble the level exit exam from the level's active question pool.
+      summary: Assemble the level exit exam from the level's active question pool — with `question_count` and `pass_mark` (percent) for the exam's front door.
       parameters:
         - { name: n, in: path, required: true, schema: { type: integer } }
       responses:
@@ -2637,10 +2641,40 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { description: "RATE_LIMITED — this gift has been polled too often." }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+  /giving/methods:
+    get:
+      tags: [giving]
+      summary: "The rails this member can give with here (Giving Cycle 1): currency, limits, whether a recurring gift can run on it, the number on file for a prompt, and which to start on. Draw the method list from this; never offer a rail with enabled false as if it could take money."
+      responses:
+        "200":
+          description: Methods
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GivingMethods" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /giving/intents:
     post:
       tags: [giving]
       summary: Create a payment intent (card via Stripe → client secret; mpesa/airtel → STK push). Idempotent.
+      description: >-
+        Checked before any phone rings (Giving Cycle 1): the method must be enabled
+        here (422 METHOD_UNAVAILABLE), in its own currency — M-Pesa KES, PayPal USD
+        (422 METHOD_CURRENCY) — inside its limits, whole shillings for M-Pesa
+        (422 AMOUNT_OUT_OF_RANGE, details min_minor/max_minor or step_minor), with a
+        real Kenyan mobile number for mobile money (422 PHONE_REQUIRED). A member's
+        own M-Pesa prompt from the last 90 seconds still unanswered refuses a second
+        one (409 GIFT_IN_PROGRESS, details.transaction_id) — a replay with the SAME
+        idempotency_key is not refused; it returns that transaction, with provider
+        and provider_ref (null while the prompt is still being sent) — and, for a
+        PayPal order still waiting, its approve_url again (Giving Cycle 10), so an
+        app that lost the first answer can reopen the approval page. Giving Cycle
+        6: the gift's row is claimed under a per-member lock BEFORE the phone
+        rings, so a resend or a double tap can never ring twice or lose a row; a
+        prompt that could not be sent leaves no row. A prompt to a number that is
+        not the member's own is limited (429 RATE_LIMITED). A gift toward a
+        pledge or a department need is in THAT pledge's or need's currency (422
+        CURRENCY_MISMATCH, details.expected — Cycle 5: a USD gift used to add its
+        cents to a KES pledge's shillings).
       requestBody:
         required: true
         content:
@@ -2653,12 +2687,34 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/GivingIntentResult" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "400": { description: "VALIDATION_FAILED — also an idempotency_key in the server's own namespaces (sched:, claim:, pledge:, web:, website:, office:)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "GIFT_IN_PROGRESS — a prompt from a moment ago is still waiting on the member's phone; CONFLICT — the idempotency_key is another gift's (send a fresh key)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { description: "RATE_LIMITED — several prompts have gone to that number (not the member's own) just now; details.retry_after_sec says when to try again. The number's allowance is shared with the website's donate button.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "503": { $ref: "#/components/responses/UpstreamUnavailable" }
   /giving/schedules:
     post:
       tags: [giving]
       summary: Create a recurring giving schedule (weekly/monthly). The SERVER charges each cycle; managed online-only (money never queues offline).
+      description: >-
+        Recurring gifts run on mobile money (Giving Cycle 1): a card or PayPal
+        schedule is refused (422 METHOD_UNAVAILABLE), as are the wrong currency,
+        amounts outside the rail's limits and a missing or invalid number (same
+        codes as /giving/intents). The same gift sent twice within ten minutes (a
+        double tap with two fresh keys) is ONE schedule — the second answer carries
+        reused true and duplicate_of; the same gift while one already exists is
+        409 SCHEDULE_EXISTS with details.schedule_id. A charge's REAL outcome (paid,
+        declined, unreachable…) comes back from M-Pesa later: declines count toward
+        three strikes (then paused, the member told why); a phone that never got the
+        prompt is tried once more that day, 08:00–20:00 EAT. A schedule bound to a
+        pledge (pledge_id) must be in the pledge's currency (422 CURRENCY_MISMATCH,
+        details.expected) and collects it (Cycle 5): each cycle asks what the
+        pledge still owes before the next cycle, skips a cycle already paid (push
+        giving_schedule_covered), and stops when the pledge is fulfilled, ends
+        (until_on) or is cancelled (push giving_schedule_stopped) — a total pledge
+        that reaches its target is fulfilled at once. With first_charge "now" the
+        first prompt asks the same; when nothing is owed first_charge is null and
+        first_charge_error says so.
       requestBody:
         required: true
         content:
@@ -2667,13 +2723,56 @@ paths:
       responses:
         "201": { description: Schedule created }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: "SCHEDULE_EXISTS — the same recurring gift already exists; change it instead", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "422": { $ref: "#/components/responses/Unprocessable" }
     get:
       tags: [giving]
-      summary: My recurring giving schedules.
+      summary: "My recurring giving schedules. Each carries phone_number (the schedule's own number, null = the profile's), retry_at (a retry of the current cycle, when armed), last_failure (a GiftFailure while the schedule is failing, else null), (Cycle 4) pause_reason (failures | member | pledge), resume_on, heads_up and anchor_day, and (Cycle 5) pledge — {pledge_id, title} of the pledge it collects, else null — and next_amount_minor: what the next prompt will ask. A schedule that collects a pledge asks only what the pledge still owes before the following cycle (never more than amount_minor; whole shillings on M-Pesa), so next_amount_minor may be below amount_minor, and is 0 when the pledge is already paid for that cycle (the prompt is skipped and the member told). Null when no prompt is coming (paused, cancelled, or stopping with its pledge)."
       responses:
         "200": { description: Schedules }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /giving/schedules/{id}:
+    patch:
+      tags: [giving]
+      summary: "Change one of my recurring gifts instead of cancelling it (Giving Cycle 4): amount (from the next cycle; checked like a new gift; a twin of another gift is 409 SCHEDULE_EXISTS), day (monthly 1–31, weekly 0–6 with Sunday 0 — the pending prompt moves to that day WITHIN ITS OWN month or Monday–Sunday week, so a period already given is never asked twice (Cycle 5); in prompt hours), phone_number (null = back to the profile number), heads_up. A schedule collecting a MONTHLY pledge takes its amount and day from the pledge: changing either here is 422 UNPROCESSABLE with details.pledge_id — change the pledge (PATCH /giving/pledges/{id}) and the schedule follows. Answers the schedule row."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount_minor: { type: integer, format: int64 }
+                day: { type: integer, minimum: 0, maximum: 31 }
+                phone_number: { type: [string, "null"] }
+                heads_up: { type: boolean }
+      responses:
+        "200": { description: "The schedule, as GET /giving/schedules lists it" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "SCHEDULE_EXISTS", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /giving/schedules/{id}/pause:
+    post:
+      tags: [giving]
+      summary: "Pause one of my active recurring gifts myself (Giving Cycle 4), optionally until resume_on (a Nairobi date from tomorrow to a year ahead), when it resumes on its own at its next occurrence."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                resume_on: { type: [string, "null"], format: date }
+      responses:
+        "200": { description: Paused }
+        "400": { description: "VALIDATION_FAILED — resume_on not from tomorrow to a year ahead", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /giving/schedules/{id}/cancel:
     post:
       tags: [giving]
@@ -3370,7 +3469,8 @@ paths:
         "404": { description: Not found }
     patch:
       tags: [giving]
-      summary: Member. Pause, resume, cancel, rename or edit a pledge; a bound schedule follows.
+      summary: "Member. Pause, resume, cancel, rename or edit a pledge; every schedule collecting it follows (Cycle 5): cancelled → cancelled, paused → paused (reason pledge), resumed → only schedules the PLEDGE paused resume; a monthly pledge's new amount_minor / due_day move its monthly schedules too (an amount M-Pesa can't take is 422 AMOUNT_OUT_OF_RANGE and nothing changes)."
+
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -3399,6 +3499,11 @@ paths:
     post:
       tags: [giving]
       summary: Member. "I paid another way" — the office confirms before it counts.
+      description: >-
+        Cycle 5: in the pledge's own currency (422 CURRENCY_MISMATCH,
+        details.expected), paid today or within the last year in Nairobi (422
+        INVALID_DATE), told once — the same amount and day already waiting is
+        409 CONFLICT — and at most five waiting per pledge (409 CONFLICT).
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -3417,10 +3522,12 @@ paths:
         "201": { description: Claim (pending) }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: Pledge not found }
+        "409": { description: "CONFLICT — already told, or five already waiting", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "CURRENCY_MISMATCH | INVALID_DATE", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /admin/partners/claims:
     get:
       tags: [system]
-      summary: Admin. Pending "I paid another way" claims.
+      summary: Admin. Pending "I paid another way" claims — each with pledge_currency and currency_mismatch (Giving Cycle 7; a mismatched claim can only be rejected).
       responses:
         "200": { description: Claims }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
@@ -3434,7 +3541,7 @@ paths:
         "200": { description: Confirmed }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { description: Not found }
-        "422": { description: Already decided }
+        "422": { description: "Already decided; or CURRENCY_MISMATCH — an older claim in another currency than its pledge can only be rejected (Cycle 5)" }
   /admin/partners/claims/{id}/reject:
     post:
       tags: [system]
@@ -3449,7 +3556,7 @@ paths:
   /admin/partners/remind-behind:
     post:
       tags: [system]
-      summary: Admin. Remind every partner with a pledge that is behind — spaced 12 h from any other reminder.
+      summary: Admin. Remind every partner with a pledge that is behind — spaced 12 h from any other reminder; a pledge whose automatic collection failed in the last 36 h is skipped (the member was just told why — Giving Cycle 7).
       responses:
         "200": { description: Counts }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
@@ -3758,7 +3865,22 @@ paths:
   /admin/finance/schedules:
     get:
       tags: [portal]
-      summary: "finance:view. Recurring giving with collection health — member, amount, method, status, next run, consecutive_failures, last_error and needs_attention. Ordered paused first, then most failures, then soonest due. Optional ?status=active|paused|cancelled, ?attention=true (only the ones needing attention — paused, or with a consecutive failure; never cancelled) and ?limit (max 200)."
+      summary: "finance:view. Recurring giving with collection health — member, amount, method, status, next run, consecutive_failures, last_error and needs_attention. Ordered needs-attention first, then paused, then most failures, then soonest due. Optional ?status=active|paused|cancelled, ?attention=true (only the ones needing attention; never cancelled) and ?limit (max 200)."
+      description: >-
+        Giving Cycle 7: needs_attention is ONE server rule (constants.ts
+        SCHEDULE_ATTENTION_SQL, also the Overview's failing_schedules alert):
+        failing (consecutive_failures > 0), stopped after failed prompts (paused,
+        pause_reason failures or unknown), or our own outage — the last prompt
+        could not be SENT in the past 24 hours (last_error with no
+        last_failure_code). A member's own pause and a pause that follows a
+        paused pledge are NOT attention. Each row also carries fund_name,
+        last_failure (GiftFailure words, while failing), office_alert (our side
+        — the giver was not told), pause_reason, resume_on, heads_up,
+        prompt_number (the schedule's own number; null = the profile's),
+        retry_at, pledge ({pledge_id, title} it collects, or null) and
+        next_amount_minor (what the next prompt asks: below amount_minor when
+        its pledge is part paid, 0 when already paid, null when nothing is
+        coming).
       parameters:
         - { name: status, in: query, required: false, schema: { type: string, enum: [active, paused, cancelled] } }
         - { name: attention, in: query, required: false, schema: { type: boolean }, description: "true = only schedules needing attention (the same rule as needs_attention)." }
@@ -3767,6 +3889,114 @@ paths:
         "200": { description: Recurring giving }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/collection-health:
+    get:
+      tags: [portal]
+      summary: "finance:view. How collection is going (Giving Cycle 9): the window's M-Pesa prompts, paid, failed by reason in the words members were told (member_answered = their own answer, else it never reached them), the success rate, recurring gifts our side could not send today, the live outage check, and what the rest of this Nairobi month should bring in — each active gift's remaining prompts weighted by its own last six answers; per currency."
+      parameters:
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 90, default: 30 } }
+      responses:
+        "200":
+          description: Collection health
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [window_days, prompts, paid, failed, waiting, success_rate, by_reason, not_sent_by_us, outage, month_end, forecast]
+                properties:
+                  window_days: { type: integer }
+                  prompts: { type: integer }
+                  paid: { type: integer }
+                  failed: { type: integer }
+                  waiting: { type: integer }
+                  success_rate: { type: [number, "null"], description: "paid ÷ (paid + failed), 3 decimals; null with nothing answered" }
+                  by_reason:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string }
+                        count: { type: integer }
+                        reason: { type: string }
+                        member_answered: { type: boolean }
+                  not_sent_by_us: { type: integer }
+                  outage:
+                    type: object
+                    description: "Suspected when, over the last hour, at least 5 prompts were answered and 60% or more never reached a phone (unreachable, expired, busy, M-Pesa's own error, no answer), or 3 or more scheduled prompts could not be sent at all. A member's own decline never counts."
+                    properties:
+                      suspected: { type: boolean }
+                      evidence: { type: [string, "null"] }
+                      resolved: { type: integer }
+                      unreached: { type: integer }
+                      unsent: { type: integer }
+                  month_end: { type: string, format: date }
+                  forecast:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        currency: { type: string }
+                        gifts: { type: integer }
+                        prompts: { type: integer }
+                        scheduled_minor: { type: integer, format: int64 }
+                        expected_minor: { type: integer, format: int64 }
+        "400": { description: "VALIDATION_FAILED — days outside 1–90", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/schedules/{id}/pause:
+    post:
+      tags: [portal]
+      summary: "finance:manage. The office pauses a member's recurring gift AT THE MEMBER'S REQUEST (Giving Cycle 7) — optionally until resume_on (a Nairobi date from tomorrow to a year ahead), when it resumes by itself. Recorded as the member's pause; the audit names the officer and the reason; the member is told (push giving_schedule_office_change). Answers the register row."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OfficeScheduleAction" }
+      responses:
+        "200": { description: "The schedule, as GET /admin/finance/schedules lists it" }
+        "400": { description: "VALIDATION_FAILED — a reason (3–300) is required; resume_on out of range", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "Not active", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /admin/finance/schedules/{id}/resume:
+    post:
+      tags: [portal]
+      summary: "finance:manage. The office resumes a member's paused recurring gift at the member's request (Giving Cycle 7): it picks up at its next occurrence — nothing missed is charged — with its failure state cleared. A gift paused with its pledge is 422 (resume the pledge). Audited; the member is told."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OfficeScheduleAction" }
+      responses:
+        "200": { description: "The schedule, as GET /admin/finance/schedules lists it" }
+        "400": { description: "VALIDATION_FAILED — a reason is required", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "Not paused, or paused with its pledge", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /admin/finance/schedules/{id}/cancel:
+    post:
+      tags: [portal]
+      summary: "finance:manage. The office cancels a member's recurring gift at the member's request (Giving Cycle 7). Nothing is prompted again. Audited; the member is told."
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OfficeScheduleAction" }
+      responses:
+        "200": { description: "The schedule, as GET /admin/finance/schedules?status=cancelled lists it" }
+        "400": { description: "VALIDATION_FAILED — a reason is required", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "Already cancelled", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /giving/history:
     get:
       tags: [giving]
@@ -3786,6 +4016,12 @@ paths:
     get:
       tags: [giving]
       summary: Full detail for one of the caller's gifts, including the ledger trail.
+      description: >-
+        Giving Cycle 3: the app polls this while the member waits on a prompt.
+        Once a mobile-money prompt is more than 20 seconds old without a verdict,
+        reading it asks the provider (at most every 10 seconds per prompt) and
+        applies the answer exactly as a callback would — so "paid" or "why not"
+        arrives while the member is still on the screen.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -3796,13 +4032,44 @@ paths:
               schema: { $ref: "#/components/schemas/GivingDetail" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /giving/transactions/{id}/retry:
+    post:
+      tags: [giving]
+      summary: "\"Try again\" on one of the caller's FAILED gifts (Giving Cycle 3): a new gift carrying everything the failed one did — fund, amount, currency, method, pledge or need, name, fee cover — so a retry never loses its pledge. The pledge/need and every intent check run afresh."
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                idempotency_key: { type: string, minLength: 8, maxLength: 255 }
+                phone_number: { type: [string, "null"], description: "Mobile money: another number to prompt this time; absent = the profile number." }
+      responses:
+        "201":
+          description: "The new gift, as POST /giving/intents answers, plus retry_of"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/GivingIntentResult" }
+                  - type: object
+                    required: [retry_of]
+                    properties:
+                      retry_of: { type: string, format: uuid }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "GIFT_IN_PROGRESS", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /giving/transactions/{id}/receipt.pdf:
     get:
       tags: [giving]
       summary: One of the caller's gifts as a downloadable receipt PDF.
       description: >
         Rendered server-side and opened in the OS browser/viewer. Accepts the
-        access token either as a Bearer header or a `token` query parameter.
+        access token either as a Bearer header or a `token` query parameter. Giving Cycle 6: answered with Cache-Control private, no-store and Referrer-Policy no-referrer; the `token` query parameter is kept only for the retired React Native app (both native apps send the header) and is logged when used, to be removed.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: token, in: query, required: false, schema: { type: string } }
@@ -3823,9 +4090,12 @@ paths:
         when Y = 0, as both apps' hero does — the day groups list
         gifts outside a pledge only, then a PARTNER PLEDGES section lists the
         pledge-tied payments under their pledge's title with a subtotal. Long
-        histories continue onto further pages.
+        histories continue onto further pages. Giving Cycle 2: days and times
+        are Nairobi's; every amount is in its own currency and totals are per
+        currency ("KSh 3,500 + USD 20.00"), never summed across currencies. Giving Cycle 6: answered with Cache-Control private, no-store and Referrer-Policy no-referrer; the `token` query parameter is kept only for the retired React Native app (both native apps send the header) and is logged when used, to be removed.
       parameters:
         - { name: token, in: query, required: false, schema: { type: string } }
+        - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2100 }, description: "One church year (Nairobi); absent = the complete record." }
       responses:
         "200":
           description: PDF document
@@ -3848,7 +4118,7 @@ paths:
         `/giving/statements` reports for that year. Below the first disciple
         carried it prints progress toward it ("KSh x of 20,000 toward carrying
         one disciple through a level"), never "0 disciples". A ledger longer
-        than a page continues onto a further page.
+        than a page continues onto a further page. Giving Cycle 6: answered with Cache-Control private, no-store and Referrer-Policy no-referrer; the `token` query parameter is kept only for the retired React Native app (both native apps send the header) and is logged when used, to be removed.
       parameters:
         - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 } }
         - { name: token, in: query, required: false, schema: { type: string } }
@@ -4777,7 +5047,12 @@ paths:
   /calendar/series:
     get:
       tags: [system]
-      summary: Followable event series for the member (Events make "Series you follow") — cadence, next occurrence, following flag, new count.
+      summary: >-
+        Followable event series for the member (Events make "Series you
+        follow") — cadence, next occurrence, following flag, new count. A
+        series that will not meet again (looking two years ahead) is left out,
+        unless the member follows it; so is a one-off event, which is not a
+        series to follow.
       responses:
         "200": { description: Series }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -5051,7 +5326,12 @@ paths:
   /home/featured-event:
     get:
       tags: [calendar]
-      summary: Member. The current homepage-featured event (cover image + descriptive fields) or null.
+      summary: >-
+        Member. The current homepage-featured event (cover image + descriptive
+        fields) or null. Only an active series that meets again is featured;
+        null once it has ended. `next_at` / `next_end_at` / `next_occurrence_id`
+        give the next meeting (`dtstart_local` is the series' first start, kept
+        for older builds — show `next_at`).
       responses:
         "200": { description: Featured event or null }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -6267,7 +6547,7 @@ paths:
   /me/notifications:
     get:
       tags: [progress]
-      summary: My notification center — recent notifications + unread badge count.
+      summary: My notification center — recent notifications + unread badge count. One row per NOTICE (Giving Cycle 10) — a notice sent on push, SMS and email (a pledge reminder) is one row (the push row when there is one) and counts once as unread; it is unread while any delivered row of it is.
       parameters:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
       responses:
@@ -6276,7 +6556,7 @@ paths:
   /me/notifications/read:
     post:
       tags: [progress]
-      summary: Mark all (or the given ids) read. Idempotent display state.
+      summary: Mark all (or the given ids) read. Idempotent display state. Reading a notice reads every channel's row of it (Giving Cycle 10); `marked` counts rows.
       requestBody:
         required: false
         content:
@@ -6291,7 +6571,7 @@ paths:
   /me/notification-preferences:
     get:
       tags: [progress]
-      summary: My notification channel toggles (defaults push+email on, sms off when never saved).
+      summary: My notification channel toggles (defaults push+email on, sms off, sound on when never saved).
       responses:
         "200":
           description: Preferences
@@ -6301,7 +6581,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
     put:
       tags: [progress]
-      summary: Save my notification channel toggles (all three required; upsert).
+      summary: Save my notification channel toggles (push/email/sms required; sound_enabled optional — kept when left out; upsert).
       requestBody:
         required: true
         content:
@@ -6739,7 +7019,12 @@ paths:
   /growth/plans:
     get:
       tags: [progress]
-      summary: Reading plans with my enrollment + progress.
+      summary: >-
+        Reading plans with my enrollment + progress. Each row carries
+        `last_day_finished_at` — when I last finished a day of the plan (the
+        moment the last part of a fully-read day was read), null when no day is
+        finished. The Plans streak card ticks today from it, so a day finished
+        on one device is ticked on every device.
       responses:
         "200": { description: Plans }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -7949,6 +8234,30 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /me/cell-connection:
+    get:
+      tags: [chat]
+      summary: >-
+        Member. "Ask to be connected" to a cell — `{ in_cell, request }`, where
+        `request` is `{ requested_at, conversation_id }` for the member's latest
+        request (null when none, or when already in a cell).
+      responses:
+        "200": { description: Status }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [chat]
+      summary: >-
+        Member. Ask to be connected to a cell (`{ area, availability, note?,
+        client_mutation_id }`). Posts the request into the member's own
+        pastoral thread, to their pastor — no list of cells or homes is shown
+        to members. Idempotent on `client_mutation_id`. 409 when already in a
+        cell; 422 (in words) for a minor or when no pastor can receive it.
+      responses:
+        "201": { description: "Asked — { conversation_id, requested_at }" }
+        "400": { description: Validation failed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: Already in a cell }
+        "422": { description: "Cannot be sent this way: a minor, or no pastor yet" }
   /chat/pastoral:
     post:
       tags: [progress]
@@ -8443,12 +8752,21 @@ paths:
   /webhooks/mobilemoney/{provider}:
     post:
       tags: [system]
-      summary: M-Pesa/Airtel callback receiver; HMAC-verified + idempotent — settlement happens only here.
+      summary: M-Pesa/Airtel callback receiver — a hint that a prompt ended; money moves only on the provider's confirmed answer.
+      description: >-
+        Signed providers are HMAC-verified and applied. Safaricom's Daraja signs
+        nothing, so its callback is only a hint (Giving Cycle 1): a CheckoutRequestID
+        that is not one of our waiting prompts is ignored at the cost of one read;
+        otherwise the server asks Safaricom (STK Push Query, at most every 10 s per
+        prompt) and applies THAT answer — a forged "paid" moves nothing. If
+        Safaricom cannot say yet, the mobile-money sweeper asks again (every minute,
+        from 90 s; unanswered after 48 h closes as no_answer). The reply to an
+        unsigned caller is always { received: true }.
       security: []
       parameters:
         - { name: provider, in: path, required: true, schema: { type: string, enum: [mpesa, airtel] } }
       responses:
-        "200": { description: Acknowledged }
+        "200": { description: "Acknowledged — { received: true }" }
   /webhooks/website-contact:
     post:
       tags: [system]
@@ -10358,9 +10676,17 @@ components:
         reminders_enabled: { type: boolean, default: true }
         auto_schedule:
           type: [object, "null"]
+          description: >-
+            "Charge me automatically" — MONTHLY pledges only (a total pledge with
+            it is 400 VALIDATION_FAILED). Collected monthly on the pledge's due
+            day, from its first due day AFTER today — never today — so the
+            pledge's instalments start there too (Pledge.starts_on). Checked
+            before anything is written (Cycle 5): no usable number (422
+            PHONE_REQUIRED), M-Pesa off (422 METHOD_UNAVAILABLE) or an amount
+            M-Pesa can't take (422 AMOUNT_OUT_OF_RANGE) creates no pledge.
           properties:
             method: { type: string, enum: [mpesa, airtel] }
-            frequency: { type: string, enum: [weekly, monthly], default: monthly }
+            frequency: { type: string, enum: [monthly], default: monthly, description: "weekly is refused (400): it charged the monthly amount every week" }
     UpdatePledgeBody:
       type: object
       properties:
@@ -10465,6 +10791,7 @@ components:
               overdue_since: { type: [string, "null"], format: date, description: "kind pledge only — the earliest of those overdue due dates; null when overdue_count is 0" }
               pays_to: { $ref: "#/components/schemas/PledgePaysTo", description: "kind pledge only — where the money will be booked" }
               pending_minor: { type: integer, format: int64, description: "kind pledge only — Σ amount of THIS pledge's payments still processing or requiring action that were started in the last 15 minutes (the STK push / checkout window; deliberately shorter than the statement's 48 h pending[], so an abandoned checkout never blocks paying another way). 0 when none. Clients show \"Processing\" instead of Pay while pending_minor ≥ amount_minor." }
+              pending_claim_minor: { type: integer, format: int64, description: "kind pledge only — Σ amount of this member's PENDING \"I paid another way\" claims on THIS pledge, in the pledge's currency. Shown beside the row (\"KSh 2,000 is being checked by the office\") so nobody pays twice; never subtracted from amount_minor — a claim counts once the office confirms it. 0 when none." }
         pledge_options:
           type: array
           description: "Ordered: general, then active funds by name, then campaigns live today in the member's congregation, then that congregation's approved department needs."
@@ -10920,6 +11247,12 @@ components:
       properties:
         modules: { type: array, items: { type: string }, description: "PERM_MODULES, server order." }
         capabilities: { type: array, items: { type: string }, description: "CAPABILITIES, server order (view, create, edit, delete, approve, export, go, manage)." }
+    OfficeScheduleAction:
+      type: object
+      required: [note]
+      properties:
+        note: { type: string, minLength: 3, maxLength: 300, description: "Why — the member's request, in a line (audited)." }
+        resume_on: { type: [string, "null"], format: date, description: "Pause only: resume by itself on this Nairobi date (tomorrow to a year ahead)." }
     Pledge:
       type: object
       required: [pledge_id, shape, currency, status, progress, title, custom_title, pays_to]
@@ -10931,7 +11264,24 @@ components:
         currency: { type: string }
         due_day: { type: [integer, "null"] }
         due_on: { type: [string, "null"] }
-        until_on: { type: [string, "null"] }
+        until_on: { type: [string, "null"], description: "Monthly: the last day an instalment can fall due — none after it is pledged, owed or missed (Cycle 5); its collector stops after it." }
+        starts_on: { type: [string, "null"], format: date, description: "Monthly: the first day an instalment can fall due when later than the creation day — a pledge collected automatically starts with its first collection (Cycle 5). Null = the creation day." }
+        reused: { type: boolean, description: "Create only: true when this is the same pledge made a moment ago (a double tap or retried request within ten minutes) — no second pledge was created." }
+        pace:
+          type: [object, "null"]
+          description: >-
+            Total pledges (Giving Cycle 9): the pace that reaches the target on
+            time — what is still owed spread over the monthly collections left
+            (one today, then the same day each month through due_on), rounded UP
+            to whole shillings in KES so the last is never short. A recurring
+            gift bound to the pledge at this amount lands exactly on the target
+            (its last prompt asks only the rest) and stops there. Null for a
+            monthly pledge, or one not active, fully paid or past its date.
+          properties:
+            per_month_minor: { type: integer, format: int64 }
+            collections_left: { type: integer, minimum: 1 }
+            by: { type: string, format: date }
+        auto_schedule_error: { type: string, description: "Create only: the pledge was made but its automatic collection could not be set up — say this; the member pays with Pay now." }
         fund: { type: [object, "null"], properties: { code: { type: string }, name: { type: string } } }
         campaign: { type: [object, "null"], properties: { campaign_id: { type: string }, title: { type: string } } }
         need_id: { type: [string, "null"] }
@@ -11037,7 +11387,7 @@ components:
       description: "What the year's pledge money comes to at the owner's costing (tiers.ts: KSh 20,000 carries one disciple through one level). Rounded DOWN, never up. Clients never print \"0 disciples\": below the first, show toward_next_minor of per_disciple_minor."
       required: [paid_minor, per_disciple_minor, disciples_carried, toward_next_minor]
       properties:
-        paid_minor: { type: integer, format: int64, description: "The statement's paid_minor — the year's pledge-tied payments" }
+        paid_minor: { type: integer, format: int64, description: "The year's pledge-tied payments IN SHILLINGS (Giving Cycle 9: the costing is in shillings; other currencies used to be added in)" }
         per_disciple_minor: { type: integer, format: int64, description: "The costing constant (2000000 = KSh 20,000)" }
         disciples_carried: { type: integer, description: "floor(paid_minor ÷ per_disciple_minor)" }
         toward_next_minor: { type: integer, format: int64, description: "paid_minor mod per_disciple_minor" }
@@ -11096,32 +11446,55 @@ components:
         server-side by the rule in docs/PARTNERS_PROGRAMME.md §3a. The numbers
         foot: Σ pledges[].pledged_minor = pledged_minor and Σ pledges[].paid_minor
         = paid_minor.
-      required: [years, year, total_minor, currency, pledged_minor, paid_minor, remaining_minor, by_pledge, by_fund, pledges, payments, impact, months, faithfulness, season, pending]
+      required: [years, year, total_minor, currency, totals, pledged_minor, paid_minor, remaining_minor, summary_currency, summary_by_currency, by_pledge, by_fund, pledges, payments, impact, months, faithfulness, season, pending]
       properties:
         years: { type: array, items: { type: integer }, description: "Years with a succeeded gift, newest first" }
         year: { type: integer }
-        total_minor: { type: integer, format: int64, description: "Every succeeded gift in the year, pledge-tied or not" }
+        total_minor: { type: integer, format: int64, description: "Every succeeded gift in the year in `currency` — the first entry of `totals` (shillings first). Never a sum across currencies (Giving Cycle 2)." }
         currency: { type: string }
-        pledged_minor: { type: integer, format: int64, description: "Σ over pledges not cancelled: monthly → amount_minor × due_day dates in the year from max(created_at, 1 Jan) through 31 Dec; total → target_minor if due_on falls in the year" }
+        totals:
+          type: array
+          description: "The year's succeeded giving per currency, KES first — a member with a USD PayPal gift and KSh gifts sees both, never one sum."
+          items:
+            type: object
+            required: [currency, total_minor]
+            properties:
+              currency: { type: string }
+              total_minor: { type: integer, format: int64 }
+        summary_currency: { type: string, description: "Giving Cycle 9: the currency pledged_minor / paid_minor / remaining_minor are in — KES whenever any pledge money is in shillings, else the first currency. They used to add every currency's minor units together." }
+        summary_by_currency:
+          type: array
+          description: "Giving Cycle 9: pledged / paid / remaining for EACH currency — that currency's pledges against that currency's payments; shillings first."
+          items:
+            type: object
+            required: [currency, pledged_minor, paid_minor, remaining_minor]
+            properties:
+              currency: { type: string }
+              pledged_minor: { type: integer, format: int64 }
+              paid_minor: { type: integer, format: int64 }
+              remaining_minor: { type: integer, format: int64 }
+        pledged_minor: { type: integer, format: int64, description: "In summary_currency. Σ over pledges not cancelled: monthly → amount_minor × due_day dates in the year from max(pledge start, 1 Jan) through min(until_on, 31 Dec); total → target_minor if due_on falls in the year" }
         paid_minor: { type: integer, format: int64, description: "Σ payments[].amount_minor where pledge_id is set" }
-        remaining_minor: { type: integer, format: int64, description: "max(pledged_minor − paid_minor, 0)" }
+        remaining_minor: { type: integer, format: int64, description: "Σ over pledges of max(pledged_i − paid_i, 0) — what is still owed on EACH pledge, added up (Cycle 5; it used to net the year's totals, so money beyond one pledge hid what another still owed). Foots with pledges[].remaining_year_minor." }
         by_pledge:
           type: array
           items:
             type: object
-            required: [pledge_id, title, total_minor]
+            required: [pledge_id, title, currency, total_minor]
             properties:
               pledge_id: { type: [string, "null"], format: uuid, description: "null for the \"Gifts outside a pledge\" row" }
               title: { type: string }
+              currency: { type: string, description: "One row per pledge per currency." }
               total_minor: { type: integer, format: int64 }
         by_fund:
           type: array
           items:
             type: object
-            required: [code, name, total_minor]
+            required: [code, name, currency, total_minor]
             properties:
               code: { type: string }
               name: { type: string }
+              currency: { type: string, description: "One row per fund per currency." }
               total_minor: { type: integer, format: int64 }
         pledges:
           type: array
@@ -11597,8 +11970,8 @@ components:
             where it landed. Also overridden for `need_id` (see there). Still required.
         amount_minor: { type: integer, format: int64, description: "Minor units, never floats" }
         currency: { type: string, minLength: 3, maxLength: 3 }
-        method: { type: string, enum: [card, mpesa, airtel], default: card }
-        phone_number: { type: string, description: "Mobile money only — where the STK push lands; defaults to the profile phone" }
+        method: { type: string, enum: [card, mpesa, airtel, paypal], default: card, description: "PayPal gifts are in USD (currency must be USD); M-Pesa/Airtel in KES." }
+        phone_number: { type: [string, "null"], description: "Mobile money only — where the STK push lands (07XX…, 01XX…, +2547…); defaults to the profile phone. Not a Kenyan mobile number → 422 PHONE_REQUIRED." }
         account_name:
           type: string
           maxLength: 60
@@ -11612,6 +11985,7 @@ components:
         idempotency_key: { type: string, minLength: 8, maxLength: 255, description: Client-supplied; replays return the same transaction }
         pledge_id: { type: [string, "null"], format: uuid, description: "Count this gift toward one of the member's open pledges (own pledge only, else 422). Omitted on a scheduled charge = the pledge bound to that schedule." }
         need_id: { type: [string, "null"], format: uuid, description: "Give to an approved department need (else 422). Server-authoritative fund: when the need's department names an active fund, the gift lands there regardless of `fund`, so a need never splits across funds by client." }
+        cover_fee_minor: { type: [integer, "null"], format: int64, minimum: 0, description: "\"Cover the fee\" (Giving Cycle 2): how much of amount_minor the member added to cover the M-Pesa fee. amount_minor is still what is charged and booked; this lets the receipt say gift / fee cover / total. At most half the gift; whole shillings for M-Pesa (else 422 AMOUNT_OUT_OF_RANGE)." }
     GivingIntentResult:
       type: object
       required: [transaction_id, status, idempotency_key, reused]
@@ -11645,8 +12019,12 @@ components:
         amount_minor: { type: integer, format: int64 }
         currency: { type: string, minLength: 3, maxLength: 3 }
         frequency: { type: string, enum: [weekly, monthly] }
-        method: { type: string, enum: [card, mpesa, airtel], default: card }
+        method: { type: string, enum: [card, mpesa, airtel, paypal], default: mpesa, description: "Only an enabled recurring rail (M-Pesa) is accepted; others are 422 METHOD_UNAVAILABLE." }
         idempotency_key: { type: string, minLength: 8, maxLength: 255 }
+        pledge_id: { type: [string, "null"], format: uuid, description: "Bind the schedule to one of the member's open pledges." }
+        phone_number: { type: [string, "null"], description: "The number to prompt each cycle; absent = the member's profile number (followed if it changes)." }
+        first_charge: { type: string, enum: [now, next], default: next, description: "Giving Cycle 4: now = the first prompt goes out immediately as the schedule's first cycle (the answer carries first_charge: the intent, or first_charge null + first_charge_error when it could not be sent); next = wait for the next cycle. A prompt already waiting on the phone → 409 GIFT_IN_PROGRESS and nothing is created." }
+        heads_up: { type: boolean, default: true, description: "A push minutes before each scheduled prompt." }
     # ── Finance ERP · reports schemas — add below this line. ──
     FinanceChannel:
       type: string
@@ -11790,9 +12168,10 @@ components:
             type: object
             required: [kind, count, link]
             properties:
-              kind: { type: string, enum: [pending_claims, expenses_awaiting_approval, failing_schedules, stale_processing, integrity_issues, partners_behind] }
+              kind: { type: string, enum: [pending_claims, expenses_awaiting_approval, failing_schedules, stale_processing, integrity_issues, partners_behind, collection_outage], description: "Clients must tolerate a kind they do not know yet (Giving Cycle 7/9). collection_outage (Cycle 9): M-Pesa looks unwell right now — see message." }
               count: { type: integer }
               link: { type: string, example: /finance/claims, description: The web route that opens the queue. }
+              message: { type: string, description: "The server's own words for this alert, when it has them (collection_outage: the evidence)." }
     FinanceChannelTotal:
       type: object
       required: [channel, account, currency, count, received_minor, reversed_minor, net_minor]
@@ -12457,8 +12836,42 @@ components:
         pledge_id: { type: [string, "null"], format: uuid, description: The pledge this gift counted toward; null for a gift outside a pledge }
         pledge_title: { type: [string, "null"], description: "That pledge's title under the words its card shows (the member's own name for it, else the derived one) — so the Give statement can label pledge payments; null off-pledge" }
         need_id: { type: [string, "null"], format: uuid, description: "The department need this gift was given to (\"Give to this need\"); null otherwise. With pledge_id, what the apps' \"Repeat last gift\" checks to skip pledge and need gifts." }
+        failure: { oneOf: [{ $ref: "#/components/schemas/GiftFailure" }, { type: "null" }], description: "Why a failed gift failed, in words the member can act on; null unless status is failed." }
+        fee_cover_minor: { type: [integer, "null"], format: int64, description: "How much of amount_minor was the fee the member covered; null when none." }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
+
+    GiftFailure:
+      type: object
+      description: "Why a gift did not go through (Giving Cycle 1) — from M-Pesa's own result code. retryable = the member never had a chance to answer (a recurring gift may try once more on its own)."
+      required: [code, reason, hint, retryable]
+      properties:
+        code: { type: string, enum: [cancelled, unreachable, expired, insufficient_funds, wrong_pin, busy, limit_exceeded, declined, system, no_answer, no_phone] }
+        reason: { type: string, description: "What happened, in one sentence." }
+        hint: { type: string, description: "What to do next, and whether money moved." }
+        retryable: { type: boolean }
+    GivingMethods:
+      type: object
+      required: [methods, phone_on_file, default_method]
+      properties:
+        methods:
+          type: array
+          items:
+            type: object
+            required: [key, label, enabled, unavailable_reason, currency, min_minor, max_minor, whole_units, recurring, needs_phone]
+            properties:
+              key: { type: string, enum: [mpesa, airtel, paypal, card] }
+              label: { type: string }
+              enabled: { type: boolean, description: "Can take a member's money on this server right now." }
+              unavailable_reason: { type: [string, "null"], enum: [coming_soon, unavailable, null] }
+              currency: { type: [string, "null"], description: "The rail's own currency (M-Pesa KES, PayPal USD); null = any." }
+              min_minor: { type: integer, format: int64 }
+              max_minor: { type: integer, format: int64 }
+              whole_units: { type: boolean, description: "Whole shillings only (no cents)." }
+              recurring: { type: boolean, description: "A recurring gift can run on it here." }
+              needs_phone: { type: boolean }
+        phone_on_file: { type: [string, "null"], description: "The profile number as E.164 when it is a Kenyan mobile number, else null." }
+        default_method: { type: [string, "null"], description: "The first enabled rail — where the Give form starts." }
 
     GivingDetail:
       type: object
@@ -12496,6 +12909,8 @@ components:
         receipt_code: { type: [string, "null"], description: M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL); null for older or non-mobile-money gifts }
         account_name: { type: [string, "null"], description: "Named giving: the member's own label for this gift, as entered; null when not used" }
         schedule_id: { type: [string, "null"], format: uuid }
+        failure: { oneOf: [{ $ref: "#/components/schemas/GiftFailure" }, { type: "null" }], description: "Why it failed (status failed), else null." }
+        fee_cover_minor: { type: [integer, "null"], format: int64, description: "How much of amount_minor was the fee the member covered; null when none." }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
         ledger:
@@ -12936,6 +13351,17 @@ components:
         push_enabled: { type: boolean }
         email_enabled: { type: boolean }
         sms_enabled: { type: boolean }
+        sound_enabled:
+          type: boolean
+          description: >-
+            Whether pushes make a sound and vibrate (default true; migration 223). Muted pushes still
+            arrive, quietly: no `aps.sound`, Android channel `nuru_quiet`. Always present in responses;
+            optional in a PUT, where leaving it out keeps the stored value. Every push's data carries
+            `template`, `nuru_kind` (message | ring | update — `live_guest_invite` rings, `chat_*` are
+            messages) and `nuru_sound` (on | off). A ring is data-only on Android (the app rings it, up to
+            30 s) and an alert with `aps.sound` nuru_ring.caf on iOS; its `title` is the stream's name and
+            `alert_title` / `alert_body` carry the invite's words. Android channels: nuru_messages,
+            nuru_updates, nuru_live_invite, nuru_quiet.
     PlanDayReflection:
       type: object
       required: [id, plan_id, day_number, body, created_at, updated_at]

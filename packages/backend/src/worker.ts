@@ -16,6 +16,7 @@ import { NotificationWorker } from "./workers/notificationWorker.js";
 import { buildDispatchProvider } from "./workers/dispatch.js";
 import { NudgeScanner } from "./workers/nudgeScanner.js";
 import { PledgeReminderScanner } from "./workers/pledgeReminderScanner.js";
+import { oneAtATime } from "./workers/oneAtATime.js";
 import { NotificationService } from "./modules/notifications/service.js";
 import { EngagementService } from "./modules/engagement/service.js";
 import { PartitionMaintenance, refreshMinorFlags } from "./jobs/maintenance.js";
@@ -77,11 +78,14 @@ function main(): void {
   // Recurring giving (B7): the server creates each cycle's intent. Deterministic
   // per-cycle idempotency keys make overlapping/restarted runs double-charge-proof.
   const financial = new FinancialService(db.primary, buildPaymentGateway(env), buildMobileMoneyProviders(env));
-  const schedTimer = setInterval(
-    () => void financial.runDueSchedules().catch((err) => log.error({ err }, "giving schedule run failed")),
-    5 * 60_000,
-  );
+  // One run at a time (Giving Cycle 8): a slow run (a provider timing out on
+  // every prompt) used to overlap the next tick, and the next.
+  const schedTimer = setInterval(oneAtATime("giving schedule run", () => financial.runDueSchedules(), log), 5 * 60_000);
   stops.push(() => clearInterval(schedTimer));
+  // Giving Cycle 1: ask Safaricom about prompts whose callback never came (or
+  // came before it could be confirmed); close any unanswered after 48 hours.
+  const mmTimer = setInterval(oneAtATime("mobile-money reconcile", () => financial.reconcileMobileMoney(), log), 60_000);
+  stops.push(() => clearInterval(mmTimer));
 
   // Radio auto-air (ADDENDUM): air scheduled programs at their time + auto-end
   // live ones past their duration. Single worker → the is_live-guarded sweep is

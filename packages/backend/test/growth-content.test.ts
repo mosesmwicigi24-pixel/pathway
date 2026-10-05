@@ -267,6 +267,42 @@ describe("reading plans — a day is earned, and the days are walked in order", 
     expect((await detailOf(p.plan_id)).days[2]!.completed).toBe(false);
   });
 
+  it("says when the member last finished a day of each plan — the moment its last part was read (EXPERIENCE.md §7.4 #4)", async () => {
+    type Row = { code: string; plan_id: string; last_day_finished_at: string | null };
+    const row = async (code: string): Promise<Row> =>
+      ((await agent().get("/v1/growth/plans").set(auth(meTok))).body.data as Row[]).find((x) => x.code === code)!;
+    const p = await psalms();
+    expect((await row("rooted-psalms-10")).last_day_finished_at).toBeNull(); // not begun
+
+    const segs = (await detailOf(p.plan_id)).days[0]!.segments;
+    for (const s of segs.slice(0, -1)) {
+      await agent().post(`/v1/growth/segments/${s.segment_id}/complete`).set(auth(meTok));
+    }
+    expect((await row("rooted-psalms-10")).last_day_finished_at).toBeNull(); // under way, not finished
+
+    await agent().post(`/v1/growth/segments/${segs.at(-1)!.segment_id}/complete`).set(auth(meTok));
+    // Pin the parts' times: three read on the 1st, the last on the 2nd — the day
+    // was finished when its LAST part was read, not its first.
+    await testPool().query(
+      `UPDATE reading_plan_segment_progress SET completed_at = CASE WHEN segment_id = $2
+                 THEN '2026-10-02T09:30:00Z'::timestamptz ELSE '2026-10-01T08:00:00Z'::timestamptz END
+        WHERE user_id = $1`,
+      [me, segs.at(-1)!.segment_id],
+    );
+    expect(new Date((await row("rooted-psalms-10")).last_day_finished_at!).toISOString()).toBe("2026-10-02T09:30:00.000Z");
+
+    // A part read on the next day, with that day not finished, moves nothing.
+    const day2 = (await detailOf(p.plan_id)).days[1]!.segments;
+    await agent().post(`/v1/growth/segments/${day2[0]!.segment_id}/complete`).set(auth(meTok));
+    expect(new Date((await row("rooted-psalms-10")).last_day_finished_at!).toISOString()).toBe("2026-10-02T09:30:00.000Z");
+
+    // Every other plan, never opened, says nothing.
+    const others = ((await agent().get("/v1/growth/plans").set(auth(meTok))).body.data as Row[])
+      .filter((x) => x.plan_id !== p.plan_id);
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.every((x) => x.last_day_finished_at === null)).toBe(true);
+  });
+
   it("locks day 2 while day 1 is unfinished — by the day CTA and by the part", async () => {
     const p = await psalms();
     const d = await detailOf(p.plan_id);

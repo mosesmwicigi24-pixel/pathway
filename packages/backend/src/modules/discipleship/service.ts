@@ -539,15 +539,20 @@ export class DiscipleshipService {
     );
     const currentLevel = Number(base?.current_level ?? 1);
 
+    // Lessons only: the exam container is never "a module" — the hub read
+    // "20 of 21 modules complete" beside the Pathway's "20 of 20"
+    // (EXPERIENCE.md §8.2 #4).
     const curr = await one<{ done: string; total: string }>(
       this.pool,
       `SELECT
           (SELECT count(*) FROM module_progress mp
              JOIN enrollments e ON e.enrollment_id = mp.enrollment_id
              JOIN modules md ON md.module_id = mp.module_id
-            WHERE e.user_id = $1 AND mp.is_completed AND md.level_number = $2) AS done,
+            WHERE e.user_id = $1 AND mp.is_completed AND md.level_number = $2
+              AND md.evaluation_kind <> 'exit_exam') AS done,
           (SELECT count(*) FROM modules md
-            WHERE md.level_number = $2 AND md.status = 'published') AS total`,
+            WHERE md.level_number = $2 AND md.status = 'published'
+              AND md.evaluation_kind <> 'exit_exam') AS total`,
       [userId, currentLevel],
     );
 

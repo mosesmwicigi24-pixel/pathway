@@ -3,6 +3,14 @@ name: CI
 # Commit stage of the §4.6 pipeline: lint, type-check, unit tests, OpenAPI &
 # migration validation against an ephemeral Postgres. Build/scan/deploy stages
 # (container images, SBOM, canary) are added when a deploy target exists.
+#
+# Parallel since 2026-10-05 (owner: "repeated 30-minute CI runs — make it 5
+# min"). The backend suite ran its ~180 files one after another on one runner
+# (25–30 min). It now runs in 8 shards side by side, each with its own embedded
+# Postgres (test/helpers/globalSetup.ts), beside one `checks` job for build,
+# lint, types, contract, migrations and the other packages' tests. `ci` is the
+# one check that says "everything passed" — read it, or every job, before
+# merging; never one shard alone.
 
 on:
   push:
@@ -15,12 +23,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  checks:
     runs-on: ubuntu-latest
-    # Twice (2026-09-15, 2026-09-16) the test step hung for 30–40 min on code
-    # identical to main; without this GitHub lets a hung job burn six hours.
-    # Normal runs take 15–20 min.
-    timeout-minutes: 35
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -79,8 +84,9 @@ jobs:
       - name: Seed loads (5 levels, 4 funds) (§2.6)
         run: pnpm db:seed
 
-      - name: Unit + integration tests
-        run: pnpm test
+      # Every package's tests except the backend's, which run in the shards below.
+      - name: Tests (shared, admin-web, mobile)
+        run: pnpm turbo run test --filter='!@nuru/backend'
 
       # The portal is a static Vite bundle with no image and no deploy path, so
       # until now the only way to ship it was to build it on the VPS — the exact
@@ -90,8 +96,9 @@ jobs:
       # download and extract.
       #
       # Gated on a green push to main, so a bundle can never be published from a
-      # run whose tests, migrations or contract lint failed, and PRs don't
-      # litter the run with artifacts nobody deploys.
+      # run whose checks failed, and PRs don't litter the run with artifacts
+      # nobody deploys. (The backend shards run beside this job; a red shard
+      # makes the `ci` check red, and nothing is deployed from a red run.)
       - name: Stamp the portal bundle with its commit
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
@@ -113,3 +120,63 @@ jobs:
           path: packages/admin-web/dist
           retention-days: 30
           if-no-files-found: error
+
+  backend-tests:
+    runs-on: ubuntu-latest
+    # A shard normally takes a few minutes. Twice (2026-09-15, 2026-09-16) the
+    # single test step hung for 30–40 min on code identical to main; a hung
+    # shard now fails at 15 instead of burning hours.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nuru
+          POSTGRES_PASSWORD: nuru
+          POSTGRES_DB: nuru_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nuru"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://nuru:nuru@localhost:5432/nuru_test
+      JWT_SIGNING_KEY: ci-test-only
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The backend tests import @nuru/shared's built output (turbo's ^build).
+      - name: Build shared
+        run: pnpm --filter @nuru/shared build
+
+      - name: Backend tests (shard ${{ matrix.shard }} of 8)
+        run: pnpm --filter @nuru/backend exec vitest run --shard=${{ matrix.shard }}/8
+
+  # The one check to read before merging: green only when every job is.
+  ci:
+    if: always()
+    needs: [checks, backend-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed
+        run: |
+          echo "checks: ${{ needs.checks.result }} · backend-tests: ${{ needs.backend-tests.result }}"
+          test "${{ needs.checks.result }}" = "success"
+          test "${{ needs.backend-tests.result }}" = "success"

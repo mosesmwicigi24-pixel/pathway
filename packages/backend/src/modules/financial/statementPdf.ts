@@ -98,6 +98,15 @@ export interface ReceiptFacts {
   statusLabel: string;
   feeLabel: string;
   totalLabel: string;
+  /** Giving Cycle 2 — a receipt tells the truth about its gift. The line under
+   *  the church's name ("Received with thanks" only when the money arrived). */
+  headline?: string;
+  /** Why a failed gift failed, and what to do — printed under the reference. */
+  notice?: string | null;
+  /** Only a settled gift is an official receipt. */
+  official?: boolean;
+  /** The gift without the fee the member covered (null = no fee cover). */
+  giftLabel?: string | null;
   initiatedAt: string;
   settledAt: string | null;
   generatedAt: string;
@@ -108,15 +117,16 @@ export interface ReceiptFacts {
  *  scripture. Reuses the same minimal PDF/1.4 writer as the statement. */
 export function renderReceiptPdf(f: ReceiptFacts): Buffer {
   const lines: string[] = [
-    "NURU PATHWAY - GIVING RECEIPT",
+    f.official === false ? "NURU PATHWAY - GIFT RECORD" : "NURU PATHWAY - GIVING RECEIPT",
     f.congregation,
-    "Received with thanks",
+    f.headline ?? "Received with thanks",
     "",
     `${f.amountLabel}   ${f.fund}`,
     ...(f.giftName ? [`"${f.giftName}"`] : []),
     ...(f.pledgeTitle ? [`toward your ${f.pledgeTitle} pledge`] : []),
     ...(f.needTitle ? [`toward ${f.needTitle}`] : []),
     `Ref ${f.ref}   -   ${f.statusLabel}`,
+    ...(f.notice ? [f.notice] : []),
     "",
     "TRANSACTION JOURNEY",
     `  01 Initiated   ${f.member}`,
@@ -125,12 +135,16 @@ export function renderReceiptPdf(f: ReceiptFacts): Buffer {
     `  03 Received     ${f.congregation}  -  ${f.fund}`,
     `  04 Settled      ${f.settledAt ? `Cleared ${f.amountLabel}  -  ${f.settledAt}` : f.statusLabel}`,
     "",
-    `Account: ${f.fund}    Fee: ${f.feeLabel}    Total: ${f.totalLabel}`,
+    f.giftLabel
+      ? `Account: ${f.fund}    Gift: ${f.giftLabel}    Fee cover: ${f.feeLabel}    Total: ${f.totalLabel}`
+      : `Account: ${f.fund}    Fee: ${f.feeLabel}    Total: ${f.totalLabel}`,
     "",
     '"Each of you should give what you have decided in your heart to give,',
     ' for God loves a cheerful giver."   - 2 Corinthians 9:7',
     "",
-    `Official receipt - Finance - ${f.congregation}`,
+    f.official === false
+      ? "Not a receipt: no money has been received for this gift."
+      : `Official receipt - Finance - ${f.congregation}`,
     `Generated: ${f.generatedAt}`,
   ];
   return renderLinesPdf(lines);

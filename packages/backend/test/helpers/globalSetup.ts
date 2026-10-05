@@ -9,7 +9,7 @@ import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { findOrphanClusters, reapOrphanCluster } from "./orphanCluster.js";
+import { clusterRunningIn, findOrphanClusters, reapOrphanCluster } from "./orphanCluster.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const backendRoot = join(here, "..", "..");
@@ -89,14 +89,17 @@ async function awaitFreePort(timeoutMs = 60_000): Promise<void> {
  * Remove test cluster directories left by runs that died before teardown. Each
  * is ~180 MB; 1.6 GB of them was found on one machine, having helped fill the
  * disk whose filling killed the run that created the newest one. Only
- * directories with no live process are touched.
+ * directories with no live process are touched — on any port, from any
+ * checkout.
  */
 function sweepAbandonedDataDirs(): void {
   const live = new Set(findOrphanClusters(TEST_PG_PORT).map((o) => o.dataDir));
   let freed = 0;
   for (const dir of readdirSync(tmpdir()).filter((d) => d.startsWith("nuru-pg-"))) {
     const full = join(tmpdir(), dir);
-    if (live.has(full) || full === currentDataDir) continue;
+    // Spared whatever port it serves: another checkout's suite may be running
+    // out of it right now (clusterRunningIn, 2026-10-05).
+    if (live.has(full) || full === currentDataDir || clusterRunningIn(full)) continue;
     try {
       rmSync(full, { recursive: true, force: true });
       freed += 1;

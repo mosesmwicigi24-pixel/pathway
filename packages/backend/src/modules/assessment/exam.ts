@@ -19,6 +19,29 @@ export interface ExamResult {
   duplicate: boolean;
 }
 
+/**
+ * The levels whose exam can be assembled: at least one active question in a
+ * published module of the level — the pool examQuestions() draws from. A
+ * published exam with an empty pool answers 422, so the member apps are told
+ * (`exam_available`) never to offer it (EXPERIENCE.md §7.2 #1). [levelNumber]
+ * narrows the read to one level.
+ */
+export async function levelsWithExamQuestions(c: Queryable, levelNumber?: number): Promise<Set<number>> {
+  const rows = await many<{ level_number: number }>(
+    c,
+    `SELECT DISTINCT m.level_number
+       FROM question_bank q JOIN modules m ON m.module_id = q.module_id
+      WHERE m.is_published AND q.is_active
+        AND ($1::int IS NULL OR m.level_number = $1)`,
+    [levelNumber ?? null],
+  );
+  return new Set(rows.map((r) => r.level_number));
+}
+
+/** A member's words for an exam with no questions yet (§7.2 #1). */
+const examNotReady = (levelNumber: number): string =>
+  `Your Level ${levelNumber} exam isn't ready yet — we'll let you know when it opens.`;
+
 export class ExamService {
   constructor(private readonly pool: Pool) {}
 
@@ -93,10 +116,10 @@ export class ExamService {
   async assemble(userId: string, levelNumber: number): Promise<unknown> {
     await this.requireLevelReady(this.pool, userId, levelNumber);
     const rows = await this.examQuestions(this.pool, levelNumber, false);
-    if (rows.length === 0) throw new ApiError("UNPROCESSABLE", "No exam questions for this level");
-    const cfg = await maybeOne<{ exam_shuffle: boolean }>(
+    if (rows.length === 0) throw new ApiError("UNPROCESSABLE", examNotReady(levelNumber));
+    const cfg = await maybeOne<{ exam_shuffle: boolean; required_exam_pass_mark: string | null }>(
       this.pool,
-      `SELECT exam_shuffle FROM levels WHERE level_number = $1`,
+      `SELECT exam_shuffle, required_exam_pass_mark FROM levels WHERE level_number = $1`,
       [levelNumber],
     );
     // §5.8: strip correct-answer signal, then randomize choice order (unless the
@@ -106,7 +129,9 @@ export class ExamService {
       const stripped = stripAnswerSignal(q.answer_options);
       return { ...q, answer_options: shuffle ? shuffleChoices(stripped) : stripped };
     });
-    return { level_number: levelNumber, question_count: questions.length, questions };
+    // The front door says the pass mark before question 1 (EXPERIENCE.md §9.1 rule 2).
+    const pass_mark = cfg?.required_exam_pass_mark == null ? null : Number(cfg.required_exam_pass_mark);
+    return { level_number: levelNumber, question_count: questions.length, pass_mark, questions };
   }
 
   /** Score the exam server-side against required_exam_pass_mark. */
@@ -144,7 +169,7 @@ export class ExamService {
 
       const enrollment = await this.requireLevelReady(c, userId, levelNumber);
       const active = (await this.examQuestions(c, levelNumber, true)) as unknown as GradableQuestion[];
-      if (active.length === 0) throw new ApiError("UNPROCESSABLE", "No exam questions for this level");
+      if (active.length === 0) throw new ApiError("UNPROCESSABLE", examNotReady(levelNumber));
 
       const submitted = new Map(sub.answers.map((a) => [a.question_id, a.given_answer]));
       const outcome = gradeSubmission(active, submitted);

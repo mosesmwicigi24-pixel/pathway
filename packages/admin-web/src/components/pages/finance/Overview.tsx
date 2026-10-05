@@ -29,7 +29,7 @@ import {
 } from "../../finance/kit";
 import { compareCurrencies, formatMinor, sortTotals } from "../../finance/money";
 import { fmtDay, fmtMonth, fmtRange } from "../../finance/dates";
-import { ALERT_COPY, alertLink, fmtPct, pctChange, plural } from "../../finance/a/helpers";
+import { alertCopy, alertLink, fmtPct, pctChange, plural } from "../../finance/a/helpers";
 import { periodQuery, useAsync, usePeriodParam } from "../../finance/a/hooks";
 import { IncomeExpenseChart } from "../../finance/a/IncomeExpenseChart";
 import { MoneyLines } from "../../finance/a/ui";
@@ -113,7 +113,8 @@ function AlertsCard({ data, loading, periodLink }: { data: Overview | null; load
       ) : (
         <div style={{ display: "grid", gap: 8 }}>
           {alerts.map((a) => {
-            const copy = ALERT_COPY[a.kind];
+            // A kind this portal does not know yet must not break the page.
+            const copy = alertCopy(a.kind);
             const t = TONES[copy.tone];
             return (
               <button
@@ -130,7 +131,7 @@ function AlertsCard({ data, loading, periodLink }: { data: Overview | null; load
                 </span>
                 <span style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ display: "block", fontSize: 13, fontWeight: 700, color: t.color }}>{copy.title(a.count)}</span>
-                  <span style={{ display: "block", fontSize: 12, color: FIN.navy, opacity: 0.8 }}>{copy.hint}</span>
+                  <span style={{ display: "block", fontSize: 12, color: FIN.navy, opacity: 0.8 }}>{a.message ?? copy.hint}</span>
                 </span>
                 <ArrowRight size={15} color={t.color} />
               </button>

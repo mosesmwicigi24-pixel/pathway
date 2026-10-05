@@ -19,6 +19,8 @@
 //     statement's own instalment ledger — never a second copy of that math.
 //   · Every list returns { data, next_cursor, totals } with totals over the
 //     WHOLE filtered set, never just the page.
+import { SCHEDULE_ATTENTION_SQL } from "./constants.js";
+import { giftFailureCopy } from "./giftFailure.js";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { many, maybeOne, type Queryable } from "../../db/db.js";
@@ -264,6 +266,7 @@ const TXN_COLUMNS = `
        t.office_channel, t.office_reference,
        t.recorded_by, rb.full_name AS recorded_by_name,
        t.reversed_at, t.reversed_by, vb.full_name AS reversed_by_name, t.reversal_reason,
+       t.failure_code, t.failure_detail, t.fee_cover_minor,
        t.created_at, t.settled_at`;
 
 const TXN_DETAIL_JOINS = `
@@ -284,7 +287,15 @@ export interface FinanceTransactionRow extends Record<string, unknown> {
 function shapeTxn(r: Record<string, unknown>): FinanceTransactionRow {
   const { cursor_ts: _c, ...rest } = r;
   void _c;
-  return { ...rest, amount_minor: Number(r.amount_minor) } as FinanceTransactionRow;
+  return {
+    ...rest,
+    amount_minor: Number(r.amount_minor),
+    fee_cover_minor: r.fee_cover_minor === null || r.fee_cover_minor === undefined ? null : Number(r.fee_cover_minor),
+    // Why a gift failed, in the member's words, beside the provider's own
+    // (failure_detail) — the office can answer "why didn't my gift go through?"
+    // (Giving Cycle 3).
+    failure: r.status === "failed" ? giftFailureCopy((r.failure_code as string | null) ?? "declined") : null,
+  } as unknown as FinanceTransactionRow;
 }
 
 export interface CurrencyTotal { currency: string; amount_minor: number; count: number }
@@ -1299,8 +1310,10 @@ export class FinanceReportsService {
                   AND created_at >= ${eatStart("$1")} AND created_at < ${eatEnd("$2")}) AS failed_in_period,
               (SELECT count(*)::int FROM pledge_claims WHERE status = 'pending') AS pending_claims,
               (SELECT count(*)::int FROM expenses WHERE status = 'recorded') AS expenses_awaiting_approval,
-              (SELECT count(*)::int FROM giving_schedules
-                WHERE status <> 'cancelled' AND (status = 'paused' OR consecutive_failures > 0)) AS failing_schedules`,
+              -- The register's own rule (FinancialService.SCHEDULE_ATTENTION_SQL,
+              -- Giving Cycle 7): a member's own pause is not a failure.
+              (SELECT count(*)::int FROM giving_schedules s
+                WHERE s.status <> 'cancelled' AND (${SCHEDULE_ATTENTION_SQL})) AS failing_schedules`,
       [from, to],
     );
     const exceptions = await this.exceptions({ from, to }, now);
@@ -1372,13 +1385,17 @@ export class FinanceReportsService {
     const inc = new Map(income.map((r) => [r.currency, r]));
     const exp = new Map(expenses.map((r) => [r.currency, r]));
 
-    const alertsSrc: { kind: string; count: number; link: string }[] = [
+    const outage = await this.deps.financial.outageCheck(now);
+    const alertsSrc: { kind: string; count: number; link: string; message?: string | undefined }[] = [
       { kind: "pending_claims", count: counts?.pending_claims ?? 0, link: "/finance/claims" },
       { kind: "expenses_awaiting_approval", count: counts?.expenses_awaiting_approval ?? 0, link: "/finance/expenses?status=recorded" },
       { kind: "failing_schedules", count: counts?.failing_schedules ?? 0, link: "/finance/recurring?attention=true" },
       { kind: "stale_processing", count: staleCount, link: "/finance/reconciliation?tab=exceptions" },
       { kind: "integrity_issues", count: integrityCount, link: "/finance/reconciliation?tab=integrity" },
       { kind: "partners_behind", count: behind, link: "/finance/pledges?standing=behind" },
+      // Giving Cycle 9: M-Pesa looks unwell right now — the office learns why
+      // gifts are failing before members start calling.
+      ...(outage.suspected ? [{ kind: "collection_outage", count: 1, link: "/finance/recurring", message: outage.evidence ?? undefined }] : []),
     ];
 
     return {

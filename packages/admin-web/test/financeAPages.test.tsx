@@ -395,6 +395,20 @@ describe("pages render their figures with the words that explain them", () => {
     expect(api.overview).toHaveBeenCalledWith(expect.objectContaining({ from: expect.stringMatching(/^\d{4}-\d{2}-01$/) }));
   });
 
+  it("Overview: an outage alert speaks in the server's words, and an alert kind this portal doesn't know yet can't break the page (Giving Cycle 7/9)", async () => {
+    api.overview.mockResolvedValue({
+      ...OVERVIEW,
+      alerts: [
+        { kind: "collection_outage", count: 1, link: "/finance/recurring", message: "8 of the last 10 M-Pesa prompts in the past hour never reached the phone." },
+        { kind: "some_future_alert", count: 2, link: "/finance/somewhere" },
+      ],
+    } as unknown as OverviewData);
+    renderApp(<FinanceOverview />);
+    expect(await screen.findByText("M-Pesa looks unwell right now")).toBeTruthy();
+    expect(screen.getByText("8 of the last 10 M-Pesa prompts in the past hour never reached the phone.")).toBeTruthy();
+    expect(screen.getByText("2 × some future alert")).toBeTruthy();
+  });
+
   it("Reconciliation opens on ?tab=exceptions with what to do per kind", async () => {
     const rec: FinanceReconciliation = {
       period: { from: "2026-09-01", to: "2026-09-26" },

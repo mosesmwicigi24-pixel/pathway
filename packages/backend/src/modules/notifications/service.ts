@@ -148,20 +148,44 @@ export class NotificationService {
   // ---- Member notification center (Design spec D1) ----
 
   /** My recent notifications, newest first, plus the unread badge count. */
+  /**
+   * The member's notification centre: ONE row per notice. A notice fanned out
+   * on push, SMS and email (a pledge reminder) is three rows here — it used
+   * to show three times and count three unread (Giving Cycle 10). Rows are
+   * one notice when they share template, payload and minute; the push row
+   * represents it when there is one, else the channel that delivered it. A
+   * notice is unread while any of its rows is.
+   */
   async listMine(userId: string, limit = 50): Promise<{ data: unknown[]; unread: number }> {
     const data = await many(
       this.pool,
       `SELECT notification_id, template, payload, status, scheduled_for, sent_at, read_at
-         FROM notifications
-        WHERE user_id = $1 AND status <> 'suppressed'
-        ORDER BY scheduled_for DESC
+         FROM (
+           SELECT DISTINCT ON (template, payload, date_trunc('minute', scheduled_for))
+                  notification_id, template, payload, status, scheduled_for, sent_at,
+                  CASE WHEN bool_or(read_at IS NULL AND status = 'sent')
+                         OVER (PARTITION BY template, payload, date_trunc('minute', scheduled_for))
+                       THEN NULL ELSE read_at END AS read_at
+             FROM notifications
+            -- A notice appears once it is due — an event's reminders were in
+            -- the inbox days early, as "now" (EXPERIENCE.md §7.4 #13) — or once
+            -- it has been delivered, whatever its slot: a reminder that quiet
+            -- hours moved to the morning, then sent, is in the inbox (and in
+            -- the unread count below, which counts every delivered row).
+            WHERE user_id = $1 AND status <> 'suppressed' AND (scheduled_for <= now() OR status = 'sent')
+            ORDER BY template, payload, date_trunc('minute', scheduled_for), (channel = 'push') DESC, (status = 'sent') DESC, notification_id
+         ) one_per_notice
+        ORDER BY scheduled_for DESC, notification_id
         LIMIT $2`,
       [userId, Math.min(Math.max(limit, 1), 100)],
     );
     const unread = await one<{ n: number }>(
       this.pool,
-      `SELECT count(*)::int AS n FROM notifications
-        WHERE user_id = $1 AND status = 'sent' AND read_at IS NULL`,
+      `SELECT count(*)::int AS n FROM (
+         SELECT DISTINCT template, payload, date_trunc('minute', scheduled_for)
+           FROM notifications
+          WHERE user_id = $1 AND status = 'sent' AND read_at IS NULL
+       ) unread_notices`,
       [userId],
     );
     return { data, unread: unread.n };
@@ -170,11 +194,17 @@ export class NotificationService {
   /** Mark all (or the given ids) read for this user. Idempotent. */
   async markRead(userId: string, ids?: string[]): Promise<{ marked: number }> {
     // Only delivered rows are markable — matches the unread-badge definition.
+    // Reading a notice reads every channel's row of it (Giving Cycle 10) —
+    // the centre shows one row per notice.
     const res = ids?.length
       ? await this.pool.query(
-          `UPDATE notifications SET read_at = now()
-            WHERE user_id = $1 AND status = 'sent' AND read_at IS NULL
-              AND notification_id = ANY($2::uuid[])`,
+          `UPDATE notifications n SET read_at = now()
+            WHERE n.user_id = $1 AND n.status = 'sent' AND n.read_at IS NULL
+              AND EXISTS (
+                SELECT 1 FROM notifications m
+                 WHERE m.user_id = $1 AND m.notification_id = ANY($2::uuid[])
+                   AND m.template = n.template AND m.payload = n.payload
+                   AND date_trunc('minute', m.scheduled_for) = date_trunc('minute', n.scheduled_for))`,
           [userId, ids],
         )
       : await this.pool.query(

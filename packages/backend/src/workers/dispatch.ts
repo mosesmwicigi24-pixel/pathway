@@ -5,7 +5,7 @@
 // but (per the incident this file was rewritten to close, PR notes) that must
 // NEVER be mistaken for a real send: unconfigured email now fails the row
 // loudly instead of quietly "succeeding" into a log line.
-import type { Messaging } from "firebase-admin/messaging";
+import type { Message, Messaging } from "firebase-admin/messaging";
 import type { Logger } from "pino";
 import type { Env } from "../config/env.js";
 import { buildEmailProvider, type EmailProvider } from "../modules/identity/email.js";
@@ -18,6 +18,97 @@ export interface DispatchMessage {
   to: string; // device token, email address, or E.164 phone number
   template: string;
   payload: Record<string, unknown>;
+  /** Push only: whether it makes a sound and vibrates — the member's
+   *  `notification_preferences.sound_enabled` (migration 223). Absent = on. */
+  sound?: boolean;
+}
+
+/**
+ * How a push sounds (owner request 2026-09-28: "a beep sound / notification
+ * sound or vibrations on any message that comes in … and make calls ring and
+ * vibrate"). A chat message, a Live guest invite that RINGS like a call, or
+ * any other update. The member apps create the Android channels below —
+ * their ids are part of the contract, and immutable once on a phone.
+ */
+export type PushKind = "message" | "ring" | "update";
+export function pushKind(template: string): PushKind {
+  if (template === "live_guest_invite") return "ring";
+  if (template.startsWith("chat_")) return "message";
+  return "update";
+}
+export const PUSH_CHANNEL = {
+  message: "nuru_messages",
+  update: "nuru_updates",
+  ring: "nuru_live_invite",
+  quiet: "nuru_quiet",
+} as const;
+/** The ring bundled in the iOS app (≤ 30 s, iOS's limit for a push sound). */
+export const RING_SOUND = "nuru_ring.caf";
+/** A Live invite is worth ringing for a minute at most — after that it is
+ *  stale, and it is dropped rather than delivered late. */
+export const RING_TTL_MS = 60_000;
+
+/**
+ * The FCM message for one push — pure, so every case is pinned by a test.
+ *
+ * Every push's `data` carries the notification's own keys, its `template`,
+ * `nuru_kind` and `nuru_sound` ("on" | "off"), so an app can choose how to
+ * show it in the foreground. Before this, APNs alerts carried no `sound` —
+ * iOS delivered every push silently — and Android had one default channel.
+ *
+ * - message / update: a notification on its channel (`nuru_messages`,
+ *   heads-up; `nuru_updates`), `aps.sound` "default"; a chat message's
+ *   conversation groups its alerts (`thread-id`).
+ * - ring: DATA-ONLY on Android, so the app itself rings — an insistent,
+ *   full-screen invite for up to 30 s; an alert with the ring on iOS. Both
+ *   expire after a minute. `alert_title` / `alert_body` carry the invite's
+ *   words; `title` stays the stream's name.
+ * - muted (`sound: false`): the same push, quietly — `nuru_quiet`, no
+ *   `aps.sound`. It still arrives.
+ */
+export function fcmMessage(msg: DispatchMessage, copy: { title: string; body: string }, nowMs: number = Date.now()): Message {
+  const kind = pushKind(msg.template);
+  const sound = msg.sound !== false;
+  const data: Record<string, string> = {};
+  for (const [k, v] of Object.entries(msg.payload)) {
+    if (v != null) data[k] = typeof v === "string" ? v : JSON.stringify(v);
+  }
+  data.template ??= msg.template;
+  data.nuru_kind = kind;
+  data.nuru_sound = sound ? "on" : "off";
+  if (kind === "ring") {
+    // `title` stays the payload's (the stream's name); the invite's own words
+    // ride beside it for the app to show, and `body` for an app that predates
+    // ringing (it renders a data-only push from `title` + `body`).
+    data.alert_title = copy.title;
+    data.alert_body = copy.body;
+    data.body ??= copy.body;
+    return {
+      token: msg.to,
+      data,
+      android: { priority: "high", ttl: RING_TTL_MS },
+      apns: {
+        headers: { "apns-priority": "10", "apns-expiration": String(Math.floor((nowMs + RING_TTL_MS) / 1000)) },
+        payload: { aps: { alert: { title: copy.title, body: copy.body }, ...(sound ? { sound: RING_SOUND } : {}) } },
+      },
+    };
+  }
+  const threadId = str(msg.payload.conversation_id);
+  return {
+    token: msg.to,
+    notification: { title: copy.title, body: copy.body },
+    data,
+    android: {
+      priority: "high",
+      notification: sound
+        ? { channelId: PUSH_CHANNEL[kind], defaultSound: true, defaultVibrateTimings: true }
+        : { channelId: PUSH_CHANNEL.quiet },
+    },
+    apns: {
+      headers: { "apns-priority": "10" },
+      payload: { aps: { ...(sound ? { sound: "default" } : {}), ...(threadId ? { threadId } : {}) } },
+    },
+  };
 }
 
 export interface DispatchProvider {
@@ -27,12 +118,21 @@ export interface DispatchProvider {
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
-/** "KSh 1,000" from a payload's amount_minor + currency. */
+/** "KSh 1,000" / "USD 12.50" from a payload's amount_minor + currency —
+ *  cents shown when there are any (Giving Cycle 5: USD 12.50 read "USD 13"). */
 function money(p: Record<string, unknown>): string {
   const minor = num(p.amount_minor) ?? 0;
   const cur = str(p.currency) ?? "KES";
-  const major = Math.round(minor / 100);
-  return `${cur === "KES" ? "KSh" : cur} ${major.toLocaleString("en-KE")}`;
+  const cents = minor % 100 !== 0;
+  const text = (minor / 100).toLocaleString("en-KE", { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: 2 });
+  return `${cur === "KES" ? "KSh" : cur} ${text}`;
+}
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+/** "5 October" for a payload's YYYY-MM-DD date (as given — no time-zone math). */
+function dayWords(ymd: string | undefined): string | undefined {
+  const m = ymd ? /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd) : null;
+  return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}` : ymd;
 }
 
 function num(v: unknown): number | undefined {
@@ -166,7 +266,7 @@ const PUSH_TEMPLATE_COPY: Record<
   },
   pledge_overdue: (p) => ({
     title: `A gentle nudge on ${str(p.title) ?? "your pledge"}`,
-    body: `${money(p)} was due on ${str(p.due_on) ?? "the due date"}. No pressure — give when you can, or tell us if you paid another way.`,
+    body: `${money(p)} was due on ${dayWords(str(p.due_on)) ?? "the due date"}. No pressure — give when you can, or tell us if you paid another way.`,
   }),
   pledge_reminder_manual: (p) => ({
     title: `From the church office: ${str(p.title) ?? "your pledge"}`,
@@ -174,7 +274,7 @@ const PUSH_TEMPLATE_COPY: Record<
   }),
   pledge_fulfilled: (p) => ({
     title: "Pledge fulfilled — thank you",
-    body: `You completed your ${str(p.title) ?? "pledge"}. Every shilling carried someone further. Open Partners to see it.`,
+    body: `You completed your ${str(p.title) ?? "pledge"}. Every shilling carried someone further.${p.schedule_stopped === true ? " Its automatic prompts have stopped." : ""} Open Partners to see it.`,
   }),
   pledge_claim_confirmed: (p) => ({
     title: "Your payment is recorded",
@@ -184,13 +284,64 @@ const PUSH_TEMPLATE_COPY: Record<
     title: "We couldn't match that payment",
     body: `The office could not find ${money(p)} toward ${str(p.title) ?? "your pledge"}. Reply in Community or give again from Partners.`,
   }),
-  giving_schedule_failed: () => ({
-    title: "Your recurring gift didn't go through",
-    body: "We couldn't collect it this time — we'll try again shortly. Open Give to check your number or method.",
+  // Giving Cycle 1: say WHY, and what happens next — a cancelled prompt is
+  // not a broken phone, and "we'll try again" is only said when we will.
+  giving_schedule_failed: (p) => ({
+    title: `Your ${str(p.frequency) === "weekly" ? "weekly" : str(p.frequency) === "monthly" ? "monthly" : "recurring"} gift didn't go through`,
+    body: [
+      str(p.reason) ?? "We couldn't collect it this time.",
+      str(p.retry_at) ? "We'll send the prompt once more later today." : str(p.hint) ?? "Open Give to give now or check your number.",
+    ].join(" "),
   }),
-  giving_schedule_paused: () => ({
+  // Giving Cycle 3: a member's own gift that failed where they could not see
+  // it (the prompt never reached them, or no answer came before they left).
+  giving_gift_failed: (p) => ({
+    title: "Your gift didn't go through",
+    body: `${str(p.reason) ?? "The payment didn't complete."} ${str(p.hint) ?? "Open Give to try again."}`,
+  }),
+  // Giving Cycle 4: minutes before a scheduled M-Pesa prompt, so it is
+  // expected rather than dismissed as a scam.
+  giving_schedule_heads_up: (p) => ({
+    title: `Your ${str(p.frequency) === "weekly" ? "weekly" : "monthly"} gift is ready`,
+    body: p.partial === true && str(p.pledge_title)
+      ? `An M-Pesa prompt for ${money(p)} — the rest of what's due on “${str(p.pledge_title)}” — is coming to your phone in a few minutes. Enter your PIN to give.`
+      : `An M-Pesa prompt for ${money(p)} to ${str(p.fund_name) ?? "the church"} is coming to your phone in a few minutes. Enter your PIN to give.`,
+  }),
+  // Giving Cycle 7: the church office changed a recurring gift at the
+  // member's request — they are always told, in words.
+  giving_schedule_office_change: (p) => {
+    const gift = `${str(p.frequency) === "weekly" ? "weekly" : "monthly"} gift of ${money(p)}${str(p.fund_name) ? ` to ${str(p.fund_name)}` : ""}`;
+    const action = str(p.action);
+    return {
+      title: action === "cancel" ? "Your recurring gift was cancelled" : action === "resume" ? "Your recurring gift is back on" : "Your recurring gift is paused",
+      body: action === "cancel"
+        ? `The church office cancelled your ${gift}, as you asked. Nothing more will be prompted.`
+        : action === "resume"
+          ? `The church office resumed your ${gift}, as you asked.`
+          : `The church office paused your ${gift}, as you asked${str(p.resume_on) ? ` — it starts again on ${dayWords(str(p.resume_on))}` : ""}.`,
+    };
+  },
+  // Giving Cycle 5: a pledge's collector skips a cycle already paid, and
+  // stops with its pledge — each said once, in words.
+  giving_schedule_covered: (p) => ({
+    title: `Nothing to pay this ${str(p.frequency) === "weekly" ? "week" : "month"}`,
+    body: `${str(p.title) ? `“${str(p.title)}”` : "Your pledge"} is already paid${str(p.covered_through) ? ` through ${dayWords(str(p.covered_through))}` : ""}, so no M-Pesa prompt is coming this time. Thank you.`,
+  }),
+  giving_schedule_stopped: (p) => {
+    const pledge = str(p.title) ? `“${str(p.title)}”` : "Your pledge";
+    const reason = str(p.reason);
+    return {
+      title: reason === "pledge_fulfilled" ? "Your pledge is complete" : reason === "pledge_ended" ? "Your pledge has ended" : "Automatic prompts stopped",
+      body: reason === "pledge_fulfilled"
+        ? `${pledge} is fulfilled, so its automatic M-Pesa prompts have stopped. Thank you for carrying it through.`
+        : reason === "pledge_ended"
+          ? `${pledge} ended${str(p.until_on) ? ` on ${dayWords(str(p.until_on))}` : ""}, so its automatic prompts have stopped. Open Partners to make a new pledge.`
+          : `${pledge} was cancelled, so its recurring gift has stopped too.`,
+    };
+  },
+  giving_schedule_paused: (p) => ({
     title: "Your recurring gift is paused",
-    body: "We tried a few times and couldn't collect it, so we've stopped trying. Open Give to resume it whenever you're ready.",
+    body: `${str(p.reason) ? `${str(p.reason)} ` : ""}We've stopped sending prompts for now. Open Give to resume it whenever you're ready.`,
   }),
   reflection_approved: () => ({
     title: "Reflection approved",
@@ -292,7 +443,15 @@ export const KNOWN_PUSH_TEMPLATES = Object.keys(PUSH_TEMPLATE_COPY);
 function pushCopy(msg: DispatchMessage, log?: Logger): { title: string; body: string } {
   const p = msg.payload;
   const generated = PUSH_TEMPLATE_COPY[msg.template]?.(p);
-  const title = str(p.title) ?? generated?.title ?? "Nuru Pathway";
+  // An explicit push title is a call site composing its own copy — it sets
+  // title AND body (chat, blessings, prayer chains, announcements). A payload
+  // with a title but no body is naming the THING the notice is about — a
+  // pledge, a department need — and the table's words come first (Giving
+  // Cycle 10: a pledge reminder's lock screen read "Kenya trip" instead of
+  // "Kenya trip — due in 3 days", a covered month "Kenya trip" instead of
+  // "Nothing to pay this month").
+  const composed = str(p.title) !== undefined && str(p.body) !== undefined;
+  const title = (composed ? str(p.title) : undefined) ?? generated?.title ?? str(p.title) ?? "Nuru Pathway";
   const body = str(p.body) ?? generated?.body ?? str(p.feedback);
   if (body) return { title, body };
 
@@ -333,19 +492,10 @@ class FcmDispatchProvider implements DispatchProvider {
 
   async send(msg: DispatchMessage): Promise<void> {
     if (msg.channel !== "push") return this.fallback.send(msg);
-    const { title, body } = pushCopy(msg, this.log);
-    const data: Record<string, string> = {};
-    for (const [k, v] of Object.entries(msg.payload)) {
-      if (v != null) data[k] = typeof v === "string" ? v : JSON.stringify(v);
-    }
+    const copy = pushCopy(msg, this.log);
     const messaging = await this.messagingClient();
     // Throws on invalid/expired token → the worker marks the row 'failed' and logs.
-    await messaging.send({
-      token: msg.to,
-      notification: { title, body },
-      data,
-      android: { priority: "high" },
-    });
+    await messaging.send(fcmMessage(msg, copy));
   }
 }
 
@@ -357,7 +507,7 @@ class LoggingPushDispatchProvider implements DispatchProvider {
   send(msg: DispatchMessage): Promise<void> {
     const { title, body } = pushCopy(msg, this.log);
     this.log?.info(
-      { channel: msg.channel, template: msg.template, to: msg.to, title, body },
+      { channel: msg.channel, template: msg.template, to: msg.to, title, body, kind: pushKind(msg.template), sound: msg.sound !== false },
       "notification (logged, no push provider)",
     );
     return Promise.resolve();

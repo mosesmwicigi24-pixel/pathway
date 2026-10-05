@@ -46,6 +46,19 @@ export const API_ERROR_CODES = {
   /** Deactivating a fund that pledges, recurring gifts, departments or live
    *  campaigns still send money to — refused unless the office confirms (force). */
   FUND_IN_USE: 409,
+  // Giving (docs/GIVING.md, Cycle 1) — each names what the member can do next.
+  /** That payment method cannot take money here right now (not set up, or not offered). */
+  METHOD_UNAVAILABLE: 422,
+  /** The method settles in another currency (M-Pesa: KES; PayPal: USD). */
+  METHOD_CURRENCY: 422,
+  /** The amount is below the method's minimum or above its maximum. */
+  AMOUNT_OUT_OF_RANGE: 422,
+  /** Mobile money needs a valid Kenyan number to prompt, and none was given or on file. */
+  PHONE_REQUIRED: 422,
+  /** A prompt from a moment ago is still waiting on the member's phone. */
+  GIFT_IN_PROGRESS: 409,
+  /** The same recurring gift already exists — change it rather than add a twin. */
+  SCHEDULE_EXISTS: 409,
 } as const;
 
 export type ApiErrorCode = keyof typeof API_ERROR_CODES;

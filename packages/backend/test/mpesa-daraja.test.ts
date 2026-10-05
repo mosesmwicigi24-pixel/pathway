@@ -41,7 +41,14 @@ const callback = (resultCode: number, checkoutId = "ws_CO_123", receipt?: string
 describe("DarajaMpesaProvider.verifyCallback", () => {
   it("maps ResultCode 0 → succeeded, keyed by CheckoutRequestID", () => {
     const cb = provider.verifyCallback(callback(0, "ws_CO_ABC"));
-    expect(cb).toEqual({ event_id: "ws_CO_ABC", ref: "ws_CO_ABC", status: "succeeded" });
+    // The provider's own code and text ride along (Giving Cycle 1: why a
+    // payment failed is kept). An unsigned callback is only a hint — the
+    // service confirms it with Safaricom before any money moves.
+    expect(cb).toEqual({
+      event_id: "ws_CO_ABC", ref: "ws_CO_ABC", status: "succeeded", receipt: undefined,
+      result_code: "0", result_desc: "The service request is processed successfully.",
+    });
+    expect(provider.signedCallbacks).toBe(false);
   });
 
   it("maps a non-zero ResultCode → failed", () => {

@@ -34,6 +34,9 @@ const EnvSchema = z.object({
   OAUTH_APPLE_SECRET: z.string().optional(),
 
   STRIPE_SECRET_KEY: z.string().optional(),
+  // Card giving from the member apps (Giving Cycle 1). Unset = off in
+  // production (no app can confirm a card payment yet), on elsewhere.
+  CARD_GIVING_ENABLED: z.enum(["true", "false"]).optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   // Shared with nuruplace.org, which signs every contact-form POST with it.
   // Unset means the intake refuses everything: an unauthenticated write into

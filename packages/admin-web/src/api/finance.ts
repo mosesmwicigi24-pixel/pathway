@@ -347,7 +347,9 @@ export type FinanceAlertKind =
   | "failing_schedules"
   | "stale_processing"
   | "integrity_issues"
-  | "partners_behind";
+  | "partners_behind"
+  /** Giving Cycle 9: M-Pesa looks unwell right now (see `message`). */
+  | "collection_outage";
 
 /* ====================================================================== */
 /* Reads — "Finance ERP · reports" schemas                                  */
@@ -399,7 +401,28 @@ export interface FinanceOverview {
   /** 12 months per currency, oldest first, the last being `to`'s month. month = "YYYY-MM". */
   series: { currency: string; months: { month: string; income_minor: number; expenses_minor: number }[] }[];
   /** Only kinds with count > 0; `link` is the web route that opens the queue. */
-  alerts: { kind: FinanceAlertKind; count: number; link: string }[];
+  alerts: { kind: FinanceAlertKind; count: number; link: string; /** The server's own words, when it has them (collection_outage). */ message?: string | undefined }[];
+}
+
+/** GET /admin/finance/collection-health (Giving Cycle 9): how collection is
+ *  going over the window — M-Pesa prompts, paid, failed by reason in the
+ *  words members were told (whose answer it was), the success rate, the gifts
+ *  only the office can fix, the live outage check, and what the rest of this
+ *  Nairobi month should bring in, each gift weighted by its own record. */
+export interface CollectionHealth {
+  window_days: number;
+  prompts: number;
+  paid: number;
+  failed: number;
+  waiting: number;
+  /** paid ÷ (paid + failed), 3 decimals; null with nothing answered. */
+  success_rate: number | null;
+  by_reason: { code: string; count: number; reason: string; member_answered: boolean }[];
+  not_sent_by_us: number;
+  outage: { suspected: boolean; evidence: string | null; resolved: number; unreached: number; unsent: number };
+  /** YYYY-MM-DD — the last day of the month the forecast covers. */
+  month_end: string;
+  forecast: { currency: string; gifts: number; prompts: number; scheduled_minor: number; expected_minor: number }[];
 }
 
 /** FinanceTransactionRow — one transaction as the office sees it. */
@@ -1394,10 +1417,20 @@ export const FinanceApi = {
   trend: (months?: number) => get<FinanceTrend>(`${F}/trend`, { months }),
   /** GET /admin/finance/config — funds + provider availability. */
   config: () => get<FinanceConfig>(`${F}/config`),
+  /** GET /admin/finance/collection-health?days (1–90, default 30) — Giving Cycle 9. */
+  collectionHealth: (days?: number) => get<CollectionHealth>(`${F}/collection-health`, { days }),
   /** GET /admin/finance/schedules — recurring gifts with collection health. */
   schedules: (q: SchedulesQuery = {}) => get<{ data: AdminScheduleRow[] }>(`${F}/schedules`, q).then((r) => r.data),
 
   /* ---------- writes ---------- */
+
+  /** finance:manage. POST /admin/finance/schedules/:id/{pause|resume|cancel} —
+   *  the office changes a member's recurring gift AT THEIR REQUEST (Giving
+   *  Cycle 7): a reason is required (3–300), the audit names who, and the
+   *  member is told. Pause may carry resume_on (tomorrow to a year ahead).
+   *  Answers the register row. */
+  scheduleAction: (scheduleId: string, action: "pause" | "resume" | "cancel", body: { note: string; resume_on?: string | null | undefined }) =>
+    post<AdminScheduleRow>(`${F}/schedules/${id(scheduleId)}/${action}`, body),
 
   /** finance:manage. POST /admin/finance/gifts — record a gift the office received (201; a replay 200 with reused). */
   recordGift: (body: BooksGiftInput) => post<BooksGiftResult>(`${F}/gifts`, body),

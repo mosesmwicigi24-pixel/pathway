@@ -40,12 +40,20 @@ class FakeGateway implements PaymentGateway {
  * honest about which one it is.
  */
 class DecliningMobileMoneyProvider implements MobileMoneyProvider {
+  readonly signedCallbacks = true;
   constructor(readonly key: "mpesa" | "airtel") {}
+  // Refused at SEND time for the gift's own reason (Giving Cycle 1: a network
+  // error or a 5xx is Safaricom's outage — ours, never the giver's strike — so
+  // the giver's failure is modelled as the refusal Daraja returns for a number
+  // or amount it will not prompt).
   initiate(): Promise<{ ref: string }> {
-    return Promise.reject(new ApiError("UPSTREAM_UNAVAILABLE", "MPESA 2001: wrong PIN"));
+    return Promise.reject(new ApiError("UNPROCESSABLE", "M-Pesa refused the prompt: the number is not registered"));
   }
   verifyCallback(): never {
     throw new ApiError("UPSTREAM_UNAVAILABLE", "not used in these tests");
+  }
+  queryStatus(): Promise<{ state: "pending" }> {
+    return Promise.resolve({ state: "pending" });
   }
 }
 
@@ -311,7 +319,7 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
       amount_minor: 10000,
       currency: "KES",
       frequency: "weekly",
-      method: "card",
+      method: "mpesa", // recurring gifts run on mobile money (Giving Cycle 1)
       idempotency_key: "sched-001",
     })) as { schedule_id: string; next_run_at: string };
 
@@ -347,8 +355,10 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
     const sched = await testPool().query(`SELECT next_run_at FROM giving_schedules WHERE schedule_id=$1`, [
       created.schedule_id,
     ]);
-    const expected = new Date(due);
-    expected.setUTCDate(expected.getUTCDate() + 7);
+    // +7 days from DUE, kept inside the prompt hours on its own Nairobi day
+    // (the code's rule — Giving Cycle 2). A plain +7 days failed whenever the
+    // suite ran after 22:00: a 21:02 slot becomes 20:00.
+    const expected = FinancialService.sameDayPromptHours(FinancialService.nextRun(due, "weekly"));
     expect(new Date(sched.rows[0].next_run_at).toISOString()).toBe(expected.toISOString());
 
     // Crash simulation: rewind next_run_at to the SAME due instant and re-run —
@@ -384,9 +394,11 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
   });
 
   it("provider outages leave the schedule due — the next tick retries", async () => {
-    // No mobile-money providers wired at all → initiate throws.
+    // No mobile-money providers wired at all → initiate throws. (A server
+    // without M-Pesa refuses to CREATE an M-Pesa schedule — Giving Cycle 1 — so
+    // the schedule is made where M-Pesa exists and run where it does not.)
     const lonely = new FinancialService(testPool(), gw);
-    await lonely.createSchedule(user, {
+    await svc.createSchedule(user, {
       fund: "tithe",
       amount_minor: 700,
       currency: "KES",
@@ -396,7 +408,7 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
     });
     await testPool().query(`UPDATE giving_schedules SET next_run_at=now() - interval '1 hour'`);
     const result = await lonely.runDueSchedules(new Date());
-    expect(result).toEqual({ run: 0, failed: 1, skipped: 0 });
+    expect(result).toMatchObject({ run: 0, failed: 1, skipped: 0 });
     const sched = await testPool().query(`SELECT next_run_at < now() AS still_due FROM giving_schedules`);
     expect(sched.rows[0].still_due).toBe(true); // untouched — will retry
   });
@@ -447,7 +459,7 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
       await dueSchedule("sched-f2");
       await brokenSvc().runDueSchedules(new Date());
       const second = await brokenSvc().runDueSchedules(new Date());
-      expect(second).toEqual({ run: 0, failed: 0, skipped: 0 });         // skipped, not retried
+      expect(second).toMatchObject({ run: 0, failed: 0, skipped: 0 });         // skipped, not retried
       expect((await scheduleRow()).consecutive_failures).toBe(1);
     });
 
@@ -474,7 +486,7 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
         await testPool().query(`UPDATE giving_schedules SET retry_after = NULL`);
         await brokenSvc().runDueSchedules(new Date());
       }
-      expect(await brokenSvc().runDueSchedules(new Date())).toEqual({ run: 0, failed: 0, skipped: 0 });
+      expect(await brokenSvc().runDueSchedules(new Date())).toMatchObject({ run: 0, failed: 0, skipped: 0 });
 
       const id = (await testPool().query<{ schedule_id: string }>(`SELECT schedule_id FROM giving_schedules`)).rows[0]!.schedule_id;
       // Through the ROUTE, not the service: mounting is part of the feature,
@@ -497,6 +509,12 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
       expect((await scheduleRow()).consecutive_failures).toBe(1);
       await testPool().query(`UPDATE giving_schedules SET retry_after = NULL`);
       await svc.runDueSchedules(new Date());                 // svc HAS a working fake provider
+      // Sending a prompt is not collecting a gift (Giving Cycle 1): the strike
+      // stands until M-Pesa confirms the payment.
+      expect((await scheduleRow()).consecutive_failures).toBe(1);
+      const ref = mpesa.initiated.length ? `mpesa_co_${mpesa.initiated.length}` : "";
+      const paid = signedBody(mpesa, { event_id: "evt_sched_ok", ref, status: "succeeded" });
+      await svc.handleMobileMoneyCallback("mpesa", paid.body, paid.signature);
       const row = await scheduleRow();
       expect(row.consecutive_failures).toBe(0);
       expect(row.last_error).toBeNull();
@@ -669,7 +687,7 @@ describe("a schedule that fell far behind does not collect the backlog", () => {
     expect(new Date(row.rows[0]!.next_run_at).getTime()).toBeGreaterThan(Date.now());
 
     // A second pass does nothing at all — it is no longer due.
-    expect(await svc.runDueSchedules(new Date())).toEqual({ run: 0, failed: 0, skipped: 0 });
+    expect(await svc.runDueSchedules(new Date())).toMatchObject({ run: 0, failed: 0, skipped: 0 });
   });
 
   it("still charges a schedule that is merely due, not behind", async () => {
@@ -710,7 +728,9 @@ describe("a server misconfiguration is not the giver's failure", () => {
     // A service whose mobile-money providers were never configured — exactly
     // the production shape, where the worker had no MPESA_* env at all.
     const unconfigured = new FinancialService(testPool(), gw);
-    await unconfigured.createSchedule(user, {
+    // Created while M-Pesa worked (an unconfigured server refuses to create
+    // one — Giving Cycle 1); the provider then goes missing.
+    await svc.createSchedule(user, {
       fund: "tithe", amount_minor: 100_000, currency: "KES",
       frequency: "weekly", method: "mpesa", idempotency_key: "cfg-1",
     });

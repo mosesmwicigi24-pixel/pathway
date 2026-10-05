@@ -38,7 +38,10 @@ type Decision = { claim: PledgeClaimRow; decision: "confirm" | "reject" };
 /** The wire pledge carries `pays_to` (the fund its money is booked to) beyond client.ts's type. */
 type PledgeWithPaysTo = PartnerPledge & { pays_to?: { code: string; name: string } | null | undefined };
 
-const isAlreadyDecided = (e: unknown): boolean => axios.isAxiosError(e) && e.response?.status === 422;
+// "Already decided" is the server's UNPROCESSABLE; a CURRENCY_MISMATCH (also
+// 422) is not — its own words stay in the dialog (Giving Cycle 7).
+const isAlreadyDecided = (e: unknown): boolean =>
+  axios.isAxiosError(e) && e.response?.status === 422 && (e.response.data as { error?: { code?: string } } | undefined)?.error?.code !== "CURRENCY_MISMATCH";
 
 export function FinanceClaims(): ReactElement {
   const caps = useFinanceCaps();
@@ -118,7 +121,21 @@ export function FinanceClaims(): ReactElement {
       ),
     },
     { key: "pledge", header: "Pledge", cell: (c) => c.pledge_title },
-    { key: "amount", header: "Amount", cell: (c) => <MoneyText amount_minor={c.amount_minor} currency={c.currency} strong />, align: "right" },
+    {
+      key: "amount",
+      header: "Amount",
+      cell: (c) => (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+          <MoneyText amount_minor={c.amount_minor} currency={c.currency} strong />
+          {c.currency_mismatch ? (
+            <span style={{ fontSize: 11, color: FIN.danger, whiteSpace: "nowrap" }} title="The pledge is counted in its own currency; this claim can only be rejected.">
+              Pledge is in {c.pledge_currency}
+            </span>
+          ) : null}
+        </div>
+      ),
+      align: "right",
+    },
     { key: "paid_on", header: <span title="The day the member says they paid.">Paid on</span>, cell: (c) => fmtDay(c.paid_on), mono: true },
     {
       key: "note",
@@ -140,7 +157,14 @@ export function FinanceClaims(): ReactElement {
       hidden: !caps.manage,
       cell: (c) => (
         <div className="inline-flex" style={{ gap: 6 }}>
-          <Button size="sm" variant="primary" icon={<Check size={12} />} busy={lookingUp === c.claim_id} disabled={lookingUp !== null && lookingUp !== c.claim_id} onClick={() => void askConfirm(c)}>
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<Check size={12} />}
+            busy={lookingUp === c.claim_id}
+            disabled={(lookingUp !== null && lookingUp !== c.claim_id) || Boolean(c.currency_mismatch)}
+            onClick={() => void askConfirm(c)}
+          >
             Confirm
           </Button>
           <Button size="sm" variant="danger" icon={<Ban size={12} />} disabled={lookingUp !== null} onClick={() => setDecision({ claim: c, decision: "reject" })}>

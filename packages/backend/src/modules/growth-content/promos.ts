@@ -18,9 +18,12 @@
 //                the whole shelf eventually gets seen.
 //
 // MEMORY (plan_promo_log, migration 210): the selector records what it showed
-// and reads it back — a plan promoted in the last 10 days is skipped unless it
-// is the continue slot, and among equals the least-shown wins. That is what
-// keeps a shelf of 22 plans from collapsing onto the same three.
+// and reads it back — a plan promoted on an EARLIER day in the last 10 is
+// skipped unless it is the continue slot, and among equals the least-shown
+// wins. That is what keeps a shelf of 22 plans from collapsing onto the same
+// three. Within one Nairobi day the picks stand: what was shown today is shown
+// again (it used to rotate on every request — 6.6 different "featured" plans a
+// day per member, and the two apps disagreeing; EXPERIENCE.md §7.4 #5).
 import type pg from "pg";
 import { many, maybeOne } from "../../db/db.js";
 
@@ -74,15 +77,16 @@ export async function planPromos(pool: pg.Pool, userId: string, limit = 5): Prom
   const shown = new Map<string, { days_ago: number; times: number }>();
   for (const r of await many<{ plan_id: string; days_ago: number; times_shown: number }>(
     pool,
-    `SELECT plan_id, (CURRENT_DATE - last_shown_on)::int AS days_ago, times_shown
+    `SELECT plan_id, ((now() AT TIME ZONE 'Africa/Nairobi')::date - last_shown_on)::int AS days_ago, times_shown
        FROM plan_promo_log WHERE user_id = $1`,
     [userId],
   )) {
     shown.set(r.plan_id, { days_ago: r.days_ago, times: r.times_shown });
   }
+  const shownToday = (planId: string): boolean => shown.get(planId)?.days_ago === 0;
   const rested = (planId: string): boolean => {
     const s = shown.get(planId);
-    return !s || s.days_ago >= 10;
+    return !s || s.days_ago === 0 || s.days_ago >= 10;
   };
   const timesShown = (planId: string): number => shown.get(planId)?.times ?? 0;
 
@@ -101,10 +105,13 @@ export async function planPromos(pool: pg.Pool, userId: string, limit = 5): Prom
     used.add(plan.plan_id);
     out.push({ plan_id: plan.plan_id, slot, kicker, reason });
   };
-  /** Least-promoted first, then library order — so the shelf gets seen. */
+  /** Today's pick first (it stands all day), then least-promoted, then
+   *  library order — so the shelf gets seen across days. */
   const freshest = (pool_: PlanLite[]): PlanLite | undefined =>
     pool_.filter((p) => !used.has(p.plan_id) && rested(p.plan_id))
-      .sort((a, b) => timesShown(a.plan_id) - timesShown(b.plan_id) || a.sort - b.sort)[0];
+      .sort((a, b) =>
+        Number(shownToday(b.plan_id)) - Number(shownToday(a.plan_id))
+        || timesShown(a.plan_id) - timesShown(b.plan_id) || a.sort - b.sort)[0];
 
   // 1 · CONTINUE — the plan they are already walking. Memory never hides this.
   const inProgress = progress.find((p) => p.completed_at == null);
@@ -166,11 +173,17 @@ export async function planPromos(pool: pg.Pool, userId: string, limit = 5): Prom
     "You haven't opened this one yet — it may be the word for this season.");
 
   // Still short (a small library, or everything recently shown)? Fill with the
-  // least-shown untouched plans rather than returning a thin page.
+  // least-shown untouched plans rather than returning a thin page — today's
+  // fillers first, so the page stands all day like every other slot (showing a
+  // plan counts it, so "least-shown" alone picked new fillers on every
+  // request; EXPERIENCE.md §7.4 #5). A plan they have begun is never filler:
+  // it lives in My plans, and "FROM THE LIBRARY" would offer it as new.
   while (out.length < limit) {
     const filler = plans
-      .filter((p) => !used.has(p.plan_id) && !finishedIds.has(p.plan_id))
-      .sort((a, b) => timesShown(a.plan_id) - timesShown(b.plan_id) || a.sort - b.sort)[0];
+      .filter((p) => !used.has(p.plan_id) && !touched.has(p.plan_id))
+      .sort((a, b) =>
+        Number(shownToday(b.plan_id)) - Number(shownToday(a.plan_id))
+        || timesShown(a.plan_id) - timesShown(b.plan_id) || a.sort - b.sort)[0];
     if (!filler) break;
     used.add(filler.plan_id);
     out.push({
@@ -187,12 +200,13 @@ export async function planPromos(pool: pg.Pool, userId: string, limit = 5): Prom
     if (out.length > 0) {
       await pool.query(
         `INSERT INTO plan_promo_log (user_id, plan_id, slot, last_shown_on, times_shown)
-         SELECT $1, x.plan_id::uuid, x.slot, CURRENT_DATE, 1
+         SELECT $1, x.plan_id::uuid, x.slot, (now() AT TIME ZONE 'Africa/Nairobi')::date, 1
            FROM unnest($2::uuid[], $3::text[]) AS x(plan_id, slot)
          ON CONFLICT (user_id, plan_id) DO UPDATE
            SET slot = EXCLUDED.slot,
-               times_shown = plan_promo_log.times_shown + (CASE WHEN plan_promo_log.last_shown_on < CURRENT_DATE THEN 1 ELSE 0 END),
-               last_shown_on = CURRENT_DATE`,
+               times_shown = plan_promo_log.times_shown
+                 + (CASE WHEN plan_promo_log.last_shown_on < (now() AT TIME ZONE 'Africa/Nairobi')::date THEN 1 ELSE 0 END),
+               last_shown_on = (now() AT TIME ZONE 'Africa/Nairobi')::date`,
         [userId, out.map((o) => o.plan_id), out.map((o) => o.slot)],
       );
     }

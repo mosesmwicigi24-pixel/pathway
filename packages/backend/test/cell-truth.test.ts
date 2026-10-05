@@ -26,6 +26,7 @@ interface Summary {
     next: { start_at: string; occurrence_id: string } | null;
     roster: { count: number; faces: Array<{ first_name: string; avatar_url: string | null }> };
     turnout: { rate: number; meetings: number; trend: string | null } | null;
+    attendance: { attended: number; expected: number; you: { attended: number; meetings: number } | null };
     leader_view: { count: number; names: string[] } | null;
   } | null;
 }
@@ -138,6 +139,24 @@ describe("cell summary tells the truth about the member's OWN cell", () => {
     const s = (await cal().cellSummary(member)) as Summary;
     // 4 members; meeting shares 2/4 and 3/4 → 0.625 → 0.63.
     expect(s.cell!.turnout).toEqual({ rate: 0.63, meetings: 2, trend: null });
+  });
+
+  it("the member's own part counts the cell's real meetings, not the scoring baseline (EXPERIENCE.md §7.4 #16)", async () => {
+    const { cong, cell, member } = await fixture();
+    await pastMeeting(cong, cell, "evt-y1", 21);
+    await pastMeeting(cong, cell, "evt-y2", 14);
+    await pastMeeting(cong, cell, "evt-y3", 7);
+    await checkIn(member, "evt-y1");
+    await checkIn(member, "evt-y3");
+    const s = (await cal().cellSummary(member)) as Summary;
+    expect(s.cell!.attendance.you).toEqual({ attended: 2, meetings: 3 });
+    expect(s.cell!.attendance.expected).toBe(8); // the baseline is still sent, unchanged
+  });
+
+  it("a cell that has never met has no 'you' figure", async () => {
+    const { member } = await fixture();
+    const s = (await cal().cellSummary(member)) as Summary;
+    expect(s.cell!.attendance.you).toBeNull();
   });
 
   it("the leader — and only the leader — sees who missed the last two gatherings", async () => {

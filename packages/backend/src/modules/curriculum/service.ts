@@ -8,6 +8,7 @@ import { many, maybeOne, one, tx, audit } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { cacheGetSet, cacheKeys } from "../../cache.js";
 import { loadEnrollment, loadModule, isModuleUnlocked, isEntryModule } from "../progress/gating.js";
+import { levelsWithExamQuestions } from "../assessment/exam.js";
 
 /** Authoring marker that splits a lesson body into mobile reader pages. */
 const PAGE_BREAK = /<!--\s*page-break\s*-->/;
@@ -95,6 +96,7 @@ export class CurriculumService {
       [userId],
     );
     const awaitingLevels = new Set(awaitingRows.map((r) => r.level_number));
+    const examPooled = await levelsWithExamQuestions(this.pool);
     const rows = await many<{
       level_number: number;
       title: string;
@@ -102,6 +104,8 @@ export class CurriculumService {
       description: string | null;
       total_modules: number;
       completed_modules: number;
+      lessons_total: number;
+      lessons_completed: number;
       minutes: number;
       exam_status: string;
     }>(
@@ -118,6 +122,15 @@ export class CurriculumService {
                   AND (mp.progress_id IS NOT NULL
                        OR (l.level_number = $2 AND m.module_sequence_number < $3))
               )::int AS completed_modules,
+              -- Lessons only — the exam is a step of its own, never "a module"
+              -- (EXPERIENCE.md §8.2): total_modules counts the published exam
+              -- container, so a finisher read "20 of 21 done" beside "20 of 20".
+              COUNT(m.module_id) FILTER (WHERE m.evaluation_kind <> 'exit_exam')::int AS lessons_total,
+              COUNT(*) FILTER (
+                WHERE m.module_id IS NOT NULL AND m.evaluation_kind <> 'exit_exam'
+                  AND (mp.progress_id IS NOT NULL
+                       OR (l.level_number = $2 AND m.module_sequence_number < $3))
+              )::int AS lessons_completed,
               COALESCE(SUM(m.estimated_minutes), 0)::int AS minutes
          FROM levels l
          LEFT JOIN modules m
@@ -155,12 +168,18 @@ export class CurriculumService {
         description: r.description,
         total_modules: r.total_modules,
         completed_modules: r.completed_modules,
+        lessons_total: r.lessons_total,
+        lessons_completed: Math.min(r.lessons_completed, r.lessons_total),
         minutes: r.minutes,
         status,
         awaiting_review: awaitingReview,
         // The level's final exam is live only once an admin publishes it — the
         // client hides the exam gate until then (the exam is "in review").
         exam_published: r.exam_status === "published",
+        // …and it can only be TAKEN once it has questions: published with an
+        // empty pool, the exam answers 422 — the apps offer it only when this
+        // is true (EXPERIENCE.md §7.2 #1).
+        exam_available: r.exam_status === "published" && examPooled.has(r.level_number),
       };
     });
     return { current_level: currentLevel, levels };
@@ -203,6 +222,8 @@ export class CurriculumService {
       [levelNumber],
     );
     const examPublished = !lvl || lvl.exam_status === "published";
+    // Published AND has questions — the only exam the member can take (§7.2 #1).
+    const examAvailable = examPublished && (await levelsWithExamQuestions(this.pool, levelNumber)).has(levelNumber);
     // Has this member already passed the level exam? Drives the exam row's
     // "completed" state (there is no "read to complete" for an exam container).
     const examPassed =
@@ -263,6 +284,7 @@ export class CurriculumService {
           status,
           progress: completed ? 100 : 0,
           locked: !unlocked,
+          exam_available: examAvailable,
         });
         continue;
       }

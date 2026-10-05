@@ -368,25 +368,27 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
   // --- Cell reading presence (Wave 2): studying together, apart ---
   r.get("/community/presence", auth, handler(async (req, res) => {
     const userId = requirePrincipal(req).userId;
-    const rows = await ctx.db.primary.query(
+    // Everyone active counts (it stopped at 12), and the three named are the
+    // most recently active — the same names on every visit; they were drawn at
+    // random per request (EXPERIENCE.md Cycle 4; §7.4 #5's "stands" rule).
+    const rows = await ctx.db.primary.query<{ first_name: string; total: number }>(
       `WITH me AS (SELECT cell_group_id, congregation_id FROM users WHERE user_id = $1)
-       SELECT split_part(u.full_name, ' ', 1) AS first_name
-         FROM users u, me
+       SELECT split_part(u.full_name, ' ', 1) AS first_name, (count(*) OVER ())::int AS total
+         FROM users u
+         CROSS JOIN me
+         JOIN LATERAL (SELECT max(e.updated_at) AS last FROM module_engagement e WHERE e.user_id = u.user_id) a ON true
         WHERE u.user_id <> $1 AND u.deleted_at IS NULL
           AND ((me.cell_group_id IS NOT NULL AND u.cell_group_id = me.cell_group_id)
                OR (me.cell_group_id IS NULL AND u.congregation_id = me.congregation_id))
-          AND EXISTS (
-            SELECT 1 FROM module_engagement e
-             WHERE e.user_id = u.user_id AND e.updated_at > now() - interval '7 days'
-          )
-        ORDER BY random()
-        LIMIT 12`,
+          AND a.last > now() - interval '7 days'
+        ORDER BY a.last DESC, u.user_id
+        LIMIT 3`,
       [userId],
     );
     const me = await ctx.db.primary.query(`SELECT cell_group_id FROM users WHERE user_id = $1`, [userId]);
     res.json({
-      count: rows.rowCount ?? 0,
-      names: rows.rows.slice(0, 3).map((r: { first_name: string }) => r.first_name),
+      count: rows.rows[0]?.total ?? 0,
+      names: rows.rows.map((r) => r.first_name),
       scope: me.rows[0]?.cell_group_id ? "cell" : "congregation",
     });
   }));

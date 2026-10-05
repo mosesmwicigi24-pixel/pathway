@@ -62,6 +62,33 @@ describe("GET /me/home/next-action", () => {
     expect(res.body.nudges[0]).toMatchObject({ id: expect.any(String), title: expect.any(String), cta_label: expect.any(String), route: expect.any(String), priority: expect.any(Number) });
   });
 
+  it("opens the level review only when the exam can be taken (EXPERIENCE.md §7.2 #1)", async () => {
+    const enr = await createEnrollment(meId, 1);
+    const lesson = await createModule(1, 1, { evaluationKind: "none", published: true });
+    await createModule(1, 11, { evaluationKind: "exit_exam", published: true, title: "Level 1 Review" });
+    await testPool().query(
+      `INSERT INTO module_progress (enrollment_id, module_id, is_completed, completed_at) VALUES ($1,$2,TRUE,now())`,
+      [enr, lesson],
+    );
+    const svc = new HomeService(testPool());
+    // Every lesson done and the exam published — but no questions: no review.
+    expect((await svc.nudges(meId)).nudges.map((n) => n.kind)).not.toContain("level_review");
+
+    const { addQuestion } = await import("./helpers/factories.js");
+    await addQuestion(lesson, "A");
+    const review = (await svc.nudges(meId)).nudges.find((n) => n.kind === "level_review");
+    // One name for the exam everywhere (EXPERIENCE.md §9.1 rule 1) — it was
+    // "Level 1 review is open · Start review".
+    expect(review).toMatchObject({
+      title: "Take the Level 1 exam",
+      cta_label: "Begin the exam",
+      route: "level_exam",
+      params: { levelNumber: 1 },
+    });
+    const words = review as { title: string; body: string; cta_label: string };
+    expect(`${words.title} ${words.body} ${words.cta_label}`).not.toMatch(/review/i); // the kind key stays
+  });
+
   it("always returns a hero (affirmation fallback) even with no enrollment", async () => {
     const res = await agent().get("/v1/me/home/next-action").set(auth(meTok));
     expect(res.status).toBe(200);

@@ -113,7 +113,7 @@ describe("pledge reminders", () => {
 
   it("a confirmed 'I paid another way' is a real manual gift: attributed, ledger-posted, receipted", async () => {
     const pledge = await partners.createPledge(user, { shape: "total", target_minor: 50_000, currency: "KES", due_on: "2030-06-01", fund: "mission", reminders_enabled: true });
-    const claim = await partners.createClaim(user, String(pledge.pledge_id), { amount_minor: 50_000, currency: "KES", paid_on: "2030-03-09", note: "cash at the office" });
+    const claim = await partners.createClaim(user, String(pledge.pledge_id), { amount_minor: 50_000, currency: "KES", paid_on: "2030-03-09", note: "cash at the office" }, new Date("2030-03-10T09:00:00Z"));
     expect(claim.status).toBe("pending");
     expect((await partners.pendingClaims()).length).toBe(1);
     const decided = await partners.decideClaim(admin, String(claim.claim_id), "confirm", notifications);

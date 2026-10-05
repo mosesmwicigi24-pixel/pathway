@@ -221,6 +221,34 @@ describe("scheduling", () => {
   });
 });
 
+describe("an announcement its recipients can open (EXPERIENCE.md §7.4 #10, #11)", () => {
+  it("opens for a recipient reached only by push, stays hidden from others, and reading it reads its notice", async () => {
+    const created = await agent()
+      .post("/v1/admin/announcements")
+      .set(auth(adminTok))
+      .send(compose({ title: "Cell A prayer night", channels: ["push"], audience: { kind: "cells", cell_group_ids: [cellA] } }));
+    const id = created.body.announcement_id as string;
+    expect((await agent().post(`/v1/admin/announcements/${id}/send`).set(auth(adminTok))).status).toBe(200);
+
+    // The push notice points here; it used to answer "not found" without a banner delivery.
+    const detail = await agent().get(`/v1/announcements/${id}`).set(auth(memberATok));
+    expect(detail.status).toBe(200);
+    expect(detail.body.title).toBe("Cell A prayer night");
+    // Not a recipient (another cell): still not found.
+    const memberBTok = bearer({ sub: memberB, role: "Student", cong });
+    expect((await agent().get(`/v1/announcements/${id}`).set(auth(memberBTok))).status).toBe(404);
+
+    // The worker sends the push; opening the announcement reads that notice.
+    await testPool().query(
+      `UPDATE notifications SET status = 'sent', sent_at = now() WHERE user_id = $1 AND template LIKE 'announcement%'`,
+      [memberA],
+    );
+    expect((await agent().get("/v1/me/notifications").set(auth(memberATok))).body.unread).toBe(1);
+    expect((await agent().post(`/v1/announcements/${id}/open`).set(auth(memberATok))).status).toBe(200);
+    expect((await agent().get("/v1/me/notifications").set(auth(memberATok))).body.unread).toBe(0);
+  });
+});
+
 describe("images + homepage feature + delete + member detail (migration 52)", () => {
   it("stores a primary image + gallery, features on homepage, serves member detail, and soft-deletes", async () => {
     const created = await agent()

@@ -24,14 +24,79 @@ export interface MobileMoneyCallback {
   /** M-Pesa confirmation code from the customer's SMS (e.g. UG3J29U3OL), when the
    *  success callback carries it. Display-only; settlement still keys off `ref`. */
   receipt?: string | undefined;
+  /** The provider's own result code and text (Daraja ResultCode / ResultDesc). */
+  result_code?: string | undefined;
+  result_desc?: string | undefined;
 }
+
+/** What the provider itself says happened to a prompt (Giving Cycle 1). */
+export type MobileMoneyStatus =
+  | { state: "succeeded" }
+  | { state: "failed"; code: string; desc?: string | undefined }
+  | { state: "pending" };
 
 export interface MobileMoneyProvider {
   readonly key: MobileMoneyKey;
+  /**
+   * True when `verifyCallback` PROVES the callback came from the provider (an
+   * HMAC over the body). False for Daraja: Safaricom signs nothing, so a
+   * callback is only a hint that something happened, and the outcome is read
+   * from the provider with `queryStatus` before any money moves (Cycle 1 —
+   * anyone who knew a CheckoutRequestID could otherwise post "paid").
+   */
+  readonly signedCallbacks: boolean;
   /** Send the STK push; returns the provider checkout reference. */
   initiate(input: MobileMoneyCharge): Promise<{ ref: string }>;
   /** Verify the callback signature and parse it, or throw on tamper. */
   verifyCallback(rawBody: Buffer | string, signature: string): MobileMoneyCallback;
+  /** Ask the provider what happened to a prompt. `pending` = no answer yet
+   *  (still on the phone, or the provider could not say) — never a guess. */
+  queryStatus(ref: string): Promise<MobileMoneyStatus>;
+}
+
+/**
+ * Our word for why a mobile-money payment failed, from the provider's code —
+ * the thing a member can act on ("you cancelled it" is not "your phone was
+ * off") and the thing a schedule decides with: `retryable` failures happened
+ * to the member (they never had a chance to answer), the others were the
+ * member's answer or their account's, and a machine must not keep asking.
+ */
+export type GiftFailureCode =
+  | "cancelled"
+  | "unreachable"
+  | "expired"
+  | "insufficient_funds"
+  | "wrong_pin"
+  | "busy"
+  | "limit_exceeded"
+  | "declined"
+  | "system"
+  | "no_answer"
+  | "no_phone";
+
+export interface GiftFailure {
+  code: GiftFailureCode;
+  retryable: boolean;
+}
+
+const MPESA_RESULT: Record<string, GiftFailure> = {
+  "1032": { code: "cancelled", retryable: false },
+  "1037": { code: "unreachable", retryable: true },
+  "1019": { code: "expired", retryable: true },
+  "1": { code: "insufficient_funds", retryable: false },
+  "2001": { code: "wrong_pin", retryable: false },
+  "1001": { code: "busy", retryable: true },
+  "1025": { code: "system", retryable: true },
+  "9999": { code: "system", retryable: true },
+  "26": { code: "system", retryable: true },
+  "17": { code: "system", retryable: true },
+};
+
+/** Provider result code → our failure word. Unknown codes are a plain
+ *  "declined" — not retried, because we do not know it is safe to. */
+export function mobileMoneyFailure(providerCode: string | number | undefined | null): GiftFailure {
+  const key = providerCode === undefined || providerCode === null ? "" : String(providerCode).trim();
+  return MPESA_RESULT[key] ?? { code: "declined", retryable: false };
 }
 
 /**
@@ -39,15 +104,29 @@ export interface MobileMoneyProvider {
  * shared secret the provider holds — the verification path is the real one.
  */
 export class FakeMobileMoneyProvider implements MobileMoneyProvider {
+  readonly signedCallbacks = true;
   readonly initiated: MobileMoneyCharge[] = [];
+  /** What `queryStatus` answers per ref (tests set it; default pending). */
+  readonly outcomes = new Map<string, MobileMoneyStatus>();
+  /** Every ref `queryStatus` was asked about, in order. */
+  readonly queried: string[] = [];
   constructor(
     readonly key: MobileMoneyKey,
     private readonly secret = "test-mm-secret",
+    /** Set by a dev server (never in tests): the counter restarts with the
+     *  process, and a ref an earlier run already stored made every new
+     *  prompt a 500 — a per-run prefix keeps refs unique across restarts. */
+    private readonly runPrefix = "",
   ) {}
 
   async initiate(input: MobileMoneyCharge): Promise<{ ref: string }> {
     this.initiated.push(input);
-    return { ref: `${this.key}_co_${this.initiated.length}` };
+    return { ref: `${this.key}_co_${this.runPrefix}${this.initiated.length}` };
+  }
+
+  async queryStatus(ref: string): Promise<MobileMoneyStatus> {
+    this.queried.push(ref);
+    return this.outcomes.get(ref) ?? { state: "pending" };
   }
 
   sign(rawBody: string): string {
@@ -71,6 +150,8 @@ export class FakeMobileMoneyProvider implements MobileMoneyProvider {
       ref: parsed.ref,
       status: parsed.status === "succeeded" ? "succeeded" : "failed",
       receipt: typeof parsed.receipt === "string" ? parsed.receipt : undefined,
+      result_code: parsed.result_code === undefined ? undefined : String(parsed.result_code),
+      result_desc: typeof parsed.result_desc === "string" ? parsed.result_desc : undefined,
     };
   }
 }
@@ -96,7 +177,7 @@ export function sanitizeAccountReference(raw: string | undefined | null): string
 export function toMsisdn(phone: string): string {
   let d = phone.replace(/\D/g, "");
   if (d.startsWith("0")) d = `254${d.slice(1)}`;
-  else if (d.length === 9 && d.startsWith("7")) d = `254${d}`;
+  else if (d.length === 9 && /^[17]/.test(d)) d = `254${d}`; // 7XX… and the 01XX range without its 0
   return d;
 }
 
@@ -128,10 +209,19 @@ export interface DarajaConfig {
  */
 export class DarajaMpesaProvider implements MobileMoneyProvider {
   readonly key = "mpesa" as const;
+  readonly signedCallbacks = false;
   private token?: { value: string; expiresAt: number };
   private readonly base: string;
-  constructor(private readonly cfg: DarajaConfig) {
+  constructor(
+    private readonly cfg: DarajaConfig,
+    /** Injected in tests to play Safaricom; the real `fetch` otherwise. */
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {
     this.base = cfg.env === "production" ? "https://api.safaricom.co.ke" : "https://sandbox.safaricom.co.ke";
+  }
+
+  private password(timestamp: string): string {
+    return Buffer.from(`${this.cfg.shortcode}${this.cfg.passkey}${timestamp}`).toString("base64");
   }
 
   private async accessToken(): Promise<string> {
@@ -152,16 +242,22 @@ export class DarajaMpesaProvider implements MobileMoneyProvider {
     }
     const token = await this.accessToken();
     const timestamp = yyyymmddhhmmss(new Date());
-    const password = Buffer.from(`${this.cfg.shortcode}${this.cfg.passkey}${timestamp}`).toString("base64");
+    const password = this.password(timestamp);
     const amount = Math.max(1, Math.round(input.amountMinor / 100)); // Daraja takes whole KES
     const account =
       sanitizeAccountReference(input.metadata.reference) ??
       sanitizeAccountReference(input.metadata.fund) ??
       "NuruGiving";
-    const json = (await this.fetchJson(`${this.base}/mpesa/stkpush/v1/processrequest`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({
+    // Why a push was refused decides whose problem it is (Giving Cycle 1): a
+    // network error, a 5xx or a rate limit is Safaricom being unavailable —
+    // OURS to retry, never a strike against the giver — while a 400 about the
+    // number or the amount is the gift's own problem, which the giver can fix.
+    let res: Response;
+    try {
+      res = await this.fetchWithTimeout(`${this.base}/mpesa/stkpush/v1/processrequest`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({
         BusinessShortCode: this.cfg.shortcode,
         Password: password,
         Timestamp: timestamp,
@@ -173,15 +269,74 @@ export class DarajaMpesaProvider implements MobileMoneyProvider {
         CallBackURL: this.cfg.callbackUrl,
         AccountReference: account,
         TransactionDesc: "Giving",
-      }),
-    })) as { ResponseCode?: string; CheckoutRequestID?: string; errorMessage?: string };
-    if (json.ResponseCode !== "0" || !json.CheckoutRequestID) {
-      throw new ApiError("UPSTREAM_UNAVAILABLE", json.errorMessage ?? "M-Pesa STK push was not accepted");
+        }),
+      });
+    } catch {
+      throw new ApiError("UPSTREAM_UNAVAILABLE", "M-Pesa is unavailable right now");
     }
-    return { ref: json.CheckoutRequestID };
+    let json: { ResponseCode?: string; CheckoutRequestID?: string; errorMessage?: string; errorCode?: string } = {};
+    try {
+      json = (await res.json()) as typeof json;
+    } catch {
+      /* no body — judged by the status below */
+    }
+    if (res.ok && json.ResponseCode === "0" && json.CheckoutRequestID) return { ref: json.CheckoutRequestID };
+    const message = (json.errorMessage ?? "").toString();
+    if (res.status >= 500 || res.status === 429 || res.status === 401 || res.status === 403 || (res.ok && !json.ResponseCode)) {
+      throw new ApiError("UPSTREAM_UNAVAILABLE", "M-Pesa is unavailable right now");
+    }
+    if (/phone|party ?a|msisdn/i.test(message)) {
+      throw new ApiError("PHONE_REQUIRED", "M-Pesa couldn't send a prompt to that number. Check it is an M-Pesa line.");
+    }
+    throw new ApiError("UNPROCESSABLE", message ? `M-Pesa refused the prompt: ${message.slice(0, 120)}` : "M-Pesa refused the prompt.");
   }
 
-  /** Parse Daraja's stkCallback. No signature to verify (Daraja sends none). */
+  /**
+   * STK Push Query: Safaricom's own answer about one prompt. A response that
+   * carries a ResultCode is final (0 = paid, anything else = not paid, with
+   * why); an error response without one ("the transaction is being
+   * processed", a rate limit, an expired token) means Safaricom cannot say
+   * yet — `pending`, asked again later, never guessed.
+   */
+  async queryStatus(ref: string): Promise<MobileMoneyStatus> {
+    let token: string;
+    try {
+      token = await this.accessToken();
+    } catch {
+      return { state: "pending" };
+    }
+    const timestamp = yyyymmddhhmmss(new Date());
+    let res: Response;
+    try {
+      res = await this.fetchWithTimeout(`${this.base}/mpesa/stkpushquery/v1/query`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          BusinessShortCode: this.cfg.shortcode,
+          Password: this.password(timestamp),
+          Timestamp: timestamp,
+          CheckoutRequestID: ref,
+        }),
+      });
+    } catch {
+      return { state: "pending" };
+    }
+    let json: { ResultCode?: unknown; ResultDesc?: unknown } = {};
+    try {
+      json = (await res.json()) as typeof json;
+    } catch {
+      return { state: "pending" };
+    }
+    if (json.ResultCode === undefined || json.ResultCode === null || String(json.ResultCode).trim() === "") {
+      return { state: "pending" };
+    }
+    const code = String(json.ResultCode).trim();
+    if (code === "0") return { state: "succeeded" };
+    return { state: "failed", code, desc: typeof json.ResultDesc === "string" ? json.ResultDesc : undefined };
+  }
+
+  /** Parse Daraja's stkCallback. No signature to verify (Daraja sends none),
+   *  so the result is a hint: the service confirms it with `queryStatus`. */
   verifyCallback(rawBody: Buffer | string): MobileMoneyCallback {
     const body = typeof rawBody === "string" ? rawBody : rawBody.toString("utf8");
     let parsed: {
@@ -189,6 +344,7 @@ export class DarajaMpesaProvider implements MobileMoneyProvider {
         stkCallback?: {
           CheckoutRequestID?: string;
           ResultCode?: number;
+          ResultDesc?: string;
           CallbackMetadata?: { Item?: Array<{ Name?: string; Value?: unknown }> };
         };
       };
@@ -215,26 +371,37 @@ export class DarajaMpesaProvider implements MobileMoneyProvider {
       ref: cb.CheckoutRequestID,
       status: succeeded ? "succeeded" : "failed",
       receipt,
+      result_code: String(cb.ResultCode),
+      result_desc: typeof cb.ResultDesc === "string" ? cb.ResultDesc.slice(0, 200) : undefined,
     };
   }
 
-  private async fetchJson(url: string, init: RequestInit): Promise<unknown> {
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20_000);
     try {
-      const res = await fetch(url, { ...init, signal: controller.signal });
+      return await this.fetchImpl(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async fetchJson(url: string, init: RequestInit): Promise<unknown> {
+    try {
+      const res = await this.fetchWithTimeout(url, init);
       if (!res.ok) throw new ApiError("UPSTREAM_UNAVAILABLE", "M-Pesa is unavailable right now");
       return await res.json();
     } catch (err) {
       if (err instanceof ApiError) throw err;
       throw new ApiError("UPSTREAM_UNAVAILABLE", "M-Pesa is unavailable right now");
-    } finally {
-      clearTimeout(timeout);
     }
   }
 }
 
 class NotConfiguredProvider implements MobileMoneyProvider {
+  readonly signedCallbacks = true;
+  /** Marker for the methods endpoint: this rail cannot take money here. */
+  readonly notConfigured = true;
   constructor(readonly key: MobileMoneyKey) {}
   initiate(): Promise<{ ref: string }> {
     throw new ProviderNotConfiguredError(`${this.key} payments are not configured`);
@@ -242,12 +409,28 @@ class NotConfiguredProvider implements MobileMoneyProvider {
   verifyCallback(): MobileMoneyCallback {
     throw new ProviderNotConfiguredError(`${this.key} payments are not configured`);
   }
+  queryStatus(): Promise<MobileMoneyStatus> {
+    throw new ProviderNotConfiguredError(`${this.key} payments are not configured`);
+  }
+}
+
+/** True when this provider can actually take money on this server. */
+export function providerIsLive(p: MobileMoneyProvider): boolean {
+  return !(p as { notConfigured?: boolean }).notConfigured;
 }
 
 export type MobileMoneyProviders = Record<MobileMoneyKey, MobileMoneyProvider>;
 
-/** Env-named secrets only (§5.10); unconfigured providers degrade to clear 503s. */
+/**
+ * Env-named secrets only (§5.10); unconfigured providers degrade to clear 503s.
+ *
+ * The HMAC fakes exist for tests and local development. In production they are
+ * NEVER built (Giving Cycle 1): a stray `AIRTEL_CALLBACK_SECRET` used to switch
+ * on an "Airtel" that accepted gifts and prompted no phone at all, leaving each
+ * one "processing" for ever. Production has Daraja or nothing.
+ */
 export function buildMobileMoneyProviders(env: Env): MobileMoneyProviders {
+  const fakesAllowed = env.NODE_ENV !== "production";
   const darajaReady =
     env.MPESA_CONSUMER_KEY && env.MPESA_CONSUMER_SECRET && env.MPESA_PASSKEY && env.MPESA_SHORTCODE && env.MPESA_CALLBACK_URL;
   return {
@@ -261,11 +444,12 @@ export function buildMobileMoneyProviders(env: Env): MobileMoneyProviders {
           txType: env.MPESA_TX_TYPE,
           callbackUrl: env.MPESA_CALLBACK_URL!,
         })
-      : env.MPESA_CALLBACK_SECRET
-        ? new FakeMobileMoneyProvider("mpesa", env.MPESA_CALLBACK_SECRET)
+      : fakesAllowed && env.MPESA_CALLBACK_SECRET
+        ? new FakeMobileMoneyProvider("mpesa", env.MPESA_CALLBACK_SECRET, `${Date.now().toString(36)}_`)
         : new NotConfiguredProvider("mpesa"),
-    airtel: env.AIRTEL_CALLBACK_SECRET
-      ? new FakeMobileMoneyProvider("airtel", env.AIRTEL_CALLBACK_SECRET)
+    // There is no real Airtel Money integration yet — only the test fake.
+    airtel: fakesAllowed && env.AIRTEL_CALLBACK_SECRET
+      ? new FakeMobileMoneyProvider("airtel", env.AIRTEL_CALLBACK_SECRET, `${Date.now().toString(36)}_`)
       : new NotConfiguredProvider("airtel"),
   };
 }

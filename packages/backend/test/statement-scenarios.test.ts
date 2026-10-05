@@ -263,7 +263,7 @@ describe("the member's statement right after money moves (real paths, no cache)"
   // ── (g) ──
   it("(g) an 'I paid another way' claim confirmed by the office appears as a manual payment and counts — settling the oldest instalment first", async () => {
     const g = await pledge({ shape: "monthly", amount_minor: 100_000, due_day: 15, title: "Choir" }, "2026-08-01 08:00:00+00"); // due 15 Aug, 15 Sep
-    const claim = (await partners.createClaim(user, g.pledge_id, { amount_minor: 100_000, currency: "KES", paid_on: "2026-09-14" })) as { claim_id: string };
+    const claim = (await partners.createClaim(user, g.pledge_id, { amount_minor: 100_000, currency: "KES", paid_on: "2026-09-14" }, now)) as { claim_id: string };
     const waiting = await statement();
     expect(waiting).toMatchObject({ paid_minor: 0, payments: [], pending: [] }); // a claim is not money until the office confirms it
     const decided = await partners.decideClaim(admin, claim.claim_id, "confirm", notifications);
@@ -406,7 +406,7 @@ describe("the member's statement right after money moves (real paths, no cache)"
     expect(((await partners.partnership(user, now)).pledges as { title: string }[])[0]!.title).toBe("General partnership");
     expect(((await financial.listGiving(user)) as { pledge_title: string | null }[])[0]!.pledge_title).toBe("General partnership");
     expect(((await financial.givingDetail(user, intent.transaction_id)).pledge as { title: string }).title).toBe("General partnership");
-    await partners.createClaim(user, l.pledge_id, { amount_minor: 500, currency: "KES", paid_on: "2026-09-19" });
+    await partners.createClaim(user, l.pledge_id, { amount_minor: 500, currency: "KES", paid_on: "2026-09-19" }, now);
     expect((await partners.pendingClaims())[0]!.pledge_title).toBe("General partnership");
     const pdf = (await partners.partnersStatementPdf(user, 2026, now)).pdf.toString("latin1");
     expect(pdf).toContain("General partnership");
@@ -484,6 +484,29 @@ describe("the member's statement right after money moves (real paths, no cache)"
     await callback(push.provider_ref, "succeeded");
     expect(await row()).toBeUndefined();
     expect((await statement()).pending.map((x) => x.transaction_id)).not.toContain(push.transaction_id);
+  });
+
+  // ── (o2) ──
+  it("(o2) a DUE row says what the office is checking — a pending claim in the pledge's currency — and still asks what is owed (EXPERIENCE.md §9.3 rule 1)", async () => {
+    const o = await pledge({ shape: "monthly", amount_minor: 100_000, due_day: 20 }, "2026-09-01 08:00:00+00"); // due today
+    const row = async () =>
+      ((await partners.partnership(user, now)).due as { id: string; amount_minor: number; pending_claim_minor: number }[])
+        .find((d) => d.id === o.pledge_id);
+    expect(await row()).toMatchObject({ amount_minor: 100_000, pending_claim_minor: 0 });
+
+    // "I paid another way": KSh 2,000 cash at the office — a claim the office has not confirmed yet.
+    const claim = await partners.createClaim(user, o.pledge_id, { amount_minor: 200_000, currency: "KES", paid_on: "2026-09-19" } as never, now);
+    // A claim in another currency is the office's to sort out; it is not added in.
+    await testPool().query(
+      `INSERT INTO pledge_claims (pledge_id, user_id, amount_minor, currency, paid_on) VALUES ($1, $2, 1000, 'USD', '2026-09-19')`,
+      [o.pledge_id, user],
+    );
+    // Shown, never subtracted: a claim counts once the office confirms it (GIVING.md).
+    expect(await row()).toMatchObject({ amount_minor: 100_000, pending_claim_minor: 200_000 });
+
+    // Rejected, it no longer stands beside the row.
+    await testPool().query(`UPDATE pledge_claims SET status = 'rejected' WHERE claim_id = $1`, [(claim as { claim_id: string }).claim_id]);
+    expect(await row()).toMatchObject({ pending_claim_minor: 0 });
   });
 
   // ── (p) ──

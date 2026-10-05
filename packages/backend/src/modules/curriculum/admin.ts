@@ -9,6 +9,7 @@ import { z } from "zod";
 import { many, maybeOne, one, tx, recordChange, audit, type Queryable } from "../../db/db.js";
 import { ApiError } from "../../http/errors.js";
 import { splitContentPages } from "./service.js";
+import { levelsWithExamQuestions } from "../assessment/exam.js";
 
 const KIND = z.enum(["none", "reflection", "quiz", "exit_exam"]);
 
@@ -302,6 +303,19 @@ export class AdminCurriculumService {
     editorId: string,
     input: z.infer<typeof AdminCurriculumService.UpdateExam>,
   ): Promise<unknown> {
+    // An exam with no questions can't be taken — publishing one offers members
+    // a dead end (EXPERIENCE.md §7.2 #1). Refused only on the way INTO
+    // 'published', so saving other settings on a live exam never trips it.
+    if (input.exam_status === "published") {
+      const cur = await maybeOne<{ exam_status: string }>(
+        this.pool,
+        `SELECT exam_status FROM levels WHERE level_number = $1`,
+        [levelNumber],
+      );
+      if (cur && cur.exam_status !== "published" && !(await levelsWithExamQuestions(this.pool, levelNumber)).has(levelNumber)) {
+        throw new ApiError("UNPROCESSABLE", "Add at least one active question before publishing this exam.");
+      }
+    }
     return this.patchLevel(
       levelNumber,
       editorId,
