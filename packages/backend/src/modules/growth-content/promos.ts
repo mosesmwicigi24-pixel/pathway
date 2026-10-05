@@ -173,11 +173,17 @@ export async function planPromos(pool: pg.Pool, userId: string, limit = 5): Prom
     "You haven't opened this one yet — it may be the word for this season.");
 
   // Still short (a small library, or everything recently shown)? Fill with the
-  // least-shown untouched plans rather than returning a thin page.
+  // least-shown untouched plans rather than returning a thin page — today's
+  // fillers first, so the page stands all day like every other slot (showing a
+  // plan counts it, so "least-shown" alone picked new fillers on every
+  // request; EXPERIENCE.md §7.4 #5). A plan they have begun is never filler:
+  // it lives in My plans, and "FROM THE LIBRARY" would offer it as new.
   while (out.length < limit) {
     const filler = plans
-      .filter((p) => !used.has(p.plan_id) && !finishedIds.has(p.plan_id))
-      .sort((a, b) => timesShown(a.plan_id) - timesShown(b.plan_id) || a.sort - b.sort)[0];
+      .filter((p) => !used.has(p.plan_id) && !touched.has(p.plan_id))
+      .sort((a, b) =>
+        Number(shownToday(b.plan_id)) - Number(shownToday(a.plan_id))
+        || timesShown(a.plan_id) - timesShown(b.plan_id) || a.sort - b.sort)[0];
     if (!filler) break;
     used.add(filler.plan_id);
     out.push({

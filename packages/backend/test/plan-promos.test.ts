@@ -126,6 +126,29 @@ describe("plan promos earn their place", () => {
     expect(log.rows).toHaveLength(2);                // it remembered both
   });
 
+  it("memory: the WHOLE page stands all day — fillers included (EXPERIENCE.md §7.4 #5)", async () => {
+    const cong = await createCongregation();
+    const u = await createUser({ congregationId: cong, email: "k@dev.local" });
+    for (let i = 1; i <= 8; i++) await plan(`p${i}`, `Plan ${i}`, "Growth", i);
+
+    // A blank member: one "fresh" slot earns its place, the rest is filler.
+    const first = await planPromos(testPool(), u.user_id);
+    expect(first).toHaveLength(5);
+    expect(first.filter((p) => p.kicker === "FROM THE LIBRARY").length).toBeGreaterThan(0);
+
+    // Showing a plan counts it, and the filler used to pick the least-shown, so
+    // every request picked different fillers (three calls, three pages).
+    for (let call = 0; call < 3; call++) {
+      expect(await planPromos(testPool(), u.user_id)).toEqual(first);
+    }
+
+    // The next day the page moves on: the never-shown lead.
+    await testPool().query(`UPDATE plan_promo_log SET last_shown_on = last_shown_on - 1 WHERE user_id = $1`, [u.user_id]);
+    const tomorrow = await planPromos(testPool(), u.user_id);
+    const shownYesterday = new Set(first.map((p) => p.plan_id));
+    expect(shownYesterday.has(tomorrow[0]!.plan_id)).toBe(false);
+  });
+
   it("never promotes a plan already finished, and never the same plan twice in one page", async () => {
     const cong = await createCongregation();
     const u = await createUser({ congregationId: cong, email: "h@dev.local" });
@@ -137,6 +160,26 @@ describe("plan promos earn their place", () => {
     const promos = await planPromos(testPool(), u.user_id);
     expect(promos.some((p) => p.plan_id === finished)).toBe(false);
     expect(new Set(promos.map((p) => p.plan_id)).size).toBe(promos.length);
+  });
+
+  it("never offers a plan already begun as if it were new — a second plan in progress is not 'FROM THE LIBRARY' (EXPERIENCE.md §7.4)", async () => {
+    const cong = await createCongregation();
+    const u = await createUser({ congregationId: cong, email: "j@dev.local" });
+    const older = await plan("p1", "Older Walk", "Growth", 1);
+    const newer = await plan("p2", "Newer Walk", "Faith", 2);
+    const untouched = await plan("p3", "Plan C", "Courage", 3);
+    await start(u.user_id, older);
+    await testPool().query(
+      `UPDATE reading_plan_progress SET updated_at = now() - interval '3 days' WHERE user_id = $1 AND plan_id = $2`,
+      [u.user_id, older],
+    );
+    await start(u.user_id, newer);
+
+    const promos = await planPromos(testPool(), u.user_id);
+    expect(promos[0]).toMatchObject({ slot: "continue", plan_id: newer });
+    expect(promos.map((p) => p.plan_id)).toContain(untouched);
+    // The older walk lives in My plans; the shelf never re-offers it as new.
+    expect(promos.some((p) => p.plan_id === older)).toBe(false);
   });
 
   it("an empty library is an empty page, not an error", async () => {
