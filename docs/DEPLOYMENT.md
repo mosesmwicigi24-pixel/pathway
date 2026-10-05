@@ -137,6 +137,35 @@ bundle, so this is instant and total.
 
 ## Incident ledger
 
+### 2026-10-05 — The stack lands: Giving cycles, notification sounds, Experience Cycles 1–5 (server)
+
+**What shipped.** pathway#507 (merge commit `c349bbf`) merged the branches that had been
+stacked since 2026-09-28. That was the Giving cycles 1–10 (was #496), notification
+sounds (was #497) and the Experience programme's server side (was #498),
+with the day's two hotfixes already on `main`.
+
+**Owner YES, 2026-10-05** ("yes to A, B, C and D — go ahead"):
+- **(A) Money logic:** the Giving cycles, including the two schedule backfills.
+- **(B) Announcement visibility:** any recipient, by any channel, can open an announcement, and opening it reads its notices.
+- **(C) Migrations 218–223.**
+- **(D) Android's sign-out revokes the session.** This ships with the app merge, not this deploy.
+
+**Migrations.** All six are additive: new columns on `transactions`,
+`giving_schedules`, `pledges` and `notification_preferences`; a check on
+the new `failure_code`; and six indexes (three in 218, one in 220, two in 222). Two backfills ran against
+production's baseline of 8 active schedules (3 monthly, 5 weekly, none paused):
+- 219 set `anchor_day` on the 3 monthly schedules from their creation day.
+- 220 found no paused schedule to label.
+
+Backups were taken first: `giving_schedules`, `pledges` and
+`transactions` → `/root/backups/stack-deploy-20261005/`.
+
+**Verified.** Deployed 2026-10-05 21:27 UTC with `--migrate`: api + worker revision `c349bbf8c…` (image `sha-c349bbf`), api healthy, worker up with no restarts (FCM, SMTP and SMS providers active), `/readyz` 200 locally and through the edge. All six migrations ran (218–223), 18 of 18 columns and 6 of 6 indexes exist, and the `failure_code` check is in place. Monthly schedules with `anchor_day`: 3, as expected; paused schedules without a reason: 0; the 8 schedules are unchanged. The new routes answer (`/v1/me/cell-connection` and others → 401 unauthenticated), the running `dist` holds the new code, and there were no error-level lines and no 5xx afterwards. Backup: `money-tables.dump` (35,982 bytes, 8 schedules, 3 pledges, 141 transactions). Portal: the CI artifact `portal-c349bbf…` is served, and `version.txt` = `c349bbf8c…` through the edge (the previous bundle is kept beside the backups). **Merged during a GitHub Actions incident** on the owner's explicit "merge", with the queued CI jobs cancelled by GitHub. The evidence was green build, lint, types, contract, migrations and seed on the previous commit, the full suite green locally on the merged code (176 files, 1,932 tests), and `main`'s CI on `c349bbf` then went fully green (`checks`, 8 shards, `ci`). CI itself now runs in 8 parallel shards (about 3 minutes each).
+
+**Rollback.** Redeploy `sha-50e914e` and the previous portal artifact. The
+migrations are additive, so the old code runs on the new schema; roll
+forward rather than down. The backups hold every pre-deploy row.
+
 ### 2026-10-05 — Every member read "Level 1 of 7": a stray level, and a status no member read honoured
 
 **Symptom.** Both member apps' closing walk (Experience Cycle 3) read
