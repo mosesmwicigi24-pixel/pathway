@@ -11,8 +11,10 @@
 // the two properties that matter — it only ever touches OUR clusters, and it
 // escalates until the port is actually free.
 import { describe, it, expect } from "vitest";
-import { findOrphanClusters } from "./helpers/orphanCluster.js";
-import { readFileSync } from "node:fs";
+import { clusterRunningIn, findOrphanClusters } from "./helpers/orphanCluster.js";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -80,5 +82,39 @@ describe("abandoned data directories are swept", () => {
 
   it("skips directories that still have a live process", () => {
     expect(setupSource).toContain("live.has(full)");
+  });
+});
+
+// 2026-10-05: a run on a private port (55437) swept the data directory of a
+// suite running on 55432 — mid-run, 815 tests failed on "could not open file
+// base/16384/…". The sweep only spared clusters on ITS OWN port. A directory a
+// Postgres is running out of must be spared whatever port it serves.
+describe("the temp-dir sweep never takes a running cluster's directory", () => {
+  const scratch = (): string => mkdtempSync(join(tmpdir(), "nuru-sweeptest-"));
+
+  it("a directory whose postmaster.pid names a live process is running — on any port", () => {
+    const dir = scratch();
+    try {
+      writeFileSync(join(dir, "postmaster.pid"), `${process.pid}\n${dir}\n`);
+      expect(clusterRunningIn(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a directory with no pid file, or a pid that has exited, is not", () => {
+    const dir = scratch();
+    try {
+      expect(clusterRunningIn(dir)).toBe(false);
+      const exited = spawnSync("true").pid!;
+      writeFileSync(join(dir, "postmaster.pid"), `${exited}\n`);
+      expect(clusterRunningIn(dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the sweep asks it before removing anything", () => {
+    expect(setupSource).toMatch(/clusterRunningIn\(full\)/);
   });
 });

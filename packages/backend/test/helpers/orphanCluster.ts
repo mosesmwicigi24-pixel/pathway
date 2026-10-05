@@ -32,7 +32,8 @@
 //   * it is the embedded-postgres binary from a node_modules tree.
 // A system postgres matches neither.
 import { execFileSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 /** Our test clusters live in mkdtemp(tmpdir(), "nuru-pg-") directories. */
 const DATA_DIR_MARKER = "nuru-pg-";
@@ -117,6 +118,33 @@ export function reapOrphanCluster(
     }
   }
   return { pid: orphan.pid, signal, dataDirRemoved };
+}
+
+/**
+ * Is a Postgres running out of `dataDir` right now — on ANY port, started by
+ * ANY checkout? Postgres writes its pid as the first line of postmaster.pid and
+ * removes the file on a clean stop, so a live pid there means hands off.
+ *
+ * The temp-dir sweep used to spare only directories of clusters on its OWN
+ * port. On 2026-10-05 a run on a private port (55437) swept the directory of a
+ * suite running on 55432, mid-run: 815 tests failed on "could not open file
+ * base/16384/…". A stale pid file whose pid was reused reads as live, which
+ * leaks one directory rather than destroying a running cluster.
+ */
+export function clusterRunningIn(dataDir: string): boolean {
+  let pid: number;
+  try {
+    pid = Number(readFileSync(join(dataDir, "postmaster.pid"), "utf8").split("\n")[0]);
+  } catch {
+    return false; // no pid file: no postmaster has this directory open
+  }
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM"; // alive, just not ours to signal
+  }
 }
 
 function isAlive(pid: number): boolean {
