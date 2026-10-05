@@ -486,6 +486,29 @@ describe("the member's statement right after money moves (real paths, no cache)"
     expect((await statement()).pending.map((x) => x.transaction_id)).not.toContain(push.transaction_id);
   });
 
+  // ── (o2) ──
+  it("(o2) a DUE row says what the office is checking — a pending claim in the pledge's currency — and still asks what is owed (EXPERIENCE.md §9.3 rule 1)", async () => {
+    const o = await pledge({ shape: "monthly", amount_minor: 100_000, due_day: 20 }, "2026-09-01 08:00:00+00"); // due today
+    const row = async () =>
+      ((await partners.partnership(user, now)).due as { id: string; amount_minor: number; pending_claim_minor: number }[])
+        .find((d) => d.id === o.pledge_id);
+    expect(await row()).toMatchObject({ amount_minor: 100_000, pending_claim_minor: 0 });
+
+    // "I paid another way": KSh 2,000 cash at the office — a claim the office has not confirmed yet.
+    const claim = await partners.createClaim(user, o.pledge_id, { amount_minor: 200_000, currency: "KES", paid_on: "2026-09-19" } as never, now);
+    // A claim in another currency is the office's to sort out; it is not added in.
+    await testPool().query(
+      `INSERT INTO pledge_claims (pledge_id, user_id, amount_minor, currency, paid_on) VALUES ($1, $2, 1000, 'USD', '2026-09-19')`,
+      [o.pledge_id, user],
+    );
+    // Shown, never subtracted: a claim counts once the office confirms it (GIVING.md).
+    expect(await row()).toMatchObject({ amount_minor: 100_000, pending_claim_minor: 200_000 });
+
+    // Rejected, it no longer stands beside the row.
+    await testPool().query(`UPDATE pledge_claims SET status = 'rejected' WHERE claim_id = $1`, [(claim as { claim_id: string }).claim_id]);
+    expect(await row()).toMatchObject({ pending_claim_minor: 0 });
+  });
+
   // ── (p) ──
   it("(p) two instalments behind: the DUE row asks for the whole catch-up; each smaller payment settles the oldest first; caught up, the row waits for the next week", async () => {
     const p = await pledge({ shape: "monthly", amount_minor: 50_000, due_day: 10, title: "Choir" }, "2026-08-01 08:00:00+00"); // due 10 Aug, 10 Sep, 10 Oct…

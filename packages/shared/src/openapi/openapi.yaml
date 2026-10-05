@@ -10791,6 +10791,7 @@ components:
               overdue_since: { type: [string, "null"], format: date, description: "kind pledge only — the earliest of those overdue due dates; null when overdue_count is 0" }
               pays_to: { $ref: "#/components/schemas/PledgePaysTo", description: "kind pledge only — where the money will be booked" }
               pending_minor: { type: integer, format: int64, description: "kind pledge only — Σ amount of THIS pledge's payments still processing or requiring action that were started in the last 15 minutes (the STK push / checkout window; deliberately shorter than the statement's 48 h pending[], so an abandoned checkout never blocks paying another way). 0 when none. Clients show \"Processing\" instead of Pay while pending_minor ≥ amount_minor." }
+              pending_claim_minor: { type: integer, format: int64, description: "kind pledge only — Σ amount of this member's PENDING \"I paid another way\" claims on THIS pledge, in the pledge's currency. Shown beside the row (\"KSh 2,000 is being checked by the office\") so nobody pays twice; never subtracted from amount_minor — a claim counts once the office confirms it. 0 when none." }
         pledge_options:
           type: array
           description: "Ordered: general, then active funds by name, then campaigns live today in the member's congregation, then that congregation's approved department needs."

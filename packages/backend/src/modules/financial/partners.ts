@@ -835,6 +835,7 @@ export class PartnersService {
     const today = nairobiDate(now);
     const window = addDays(today, PartnersService.DUE_WINDOW_DAYS);
     const inFlight = await this.inFlightByPledge(userId, now);
+    const claimsChecking = await this.pendingClaimsByPledge(userId);
     const pledges: Record<string, unknown>[] = [];
     const due: Record<string, unknown>[] = [];
     for (const r of await this.pledgeRows(this.pool, `WHERE p.user_id = $1 AND p.status <> 'cancelled'`, [userId])) {
@@ -858,6 +859,11 @@ export class PartnersService {
         // A payment toward it still in its checkout window: clients show
         // "Processing" instead of Pay while this covers amount_minor.
         pending_minor: inFlight.get(r.pledge_id) ?? 0,
+        // What the office is checking for it ("I paid another way"), in the
+        // pledge's own currency — shown beside the row so nobody pays twice,
+        // never subtracted: a claim counts once confirmed (GIVING.md;
+        // EXPERIENCE.md §9.3 rule 1).
+        pending_claim_minor: claimsChecking.get(`${r.pledge_id}:${String(r.currency).toUpperCase()}`) ?? 0,
       });
     }
     const committedMonthly = pledges
@@ -1300,6 +1306,19 @@ export class PartnersService {
   /** pledge_id → Σ amount of the member's pledge payments still processing
    *  or requiring action, started within IN_FLIGHT_MINUTES before `now`. One
    *  query for all their pledges. */
+  /** Pending "I paid another way" claims per pledge and currency. */
+  private async pendingClaimsByPledge(userId: string): Promise<Map<string, number>> {
+    const rows = await many<{ pledge_id: string; currency: string; total: string }>(
+      this.pool,
+      `SELECT c.pledge_id, upper(c.currency) AS currency, sum(c.amount_minor)::text AS total
+         FROM pledge_claims c
+        WHERE c.user_id = $1 AND c.status = 'pending'
+        GROUP BY c.pledge_id, upper(c.currency)`,
+      [userId],
+    );
+    return new Map(rows.map((r) => [`${r.pledge_id}:${r.currency}`, Number(r.total)]));
+  }
+
   private async inFlightByPledge(userId: string, now: Date): Promise<Map<string, number>> {
     const rows = await many<{ pledge_id: string; total: string }>(
       this.pool,
