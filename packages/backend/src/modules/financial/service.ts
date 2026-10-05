@@ -1576,7 +1576,7 @@ export class FinancialService {
    *  their pledge's title with a subtotal — so the total still foots with the
    *  member's bank and the church ledger. */
   async statementPdf(userId: string, year?: number): Promise<Buffer> {
-    const all = (await this.listGiving(userId)) as Array<{ amount_minor: number; currency: string; status: string; fund: string; method: string; method_label?: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string; pledge_id: string | null; pledge_title: string | null }>;
+    const all = (await this.listGiving(userId)) as Array<{ amount_minor: number; currency: string; status: string; fund: string; method: string; method_label?: string; provider_ref: string | null; receipt_code: string | null; account_name: string | null; created_at: string; settled_at: string | null; pledge_id: string | null; pledge_title: string | null }>;
     // One church year (EAT, by created_at — the statements' own year rule)
     // when the office asks for one; otherwise the complete record.
     const rows = year === undefined
@@ -1625,7 +1625,12 @@ export class FinancialService {
         totalLabel: settledLabel(recs),
         rows: recs.map((r) => {
           const ref = refOf(r);
-          return `${fundLabel(r)}  ${moneyWords(r.amount_minor, r.currency)}  ${timeLabel(r.created_at)}  ${r.method_label ?? methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}${r.account_name ? `  "${r.account_name}"` : ""}`;
+          // A settled gift is printed at the time it settled — the time both
+          // apps show on its row and its receipt (EXPERIENCE.md Cycle 3 close,
+          // B7). The day and the year stay with created_at, the statements'
+          // own rule, so no total moves.
+          const shownAt = r.settled_at ?? r.created_at;
+          return `${fundLabel(r)}  ${moneyWords(r.amount_minor, r.currency)}  ${timeLabel(shownAt)}  ${r.method_label ?? methodLabel(r.method)}  ${r.status.toUpperCase()}${ref ? `  Ref ${ref}` : ""}${r.account_name ? `  "${r.account_name}"` : ""}`;
         }),
       }));
     // Pledge-tied payments, newest first (listGiving's order), each dated and

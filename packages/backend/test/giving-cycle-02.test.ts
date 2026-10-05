@@ -78,6 +78,16 @@ describe("Cycle 2 — statements and receipts are honest about when, how much an
     expect(text(await svc.statementPdf(user, 2025))).not.toContain("KSh 500");
   });
 
+  it("S1b a settled gift is printed at the time it settled — the time both apps show on its row and receipt", async () => {
+    // Started at 11:58, settled at 11:59: the PDF said 11:58 while the receipt
+    // said 11:59 (EXPERIENCE.md, Cycle 3's closing walk B7).
+    const id = await mpesaGift(20_000, eat(2026, 9, 27, 11, 58));
+    await testPool().query(`UPDATE transactions SET settled_at = $2 WHERE transaction_id = $1`, [id, eat(2026, 9, 27, 11, 59).toISOString()]);
+    const pdf = text(await svc.statementPdf(user, 2026));
+    expect(pdf).toContain("11:59 AM");
+    expect(pdf).not.toContain("11:58 AM");
+  });
+
   it("S2 shillings and dollars on one statement are printed each in its own currency and never added", async () => {
     await mpesaGift(350_000, eat(2026, 3, 2));
     await paypalGift(2_000, eat(2026, 3, 3));
