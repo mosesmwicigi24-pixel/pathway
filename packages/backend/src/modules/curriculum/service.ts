@@ -62,12 +62,16 @@ export class CurriculumService {
     private readonly media?: MediaSigner,
   ) {}
 
-  /** Level catalog — identical for everyone, so cached (busted on admin edits). */
+  /** Level catalog — identical for everyone, so cached (busted on admin edits).
+   *  Published levels only: Draft and In review are the portal's way of
+   *  keeping a level from members, and no member read honoured it until
+   *  2026-10-05 (a stray seventh level, "LEVEL 1", made it "Level 1 of 7"). */
   listLevels(): Promise<unknown[]> {
     return cacheGetSet(this.redis, cacheKeys.levels, 600, () =>
       many(
         this.pool,
-        `SELECT level_number, title, theme, required_exam_pass_mark FROM levels ORDER BY level_number`,
+        `SELECT level_number, title, theme, required_exam_pass_mark FROM levels
+          WHERE status = 'published' ORDER BY level_number`,
       ),
     );
   }
@@ -121,9 +125,13 @@ export class CurriculumService {
          LEFT JOIN module_progress mp
            ON mp.module_id = m.module_id AND mp.is_completed
           AND mp.enrollment_id = $1
+        -- Published levels, plus every level at or below the member's own:
+        -- drafting a level hides the road ahead, never where they stand or
+        -- have walked.
+        WHERE l.status = 'published' OR l.level_number <= $4
         GROUP BY l.level_number, l.title, l.theme, l.description, l.exam_status
         ORDER BY l.level_number`,
-      [enrollment?.enrollment_id ?? null, enrollment?.start_level ?? 1, enrollment?.start_module_sequence ?? 1],
+      [enrollment?.enrollment_id ?? null, enrollment?.start_level ?? 1, enrollment?.start_module_sequence ?? 1, currentLevel],
     );
 
     const levels = rows.map((r) => {

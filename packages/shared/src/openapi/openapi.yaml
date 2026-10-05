@@ -1051,7 +1051,7 @@ paths:
   /levels:
     get:
       tags: [curriculum]
-      summary: The discipleship levels with themes and pass marks.
+      summary: The discipleship levels with themes and pass marks — published levels only (Draft and In review stay with staff).
       responses:
         "200": { description: Levels }
   /me/pathway:
@@ -1061,7 +1061,9 @@ paths:
         Per-member pathway summary; each level with module counts and status
         (completed | active | awaiting_review | locked). A level whose exam is passed
         but the discipler has not yet ushered reports status 'awaiting_review' and
-        awaiting_review:true; the next level stays 'locked' until ushered.
+        awaiting_review:true; the next level stays 'locked' until ushered. Lists
+        published levels, plus every level at or below the member's own (a
+        drafted level hides only the road ahead).
       responses:
         "200": { description: "Pathway summary — { current_level, levels: [{ level_number, title, theme, description, total_modules, completed_modules, minutes, status, awaiting_review }] }" }
         "401": { $ref: "#/components/responses/Unauthorized" }
