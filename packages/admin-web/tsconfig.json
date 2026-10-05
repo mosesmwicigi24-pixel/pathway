@@ -7,7 +7,16 @@
     "moduleResolution": "Bundler",
     "noEmit": true,
     "types": ["vite/client"],
-    "composite": false
+    "composite": false,
+    // Library typings that import "react" without declaring @types/react
+    // (lucide-react, recharts, react-router) otherwise resolve it through
+    // pnpm's hidden hoist, which holds mobile's React 19 types on some
+    // installs. Types only: Vite resolves the runtime "react" itself.
+    // See test/reactTypesResolution.test.ts.
+    "paths": {
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"]
+    }
   },
   "include": ["src", "vite.config.ts"]
 }
