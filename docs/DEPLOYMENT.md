@@ -137,6 +137,57 @@ bundle, so this is instant and total.
 
 ## Incident ledger
 
+### 2026-10-04 — Android could not give an unnamed gift, check in to a service, or save a formatted thought
+
+**Symptom.** Walking Give on the Android emulator for the experience
+programme, a plain KSh 1,000 Tithe answered **"Request body failed
+validation"**. Production's API log for the 8 days it keeps held 11 gift
+attempts, all Android (`okhttp/4.12.0`), all Sunday 2026-10-04: **10 refused
+with 400** in 2–15 ms, and **1 accepted** — a *named* gift (KSh 2,500, 10:00:50
+EAT) right after three refusals. No money moved on a refusal (the body is
+refused before any charge or STK push).
+
+**Root cause.** The Android app's kotlinx Json (`encodeDefaults = true`,
+explicit nulls on) sends every unset `val x: T? = null` request field as
+`"x": null`. Three server schemas still declared such fields `.optional()`,
+which accepts *absent* but refuses *null*:
+
+- `POST /giving/intents` `account_name` — every unnamed Android gift (card,
+  M-Pesa, PayPal, a pledge's Pay now, a need's gift), since named giving
+  shipped on 2026-07-27.
+- `POST /services/:id/attendance` `attended_at` (Android never sets it),
+  `full_name`, `phone_number` — every Android QR service check-in, since
+  2026-08-16.
+- `PUT /me/thoughts` and its `/sync/push` replay — every *formatted* Selah
+  thought, silently; offline, the queued write was rejected and dropped.
+
+**Why undetected.** This exact class had been fixed before (live's `cell_id`,
+c65c353) and `test/android-body-tolerance.test.ts` exists for it — but its
+giving test posted a body *without* `account_name`, so it never sent the
+field Android sends. The app showed the raw error, so it read as a member
+problem; check-in and thoughts had no production traffic in the log window.
+
+**Permanent fix.** pathway#499 (e6b6e63): those fields accept null and treat
+it as *not given* — the profile and now() fill check-in fields, an unnamed
+gift stays unnamed, stored thought spans match iOS's; a check-in's
+`email: null` keeps its meaning ("I have no email"). The only fix that
+reaches Android builds already on phones.
+
+**Prevention.** The tolerance suite now posts Android's **exact** bodies (5 new
+tests; all fail on the old schemas). A read-only audit of all 72 Android
+request bodies against the production schemas found no other instance. The
+Android side will also stop sending these nulls (`@EncodeDefault(NEVER)`) in
+its next build. Known deploy-order hazard of the same family: the Android
+notification-sounds build sends `sound_enabled` to a `.strict()` schema —
+the backend (#497) must deploy first.
+
+**Verified.** Deployed 2026-10-04 15:01:42 UTC: api + worker revision
+`e6b6e634f…`, api healthy, `/readyz` 200 through the edge, the new rules
+present in the running `dist/`, `POST /v1/giving/intents` unauthenticated →
+401, no error lines in the following 10 minutes. A real gift was not used as
+a probe (it would move money).
+
+
 ### 2026-09-05 → 2026-09-11 — The whole box vanishes for two to four hours, about every three days
 
 **Symptom.** Members on Android and iOS, and the owner in Firefox, saw
