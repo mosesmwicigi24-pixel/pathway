@@ -374,6 +374,14 @@ tapping "I've talked it over". Nobody is forced to post. The server rule
 - **Bottom bars clear the gesture bar** (Android: the plan reader, the chat
   composer and the plan page's buttons sat under it, as Talk's did).
 
+**Owner decisions (2026-10-05, from the success-before-save audit):**
+- **Location sharing:** the switch waits for the server on both apps. On
+  failure it stays as it was and says why. It used to show Off at once, so a
+  member could read Off while the server still held their location.
+- **Hearts** on the devotional and plan pages: no "Saved" claim, because
+  nothing was saved anywhere. The heart stays as a quiet like until real
+  saving exists as its own feature.
+
 **Owner items found (not app work):** no cell has a leader in production
 (every cell page says "Not assigned yet"); 21 members (28%) passed the
 Level 1 exam and wait to be ushered while Level 2 has no published lessons;
