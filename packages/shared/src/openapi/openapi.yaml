@@ -5045,7 +5045,11 @@ paths:
   /calendar/series:
     get:
       tags: [system]
-      summary: Followable event series for the member (Events make "Series you follow") — cadence, next occurrence, following flag, new count.
+      summary: >-
+        Followable event series for the member (Events make "Series you
+        follow") — cadence, next occurrence, following flag, new count. A
+        series that will not meet again (looking two years ahead) is left out,
+        unless the member follows it.
       responses:
         "200": { description: Series }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -5319,7 +5323,12 @@ paths:
   /home/featured-event:
     get:
       tags: [calendar]
-      summary: Member. The current homepage-featured event (cover image + descriptive fields) or null.
+      summary: >-
+        Member. The current homepage-featured event (cover image + descriptive
+        fields) or null. Only an active series that meets again is featured;
+        null once it has ended. `next_at` / `next_end_at` / `next_occurrence_id`
+        give the next meeting (`dtstart_local` is the series' first start, kept
+        for older builds — show `next_at`).
       responses:
         "200": { description: Featured event or null }
         "401": { $ref: "#/components/responses/Unauthorized" }

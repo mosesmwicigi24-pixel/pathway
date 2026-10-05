@@ -288,10 +288,17 @@ describe("Events tab: category, going counts, series follow, cell summary", () =
   });
 
   it("follows then unfollows a series (idempotent toggle)", async () => {
+    // Starts next Wednesday: a series that has ended is no longer offered, and
+    // the old fixed date (10 Jun, six weeks) ended on 15 Jul.
+    const nextWednesday = (() => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() + ((3 - d.getUTCDay() + 7) % 7 || 7));
+      return d.toISOString().slice(0, 10);
+    })();
     const s = (await svc().createSeries(principal(admin, "Admin", cong), {
       title: "Midweek Cell",
       timezone: "Africa/Nairobi",
-      dtstart_local: "2026-06-10T18:30:00",
+      dtstart_local: `${nextWednesday}T18:30:00`,
       duration_min: 60,
       rrule: "FREQ=WEEKLY;BYDAY=WE;COUNT=6",
       visibility: "congregation",

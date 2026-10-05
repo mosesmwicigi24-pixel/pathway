@@ -510,4 +510,54 @@ describe("occurrence scoping (§8)", () => {
     const homeB = await agent().get("/v1/home/featured-event").set(auth(memberBTok));
     expect(homeB.body.data.series_id).toBe(sB.series_id);
   });
+
+  // Both apps' closing walk (2026-10-05): Home featured "Pathway Discipleship
+  // Classes · Sun, Aug 30" — a series that had ended, shown at its FIRST date.
+  const daysFromNow = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+  const weeklySince70Days = async (title: string, rrule: string) =>
+    (await svc().createSeries(principal(admin, "Admin", cong), {
+      title,
+      timezone: "Africa/Nairobi",
+      dtstart_local: `${daysFromNow(-70)}T14:00:00`,
+      duration_min: 60,
+      visibility: "congregation",
+      rrule,
+    })) as { series_id: string };
+
+  it("features only a series that meets again, with its next meeting — never a past first date", async () => {
+    const ended = await weeklySince70Days("Ended Classes", "FREQ=WEEKLY;COUNT=3");
+    expect((await agent().post(`/v1/admin/events/series/${ended.series_id}/homepage`).set(auth(adminTok))).status).toBe(200);
+    expect((await agent().get("/v1/home/featured-event").set(auth(memberTok))).body.data).toBeNull();
+
+    const ongoing = await weeklySince70Days("Sunday Classes", "FREQ=WEEKLY");
+    expect((await agent().post(`/v1/admin/events/series/${ongoing.series_id}/homepage`).set(auth(adminTok))).status).toBe(200);
+    const home = (await agent().get("/v1/home/featured-event").set(auth(memberTok))).body.data;
+    expect(home.series_id).toBe(ongoing.series_id);
+    const next = new Date(home.next_at).getTime();
+    expect(next).toBeGreaterThan(Date.now());
+    expect(next).toBeLessThanOrEqual(Date.now() + 7 * 86_400_000); // weekly: within the week
+    expect(home.next_occurrence_id).toBeTruthy();
+  });
+
+  it("Events offers a series that has ended only to a member who follows it; a rare one still counts", async () => {
+    const ended = await weeklySince70Days("Ended Classes", "FREQ=WEEKLY;COUNT=3");
+    // Meets every 3 months: the next meeting is past Events' 45-day window, but it has not ended.
+    const quarterly = (await svc().createSeries(principal(admin, "Admin", cong), {
+      title: "Quarterly Vigil",
+      timezone: "Africa/Nairobi",
+      dtstart_local: `${daysFromNow(-10)}T18:00:00`,
+      duration_min: 120,
+      visibility: "congregation",
+      rrule: "FREQ=MONTHLY;INTERVAL=3",
+    })) as { series_id: string };
+
+    const ids = async () =>
+      ((await agent().get("/v1/calendar/series").set(auth(memberTok))).body.data as Array<{ series_id: string }>).map((s) => s.series_id);
+    expect(await ids()).toContain(quarterly.series_id);
+    expect(await ids()).not.toContain(ended.series_id);
+
+    // A member who follows it can still find it — and unfollow.
+    expect((await agent().post(`/v1/calendar/series/${ended.series_id}/follow`).set(auth(memberTok))).status).toBe(200);
+    expect(await ids()).toContain(ended.series_id);
+  });
 });
