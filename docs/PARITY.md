@@ -174,6 +174,7 @@ Shares with admin surfaces: the backend, `@nuru/shared`, and `tokens.ts`.
 | D-12 | Android has a dead `CommunityHubScreen` at `composable("community")` — no inbound caller (shortcuts land on `prayer-room?tab=corporate`; `routeFor` never returns it; the MainShell comments list it as a *caller* of `chat`/`give`, not a target). iOS has no equivalent. Found while auditing Phase 3. | Android | Low | Remove in its own PR after Phase 3 lands — not in the restructuring PR, which must stay revertible in one commit. Verify nothing external (FCM payload, App Link) names `community` first. |
 | ~~D-11~~ | ~~Discipleship Hub not on iPad~~ | iPad | ~~Med~~ | **DONE 2026-07-04** — DisciplesView.swift (roster + dossier + actions) under Operations. Bonus: found + fixed the web usher advancement-id 404. Open follow-up: usher scope ignores relationship_tree edges (backend) |
 
+| D-13 | The cell page's "Open community" opens the cell's own board on iOS and the cell's chat room on Android, which has no cell board (EXPERIENCE.md §7.4 #16, 2026-10-05). | Android | Low | Accepted difference for now; revisit in the Experience Cycle 8 coherence pass. |
 | ~~D-12~~ | ~~Partners + Departments admin pages not on iPad~~ | iPad | ~~Med~~ | **DONE 2026-09-24** — pathwayforipad #9 merged (main da04a97): `Features/Partners/PartnersView.swift`, `Features/Departments/DepartmentsView.swift` under Operations, gated `finance:view` / `departments:view`; `@LooseInt` for `BIGINT::text` money. Not yet smoke-tested on a device. |
 ---
 
