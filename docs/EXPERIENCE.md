@@ -265,6 +265,76 @@ the six pledge steps, Events and You, on both apps.
 - **The new-pledge flow covers the tab bar** on both apps, so a tab switch
   cannot throw away a half-made pledge.
 
+## 8. Visual language (Cycle 4)
+
+**One look on both apps, built from one set of tokens, and nothing on screen
+that reads wrong.** The apps already share the tokens
+(`packages/mobile/src/theme/tokens.ts`: paper, white, navy, gold, the ink
+scale; Fraunces for titles, Inter — regular drawn as Medium, the owner's
+"global voice" — for text; radii 14/24/999; one soft shadow); Cycle 4 makes
+every screen use them the same way. Walked: Home, Pathway, Plans, Events,
+Give, Partners, Community, Profile and Settings on both apps, side by side.
+
+### 8.1 The grammar
+1. **Colour roles.** Paper is the page; white is a card; navy is chrome,
+   ceremony and at most one dark feature card per tab; gold is the accent —
+   kickers, progress, the primary action, selected states. Green, amber and
+   red only say state (on track · due · failed or destructive). No other
+   hues.
+2. **One header per tab.** Gold kicker in caps · Fraunces title · one Inter
+   line · the bell at the right. The kicker names the tab (Home's is the
+   date); the greeting belongs to Home alone; a segment switch (Give |
+   Partners, Community | Departments | Profile) sits above the kicker. A
+   pushed page: back · kicker · title.
+3. **Type roles.** Kicker Inter 11 bold, tracking 1.4, gold · screen title
+   Fraunces 26–28 · card title Fraunces 18 semibold · **content row title
+   Fraunces 15 semibold** (things: a week row, a pledge, a plan, an event, a
+   notice) · **control row title Inter 14 medium** (settings, profile fields,
+   menus) · body Inter 13–14 · meta Inter 11.
+4. **Buttons.** One primary per screen: gold fill, navy text, radius 14.
+   Secondary: white, hairline border, navy text. Compact in-row action: a
+   navy pill ("Pay", "Go back", "Turn on"). Text action: gold text ("Give
+   again", "Show"). Destructive: red, and an alert's destructive role.
+5. **Cards.** White, radius 24, hairline border, the one soft shadow; gentle
+   prompts on gold tint; every loading / empty / failed state is §4's one
+   state card.
+6. **Pills and chips** are full pills: selected navy, unselected white with a
+   hairline; status chips tinted (green on track, amber due). Amount choices
+   are pills everywhere (Give and the pledge steps).
+7. **Icons.** One family (Lucide) in 14 / 18 / 22; row icons sit on gold-tint
+   tiles. A notice's icon says what it is about.
+8. **Words that look like data never leak.** Dates read "EEE d MMM" (with the
+   year when it isn't this year); a date-only value (a birthday, a due day)
+   is the calendar date sent, never shifted by a time zone; an empty value
+   reads "Not set"; no internal names ("Firebase") reach a member.
+9. **Nothing that matters truncates.** Titles wrap to two lines; a
+   carousel's peek is deliberate; a field is never hidden behind a floating
+   button.
+
+### 8.2 Changes
+| # | Where | Seen | Cycle 4 |
+|---|---|---|---|
+| 1 | Headers (both) | Pathway puts the greeting and "Level 1 of 6" above its title; Community's kicker is "GOOD MORNING · ADA"; Android's Settings has no header | §8.1 rule 2 on every tab. Pathway: "PATHWAY · Foundations of Faith · Level 1 of 6 · 20 of 20 modules"; Community: "COMMUNITY · Nuru Connect · You're all caught up"; Settings: "PREFERENCES · Settings" (as iOS) |
+| 2 | Content rows (both) | YOUR WEEK rows are Inter on iOS, Fraunces on Android; their icons differ | Content row title (rule 3) on both; the same icon per pillar |
+| 3 | "Quick help from Nuru" (both) | A purple and green gradient | Navy with gold — rule 1 |
+| 4 | Module counts (contract + both) | "20 of 21 done" over "20 of 20 modules done" on one screen | New `lessons_total` / `lessons_completed` on `/me/pathway` (94002f6; absent → today's fields): every "X of Y modules" counts lessons; the exam is its own step |
+| 5 | Plans streak card (both) | iOS "0 days wi…" (cut); Android "0-day streak · Read today to start your streak" | Android's words on both, never cut |
+| 6 | Featured plan (both) | The same member, the same day: "Rooted: 10 Days in the Psalms" on iOS, "Who Am I?" on Android | One pick: the same rule over the same inputs (the server's order, the Nairobi day) |
+| 7 | Give (iOS) | Amount pills wrap to two lines; "Enter a custom amount" half hidden behind the Give button | Pills on one line (as Android); the field fully visible above the button |
+| 8 | Profile (Android) | Date of birth "1989-12-31T21:00:00.000Z"; empty fields "—" | "1 Jan 1990"-style dates (rule 8); "Not set" |
+| 9 | Settings (Android) | A "Firebase account · Email / password sign-in (add-alongside)" row | No internal names: if a member needs it, name it by what it does; otherwise it goes |
+| 10 | Inbox (iOS) | An empty white band above the header | The header as on Android |
+| 11 | M-Pesa number sheet (iOS) | The sheet's lower half is empty | The sheet sized to its content |
+| 12 | Pledge amount step (both) | Square tiles; Give uses pills | Pills (rule 6) |
+| 13 | Sunday greeting | iOS "Happy Lord's Day, Ada."; Android "Good evening, Ada." | Both: "Happy Lord's Day, ‹name›." on Sundays |
+| 14 | Inbox icons | A Live notice is a gear on iOS, a bell on Android | One icon per notice family, the same on both (Live → broadcast) |
+| 15 | The level card | Navy on iOS, gold on Android | Navy (Pathway's one feature card) |
+| 16 | State screens | The exam's refusal is a full screen on iOS, a card on Android | §4's one state card on both |
+| 17 | A confirmed gift | iOS "KSh 1,000 · Tithe · Ref …"; Android "Gift confirmed — receipt on its way. 🎉" after an extra "Thank you for sowing" overlay | iOS's line on both; one celebration, no overlay before it |
+| 18 | M-Pesa stages (Android) | The tab bar stays under the ceremony | The ceremony covers it (as iOS) |
+| 19 | "Sign out" (iOS) | Not in the destructive colour | Destructive role |
+| 20 | From Cycle 2 | Android's rhythm tiles read "Pending"; Grow tile labels truncate; the Partners DUE amount wraps beside its chip | Plain words; rule 9; amount and chip on one line or stacked deliberately |
+
 ## 5. Cycle log
 
 ### Cycle 1 — Understand & establish the foundation (2026-10-04)
