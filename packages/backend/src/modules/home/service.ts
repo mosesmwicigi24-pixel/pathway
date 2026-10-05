@@ -568,9 +568,11 @@ export class HomeService {
       if (exam) {
         out.push({
           id: `level_review:${enr.current_level}`, kind: "level_review",
-          title: `Level ${enr.current_level} review is open`,
-          body: `Every module is done — one review stands between you and Level ${enr.current_level + 1}.`,
-          cta_label: "Start review", route: "level_exam", params: { levelNumber: enr.current_level },
+          // One name for the exam everywhere (EXPERIENCE.md §9.1 rule 1; §3's
+          // examReady words). The kind key stays `level_review` for clients.
+          title: `Take the Level ${enr.current_level} exam`,
+          body: `Every module is done — the exam opens the way to Level ${enr.current_level + 1}.`,
+          cta_label: "Begin the exam", route: "level_exam", params: { levelNumber: enr.current_level },
           accent: "gold", priority: 85, due: null,
         });
       }

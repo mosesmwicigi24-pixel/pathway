@@ -77,7 +77,16 @@ describe("GET /me/home/next-action", () => {
     const { addQuestion } = await import("./helpers/factories.js");
     await addQuestion(lesson, "A");
     const review = (await svc.nudges(meId)).nudges.find((n) => n.kind === "level_review");
-    expect(review).toMatchObject({ route: "level_exam", params: { levelNumber: 1 } });
+    // One name for the exam everywhere (EXPERIENCE.md §9.1 rule 1) — it was
+    // "Level 1 review is open · Start review".
+    expect(review).toMatchObject({
+      title: "Take the Level 1 exam",
+      cta_label: "Begin the exam",
+      route: "level_exam",
+      params: { levelNumber: 1 },
+    });
+    const words = review as { title: string; body: string; cta_label: string };
+    expect(`${words.title} ${words.body} ${words.cta_label}`).not.toMatch(/review/i); // the kind key stays
   });
 
   it("always returns a hero (affirmation fallback) even with no enrollment", async () => {

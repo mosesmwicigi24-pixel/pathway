@@ -57,6 +57,9 @@ describe("level exam (§1.9 rule 2)", () => {
     };
     expect(ex.question_count).toBe(1);
     expect(ex.questions[0]).not.toHaveProperty("correct_answer");
+    // The exam's front door says the pass mark before question 1 (EXPERIENCE.md §9.1 rule 2).
+    const { rows } = await testPool().query<{ m: string }>(`SELECT required_exam_pass_mark AS m FROM levels WHERE level_number = 1`);
+    expect((ex as unknown as { pass_mark: number }).pass_mark).toBe(Number(rows[0]!.m));
   });
 
   it("scores a correct submission as passing and a wrong one as failing", async () => {

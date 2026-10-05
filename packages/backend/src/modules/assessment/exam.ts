@@ -117,9 +117,9 @@ export class ExamService {
     await this.requireLevelReady(this.pool, userId, levelNumber);
     const rows = await this.examQuestions(this.pool, levelNumber, false);
     if (rows.length === 0) throw new ApiError("UNPROCESSABLE", examNotReady(levelNumber));
-    const cfg = await maybeOne<{ exam_shuffle: boolean }>(
+    const cfg = await maybeOne<{ exam_shuffle: boolean; required_exam_pass_mark: string | null }>(
       this.pool,
-      `SELECT exam_shuffle FROM levels WHERE level_number = $1`,
+      `SELECT exam_shuffle, required_exam_pass_mark FROM levels WHERE level_number = $1`,
       [levelNumber],
     );
     // §5.8: strip correct-answer signal, then randomize choice order (unless the
@@ -129,7 +129,9 @@ export class ExamService {
       const stripped = stripAnswerSignal(q.answer_options);
       return { ...q, answer_options: shuffle ? shuffleChoices(stripped) : stripped };
     });
-    return { level_number: levelNumber, question_count: questions.length, questions };
+    // The front door says the pass mark before question 1 (EXPERIENCE.md §9.1 rule 2).
+    const pass_mark = cfg?.required_exam_pass_mark == null ? null : Number(cfg.required_exam_pass_mark);
+    return { level_number: levelNumber, question_count: questions.length, pass_mark, questions };
   }
 
   /** Score the exam server-side against required_exam_pass_mark. */
