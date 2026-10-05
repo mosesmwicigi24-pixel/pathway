@@ -137,6 +137,150 @@ bundle, so this is instant and total.
 
 ## Incident ledger
 
+### 2026-10-05 — Every member read "Level 1 of 7": a stray level, and a status no member read honoured
+
+**Symptom.** Both member apps' closing walk (Experience Cycle 3) read
+"Level 1 of 7", a 14% journey ring, a map view saying "SIX-LEVEL PATHWAY"
+over "0/7", and a second "LEVEL 1" on the trail. Production (read-only):
+**seven published levels**. Level 7 was titled "LEVEL 1" with no modules.
+Its description began "Multiplying — raising leaders…", so it may have been
+meant as a seventh level and given the wrong title. Level 6 was titled
+"Level 6", also with no modules. All 87 active members were on Level 1.
+
+**Root cause.** The portal sets each level to Draft, In review or Published,
+but no member-facing read honoured that status. `/levels` and `/me/pathway`
+selected every level. Unpublishing level 7, the owner's first choice, would
+have changed nothing members see. The trace caught this before the write.
+
+**Why undetected.** The admin toggle saves and reads back fine on staff
+screens. Members' screens have no test of a draft level. Nothing in the
+local rig had more levels than its seed until production's content was
+copied in for this programme.
+
+**Permanent fix.** pathway#505 (`50e914e`): `/levels` lists published levels
+only. `/me/pathway` lists published levels plus every level at or below the
+member's own, so drafting a level hides only the road ahead, never where a
+member stands or has walked. Staff reads are unchanged.
+
+**Data.** Owner YES, 2026-10-05 ("yes do the level 7 fix"): level 7 →
+`draft`, guarded (title "LEVEL 1", published, no modules, no member on or
+past it), backed up to `/root/backups/level7-draft-20261005/level7.csv`.
+The level cache (`cache:levels`, 10 minutes) was cleared. Level 6's name
+stays as it is, on the owner's word.
+
+**Prevention.** `draft-levels.test.ts` reproduces production's exact shape
+and fails without the fix.
+
+**Verified.** Deployed 2026-10-05 15:31 UTC: api + worker revision `50e914e55…` (image `sha-50e914e`), healthy, `/readyz` 200 locally and through the edge, `/v1/levels` → 401 unauthenticated (route present). Both filters are in the running `dist/modules/curriculum/service.js`, and the 10:35 Talk fix is still present. Level 7 set to `draft` at 15:31 UTC ("level 7 set to draft"). Read-only check: level 7 is `draft`; a Level 1 member's levels number **6** (1 Foundations of Faith … 6 Level 6). No error-level lines and no 5xx since. Redis held no `levels` key, so nothing stale was served.
+
+**Rollback.** Code: redeploy `sha-ec9a519`. Data: set level 7's `status`
+back to `published` (the backup holds the full row).
+
+
+### 2026-10-05 — A post in Talk it Over never completed the part: 14 members' plan days stuck
+
+**Symptom.** Walking Plans for the experience programme on Android, a day
+could not be finished without posting, and after posting the day still read
+"Next" on Talk it Over. Production (read-only, counts only): **34 plan days
+for 14 members** had Talk it Over as their only open part, the latest on
+2026-09-30. Their next day stayed locked. On **23 of those days (11 members,
+13 plans)** the member had posted in that day's conversation.
+
+**Root cause.** The owner's rule (2026-10-05) is that Talk it Over is
+completed by posting **or** by "I've talked it over". The server held only
+half of it. `POST /growth/plans/:id/days/:n/talk` created the post and
+completed nothing. Whether a post completed the part depended on each app
+calling `/growth/segments/:id/complete` afterwards. The Android build on
+members' phones never did, and it has no "I've talked it over" button.
+
+**Why undetected.** Server tests covered posting and completing a part
+separately; none said "a post completes Talk". The rule lived in app code,
+and the two apps had drifted. The trapped state looks like an ordinary
+unfinished day, so no member could tell it apart from "not done yet".
+
+**Permanent fix.** pathway#502 (ec9a519): `postTalk` completes the day's talk
+part through the same `completeSegment` door the apps use (same gate, same
+seal). A post on a day still behind an earlier one stands and leaves that
+day open. It reaches every app build already on phones. The Android
+"I've talked it over" button ships in the next app build (Experience
+Cycle 3, §7.4 #1).
+
+**Data.** Owner YES 2026-10-05 ("yes do both 1 and 2"). The 23 talk parts
+where the member had posted were completed, each dated to the member's
+**first** post that day, and `completed_days`/`current_day` were updated as
+`completeSegment` does. No plan was finished by it. The transaction
+refused to commit unless the set matched the backed-up one exactly (row
+count plus an md5 of the (member, part, post time) set), every part
+inserted, every plan row updated, and no stuck day with a post remained.
+Backup: `/root/backups/talk-backfill-20261005/` (pairs.csv, progress.csv).
+Rehearsed first on the local prod-shaped database: a wrong expectation is
+refused with nothing changed, the real run seals the right days, a no-post
+day is left alone, and a second run is refused. The 11 days that remain (8 members; some had posted on other days but
+not these) have no post. A post now completes them on any app version, and
+"I've talked it over" arrives with the next Android build.
+
+**Prevention.** The server owns the rule, and
+`growth-content.test.ts` pins it (the test fails without the fix). Audited the
+class, "a part some app build cannot complete": production's open parts
+by kind show Talk as the only pattern; besides it there is one member's video
+part from July.
+
+**Verified.** Deployed 2026-10-05 10:35:19 UTC: api + worker revision `ec9a51937…` (image `sha-ec9a519`), api healthy, `/readyz` 200 locally and through the edge, `POST /v1/auth/login {}` → 400 JSON, the talk route unauthenticated → 401, and the fix present in the running `dist/modules/growth/service.js` (line 408, `await this.completeTalkParts(…)`). No error-level lines and no 5xx responses since. The data fix committed at 10:37 UTC ("23 parts completed, 13 plan rows updated, 0 remain"). Re-count, read-only: stuck on Talk went from 34 days to 11 (8 members), none of them with a post. All 23 parts are dated exactly to the member's first post. No plan was finished by it. Backups: `pairs.csv` (23 rows) and `progress.csv` (13 rows) in `/root/backups/talk-backfill-20261005/`.
+
+**Rollback.** Code: redeploy `sha-e6b6e63`. Data: delete the 23 (user_id, segment_id) rows listed in `pairs.csv` and restore the 13 rows of `progress.csv`.
+
+
+### 2026-10-04 — Android could not give an unnamed gift, check in to a service, or save a formatted thought
+
+**Symptom.** Walking Give on the Android emulator for the experience
+programme, a plain KSh 1,000 Tithe answered **"Request body failed
+validation"**. Production's API log for the 8 days it keeps held 11 gift
+attempts, all Android (`okhttp/4.12.0`), all Sunday 2026-10-04: **10 refused
+with 400** in 2–15 ms, and **1 accepted** — a *named* gift (KSh 2,500, 10:00:50
+EAT) right after three refusals. No money moved on a refusal (the body is
+refused before any charge or STK push).
+
+**Root cause.** The Android app's kotlinx Json (`encodeDefaults = true`,
+explicit nulls on) sends every unset `val x: T? = null` request field as
+`"x": null`. Three server schemas still declared such fields `.optional()`,
+which accepts *absent* but refuses *null*:
+
+- `POST /giving/intents` `account_name` — every unnamed Android gift (card,
+  M-Pesa, PayPal, a pledge's Pay now, a need's gift), since named giving
+  shipped on 2026-07-27.
+- `POST /services/:id/attendance` `attended_at` (Android never sets it),
+  `full_name`, `phone_number` — every Android QR service check-in, since
+  2026-08-16.
+- `PUT /me/thoughts` and its `/sync/push` replay — every *formatted* Selah
+  thought, silently; offline, the queued write was rejected and dropped.
+
+**Why undetected.** This exact class had been fixed before (live's `cell_id`,
+c65c353) and `test/android-body-tolerance.test.ts` exists for it — but its
+giving test posted a body *without* `account_name`, so it never sent the
+field Android sends. The app showed the raw error, so it read as a member
+problem; check-in and thoughts had no production traffic in the log window.
+
+**Permanent fix.** pathway#499 (e6b6e63): those fields accept null and treat
+it as *not given* — the profile and now() fill check-in fields, an unnamed
+gift stays unnamed, stored thought spans match iOS's; a check-in's
+`email: null` keeps its meaning ("I have no email"). The only fix that
+reaches Android builds already on phones.
+
+**Prevention.** The tolerance suite now posts Android's **exact** bodies (5 new
+tests; all fail on the old schemas). A read-only audit of all 72 Android
+request bodies against the production schemas found no other instance. The
+Android side will also stop sending these nulls (`@EncodeDefault(NEVER)`) in
+its next build. Known deploy-order hazard of the same family: the Android
+notification-sounds build sends `sound_enabled` to a `.strict()` schema —
+the backend (#497) must deploy first.
+
+**Verified.** Deployed 2026-10-04 15:01:42 UTC: api + worker revision
+`e6b6e634f…`, api healthy, `/readyz` 200 through the edge, the new rules
+present in the running `dist/`, `POST /v1/giving/intents` unauthenticated →
+401, no error lines in the following 10 minutes. A real gift was not used as
+a probe (it would move money).
+
+
 ### 2026-09-05 → 2026-09-11 — The whole box vanishes for two to four hours, about every three days
 
 **Symptom.** Members on Android and iOS, and the owner in Firefox, saw
