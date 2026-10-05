@@ -12,8 +12,8 @@ import { CurriculumService } from "../curriculum/service.js";
 import { CalendarService } from "../calendar/service.js";
 import type { AiProvider } from "../assistant/provider.js";
 import { pickVerse, pickEncouragement, THEME_REASON, type Encouragement, type VerseArt, type VerseTheme } from "./verses.js";
-import { bandOf, pickBandArt } from "../intelligence/liturgy.js";
-import { artForText } from "../intelligence/imagery.js";
+import { seasonOf } from "../intelligence/liturgy.js";
+import { natureArt } from "../intelligence/nature.js";
 
 const TZ = "Africa/Nairobi";
 
@@ -214,7 +214,7 @@ export class HomeService {
         // The picture knows the words and the hour (owner, 2026-08-25):
         // motif-matched art first, the old band rotation only when no motif
         // genuinely fits these words.
-        art: artForText(cached.verse_text, bandOf(), day.d) ?? pickBandArt("verse", bandOf(), day.d),
+        art: natureArt("verse", new Date(), { season: seasonOf(), text: cached.verse_text }),
         encouragement: pickEncouragement(cached.theme, day.d),
       };
     }
@@ -249,7 +249,7 @@ export class HomeService {
           reason,
           mood: mood.label,
           text: pick.verse_text,
-          art: artForText(pick.verse_text, bandOf(), day.d) ?? pickBandArt("verse", bandOf(), day.d),
+          art: natureArt("verse", new Date(), { season: seasonOf(), text: pick.verse_text }),
           encouragement: pickEncouragement(mood.theme, day.d),
         };
       }
@@ -265,7 +265,7 @@ export class HomeService {
        ON CONFLICT (user_id, day_date) DO NOTHING`,
       [userId, TZ, reference, theme, reason],
     );
-    return { reference, version: "WEB", theme, reason, art: pickBandArt("verse", bandOf(), day.d), encouragement: pickEncouragement(theme, day.d) };
+    return { reference, version: "WEB", theme, reason, art: natureArt("verse", new Date(), { season: seasonOf() }), encouragement: pickEncouragement(theme, day.d) };
   }
 
   /**
