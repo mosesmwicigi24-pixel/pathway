@@ -355,8 +355,10 @@ describe("recurring giving schedules (server-charged, §1.1)", () => {
     const sched = await testPool().query(`SELECT next_run_at FROM giving_schedules WHERE schedule_id=$1`, [
       created.schedule_id,
     ]);
-    const expected = new Date(due);
-    expected.setUTCDate(expected.getUTCDate() + 7);
+    // +7 days from DUE, kept inside the prompt hours on its own Nairobi day
+    // (the code's rule — Giving Cycle 2). A plain +7 days failed whenever the
+    // suite ran after 22:00: a 21:02 slot becomes 20:00.
+    const expected = FinancialService.sameDayPromptHours(FinancialService.nextRun(due, "weekly"));
     expect(new Date(sched.rows[0].next_run_at).toISOString()).toBe(expected.toISOString());
 
     // Crash simulation: rewind next_run_at to the SAME due instant and re-run —
