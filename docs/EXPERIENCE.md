@@ -298,6 +298,51 @@ the six pledge steps, Events and You, on both apps.
 - **The new-pledge flow covers the tab bar** on both apps, so a tab switch
   cannot throw away a half-made pledge.
 
+### 7.4 Part 2: the areas Cycle 3 skipped (2026-10-05)
+
+Walked on both apps with **production's own content** (plans, levels,
+lessons, exam questions, announcements, events, copied read-only into a
+local database) and test members built to match production's counts (§2a).
+Areas: Plans (start a plan, read a day, Talk it Over), giving history
+(receipt, statement, the Partners statement, "I paid another way"),
+announcements (from Home and from the inbox), Events (a gathering's page,
+RSVP), the cell page, Community, Profile and Settings.
+
+**Owner decision (2026-10-05): Talk it Over stays a required part of a
+plan day.** A member completes it by posting in the conversation or by
+tapping "I've talked it over". Nobody is forced to post. The server rule
+(every part done) does not change.
+
+| # | Where | Seen | In production (read-only) | Part 2 |
+|---|---|---|---|---|
+| 1 | Talk it Over (Android) | No way to finish the day without posting; leaving leaves it "Next" | 34 plan days stuck on Talk for 14 members, all Android | The gold "I've talked it over" button, as on iOS; it completes the part and returns to the day. iOS: fix the code comment that says opening completes it; only posting or the button does. |
+| 2 | A plan's page (both) | Says "Start plan" (Android) / "Begin Day 1" with Day 1 "Start" (iOS) after the member has started and done parts | 39 of 53 started plans never finished a day | The page follows progress: "Continue · Day 1" with "1 part left"; a finished day is ticked. |
+| 3 | Plans tab (both) | The same plan twice: "Continue reading" and "Pick up where you left off" | — | One card for the plan in progress. |
+| 4 | Streak card (both) | "0-day streak" beside a tick on today | — | Today is ticked only when a day is finished; before that, "Today: 2 of 3 parts". |
+| 5 | Featured plans (server) | Each visit features different plans | 6.6 different featured plans per member per day (max 10) | The promos are the same all day for a member (Nairobi day); the shown log is written once a day. |
+| 6 | Events (both) | Opens on "Today (0)"; the gatherings sit under "Upcoming" | 10 of the last 60 days had an event | Opens on the first tab that has something. |
+| 7 | Events (both) | "Series you follow" lists series the member does not follow, each with "+ Follow" | 10 members follow any series | "Series you follow" holds only followed series; the rest sit under "More series". |
+| 8 | Events (both) | "Every Sunday · 9:00 AM · 9:00 AM" | — | The time once. |
+| 9 | A gathering (both) | "Buzzing" with no posts; "Who's going" beside "Who's coming"; a "0 you're going" chip | 9 members have ever RSVP'd | "Buzzing" only when there are posts; the wall is "The wall"; no zero chips. |
+| 10 | Announcements (server) | A notice of an announcement sent without the in-app banner opens "not found" | 1 of 3 sent announcements; 10 recipients | Any recipient, by any channel, can open it. **Changes who can see it: deploy waits for the owner's YES.** |
+| 11 | Announcements (server) | Reading an announcement leaves its notice unread, so the bell keeps its dot | — | Opening an announcement marks its notices read. |
+| 12 | Announcement page | iOS: raw "Announcement not found" with Try again; Android: the cover image twice | — | §4's state card (Go back); the cover once. |
+| 13 | Inbox (server) | Reminders scheduled for days ahead show as "now" ("Your event starts in about an hour" six days early) | 8 future reminders in 4 members' inboxes right now | A notice appears once it is due. |
+| 14 | After a gift (both) | A second "Thank you for sowing · Amen" pops up later, on another tab | — | One celebration, on the gift's own screen (extends §8.2 #17 to iOS). |
+| 15 | Community header (both) | "You're all caught up" beside a bell with unread notices | — | Say what it counts: "No new messages". |
+| 16 | The cell page | Android has no way forward; iOS has "Watch replays" and "Open community". Attendance reads "0/8 · you, this month" on iOS and "48% · last 8 meetings" on Android | 0 of 7 cells have a leader; 37 of 76 members have no cell | Android gets both actions; one attendance figure with the server's meaning, the same words on both. |
+| 17 | Home tab (iOS) | Tapping the Home tab showed a stale "not found" page left in its history | — | Tapping the current tab returns to its top. |
+
+**Owner items found (not app work):** no cell has a leader in production
+(every cell page says "Not assigned yet"); 21 members (28%) passed the
+Level 1 exam and wait to be ushered while Level 2 has no published lessons;
+today's verse art pairs a prayer verse with a glass of wine.
+
+**Carried:** the Partners statement thanks the member and says their
+pledges "carry 3 disciples through a level" while KSh 0 has been given
+(Cycle 6); Home points to the exam three times and twice calls it a
+"review" (Cycle 5); the edit sheets' empty lower half (Cycle 4).
+
 ## 8. Visual language (Cycle 4)
 
 **One look on both apps, built from one set of tokens, and nothing on screen
