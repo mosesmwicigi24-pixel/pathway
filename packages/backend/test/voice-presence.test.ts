@@ -111,6 +111,26 @@ describe("community presence", () => {
     expect(res.body.scope).toBe("cell");
   });
 
+  it("counts every active cell-mate and names the three most recently active — the same names on every visit", async () => {
+    // 15 active cell-mates, each an hour apart. The count used to stop at 12
+    // (a LIMIT), and the names were drawn at random on every request.
+    const ids: string[] = [];
+    for (let i = 0; i < 15; i++) {
+      const id = (await createUser({ congregationId: cong, cellGroupId: cell, fullName: `Mate${String(i).padStart(2, "0")} Cell` })).user_id;
+      await testPool().query(
+        `INSERT INTO module_engagement (user_id, module_id, reading_seconds, updated_at)
+         VALUES ($1, $2, 120, now() - make_interval(hours => $3))`,
+        [id, moduleId, i + 1],
+      );
+      ids.push(id);
+    }
+    const first = await agent().get("/v1/community/presence").set("Authorization", studentTok);
+    expect(first.body.count).toBe(15);
+    expect(first.body.names).toEqual(["Mate00", "Mate01", "Mate02"]); // most recent first
+    const again = await agent().get("/v1/community/presence").set("Authorization", studentTok);
+    expect(again.body.names).toEqual(first.body.names);
+  });
+
   it("falls back to the congregation when the member has no cell", async () => {
     const loneId = (await createUser({ congregationId: cong, fullName: "Lone Member" })).user_id;
     await engage(leaderId, 3);
