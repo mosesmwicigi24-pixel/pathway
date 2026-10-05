@@ -311,9 +311,12 @@ describe("Cycle 1 — a recurring gift learns what really happened to its prompt
     expect(s1).toMatchObject({ consecutive_failures: 1, last_failure_code: "unreachable", cycle_attempts: 1 });
     expect(s1.retry_cycle_at).not.toBeNull();
     const retryAt = new Date(s1.retry_at);
+    // Inside the prompt window the code keeps (07:00–21:00 EAT). The test used
+    // to demand 08–20 and so failed whenever it ran in the evening: at 21:53
+    // the retry correctly moves to 07:00 the next morning.
     const eatHour = (retryAt.getUTCHours() + 3) % 24;
-    expect(eatHour).toBeGreaterThanOrEqual(8);
-    expect(eatHour).toBeLessThan(20);
+    expect(eatHour).toBeGreaterThanOrEqual(FinancialService.PROMPT_FROM_HOUR);
+    expect(eatHour).toBeLessThan(FinancialService.PROMPT_UNTIL_HOUR);
     expect((await notices())[0]!.payload.retry_at).toBe(retryAt.toISOString());
     // Not before its time…
     expect(await svc.runDueSchedules(new Date())).toMatchObject({ retried: 0 });

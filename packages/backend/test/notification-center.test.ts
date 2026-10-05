@@ -55,6 +55,19 @@ describe("notification center (D1)", () => {
     expect(res.body.unread).toBe(2); // only sent notices count
   });
 
+  it("a delivered notice is in the inbox whatever its slot — and the list agrees with the unread count", async () => {
+    // Quiet hours moved this reminder to the morning, and it has since been sent.
+    await testPool().query(
+      `INSERT INTO notifications (user_id, channel, template, payload, status, scheduled_for, sent_at) VALUES
+        ($1,'sms','pledge_due_soon','{"title":"Kenya trip"}','sent', now() + interval '10 hours', now())`,
+      [me],
+    );
+    const res = await agent().get("/v1/me/notifications").set(auth(meTok));
+    expect(res.body.data.map((n: { template: string }) => n.template)).toContain("pledge_due_soon");
+    expect(res.body.unread).toBe(3);
+    expect(res.body.data.filter((n: { read_at: string | null; status: string }) => n.status === "sent" && n.read_at === null)).toHaveLength(3);
+  });
+
   it("marks all read idempotently; unread drops to zero", async () => {
     const first = await agent().post("/v1/me/notifications/read").set(auth(meTok)).send({});
     expect(first.body.marked).toBe(2);
