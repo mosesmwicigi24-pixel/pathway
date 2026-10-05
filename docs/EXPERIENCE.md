@@ -340,7 +340,11 @@ tapping "I've talked it over". Nobody is forced to post. The server rule
 - **A post completes Talk it Over on the server** (`8e5341e`). Until now only
   some app builds completed the part after a post. That is how 14 Android
   members' posts left their days open (row 1). The apps' own call after a
-  post stays; it is idempotent.
+  post stays; it is idempotent. **Shipped to production alone** as
+  pathway#502 (`ec9a519`, 2026-10-05, owner YES), with a data fix for the
+  23 stuck days where the member had posted. Each was dated to the member's
+  first post. Stuck days went from 34 to 11 (8 members, none with a post).
+  Ledger: DEPLOYMENT.md, 2026-10-05.
 - **The streak card's tick agrees on every phone.** `/growth/plans` gives
   each plan's `last_day_finished_at`: the moment the last part of a fully
   read day was read (`272fba9`). Today is ticked when that falls on today's
@@ -353,7 +357,12 @@ tapping "I've talked it over". Nobody is forced to post. The server rule
 - **No success before the server says so.** A part's gold button ("I've
   talked it over", "Finished", "I've read today's Word") waits for the
   server. On failure the page stays and says "Couldn't save that." with the
-  §4 sentence. iOS used to return to the day first and fail silently.
+  §4 sentence, **above the button**. iOS used to return to the day first and
+  fail silently. The same audit covered every success haptic, celebration
+  and swallowed write on both apps (iOS: memory verse practice, Home's verse
+  save, "Mark answered", the radio reminder, and a "Save practice" that
+  saved nothing, now "Done"). Writes that go through the offline queue
+  (§1.7) stay as designed.
 - **Starting a plan is one tap:** "Begin Day 1" starts the plan and opens
   Day 1. Then "Continue · Day N"; a finished plan offers "Read again". A
   failed start: "Couldn't start this plan" with the §4 sentence.
