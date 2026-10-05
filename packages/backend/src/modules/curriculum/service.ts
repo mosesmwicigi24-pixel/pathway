@@ -100,6 +100,8 @@ export class CurriculumService {
       description: string | null;
       total_modules: number;
       completed_modules: number;
+      lessons_total: number;
+      lessons_completed: number;
       minutes: number;
       exam_status: string;
     }>(
@@ -116,6 +118,15 @@ export class CurriculumService {
                   AND (mp.progress_id IS NOT NULL
                        OR (l.level_number = $2 AND m.module_sequence_number < $3))
               )::int AS completed_modules,
+              -- Lessons only — the exam is a step of its own, never "a module"
+              -- (EXPERIENCE.md §8.2): total_modules counts the published exam
+              -- container, so a finisher read "20 of 21 done" beside "20 of 20".
+              COUNT(m.module_id) FILTER (WHERE m.evaluation_kind <> 'exit_exam')::int AS lessons_total,
+              COUNT(*) FILTER (
+                WHERE m.module_id IS NOT NULL AND m.evaluation_kind <> 'exit_exam'
+                  AND (mp.progress_id IS NOT NULL
+                       OR (l.level_number = $2 AND m.module_sequence_number < $3))
+              )::int AS lessons_completed,
               COALESCE(SUM(m.estimated_minutes), 0)::int AS minutes
          FROM levels l
          LEFT JOIN modules m
@@ -149,6 +160,8 @@ export class CurriculumService {
         description: r.description,
         total_modules: r.total_modules,
         completed_modules: r.completed_modules,
+        lessons_total: r.lessons_total,
+        lessons_completed: Math.min(r.lessons_completed, r.lessons_total),
         minutes: r.minutes,
         status,
         awaiting_review: awaitingReview,

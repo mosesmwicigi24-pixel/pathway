@@ -206,6 +206,20 @@ describe("exam availability (EXPERIENCE.md §7.2 #1)", () => {
     expect(await levelOne()).toMatchObject({ exam_published: false, exam_available: false });
   });
 
+  it("counts lessons apart from the exam (EXPERIENCE.md §8.2)", async () => {
+    const m1 = await createModule(1, 1);
+    await createModule(1, 2);
+    await createModule(1, 900, { evaluationKind: "exit_exam", title: "Level 1 Exam" });
+    await progress().completeModule(student, m1, null);
+    type L = { level_number: number; total_modules: number; completed_modules: number; lessons_total: number; lessons_completed: number };
+    const { CurriculumService } = await import("../src/modules/curriculum/service.js");
+    const l1 = ((await new CurriculumService(testPool()).getPathwaySummary(student)) as { levels: L[] }).levels.find((l) => l.level_number === 1)!;
+    // The published exam is in the module total (older apps read it so) …
+    expect(l1).toMatchObject({ total_modules: 3, completed_modules: 1 });
+    // … but it is never "a module" on screen: two lessons, one done.
+    expect(l1).toMatchObject({ lessons_total: 2, lessons_completed: 1 });
+  });
+
   it("marks the trail's exam row, and the empty exam refuses in the member's words", async () => {
     const m1 = await createModule(1, 1);
     await createModule(1, 11, { evaluationKind: "exit_exam", title: "Level 1 Review" });

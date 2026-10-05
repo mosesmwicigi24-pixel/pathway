@@ -1063,7 +1063,7 @@ paths:
         but the discipler has not yet ushered reports status 'awaiting_review' and
         awaiting_review:true; the next level stays 'locked' until ushered.
       responses:
-        "200": { description: "Pathway summary — { current_level, levels: [{ level_number, title, theme, description, total_modules, completed_modules, minutes, status, awaiting_review, exam_published, exam_available }] }. exam_published: an admin has published the level's exam. exam_available: it is published AND has at least one active question in a published module — the only exam a member can take (a published exam with no questions answers 422); apps offer the exam only when this is true." }
+        "200": { description: "Pathway summary — { current_level, levels: [{ level_number, title, theme, description, total_modules, completed_modules, minutes, status, awaiting_review, exam_published, exam_available, lessons_total, lessons_completed }] }. lessons_total / lessons_completed count lessons only — the exam is a step of its own, never a module (total_modules / completed_modules include the published exam container and stay as they are for older apps). exam_published: an admin has published the level's exam. exam_available: it is published AND has at least one active question in a published module — the only exam a member can take (a published exam with no questions answers 422); apps offer the exam only when this is true." }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /levels/{n}/modules:
     get:
