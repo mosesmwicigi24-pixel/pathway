@@ -137,6 +137,46 @@ bundle, so this is instant and total.
 
 ## Incident ledger
 
+### 2026-10-05 — Every member read "Level 1 of 7": a stray level, and a status no member read honoured
+
+**Symptom.** Both member apps' closing walk (Experience Cycle 3) read
+"Level 1 of 7", a 14% journey ring, a map view saying "SIX-LEVEL PATHWAY"
+over "0/7", and a second "LEVEL 1" on the trail. Production (read-only):
+**seven published levels**. Level 7 was titled "LEVEL 1" with no modules.
+Its description began "Multiplying — raising leaders…", so it may have been
+meant as a seventh level and given the wrong title. Level 6 was titled
+"Level 6", also with no modules. All 87 active members were on Level 1.
+
+**Root cause.** The portal sets each level to Draft, In review or Published,
+but no member-facing read honoured that status. `/levels` and `/me/pathway`
+selected every level. Unpublishing level 7, the owner's first choice, would
+have changed nothing members see. The trace caught this before the write.
+
+**Why undetected.** The admin toggle saves and reads back fine on staff
+screens. Members' screens have no test of a draft level. Nothing in the
+local rig had more levels than its seed until production's content was
+copied in for this programme.
+
+**Permanent fix.** pathway#505 (`50e914e`): `/levels` lists published levels
+only. `/me/pathway` lists published levels plus every level at or below the
+member's own, so drafting a level hides only the road ahead, never where a
+member stands or has walked. Staff reads are unchanged.
+
+**Data.** Owner YES, 2026-10-05 ("yes do the level 7 fix"): level 7 →
+`draft`, guarded (title "LEVEL 1", published, no modules, no member on or
+past it), backed up to `/root/backups/level7-draft-20261005/level7.csv`.
+The level cache (`cache:levels`, 10 minutes) was cleared. Level 6's name
+stays as it is, on the owner's word.
+
+**Prevention.** `draft-levels.test.ts` reproduces production's exact shape
+and fails without the fix.
+
+**Verified.** Deployed 2026-10-05 15:31 UTC: api + worker revision `50e914e55…` (image `sha-50e914e`), healthy, `/readyz` 200 locally and through the edge, `/v1/levels` → 401 unauthenticated (route present). Both filters are in the running `dist/modules/curriculum/service.js`, and the 10:35 Talk fix is still present. Level 7 set to `draft` at 15:31 UTC ("level 7 set to draft"). Read-only check: level 7 is `draft`; a Level 1 member's levels number **6** (1 Foundations of Faith … 6 Level 6). No error-level lines and no 5xx since. Redis held no `levels` key, so nothing stale was served.
+
+**Rollback.** Code: redeploy `sha-ec9a519`. Data: set level 7's `status`
+back to `published` (the backup holds the full row).
+
+
 ### 2026-10-05 — A post in Talk it Over never completed the part: 14 members' plan days stuck
 
 **Symptom.** Walking Plans for the experience programme on Android, a day
