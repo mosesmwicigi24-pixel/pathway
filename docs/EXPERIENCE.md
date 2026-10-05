@@ -682,3 +682,74 @@ repeated verse.
 
 **Carried to Cycle 7:** Android's debug build still freezes ("isn't
 responding") on a cold launch — measure the release build.
+
+### Cycle 3, part 2 and close — the skipped areas, then the scored walk (2026-10-05)
+
+**Built** (spec §7.4):
+- Server:
+  - Inbox shows only notices that are due; announcements open for any
+    recipient, and opening one reads its notices (5111964; the change in who
+    can see needs the owner's YES before deploy).
+  - Promos stay the same all day (5111964, 65b8959).
+  - A Talk it Over post completes the part (8e5341e). This is **in production**
+    as pathway#502, with a data fix for 23 stuck days.
+  - `last_day_finished_at` (272fba9).
+  - Ended series are never featured or offered (43f8ca1).
+- iOS 3d070c5 … d55d767, 466 tests. Android 63267a2 … a0e9f76, 934 tests.
+- Owner decisions:
+  - Talk stays required.
+  - The location switch waits for the server.
+  - Hearts never say "Saved".
+
+**Walked and scored** (§2a rules 1, 2, 7; production's content, local rig;
+scorecards in `EXPERIENCE_WALKS.md`):
+
+| | Screens | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Bugs |
+|---|---|---|---|---|---|---|---|---|
+| iOS (d55d767) | 107 | 1 | 26 | 0 | 24 | 11 | 10 | 12 |
+| Android (a0e9f76) | 79 | 5 | 12 | 6 | 8 | 6 | 7 | 13 |
+
+The two walks agree on the big findings:
+- the stray seventh level ("Level 1 of 7");
+- an ended gathering featured at its first date;
+- "In progress" on unopened lessons;
+- a done Talk part still asking;
+- one gift shown at two times;
+- four gold "Begin the journey" on Plans;
+- payment methods marked "SOON".
+
+**Into Cycle 4** (fixed in its build): the bugs from both walks, plus the visual
+rules (one primary, one date format, nothing cut, no internal ids, no zero
+counts, rails that work) and the success-before-save audit's findings
+(Android: lost voice notes and posts, about 20 silent failures, the RSVP
+refusal crash risk).
+
+**Carried to Cycle 5 (journeys):**
+- the exam's four names, its opening page and pass mark;
+- "Today's reading" meaning two things;
+- Give leading with a one-time tithe while the weekly one is automatic;
+- one-off events offered as series;
+- Ben's first day and "Find your cell";
+- Cara's unnamed pause;
+- the level rail's names and its tappable-looking circles.
+
+**Carried to Cycle 6 (context):** the Partners DUE row asks for the full
+amount without naming the KSh 2,000 the office is checking. This is by
+design (a claim counts once confirmed, GIVING.md), but the member is not told.
+
+**Owner items:**
+- Production has seven published levels: level 7 is a stray titled "LEVEL 1",
+  and level 6 is "Level 6". The portal's level status was never read by
+  member APIs, so "Draft" hid nothing (fix proposed).
+- The "Graduation is Calling" announcement asks for a fee to a personal
+  M-Pesa number.
+- The Level 1 exam is 91 questions at 80%.
+- No cell has a leader.
+- Content typos and duplicate series.
+
+**Rig:**
+- Two kernel panics: sleep with a nearly full disk. The Mac is now kept
+  awake while agents run, and the disk is to be freed.
+- The rig does not run the worker, so badges and receipts are not shown.
+
+Cycle 3 is closed.

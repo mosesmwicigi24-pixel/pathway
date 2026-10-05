@@ -24,4 +24,20 @@ checks on Home, Pathway and Plans: Ben (new, nothing started, no cell), Eli
 (exam passed, waiting to be ushered), Cara (2 lessons, a plan begun 5 days
 ago).
 
-_Scores and findings are added here as the walk completes._
+| App (build) | Screens scored | Fails Q1–Q6 | Bugs | Experience findings | Scorecard |
+|---|---|---|---|---|---|
+| iOS (d55d767) | 107 (642 lines) | 1 · 26 · 0 · 24 · 11 · 10 | 12 | 18 | `~/.nuru-e2e/shots/c3-close/ios/scorecard.md` |
+| Android (a0e9f76) | 79 | 5 · 12 · 6 · 8 · 6 · 7 | 13 | 25 | `~/.nuru-e2e/shots/c3-close/android/scorecard.md` |
+
+**Most-failed questions:**
+- What matters here? (two stories on one screen, or an untrue line leading)
+- What happens next? (a past date, the exam hidden under the modules,
+  "In progress" for something never started)
+
+**What could not be reached:**
+- error and offline states: shown in Cycle 3's verification instead, with
+  offline and forced-503 failure lines on both apps;
+- badges, receipts and reminders: the rig does not run the worker;
+- success screens: the walks were read-only.
+
+Routing of every finding: EXPERIENCE.md cycle log, "Cycle 3, part 2 and close".
