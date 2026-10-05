@@ -521,7 +521,7 @@ check-in, and finding a cell.
 | 9 | The rail (both) | Levels 1 and 3 both read "Foundations"; the circles look tappable and do nothing | Each level's own short name; a circle opens its level, or doesn't look tappable |
 | 10 | The ring (both) | The exam is not in the level's fraction: a member who passed and one who has not both read 14% | The exam counts as the level's last step |
 | 11 | Events (both) | One-off events offered as series to follow | Only a repeating series is a series |
-| 12 | Find your cell (server + both) | "Find your cell" opens Community, which has no way to find a cell — while 37 of 76 members in production have none | **Owner decision** (who may see the list of cells, and who approves a join) — until then the row says how it really works |
+| 12 | Find your cell (server + both) | "Find your cell" opens Community, which has no way to find a cell — while 37 of 76 members in production have none | **Owner (2026-10-05): "Ask to be connected."** The member says where they live and when they're free ("Ask the church"); it goes to **their own pastor** in their pastoral thread, who assigns the cell with the tools they have. No list of cells or homes is shown. Server: `POST/GET /me/cell-connection` (ed1525d, no schema change). After asking: "Sent to your pastor on ‹date› — they'll connect you · Open the conversation". In a cell: the cell page. A minor: "Ask a parent or guardian to contact the church office." |
 | 13 | Community (both) | Three stacked switchers; the verse of the day repeated | One switcher; the verse once (Home owns it) |
 | 14 | PayPal (Android) | The waiting stage celebrates (Cycle 1 carry) | Never a celebration before the server confirms (§7.3) |
 
