@@ -476,6 +476,55 @@ Give, Partners, Community, Profile and Settings on both apps, side by side.
   and the same string in the named face with `ImageRenderer`; the pixels must
   match.
 
+## 9. Journeys (Cycle 5)
+
+**Every journey has a front door, one next step at a time, and an end the
+member can see — and every promise along it can be kept.** Cycle 5 follows a
+member through each journey end to end: the first day (Ben), the way back
+after a pause (Cara), lessons to the exam to the leader's blessing (Ada,
+Eli), a plan day, a first gift and a recurring one, an event from finding to
+check-in, and finding a cell.
+
+### 9.1 Rules
+1. **One name for each thing, everywhere on the journey.** The exam is "the
+   Level N exam" — never "review" or "module".
+2. **A front door before any long step**: what it is, what it asks, what
+   happens after. The exam opens on "91 questions · pass mark 80% · your
+   answers are kept if you leave · a pass goes to your leader for Level 2 ·
+   Begin".
+3. **Each row says its verb** ("Start ·", "Continue ·", "Done today ·"), and
+   "What needs you today" never repeats a YOUR WEEK row.
+4. **A first day leads with the first step of the path** ("Start Level 1 ·
+   God & His Nature"), not a side task.
+5. **A pause is named kindly, once** ("You paused First Steps on Thursday —
+   Day 2 is waiting"), never as a shortfall.
+6. **What is already in motion leads.** A recurring gift being collected comes
+   before a one-time gift; a one-time gift is a choice below.
+7. **No dead ends, and no promises the church cannot keep yet.** A row that
+   says "Find your cell" lands on a way to find one; a next level with no
+   lessons says "Level 2 is being prepared — we'll let you know" (§3's words),
+   not "your leader will open Level 2".
+8. **One week shape.** Week strips that show days start on the same day on
+   every screen.
+
+### 9.2 Changes (from the Cycle 3 close walks; Cycle 4's walk adds its own)
+| # | Journey | Seen | Cycle 5 |
+|---|---|---|---|
+| 1 | Exam (server + both) | Four names ("Level 1 review is open · Start review", "Level 1 Review · Start this module", "Take the Level 1 exam"); the exam opens on "QUESTION 1 OF 91" with no count, pass mark or what a pass does | "the Level 1 exam" everywhere (the server's `level_review` nudge words too); the front door of rule 2 |
+| 2 | Home (both) | "What needs you today" repeats YOUR WEEK's exam row | Never repeats a YOUR WEEK row (rule 3) |
+| 3 | Today's reading (both) | YOUR WEEK "Day 4 of 7 · today's reading" beside Plans "Today's reading is done"; a rhythm chip "Start today" beside "Word DONE"; week strips start Monday (Home) and Sunday (Plans) | "Day 3 done today · Day 4 next"; one streak named, or the two named apart; one first day of the week (rule 8) |
+| 4 | First day (Ben, both) | "Reflection due today" leads; YOUR WEEK "God & His Nature" with no verb; "0 of 10 modules" and a "0" ring | "Start Level 1 · God & His Nature" leads; verbs on every row; no zero ring on a first day |
+| 5 | Way back (Cara, both) | A four-day pause is never named | Rule 5 on Home and the plan |
+| 6 | Give (both) | A one-time KSh 1,000 tithe is pre-filled while the weekly KSh 1,000 tithe (collected Mon 12 Oct) sits below the fold, told twice | Lead with the gift in motion (rule 6); tell it once |
+| 7 | Waiting for the next level (Eli, both) | "Your leader will open Level 2" while Level 2 has no lessons and no cell has a leader; two cards with two words ("leader", "discipler") | "Level 2 is being prepared — we'll let you know"; one card, one word |
+| 8 | Discipler (both) | Offered in five places to members who have none | Said once: "No discipler yet — your leader will pair you" |
+| 9 | The rail (both) | Levels 1 and 3 both read "Foundations"; the circles look tappable and do nothing | Each level's own short name; a circle opens its level, or doesn't look tappable |
+| 10 | The ring (both) | The exam is not in the level's fraction: a member who passed and one who has not both read 14% | The exam counts as the level's last step |
+| 11 | Events (both) | One-off events offered as series to follow | Only a repeating series is a series |
+| 12 | Find your cell (server + both) | "Find your cell" opens Community, which has no way to find a cell — while 37 of 76 members in production have none | **Owner decision** (who may see the list of cells, and who approves a join) — until then the row says how it really works |
+| 13 | Community (both) | Three stacked switchers; the verse of the day repeated | One switcher; the verse once (Home owns it) |
+| 14 | PayPal (Android) | The waiting stage celebrates (Cycle 1 carry) | Never a celebration before the server confirms (§7.3) |
+
 ## 5. Cycle log
 
 ### Cycle 1 — Understand & establish the foundation (2026-10-04)
