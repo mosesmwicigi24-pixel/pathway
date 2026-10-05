@@ -243,6 +243,30 @@ describe("reading plans — a day is earned, and the days are walked in order", 
     expect(again.body.completed_days).toEqual([1]);
   });
 
+  it("a post in Talk it Over completes the day's Talk part (owner: Talk is required; a post or \"I've talked it over\" completes it)", async () => {
+    const p = await psalms();
+    let d = await detailOf(p.plan_id);
+    // Every part but the conversation.
+    for (const s of d.days[0]!.segments.filter((x) => x.kind !== "talk")) {
+      expect((await agent().post(`/v1/growth/segments/${s.segment_id}/complete`).set(auth(meTok))).status).toBe(200);
+    }
+    expect((await detailOf(p.plan_id)).days[0]!.completed).toBe(false);
+
+    // Speaking in the conversation is the last part: the day seals.
+    const posted = await agent().post(`/v1/growth/plans/${p.plan_id}/days/1/talk`).set(auth(meTok))
+      .send({ body: "The first psalm reminded me to stay planted by the stream." });
+    expect(posted.status).toBe(201);
+    d = await detailOf(p.plan_id);
+    expect(d.days[0]!.completed).toBe(true);
+    expect(d.days[1]!.locked).toBe(false);
+
+    // A post on a day still behind an earlier one stands, and that day stays open.
+    const early = await agent().post(`/v1/growth/plans/${p.plan_id}/days/3/talk`).set(auth(meTok))
+      .send({ body: "Looking ahead." });
+    expect(early.status).toBe(201);
+    expect((await detailOf(p.plan_id)).days[2]!.completed).toBe(false);
+  });
+
   it("locks day 2 while day 1 is unfinished — by the day CTA and by the part", async () => {
     const p = await psalms();
     const d = await detailOf(p.plan_id);
