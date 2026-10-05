@@ -412,6 +412,20 @@ Give, Partners, Community, Profile and Settings on both apps, side by side.
 | 18 | M-Pesa stages (Android) | The tab bar stays under the ceremony | The ceremony covers it (as iOS) |
 | 19 | "Sign out" (iOS) | Not in the destructive colour | Destructive role |
 | 20 | From Cycle 2 | Android's rhythm tiles read "Pending"; Grow tile labels truncate; the Partners DUE amount wraps beside its chip | Plain words; rule 9; amount and chip on one line or stacked deliberately |
+| 21 | Typography (both, owner 2026-10-05: "check the fonts and put them in vigorous test to be the same") | The family is right everywhere — a forensic check of the announcement body matched Inter Medium, not the system font — but sizes drift: iOS sets 1,674 sizes in code and 521 (31%) are off the type scale (Inter 10 ×203, 9 ×116, 8 ×30, Fraunces 24/20/17/21, even 11.5 and 10.5); Android 247 of 1,164 (21%), mostly 9–10. Nothing below 11 pt is on the scale | Every text on §8.1 rule 3's scale (11 · 12 · 13 · 14 · 15 · 16 · 18 · 22 · 26 · 28) and the same role at the same size on both apps; nothing under 11 pt; long reading (an announcement, a lesson) is the one 16 pt body. Proven by §8.3's tests, not by eye |
+
+### 8.3 Typography tests (both apps)
+- **The faces resolve.** iOS: every face the code names (`Inter-*`,
+  `Fraunces-*`, `lucide`) loads by name (`UIFont(name:)`), so a missing font
+  can never fall back to the system face in silence. Android: every
+  `NuruType` style's family is Inter or Fraunces.
+- **The scale holds.** A source check in each test suite fails on a size off
+  the scale, and on a system or default font used for text (icons and
+  home-screen widgets are allowed and listed). It starts as a ratchet — the
+  count may only fall — and reaches zero by the end of Cycle 4.
+- **What renders is what's asked for.** iOS renders a token-styled `Text`
+  and the same string in the named face with `ImageRenderer`; the pixels must
+  match.
 
 ## 5. Cycle log
 
