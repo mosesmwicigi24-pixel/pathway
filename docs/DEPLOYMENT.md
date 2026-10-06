@@ -137,6 +137,63 @@ bundle, so this is instant and total.
 
 ## Incident ledger
 
+### 2026-10-06 — Home's featured video had black bars baked in, and the verse photo ignored the hour
+
+**What the owner saw (01:37–01:45, iPhone build 131).**
+1. The new featured video, "Nuru Pathway", uploaded at 01:23, was a portrait clip pillarboxed inside a wide frame.
+2. Behind the Verse for Today at 01:42 was a crowd of people under soap bubbles. The owner asked for pictures that "reflect the hour, the time, the season … realistic … in the nature … now this is midnight, there must be something beautiful demonstrating midnight."
+
+**Root causes.**
+1. **Video.** Two causes:
+   - The file itself was 1920×1080 with the bars in its pixels: a 608×1080 portrait picture exported from a 16:9 DaVinci Resolve timeline. ffmpeg `cropdetect` gave the same result at 0:00, 0:50 and 1:40.
+   - Both apps also forced every featured video into 16:9.
+2. **Verse photo.** `artForText()` scored the verse's words (10 per hit) above the time of day (6), so "race … runners … prize" chose a daytime crowd at midnight. The pools under it had their own faults:
+   - the themed library held runners, an astronaut tagged "storm, water", painted hands, a wine glass and bread;
+   - half the night pool was northern lights and snow;
+   - 14:00–17:00 drew from the sunset pool.
+
+**Fixes.**
+1. **Video file** (production data write, owner YES "Crop and replace"):
+   - Cropped on the Mac (`crop=608:1080:656:0`, x264 CRF 19, the original 50 fps, AAC 192k, faststart): 336 MB down to 37 MB.
+   - Uploaded beside the original as `f599e26f-…-portrait.mp4` with a portrait thumbnail.
+   - Backed up the row to `/root/backups/featured-video-20261006/media_asset.csv`.
+   - Updated the one `media_assets` row with a guard (`external_url`, `thumbnail_url`, `source_object_key`).
+   - The original `.mov` is kept, so rollback is a single update.
+   - The apps take the video's own shape: iOS 41e1919 (in build 132, installed) and Android 9caedab.
+2. **Pictures** (pathway#509, squash-merged `a6d1d61`, owner YES "deploy when green"):
+   - A new `intelligence/nature.ts` holds 216 nature photographs, each looked at on contact sheets.
+   - The hour is the law: a picture clock set by Nairobi's sun, in nine stages from deep night to nightfall.
+   - The season fits: Kenya's rains and dry months, and the church year's Advent, Christmas, Lent and Easter.
+   - The verse's words choose only among the photographs the hour allows.
+   - The payload is unchanged, so no app build is needed.
+
+**Verified.** **Video:**
+- Both new files are served through the edge (200, `video/mp4`, 37,074,853 bytes, sha256 matched the encode; ffprobe reads 608×1080).
+- After the update, the row points at the portrait file with `is_homepage` still true.
+- Build 132 has called `/home/welcome-video` since the switch (02:21–02:23 EAT). The endpoint reads that row directly with no cache, so it returns the portrait file. When this entry was written, the phone had not yet fetched the new files (the card hadn't been scrolled into view since).
+
+**Pictures:**
+- Deployed 2026-10-06 00:01 UTC (03:01 EAT), with no migration and no schema change.
+- The image `sha-a6d1d61` was pulled; api and worker run revision `a6d1d61b1`, healthy, restarts 0.
+- `/readyz` returns 200 locally and through the edge, and the api logs show 0 errors since.
+- `nature.js` is present in the running dist.
+- Asked inside the container at 03:01 EAT with the race verse, the hour reads *deepnight*, the weather *rains*, 216 photos. The liturgy card gets "Moonlight on a rocky shore" and the verse card "The night sky held in still water": different photographs, both of the night.
+
+**Why it went unnoticed.** The picker's tests checked that it *matched words*, not that it kept the hour. No test asked what a member sees at midnight, and nobody had looked at the pools' photographs together until tonight's contact sheets. The upload path has no check for baked-in bars either.
+
+**Prevention.** `test/nature-art.test.ts` covers:
+- the owner's exact case, plus the old picker's output pinned as evidence;
+- every hour of the clock;
+- 14:00 is never a sunset;
+- the season;
+- the two cards never coincide over a year;
+- daily variety;
+- a banned list of the 30 people, object and far-north photographs.
+
+Follow-up for the owner, not done: the admin upload could run `cropdetect` and offer to crop.
+
+**Also audited.** The verse and liturgy cards share one selector now. The old `artForText`, `pickBandArt` and `LITURGY_ART` remain exported for their tests only, and no route serves them; deleting them is a cleanup for later. The portal is unchanged and wasn't redeployed.
+
 ### 2026-10-05 — The stack lands: Giving cycles, notification sounds, Experience Cycles 1–5 (server)
 
 **What shipped.** pathway#507 (merge commit `c349bbf`) merged the branches that had been
