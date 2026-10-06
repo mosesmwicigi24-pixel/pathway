@@ -170,7 +170,7 @@ bundle, so this is instant and total.
 **Verified.** **Video:**
 - Both new files are served through the edge (200, `video/mp4`, 37,074,853 bytes, sha256 matched the encode; ffprobe reads 608×1080).
 - After the update, the row points at the portrait file with `is_homepage` still true.
-- Build 132 calls `/home/welcome-video` and gets the portrait file.
+- Build 132 has called `/home/welcome-video` since the switch (02:21–02:23 EAT). The endpoint reads that row directly with no cache, so it returns the portrait file. When this entry was written, the phone had not yet fetched the new files (the card hadn't been scrolled into view since).
 
 **Pictures:**
 - Deployed 2026-10-06 00:01 UTC (03:01 EAT), with no migration and no schema change.
