@@ -137,6 +137,40 @@ bundle, so this is instant and total.
 
 ## Incident ledger
 
+### 2026-10-07 — The editorial Sunday Letter (v3): a photograph, the week's true figures, the verse in full, an A4 PDF
+
+**What shipped.** pathway#512 (`e5912d1`, squash-merged on its exact green head), on the owner's YES ("deploy when green"). The owner asked for "a better Sunday Letter… images… a good report like a nice template from Pages", and on the canvas chose:
+- the editorial letter;
+- signed "Pastor Moses" in handwriting;
+- with a "keep this letter" PDF.
+
+The contract is additive, with no migration. Every new field is derived, never written by the model:
+- `photo`: from the eye-checked nature library, by theme and the week's weather season, frozen per letter.
+- `figures`: true counts of the letter's own week, never a zero.
+- `scripture`: the text comes from the church's `daily_verses`. The model now chooses from those references.
+- `issue_no`, `reading_minutes`, `paragraphs`, `signed_by` and `pdf_url`.
+
+New: `GET /me/letters/:id/pdf`. It renders one A4 page with `pdf-lib` (a new dependency) and OFL fonts bundled in the image. The apps' letter screens are being rebuilt to it. Until they ship, the new fields are ignored and members see no change. This Sunday's letters are the first written with the new fields.
+
+**Caught while building.**
+- pdf-lib's font subsetter dropped Inter's glyphs ("No. 6" printed as ". 6"). Inter is now embedded whole.
+- A passing network blip cost one render its photograph. The fetch now retries once and caches in-process.
+
+**Verified.** - **Deploy:** 2026-10-07 09:10 EAT, with no migration. The api and worker run revision `e5912d132`, restarts 0. `/readyz` returns 200 through the edge.
+- **Image contents:** all 6 letter fonts are present, and `letterPdf.js` and `letterExtras.js` are in the running dist.
+- **Verses:** `daily_verses` holds 365, all with text.
+- **Inside the live API container,** with no member data:
+  - a sample letter fetched its photograph from the curated library ("A rose-coloured sunrise over the hills", 33,041 bytes);
+  - it rendered a 396,467-byte `%PDF-`.
+- **The new route:** `GET /v1/me/letters/:id/pdf` answers 401 without a token.
+- **Since 06:10Z:** 0 error-level lines in the api or worker logs, and 0 5xx at nginx.
+
+**Two snags, neither affecting production:**
+- **The connection dropped mid-verification.** The deploy script's SSH session hit "server not responding" after the containers had already been recreated. Production was checked first, then verified separately.
+- **A verification script swallowed itself.** Fed through `ssh … bash -s`, a `docker exec -i … psql -c` line read the REST OF THE SCRIPT from standard input. Run remote scripts as a file (`scp`, then `bash file </dev/null`), never through stdin, whenever they contain `docker exec -i`.
+
+**Rollback.** Redeploy `sha-a6d1d61`. Nothing was migrated. Letters written meanwhile only carry extra keys inside `highlights`, which the older code ignores.
+
 ### 2026-10-06 — Home's featured video had black bars baked in, and the verse photo ignored the hour
 
 **What the owner saw (01:37–01:45, iPhone build 131).**
