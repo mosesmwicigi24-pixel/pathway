@@ -22,6 +22,8 @@ import type { StoryService } from "./story.js";
 import { LETTER_SYSTEM, LETTER_THEMES, type LetterTheme } from "./prompts.js";
 import {
   LETTER_SIGNED_BY,
+  captionText,
+  captionVerse,
   issueNo,
   letterFigures,
   paragraphsOf,
@@ -307,13 +309,18 @@ export class LettersService {
           ? { ref: base.scripture_ref, text: stored.scripture_text, version: typeof stored.scripture_version === "string" ? stored.scripture_version : null }
           : await scriptureFor(this.pool, base.scripture_ref);
     }
+    const photo = photoForLetter(base.letter_id, base.theme, base.week_of, typeof stored.photo_id === "string" ? stored.photo_id : null);
+    // The caption is scripture for the picture; the plain description stays
+    // only when the library has none of the theme's verses.
+    const verse = photo ? await captionVerse(this.pool, base.letter_id, base.theme, base.scripture_ref) : null;
+    if (photo && verse) photo.caption = captionText(verse);
     return {
       ...base,
       issue_no: await issueNo(this.pool, userId, base.week_of),
       reading_minutes: readingMinutes(base.body),
       paragraphs: paragraphsOf(base.body),
       scripture,
-      photo: photoForLetter(base.letter_id, base.theme, base.week_of, typeof stored.photo_id === "string" ? stored.photo_id : null),
+      photo,
       figures,
       signed_by: { ...LETTER_SIGNED_BY },
       pdf_url: `/v1/me/letters/${base.letter_id}/pdf`,

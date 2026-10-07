@@ -8,9 +8,15 @@
 // The photograph is fetched from the curated library's URL at render time; if
 // that fails or times out the page is drawn without it — a letter is never
 // refused for want of a picture.
+//
+// The letter runs the full measure, like its heading, in paragraphs, justified
+// (owner, 2026-10-07: "format the font like the heading to reach the end of
+// the page"). The page is measured before it is drawn: the roomiest fit that
+// ends above the foot wins, so a long letter tightens instead of running off
+// the page.
 import { readFile } from "node:fs/promises";
 import fontkit from "@pdf-lib/fontkit";
-import { PDFDocument, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import { PDFDocument, clip, endPath, popGraphicsState, pushGraphicsState, rectangle, rgb, type Color, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import type { LetterV3 } from "./letters.js";
 
 const NAVY = rgb(11 / 255, 31 / 255, 51 / 255);
@@ -44,16 +50,25 @@ function loadFonts(): Promise<Record<FontKey, Uint8Array>> {
   return fontBytes;
 }
 
+const W = 595.28, H = 841.89, M = 48;
+/** Every block runs the full measure, as the heading does. */
+const MEASURE = W - 2 * M;
+/** The lowest a block may end: the foot's rule sits at 44. */
+const FLOOR = 58;
+
 /** Recently used photographs, so a letter downloaded twice is fetched once.
  *  Small and in-process: the library is a few hundred images of ~80 KB. */
 const photoCache = new Map<string, Uint8Array>();
 const PHOTO_CACHE_MAX = 48;
 
-/** The photograph as JPEG bytes at the page's exact aspect, or null. Two
- *  tries (5 s, then 8 s): a passing network blip shouldn't cost a member the
- *  picture on a letter they keep (seen 2026-10-07 while building this). */
-export async function fetchLetterPhoto(url: string): Promise<Uint8Array | null> {
-  const sized = url.replace(/\?.*$/, "") + "?auto=compress&fm=jpg&fit=crop&w=1400&h=490&q=78";
+/** The photograph as JPEG bytes at the strip's exact aspect (`height` points
+ *  across the measure), or null. Cropped by detail, not the centre: a wide
+ *  strip from the middle of a dawn photograph is a dark box, the detailed band
+ *  is the sun (seen 2026-10-07). Two tries (5 s, then 8 s): a passing network
+ *  blip shouldn't cost a member the picture on a letter they keep. */
+export async function fetchLetterPhoto(url: string, height = 170): Promise<Uint8Array | null> {
+  const h = Math.max(1, Math.round((1400 * height) / MEASURE));
+  const sized = url.replace(/\?.*$/, "") + `?auto=compress&fm=jpg&fit=crop&crop=entropy&w=1400&h=${h}&q=78`;
   const hit = photoCache.get(sized);
   if (hit) return hit;
   for (const timeoutMs of [5000, 8000]) {
@@ -76,39 +91,240 @@ export async function fetchLetterPhoto(url: string): Promise<Uint8Array | null> 
   return null;
 }
 
-/** Greedy word wrap to `width` points. */
-function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
-  const lines: string[] = [];
-  let line = "";
-  for (const word of text.split(/\s+/).filter(Boolean)) {
-    const next = line ? `${line} ${word}` : word;
-    if (font.widthOfTextAtSize(next, size) <= width || !line) line = next;
+/** Greedy word wrap; `widthAt(line)` lets the drop cap's lines run shorter. */
+function wrapWords(words: string[], font: PDFFont, size: number, widthAt: (line: number) => number): string[][] {
+  const lines: string[][] = [];
+  let line: string[] = [];
+  for (const word of words) {
+    if (line.length === 0 || font.widthOfTextAtSize([...line, word].join(" "), size) <= widthAt(lines.length)) line.push(word);
     else {
       lines.push(line);
-      line = word;
+      line = [word];
     }
   }
-  if (line) lines.push(line);
+  if (line.length > 0) lines.push(line);
   return lines;
 }
 
-/** Draw wrapped text from `y` (its first baseline) down; returns the y below it. */
-function block(page: PDFPage, text: string, o: { x: number; y: number; width: number; font: PDFFont; size: number; leading: number; color: ReturnType<typeof rgb> }): number {
+/** Draws on the page — or, without one, only measures. The same layout code
+ *  runs both ways, so the page that was measured is the page that is drawn. */
+class Pen {
+  constructor(readonly page: PDFPage | null) {}
+  text(s: string, o: NonNullable<Parameters<PDFPage["drawText"]>[1]>): void {
+    this.page?.drawText(s, o);
+  }
+  line(o: Parameters<PDFPage["drawLine"]>[0]): void {
+    this.page?.drawLine(o);
+  }
+  rect(o: Parameters<PDFPage["drawRectangle"]>[0]): void {
+    this.page?.drawRectangle(o);
+  }
+  circle(o: Parameters<PDFPage["drawCircle"]>[0]): void {
+    this.page?.drawCircle(o);
+  }
+  /** The image covers the box, centred and cropped to it. */
+  photo(img: PDFImage, box: { x: number; y: number; width: number; height: number }): void {
+    if (!this.page) return;
+    const scale = Math.max(box.width / img.width, box.height / img.height);
+    const w = img.width * scale, h = img.height * scale;
+    this.page.pushOperators(pushGraphicsState(), rectangle(box.x, box.y, box.width, box.height), clip(), endPath());
+    this.page.drawImage(img, { x: box.x - (w - box.width) / 2, y: box.y - (h - box.height) / 2, width: w, height: h });
+    this.page.pushOperators(popGraphicsState());
+  }
+}
+
+/** Wrapped, ragged text from `y` (its first baseline) down; returns the y below it. */
+function block(pen: Pen, text: string, o: { x: number; y: number; width: number; font: PDFFont; size: number; leading: number; color: Color }): number {
   let y = o.y;
-  for (const l of wrap(text, o.font, o.size, o.width)) {
-    page.drawText(l, { x: o.x, y, size: o.size, font: o.font, color: o.color });
+  for (const words of wrapWords(text.split(/\s+/).filter(Boolean), o.font, o.size, () => o.width)) {
+    pen.text(words.join(" "), { x: o.x, y, size: o.size, font: o.font, color: o.color });
     y -= o.leading;
   }
   return y;
 }
 
+/** One paragraph of the letter, justified to the measure with its last line
+ *  ragged. The first opens with a two-line drop cap, as on the phone. */
+function paragraph(pen: Pen, text: string, o: { y: number; font: PDFFont; capFont: PDFFont; size: number; leading: number; dropCap: boolean }): number {
+  let body = text;
+  let indent = 0;
+  if (o.dropCap && /^[A-Za-z]/.test(text)) {
+    const cap = text[0]!;
+    const capSize = (o.leading + 0.7 * o.size) / 0.7; // its top on line one's caps, its foot on line two
+    indent = o.capFont.widthOfTextAtSize(cap, capSize) + 5;
+    pen.text(cap, { x: M, y: o.y - o.leading, size: capSize, font: o.capFont, color: GOLD_TEXT });
+    body = text.slice(1);
+  }
+  const widthAt = (i: number): number => (i < 2 ? MEASURE - indent : MEASURE);
+  const lines = wrapWords(body.split(/\s+/).filter(Boolean), o.font, o.size, widthAt);
+  const space = o.font.widthOfTextAtSize(" ", o.size);
+  let y = o.y;
+  lines.forEach((words, i) => {
+    const x0 = M + (i < 2 ? indent : 0);
+    const gap = words.length > 1 ? (widthAt(i) - o.font.widthOfTextAtSize(words.join(" "), o.size)) / (words.length - 1) + space : space;
+    if (i === lines.length - 1 || words.length < 2 || gap > space * 3) {
+      pen.text(words.join(" "), { x: x0, y, size: o.size, font: o.font, color: INK });
+    } else {
+      let x = x0;
+      for (const w of words) {
+        pen.text(w, { x, y, size: o.size, font: o.font, color: INK });
+        x += o.font.widthOfTextAtSize(w, o.size) + gap;
+      }
+    }
+    y -= o.leading;
+  });
+  // A one-line opening paragraph still clears its drop cap.
+  return indent > 0 ? Math.min(y, o.y - 2 * o.leading) : y;
+}
+
 function spaced(text: string): string {
-  return text.toUpperCase().split("").join(" ");
+  return text.toUpperCase().split("").join(" ");
 }
 
 function longDate(weekOf: string): string {
   const d = new Date(`${weekOf}T12:00:00+03:00`);
   return d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Africa/Nairobi" });
+}
+
+interface Fit {
+  photoH: number;
+  body: number;
+  leading: number;
+  pullQuote: boolean;
+}
+/** Roomiest first. A letter takes the first that ends above the foot. */
+const FITS: readonly Fit[] = [
+  { photoH: 170, body: 12.5, leading: 18.5, pullQuote: true },
+  { photoH: 150, body: 12, leading: 17.5, pullQuote: true },
+  { photoH: 130, body: 11.5, leading: 16.5, pullQuote: true },
+  { photoH: 130, body: 11.5, leading: 16.5, pullQuote: false },
+  { photoH: 110, body: 11, leading: 15.5, pullQuote: false },
+  { photoH: 90, body: 11, leading: 15.5, pullQuote: false },
+  { photoH: 70, body: 10.5, leading: 14.5, pullQuote: false },
+  { photoH: 0, body: 10.5, leading: 14.5, pullQuote: false },
+];
+
+type Fonts = Record<FontKey, PDFFont>;
+
+/** The narrowest width that keeps a heading on as few lines as the measure
+ *  allows — so a two-line title shares its words, never one word alone. */
+function balancedWidth(text: string, font: PDFFont, size: number, max: number): number {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines = wrapWords(words, font, size, () => max).length;
+  if (lines < 2) return max;
+  let lo = max / lines, hi = max;
+  for (let i = 0; i < 14; i++) {
+    const mid = (lo + hi) / 2;
+    if (wrapWords(words, font, size, () => mid).length > lines) lo = mid;
+    else hi = mid;
+  }
+  return Math.ceil(hi);
+}
+
+/** The page from the masthead to the week's step; returns where it ends. */
+function layout(pen: Pen, letter: LetterV3, f: Fonts, fit: Fit, photo: { img: PDFImage | null } | null): number {
+  let y = H - 46;
+
+  // Masthead: the seal, the name, the issue and date.
+  pen.circle({ x: M + 15, y: y - 12, size: 15, color: GOLD });
+  pen.text("N", { x: M + 15 - f.serifBold.widthOfTextAtSize("N", 15) / 2, y: y - 17, size: 15, font: f.serifBold, color: SEAL_INK });
+  pen.text("The Sunday Letter", { x: M + 40, y: y - 20, size: 25, font: f.serifItalic, color: NAVY });
+  const issue = `No. ${letter.issue_no}`;
+  const date = longDate(letter.week_of);
+  pen.text(issue, { x: W - M - f.sans.widthOfTextAtSize(issue, 9), y: y - 8, size: 9, font: f.sans, color: MUTED });
+  pen.text(date, { x: W - M - f.sans.widthOfTextAtSize(date, 9), y: y - 21, size: 9, font: f.sans, color: MUTED });
+  y -= 34;
+  pen.line({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.8, color: GOLD });
+  pen.line({ start: { x: M, y: y - 2.6 }, end: { x: W - M, y: y - 2.6 }, thickness: 0.8, color: GOLD });
+  y -= 14;
+
+  // The photograph across the measure, and the scripture beneath it.
+  if (photo && fit.photoH > 0) {
+    if (photo.img) pen.photo(photo.img, { x: M, y: y - fit.photoH, width: MEASURE, height: fit.photoH });
+    y -= fit.photoH + 6;
+    if (letter.photo?.caption) {
+      y = block(pen, letter.photo.caption, { x: M, y: y - 9, width: MEASURE, font: f.serifItalic, size: 9, leading: 12, color: MUTED }) - 4;
+    }
+  }
+
+  // The title, then the letter, both across the full measure.
+  const titleW = balancedWidth(letter.title, f.serifBold, 21, MEASURE);
+  y = block(pen, letter.title, { x: M, y: y - 22, width: titleW, font: f.serifBold, size: 21, leading: 25, color: NAVY }) - 4;
+  y = block(pen, letter.salutation, { x: M, y: y - 10, width: MEASURE, font: f.serifItalic, size: 14, leading: 19, color: NAVY }) - 4;
+  letter.paragraphs.forEach((p, i) => {
+    y = paragraph(pen, p, { y: y - 2, font: f.serif, capFont: f.serifBold, size: fit.body, leading: fit.leading, dropCap: i === 0 }) - fit.leading * 0.4;
+  });
+
+  // Signed.
+  pen.text("With grace,", { x: M, y: y - 6, size: 10.5, font: f.serifItalic, color: MUTED });
+  pen.text(letter.signed_by.name, { x: M, y: y - 38, size: 30, font: f.signature, color: NAVY });
+  pen.text(spaced(letter.signed_by.role), { x: M, y: y - 52, size: 7.5, font: f.sansBold, color: GOLD_TEXT });
+  y -= 64;
+
+  // The letter's own shareable line, as a pull quote — as on the phone.
+  if (fit.pullQuote && letter.share_line) {
+    pen.line({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.7, color: GOLD });
+    y = block(pen, `\u201C${letter.share_line}\u201D`, { x: M, y: y - 24, width: MEASURE, font: f.serifItalic, size: 16, leading: 21, color: GOLD_TEXT }) - 4;
+    pen.line({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.7, color: GOLD });
+    y -= 14;
+  }
+
+  // The week in figures, side by side.
+  if (letter.figures.length > 0) {
+    const h = 58;
+    pen.rect({ x: M, y: y - h, width: MEASURE, height: h, color: PANEL });
+    pen.text(spaced("Your week, in grace"), { x: M + 12, y: y - 15, size: 7, font: f.sansBold, color: GOLD_TEXT });
+    const colW = (MEASURE - 24) / letter.figures.length;
+    letter.figures.forEach((fig, i) => {
+      pen.text(fig.value, { x: M + 12 + i * colW, y: y - 37, size: 19, font: f.serif, color: NAVY });
+      pen.text(fig.label, { x: M + 12 + i * colW, y: y - 50, size: 8.5, font: f.sans, color: MUTED });
+    });
+    y -= h + 14;
+  }
+
+  // The verse in full; without its words in the library, its reference.
+  if (letter.scripture) {
+    const ref = letter.scripture.version ? `${letter.scripture.ref} · ${letter.scripture.version}` : letter.scripture.ref;
+    if (letter.scripture.text) {
+      y = block(pen, `\u201C${letter.scripture.text}\u201D`, { x: M, y: y - 6, width: MEASURE, font: f.serifItalic, size: 11.5, leading: 16, color: NAVY }) - 1;
+      pen.text(spaced(ref), { x: M, y: y - 4, size: 7, font: f.sansBold, color: GOLD_TEXT });
+    } else {
+      pen.text(spaced(`Scripture · ${ref}`), { x: M, y: y - 6, size: 7, font: f.sansBold, color: GOLD_TEXT });
+    }
+    y -= 20;
+  }
+
+  // One step for the week.
+  if (letter.next_step) {
+    const boxH = 40;
+    pen.rect({ x: M, y: y - boxH, width: MEASURE, height: boxH, borderColor: NAVY, borderWidth: 0.8 });
+    pen.text(spaced("One step for this week"), { x: M + 12, y: y - 16, size: 7, font: f.sansBold, color: GOLD_TEXT });
+    pen.text(letter.next_step.label, { x: M + 12, y: y - 31, size: 12, font: f.serifBold, color: NAVY });
+    y -= boxH;
+  }
+  return y;
+}
+
+/** Which fit a letter takes, and where its page then ends. */
+function fitLetter(letter: LetterV3, f: Fonts, withPhoto: boolean): { fit: Fit; end: number } {
+  const room = withPhoto ? { img: null } : null;
+  for (const fit of FITS) {
+    const end = layout(new Pen(null), letter, f, fit, room);
+    if (end >= FLOOR) return { fit, end };
+  }
+  const fit = FITS[FITS.length - 1]!;
+  return { fit, end: layout(new Pen(null), letter, f, fit, room) };
+}
+
+/** The page plan for a letter — for tests: the fit, where the page ends, the
+ *  lowest it may end, and the measure every block runs to. */
+export async function planLetterPage(letter: LetterV3, withPhoto: boolean): Promise<{ fit: Fit; end: number; floor: number; measure: number }> {
+  const doc = await PDFDocument.create();
+  doc.registerFontkit(fontkit);
+  const bytes = await loadFonts();
+  const f = {} as Fonts;
+  for (const k of Object.keys(FONT_FILES) as FontKey[]) f[k] = await doc.embedFont(bytes[k], { subset: false });
+  return { ...fitLetter(letter, f, withPhoto), floor: FLOOR, measure: MEASURE };
 }
 
 /** Render one letter as a single A4 page. `photo` lets tests (and callers
@@ -123,103 +339,34 @@ export async function renderLetterPdf(
   doc.setAuthor(`${letter.signed_by.name}, ${letter.signed_by.role}`);
   doc.setCreator("Nuru Place");
   const bytes = await loadFonts();
-  const f = {} as Record<FontKey, PDFFont>;
+  const f = {} as Fonts;
   // Subset where it is safe; Inter is embedded whole — pdf-lib's subsetter
   // drops glyphs from Inter (seen 2026-10-07: "No. 6" printed as ". 6").
   for (const k of Object.keys(FONT_FILES) as FontKey[]) {
     f[k] = await doc.embedFont(bytes[k], { subset: k !== "sans" && k !== "sansBold" });
   }
 
-  const W = 595.28, H = 841.89, M = 48;
+  // Plan with the photograph, fetch it at that plan's strip, and re-plan
+  // without it if it can't be had.
+  const wantPhoto = opts.photo !== undefined ? opts.photo !== null : letter.photo !== null;
+  let { fit } = fitLetter(letter, f, wantPhoto);
+  let img: PDFImage | null = null;
+  if (wantPhoto && fit.photoH > 0) {
+    const photoBytes = opts.photo !== undefined ? opts.photo : await fetchLetterPhoto(letter.photo!.url, fit.photoH);
+    if (photoBytes) {
+      try {
+        img = await doc.embedJpg(photoBytes);
+      } catch {
+        /* not a JPEG we can embed: the page stands without it */
+      }
+    }
+    if (!img) fit = fitLetter(letter, f, false).fit;
+  }
+
   const page = doc.addPage([W, H]);
   page.drawRectangle({ x: 0, y: 0, width: W, height: H, color: PAPER });
-  const cw = W - 2 * M;
-  let y = H - 46;
+  layout(new Pen(page), letter, f, fit, img ? { img } : null);
 
-  // Masthead: the seal, the name, the issue and date.
-  page.drawCircle({ x: M + 15, y: y - 12, size: 15, color: GOLD });
-  page.drawText("N", { x: M + 15 - f.serifBold.widthOfTextAtSize("N", 15) / 2, y: y - 17, size: 15, font: f.serifBold, color: SEAL_INK });
-  page.drawText("The Sunday Letter", { x: M + 40, y: y - 20, size: 25, font: f.serifItalic, color: NAVY });
-  const issue = `No. ${letter.issue_no}`;
-  const date = longDate(letter.week_of);
-  page.drawText(issue, { x: W - M - f.sans.widthOfTextAtSize(issue, 9), y: y - 8, size: 9, font: f.sans, color: MUTED });
-  page.drawText(date, { x: W - M - f.sans.widthOfTextAtSize(date, 9), y: y - 21, size: 9, font: f.sans, color: MUTED });
-  y -= 34;
-  page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.8, color: GOLD });
-  page.drawLine({ start: { x: M, y: y - 2.6 }, end: { x: W - M, y: y - 2.6 }, thickness: 0.8, color: GOLD });
-  y -= 14;
-
-  // The photograph, at the page's measure (fetched at its exact aspect).
-  const photoBytes = opts.photo !== undefined ? opts.photo : letter.photo ? await fetchLetterPhoto(letter.photo.url) : null;
-  if (photoBytes) {
-    try {
-      const img = await doc.embedJpg(photoBytes);
-      const h = cw * (490 / 1400);
-      page.drawImage(img, { x: M, y: y - h, width: cw, height: h });
-      y -= h + 6;
-      if (letter.photo) y = block(page, letter.photo.caption, { x: M, y: y - 8, width: cw, font: f.serifItalic, size: 8.5, leading: 11, color: MUTED }) - 4;
-    } catch {
-      /* not a JPEG we can embed: the page stands without it */
-    }
-  }
-
-  // The title.
-  y = block(page, letter.title, { x: M, y: y - 20, width: cw, font: f.serifBold, size: 21, leading: 25, color: NAVY }) - 6;
-
-  // Two columns: the letter, and the week in figures beside it.
-  const gap = 22;
-  const leftW = (cw - gap) * (2 / 3);
-  const rightX = M + leftW + gap;
-  const rightW = cw - leftW - gap;
-  const top = y;
-
-  let ly = block(page, letter.salutation, { x: M, y: top - 4, width: leftW, font: f.serifItalic, size: 13.5, leading: 18, color: NAVY }) - 4;
-  for (const para of letter.paragraphs) {
-    ly = block(page, para, { x: M, y: ly, width: leftW, font: f.serif, size: 11, leading: 16.5, color: INK }) - 7;
-  }
-  page.drawText("With grace,", { x: M, y: ly - 6, size: 10.5, font: f.serifItalic, color: MUTED });
-  page.drawText(letter.signed_by.name, { x: M, y: ly - 40, size: 32, font: f.signature, color: NAVY });
-  page.drawText(spaced(letter.signed_by.role), { x: M, y: ly - 54, size: 7.5, font: f.sansBold, color: GOLD_TEXT });
-  ly -= 64;
-
-  let ry = top;
-  if (letter.figures.length > 0) {
-    const rowH = 34;
-    const panelH = 22 + letter.figures.length * rowH;
-    page.drawRectangle({ x: rightX, y: ry - panelH, width: rightW, height: panelH, color: PANEL });
-    page.drawText(spaced("Your week, in grace"), { x: rightX + 10, y: ry - 15, size: 7, font: f.sansBold, color: GOLD_TEXT });
-    let fy = ry - 22;
-    for (const fig of letter.figures) {
-      page.drawText(fig.value, { x: rightX + 10, y: fy - 18, size: 19, font: f.serif, color: NAVY });
-      page.drawText(fig.label, { x: rightX + 10, y: fy - 29, size: 8.5, font: f.sans, color: MUTED });
-      fy -= rowH;
-    }
-    ry -= panelH + 14;
-  }
-  if (letter.scripture) {
-    const verse = letter.scripture.text ? `“${letter.scripture.text}”` : null;
-    if (verse) ry = block(page, verse, { x: rightX, y: ry - 4, width: rightW, font: f.serifItalic, size: 10.5, leading: 15, color: NAVY }) - 2;
-    const ref = letter.scripture.version ? `${letter.scripture.ref} · ${letter.scripture.version}` : letter.scripture.ref;
-    page.drawText(spaced(ref), { x: rightX, y: ry - 4, size: 7, font: f.sansBold, color: GOLD_TEXT });
-    ry -= 16;
-  }
-
-  // The letter's own shareable line, as a pull quote — as on the phone.
-  y = Math.min(ly, ry) - 10;
-  if (letter.share_line) {
-    page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.7, color: GOLD });
-    y = block(page, `\u201C${letter.share_line}\u201D`, { x: M, y: y - 26, width: cw, font: f.serifItalic, size: 17, leading: 23, color: GOLD_TEXT }) - 6;
-    page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.7, color: GOLD });
-    y -= 18;
-  }
-
-  // One step for the week, then the foot of the page.
-  if (letter.next_step) {
-    const boxH = 40;
-    page.drawRectangle({ x: M, y: y - boxH, width: cw, height: boxH, borderColor: NAVY, borderWidth: 0.8 });
-    page.drawText(spaced("One step for this week"), { x: M + 12, y: y - 16, size: 7, font: f.sansBold, color: GOLD_TEXT });
-    page.drawText(letter.next_step.label, { x: M + 12, y: y - 31, size: 12, font: f.serifBold, color: NAVY });
-  }
   page.drawLine({ start: { x: M, y: 44 }, end: { x: W - M, y: 44 }, thickness: 0.5, color: rgb(0.85, 0.85, 0.85) });
   const foot = opts.firstName ? `A letter for ${opts.firstName}, written for the week` : "A letter written for your week";
   page.drawText(foot, { x: M, y: 30, size: 8.5, font: f.sans, color: MUTED });
