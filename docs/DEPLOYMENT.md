@@ -137,6 +137,33 @@ bundle, so this is instant and total.
 
 ## Incident ledger
 
+### 2026-10-07 — The letter runs the full page in paragraphs; the photograph's caption is scripture
+
+**What shipped.** pathway#514 (`3453139`, squash-merged on its exact green head) on the owner's YES ("deploy when green"). The owner had sent screenshots of the printed letter and the phone, asking for three things: "format the font like the heading to reach the end of the page", paragraphs, and "make the caption below the image scriptural".
+
+- **The A4 letter:**
+  - The text now runs the full measure, like its heading, justified, in paragraphs, and opens with the phone's drop cap. Before, it sat in a two-thirds column beside a nearly empty one: older letters often have no figures, and the library may lack the verse's words.
+  - The page is measured before it is drawn. A long letter tightens instead of running off the page: first the photo shrinks, then the type, then the pull quote goes. The photo is dropped only as a last resort.
+  - Two-line titles are balanced.
+  - Photos are now cropped to their most detailed band instead of the centre. A dawn photo's centre strip had printed as a dark box.
+- **Every surface:**
+  - A letter written as one long block is split at the sentence nearest each equal share: two paragraphs past 70 words, three past 200.
+  - The photo caption is now a verse from the church's own library that fits the picture. It stays the same each time a letter is opened and never comes from the same chapter as the letter's own verse.
+  - The verse references are listed per theme in `CAPTION_VERSES`. The verse text always comes from the library and is never typed in code.
+
+No migration and no change to the response shape. No app build either: both apps already show the server's `paragraphs` and `photo.caption` without a line limit.
+
+**Verified.** Deployed 2026-10-07 about 11:50 EAT, with no migration.
+- **Before merging:** production's verse library was checked read-only for all 28 caption references. Each has a version of 160 characters or fewer.
+- **Live versions:** the API and worker both run `3453139ca`, healthy, with 0 restarts. The running dist has `captionVerse` in `letterExtras.js` and `letters.js`, and `fitLetter` in `letterPdf.js`.
+- **Inside the live API container, with no member data:**
+  - a caption verse came from production's library for all ten themes (dawn: Psalm 30:5 … rest: Psalm 116:7);
+  - a 110-word block split into two paragraphs;
+  - a sample letter rendered a 584,377-byte `%PDF-`, with its photo fetched at the strip's own shape.
+- **Health:** the edge `/readyz` returned 200, `/v1/me/letters/latest` returned 401 without a token, and the API logged 0 errors after the deploy.
+
+**Rollback.** Redeploy `sha-e5912d1`. Nothing is stored; captions and paragraphs are worked out each time a letter is opened.
+
 ### 2026-10-07 — The editorial Sunday Letter (v3): a photograph, the week's true figures, the verse in full, an A4 PDF
 
 **What shipped.** pathway#512 (`e5912d1`, squash-merged on its exact green head), on the owner's YES ("deploy when green"). The owner asked for "a better Sunday Letter… images… a good report like a nice template from Pages", and on the canvas chose:
