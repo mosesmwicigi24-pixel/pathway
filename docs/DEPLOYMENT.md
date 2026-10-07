@@ -156,7 +156,8 @@ New: `GET /me/letters/:id/pdf`. It renders one A4 page with `pdf-lib` (a new dep
 - pdf-lib's font subsetter dropped Inter's glyphs ("No. 6" printed as ". 6"). Inter is now embedded whole.
 - A passing network blip cost one render its photograph. The fetch now retries once and caches in-process.
 
-**Verified.** - **Deploy:** 2026-10-07 09:10 EAT, with no migration. The api and worker run revision `e5912d132`, restarts 0. `/readyz` returns 200 through the edge.
+**Verified.**
+- **Deploy:** 2026-10-07 09:10 EAT, with no migration. The api and worker run revision `e5912d132`, restarts 0. `/readyz` returns 200 through the edge.
 - **Image contents:** all 6 letter fonts are present, and `letterPdf.js` and `letterExtras.js` are in the running dist.
 - **Verses:** `daily_verses` holds 365, all with text.
 - **Inside the live API container,** with no member data:
