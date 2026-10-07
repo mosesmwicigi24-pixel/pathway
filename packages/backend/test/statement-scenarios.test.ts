@@ -509,6 +509,30 @@ describe("the member's statement right after money moves (real paths, no cache)"
     expect(await row()).toMatchObject({ pending_claim_minor: 0 });
   });
 
+  // ── (o3) ──
+  it("(o3) a pledge row says what the office is checking weeks before its DUE row appears — never subtracted (final walk, §9.3 rule 1)", async () => {
+    const o = await pledge({ shape: "monthly", amount_minor: 100_000, due_day: 15 }, "2026-09-16 08:00:00+00"); // made after the 15th: first due 15 Oct, weeks away — no DUE row yet
+    const rows = async () => {
+      const p = await partners.partnership(user, now);
+      return {
+        due: (p.due as { id: string }[]).find((d) => d.id === o.pledge_id),
+        partnership: (p.pledges as { pledge_id: string; pending_claim_minor: number }[]).find((x) => x.pledge_id === o.pledge_id),
+        list: ((await partners.listPledges(user, now)) as { pledge_id: string; pending_claim_minor: number }[]).find((x) => x.pledge_id === o.pledge_id),
+      };
+    };
+    expect((await rows()).due).toBeUndefined();
+    expect((await rows()).partnership).toMatchObject({ pending_claim_minor: 0 });
+
+    const claim = await partners.createClaim(user, o.pledge_id, { amount_minor: 200_000, currency: "KES", paid_on: "2026-09-19" } as never, now);
+    const after = await rows();
+    expect(after.due).toBeUndefined();
+    expect(after.partnership).toMatchObject({ pending_claim_minor: 200_000 });
+    expect(after.list).toMatchObject({ pending_claim_minor: 200_000 });
+
+    await testPool().query(`UPDATE pledge_claims SET status = 'rejected' WHERE claim_id = $1`, [(claim as { claim_id: string }).claim_id]);
+    expect((await rows()).partnership).toMatchObject({ pending_claim_minor: 0 });
+  });
+
   // ── (p) ──
   it("(p) two instalments behind: the DUE row asks for the whole catch-up; each smaller payment settles the oldest first; caught up, the row waits for the next week", async () => {
     const p = await pledge({ shape: "monthly", amount_minor: 50_000, due_day: 10, title: "Choir" }, "2026-08-01 08:00:00+00"); // due 10 Aug, 10 Sep, 10 Oct…

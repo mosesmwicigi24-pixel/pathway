@@ -11290,6 +11290,7 @@ components:
       type: object
       required: [pledge_id, shape, currency, status, progress, title, custom_title, pays_to]
       properties:
+        pending_claim_minor: { type: integer, format: int64, description: "Member pledge rows (GET /giving/pledges and /giving/partnership pledges[]) — Σ this member's PENDING \"I paid another way\" claims on this pledge, in its currency, at any time (not only in the week its DUE row appears), so the row leads with what the office is checking and nobody pays twice. Never subtracted from what is owed; a claim counts once the office confirms it. 0 when none." }
         pledge_id: { type: string, format: uuid }
         shape: { type: string, enum: [monthly, total] }
         amount_minor: { type: [integer, "null"] }

@@ -581,8 +581,11 @@ export class PartnersService {
 
   async listPledges(userId: string, now = new Date()): Promise<Record<string, unknown>[]> {
     const rows = await this.pledgeRows(this.pool, `WHERE p.user_id = $1 AND p.status <> 'cancelled'`, [userId]);
+    const claimsChecking = await this.pendingClaimsByPledge(userId);
     const out: Record<string, unknown>[] = [];
-    for (const r of rows) out.push(await this.shape(r, now));
+    for (const r of rows) {
+      out.push({ ...(await this.shape(r, now)), pending_claim_minor: claimsChecking.get(`${r.pledge_id}:${String(r.currency).toUpperCase()}`) ?? 0 });
+    }
     return out;
   }
 
@@ -841,7 +844,10 @@ export class PartnersService {
     for (const r of await this.pledgeRows(this.pool, `WHERE p.user_id = $1 AND p.status <> 'cancelled'`, [userId])) {
       const { progress: pr, owed_minor, arrears } = await this.progressDetail(r, now);
       const shaped = this.shapeRow(r, pr, now);
-      pledges.push(shaped);
+      // The row says what the office is checking at any time, not only in the
+      // week a DUE row appears (final walk: a member paid another way on the
+      // 30th and the pledge led with "Pay now" for two weeks).
+      pledges.push({ ...shaped, pending_claim_minor: claimsChecking.get(`${r.pledge_id}:${String(r.currency).toUpperCase()}`) ?? 0 });
       if (r.status !== "active" || !pr.next_due) continue;
       // Overdue or due today → the row asks for the whole catch-up (every
       // incomplete instalment due by today, so one payment brings the member
