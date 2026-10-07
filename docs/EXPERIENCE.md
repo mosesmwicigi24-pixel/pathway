@@ -403,11 +403,24 @@ every screen use them the same way. Walked: Home, Pathway, Plans, Events,
 Give, Partners, Community, Profile and Settings on both apps, side by side.
 
 ### 8.1 The grammar
-1. **Colour roles.** Paper is the page; white is a card; navy is chrome,
-   ceremony and at most one dark feature card per tab; gold is the accent —
-   kickers, progress, the primary action, selected states. Green, amber and
-   red only say state (on track · due · failed or destructive). No other
-   hues.
+1. **Colour roles.** Paper is the page; white is a card; photographs carry
+   the hour. Navy is chrome, ceremony and the two things a member must not
+   miss:
+   - **the church's voice:** the Sunday Letter in every state (unread, read,
+     and before it arrives) and Live;
+   - **each tab's one next step:** Home's navy band heading YOUR WEEK,
+     Pathway's exam or summit card, and one lead card on each other tab
+     where a single next step exists.
+
+   Dark cards never touch each other or a photograph's dark edge; a light
+   card sits between. Gold is the accent: kickers, progress, the primary
+   action, selected states. Green, amber and red only say state (on track ·
+   due · failed or destructive). No other hues. *(Owner, 2026-10-07, option A:
+   "navy for the church's voice and for your next step". It replaces "at most
+   one dark feature card per tab", which, with Cycle 2 folding Home's two navy
+   Continue cards into YOUR WEEK and the read letter turning white, left Home
+   with no navy at all. Canvas:
+   https://claude.ai/artifact/PLZwrjJTx9GpCdszenPice.)*
 2. **One header per tab.** Gold kicker in caps · Fraunces title · one Inter
    line · the bell at the right. The kicker names the tab (Home's is the
    date); the greeting belongs to Home alone; a segment switch (Give |
