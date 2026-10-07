@@ -6,6 +6,7 @@
 //    by the letter's theme and the week's weather season, deterministic per
 //    letter. The bundled geometry art stays the clients' fallback, so the
 //    original promise holds: nothing unvetted can ever appear on a letter.
+//    Its caption is a line of scripture for that picture, from the library.
 //  - the figures: true counts of the member's own week (lessons finished,
 //    days in the Word, reflections, prayers answered, gatherings attended).
 //  - the scripture text: looked up in the church's own daily-verse library,
@@ -177,10 +178,144 @@ export async function issueNo(pool: Pool, userId: string, weekOf: string): Promi
   return Math.max(1, r?.n ?? 1);
 }
 
-/** The body as paragraphs (the model writes two, separated by a blank line). */
+/** Words whose full stop never ends a sentence. */
+const NOT_A_SENTENCE_END = new Set([
+  "mr", "mrs", "ms", "dr", "st", "mt", "rev", "no", "vs", "cf", "ch", "v", "vv",
+  "gen", "exod", "lev", "num", "deut", "ps", "prov", "isa", "jer", "matt", "rom",
+  "cor", "gal", "eph", "phil", "col", "thess", "tim", "heb", "jas", "pet",
+]);
+
+/** One paragraph's sentences, each keeping its own punctuation. */
+function sentencesOf(text: string): string[] {
+  const out: string[] = [];
+  const end = /[.!?]["'”’)\]]*(?=\s+["'“‘(]?[A-Z0-9])/g;
+  let from = 0;
+  for (let m = end.exec(text); m; m = end.exec(text)) {
+    const word = /([A-Za-z]+)\.$/.exec(text.slice(from, m.index + 1))?.[1];
+    if (word && (NOT_A_SENTENCE_END.has(word.toLowerCase()) || /^[A-Z]$/.test(word))) continue;
+    const stop = m.index + m[0].length;
+    out.push(text.slice(from, stop).trim());
+    from = stop;
+  }
+  const rest = text.slice(from).trim();
+  if (rest) out.push(rest);
+  return out;
+}
+
+const wordCount = (s: string): number => s.split(/\s+/).filter(Boolean).length;
+
+/** A long single block reads as a wall, on the phone and on paper (owner,
+ *  2026-10-07). Letters before v3 were written as one block: split it at the
+ *  sentence nearest each equal share — two paragraphs past 70 words, three
+ *  past 200. */
+function splitBlock(block: string): string[] {
+  const total = wordCount(block);
+  const parts = total > 200 ? 3 : total > 70 ? 2 : 1;
+  const sentences = parts > 1 ? sentencesOf(block) : [];
+  if (sentences.length < parts) return [block];
+  const ends: number[] = [];
+  let run = 0;
+  for (const s of sentences) ends.push((run += wordCount(s)));
+  const cuts: number[] = [];
+  for (let k = 1; k < parts; k++) {
+    const target = (total * k) / parts;
+    let best = -1;
+    for (let i = (cuts.at(-1) ?? -1) + 1; i < sentences.length - (parts - k); i++) {
+      if (best < 0 || Math.abs(ends[i]! - target) < Math.abs(ends[best]! - target)) best = i;
+    }
+    cuts.push(best);
+  }
+  const out: string[] = [];
+  let from = 0;
+  for (const c of cuts) {
+    out.push(sentences.slice(from, c + 1).join(" "));
+    from = c + 1;
+  }
+  out.push(sentences.slice(from).join(" "));
+  return out;
+}
+
+/** The body as paragraphs: the model's own (it writes two, separated by a
+ *  blank line), else one long block split at its sentences. */
 export function paragraphsOf(body: string): string[] {
   const parts = body.split(/\n\s*\n/).map((p) => p.replace(/\s*\n\s*/g, " ").trim()).filter(Boolean);
-  return parts.length > 0 ? parts : [body.trim()];
+  if (parts.length === 0) return [body.trim()];
+  return parts.length === 1 ? splitBlock(parts[0]!) : parts;
+}
+
+/** Scripture under each theme's photograph (owner, 2026-10-07: "make the
+ *  caption below the image scriptural"). References only — the words come
+ *  from the church's own daily-verse library, never typed here, and a
+ *  reference the library lacks is skipped. Each fits what that theme's
+ *  photographs show (THEME_FITS). */
+export const CAPTION_VERSES: Record<LetterTheme, readonly string[]> = {
+  dawn: ["Psalm 30:5", "Lamentations 3:22-23", "Psalm 118:24"],
+  water: ["Psalm 23:2", "Isaiah 43:19", "Jeremiah 17:7-8"],
+  path: ["Psalm 16:11", "Psalm 32:8", "Proverbs 3:5-6", "Isaiah 30:21"],
+  harvest: ["Galatians 6:9", "Galatians 5:22-23", "James 5:7"],
+  shelter: ["Psalm 46:1", "Deuteronomy 33:27", "Proverbs 18:10", "Psalm 62:8"],
+  light: ["Psalm 27:1", "Psalm 30:5", "Lamentations 3:22-23"],
+  seed: ["Isaiah 43:19", "2 Corinthians 5:17", "James 5:7"],
+  garden: ["Colossians 2:7", "Jeremiah 17:7-8", "Isaiah 32:17", "Galatians 5:22-23"],
+  mountain: ["Isaiah 40:31", "Isaiah 26:4", "Psalm 121:7-8", "Psalm 46:1"],
+  rest: ["Matthew 11:28", "Psalm 4:8", "Psalm 46:10", "Psalm 116:7", "Psalm 23:2"],
+};
+/** A caption, not a passage: longer renderings are passed over. */
+const CAPTION_MAX_CHARS = 160;
+
+export interface CaptionVerse {
+  ref: string;
+  text: string;
+  version: string | null;
+}
+
+const refKey = (ref: string): string => ref.trim().replace(/\s+/g, " ").toLowerCase();
+const chapterKey = (ref: string): string => refKey(ref).replace(/:.*$/, "");
+
+/** The library's words for every caption reference, the shortest rendering
+ *  of each — read once and kept ten minutes (the library rarely changes). */
+let captionLibrary: { at: number; verses: Map<string, CaptionVerse> } | null = null;
+async function captionVerses(pool: Pool): Promise<Map<string, CaptionVerse>> {
+  if (captionLibrary && Date.now() - captionLibrary.at < 10 * 60_000) return captionLibrary.verses;
+  const refs = [...new Set(Object.values(CAPTION_VERSES).flat())];
+  const rows = await many<{ ref: string; verse_text: string; version: string | null }>(
+    pool,
+    `SELECT DISTINCT ON (r.ref) r.ref, d.verse_text, d.version
+       FROM unnest($1::text[]) AS r(ref)
+       JOIN daily_verses d ON lower(regexp_replace(d.reference, '\\s+', ' ', 'g')) = lower(r.ref)
+      WHERE d.verse_text IS NOT NULL AND length(btrim(d.verse_text)) BETWEEN 1 AND $2
+      ORDER BY r.ref, length(d.verse_text), d.day_index`,
+    [refs, CAPTION_MAX_CHARS],
+  );
+  const verses = new Map(rows.map((r) => [refKey(r.ref), { ref: r.ref, text: r.verse_text.trim(), version: r.version }]));
+  captionLibrary = { at: Date.now(), verses };
+  return verses;
+}
+
+/** Tests reset the database underneath the cache. */
+export function forgetCaptionVerses(): void {
+  captionLibrary = null;
+}
+
+/** The scripture under a letter's photograph: one of its theme's verses,
+ *  deterministic per letter, never from the chapter of the letter's own
+ *  verse (the caption shouldn't echo it). Null when the library has none. */
+export async function captionVerse(pool: Pool, letterId: string, theme: LetterTheme, ownRef: string | null): Promise<CaptionVerse | null> {
+  const refs = CAPTION_VERSES[theme] ?? [];
+  if (refs.length === 0) return null;
+  const library = await captionVerses(pool);
+  const own = ownRef ? chapterKey(ownRef) : null;
+  const start = stableHash(letterId) % refs.length;
+  for (let i = 0; i < refs.length; i++) {
+    const hit = library.get(refKey(refs[(start + i) % refs.length]!));
+    if (hit && chapterKey(hit.ref) !== own) return hit;
+  }
+  return null;
+}
+
+/** The caption as it is shown: the verse's words, then where they're from. */
+export function captionText(v: CaptionVerse): string {
+  return `“${v.text}” — ${v.ref}${v.version ? ` (${v.version})` : ""}`;
 }
 
 /** Minutes to read, at an unhurried 180 words a minute; at least one. */

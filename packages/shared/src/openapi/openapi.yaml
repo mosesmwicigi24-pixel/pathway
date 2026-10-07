@@ -556,11 +556,15 @@ paths:
             v3 (2026-10-07, the editorial letter) adds fields that are all
             DERIVED, never model-written: issue_no (this letter's place in
             the member's series, from 1); reading_minutes; paragraphs
-            (string[], the body split on blank lines); scripture ({ ref,
+            (string[], the body split on blank lines, or a single long block
+            split at its sentences into two or three); scripture ({ ref,
             text | null, version | null } | null, its words from the
             church's daily-verse library); photo ({ id, url, alt, caption }
             | null, from the eye-checked nature library by theme and the
-            week's weather season; the bundled theme art stays the fallback);
+            week's weather season; the bundled theme art stays the fallback;
+            caption is a verse for the picture from the same library, as
+            "“words” — Ref (VERSION)", never from the chapter of the letter's
+            own verse, else a plain description; alt always describes it);
             figures ([{ value, label }], 0 to 3 true counts of the letter's
             week, never a zero); signed_by ({ name, role }); and pdf_url (GET
             it for the one-page A4 letter). The v2 fields are unchanged.

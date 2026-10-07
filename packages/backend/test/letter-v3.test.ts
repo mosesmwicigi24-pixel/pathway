@@ -10,8 +10,20 @@ import { ContentIndexService } from "../src/modules/intelligence/content.js";
 import { StoryService } from "../src/modules/intelligence/story.js";
 import { LettersService } from "../src/modules/intelligence/letters.js";
 import { NATURE, weatherOf } from "../src/modules/intelligence/nature.js";
-import { letterFigures, paragraphsOf, photoForLetter, readingMinutes, weekWindow } from "../src/modules/intelligence/letterExtras.js";
-import { renderLetterPdf } from "../src/modules/intelligence/letterPdf.js";
+import { PDFDocument } from "pdf-lib";
+import {
+  CAPTION_VERSES,
+  captionText,
+  captionVerse,
+  forgetCaptionVerses,
+  letterFigures,
+  paragraphsOf,
+  photoForLetter,
+  readingMinutes,
+  weekWindow,
+} from "../src/modules/intelligence/letterExtras.js";
+import { planLetterPage, renderLetterPdf } from "../src/modules/intelligence/letterPdf.js";
+import { LETTER_THEMES } from "../src/modules/intelligence/prompts.js";
 import { FakeAiProvider } from "../src/modules/assistant/provider.js";
 
 let meId: string, meTok: string, enrollmentId: string, moduleId: string;
@@ -31,6 +43,7 @@ const binary = (res: { setEncoding: (e: string) => void; on: (ev: string, cb: (c
 
 beforeEach(async () => {
   await resetDb();
+  forgetCaptionVerses();
   const cong = await createCongregation();
   const cell = await createCellGroup(cong, "Cell A");
   meId = (await createUser({ congregationId: cong, cellGroupId: cell, email: "lv3@dev.local", fullName: "Ada Grace" })).user_id;
@@ -54,6 +67,51 @@ describe("derived, never written by the model", () => {
     expect(paragraphsOf("One block\nwith a soft break.")).toEqual(["One block with a soft break."]);
     expect(readingMinutes("word ".repeat(150))).toBe(1);
     expect(readingMinutes("word ".repeat(400))).toBe(2);
+  });
+
+  // Owner, 2026-10-07: "make the … paragraph". Letters before v3 were one block.
+  it("one long block is split at the sentence nearest each equal share; abbreviations never end a sentence", () => {
+    const sentence = (first: string, words: number) => `${first} ${"word ".repeat(words - 2)}end.`;
+    const four = [sentence("One", 20), sentence("Two", 20), sentence("Three", 20), sentence("Four", 20)];
+    expect(paragraphsOf(four.join(" "))).toEqual([`${four[0]} ${four[1]}`, `${four[2]} ${four[3]}`]);
+
+    const abbrev = `${sentence("One", 30)} St. John kept issue No. 9 and ${"word ".repeat(20)}end. ${sentence("Three", 30)}`;
+    const split = paragraphsOf(abbrev);
+    expect(split).toHaveLength(2);
+    expect(split.join(" ")).toBe(abbrev);
+    expect(split.some((p) => p.startsWith("John") || p.startsWith("9"))).toBe(false);
+
+    const long = Array.from({ length: 11 }, (_, i) => sentence(`S${i}`, 20)).join(" ");
+    expect(paragraphsOf(long)).toHaveLength(3);
+    expect(paragraphsOf(long).join(" ")).toBe(long);
+    // the model's own paragraphs are kept as written
+    expect(paragraphsOf(`${four.join(" ")}\n\nA short close.`)).toEqual([four.join(" "), "A short close."]);
+  });
+
+  // Owner, 2026-10-07: "make the caption below the image scriptural".
+  it("every theme has scripture for its photograph — references only, the words come from the library", () => {
+    expect(Object.keys(CAPTION_VERSES).sort()).toEqual([...LETTER_THEMES].sort());
+    for (const [theme, refs] of Object.entries(CAPTION_VERSES)) {
+      expect(refs.length, theme).toBeGreaterThanOrEqual(3);
+      for (const r of refs) expect(r).toMatch(/^(\d )?[A-Z][a-z]+( [A-Za-z]+)* \d+:\d+(-\d+)?$/);
+    }
+  });
+
+  it("the caption is a verse from the library, the same every time, never from the letter's own chapter", async () => {
+    await testPool().query(
+      `INSERT INTO daily_verses (day_index, day_date, theme, reference, version, verse_text) VALUES
+         (2, '2026-01-02', 'Rest', 'Psalm 23:2', 'NIV', 'He makes me lie down in green pastures, he leads me beside quiet waters.'),
+         (3, '2026-01-03', 'New', 'Isaiah 43:19', 'NIV', 'See, I am doing a new thing! Now it springs up; do you not perceive it? I am making a way in the wilderness and streams in the wasteland.')`,
+    );
+    const v = (await captionVerse(testPool(), "letter-1", "water", null))!;
+    expect(["Psalm 23:2", "Isaiah 43:19"]).toContain(v.ref);
+    expect(captionText(v)).toMatch(/^\u201C.+\u201D \u2014 (Psalm 23:2|Isaiah 43:19) \(NIV\)$/);
+    expect(await captionVerse(testPool(), "letter-1", "water", null)).toEqual(v);
+    for (const id of ["a", "b", "c", "d", "e", "f"]) {
+      expect((await captionVerse(testPool(), id, "water", "Psalm 23:1-3"))!.ref).toBe("Isaiah 43:19");
+    }
+    // none of the theme's verses in the library: no caption verse (the description stays)
+    expect(await captionVerse(testPool(), "letter-1", "harvest", null)).toBeNull();
   });
 
   it("the photograph fits the theme and the week's season, and is the same every time", () => {
@@ -125,7 +183,12 @@ describe("the v3 letter, composed and served", () => {
        VALUES ($1, $2, 'Old letter', 'Dear Ada,', 'water', 'water', 'One.\n\nTwo.', 'Philippians 1:6', '{"moments":["x"]}'::jsonb)`,
       [meId, weekOf],
     );
+    await testPool().query(
+      `INSERT INTO daily_verses (day_index, day_date, theme, reference, version, verse_text)
+       VALUES (2, '2026-01-02', 'Rest', 'Psalm 23:2', 'NIV', 'He makes me lie down in green pastures, he leads me beside quiet waters.')`,
+    );
     const l = (await letters().latest(meId))!;
+    expect(l.photo?.caption).toBe("\u201CHe makes me lie down in green pastures, he leads me beside quiet waters.\u201D \u2014 Psalm 23:2 (NIV)");
     expect(l.paragraphs).toEqual(["One.", "Two."]);
     expect(l.scripture?.text).toContain("good work");
     expect(l.photo).not.toBeNull();
@@ -146,6 +209,32 @@ describe("keep this letter — the A4 page", () => {
     const other = await createUser({ congregationId: (await createCongregation()), email: "lv3-other@dev.local", fullName: "Ben" });
     const theirs = await agent().get(`/v1/me/letters/${id}/pdf`).set("Authorization", bearer({ sub: other.user_id, role: "Student" }));
     expect(theirs.status).toBe(404);
+  });
+
+  // Owner, 2026-10-07: "format the font like the heading to reach the end of the page".
+  it("runs the full measure, and a long letter tightens to one page without losing its photograph", async () => {
+    await letters().runWeekly();
+    const base = (await letters().latest(meId))!;
+    const long = {
+      ...base,
+      title: "A title long enough that it has to wrap onto a second line of the page",
+      paragraphs: paragraphsOf(Array.from({ length: 12 }, (_, i) => `Sentence ${i} ${"word ".repeat(18)}end.`).join(" ")),
+      share_line: "A line worth keeping, long enough to need a second line on the page when it is set large.",
+      figures: [
+        { value: "2", label: "lessons finished" },
+        { value: "5 of 7", label: "days in the Word" },
+        { value: "1", label: "reflection written" },
+      ],
+    };
+    expect(long.paragraphs).toHaveLength(3);
+    const plan = await planLetterPage(long, true);
+    expect(plan.measure).toBeCloseTo(595.28 - 2 * 48, 1);
+    expect(plan.end).toBeGreaterThanOrEqual(plan.floor);
+    expect(plan.fit.photoH).toBeGreaterThan(0);
+    const roomy = await planLetterPage({ ...base, paragraphs: ["A short week, gently told."] }, true);
+    expect(roomy.fit).toEqual({ photoH: 170, body: 12.5, leading: 18.5, pullQuote: true });
+    const pdf = await PDFDocument.load(await renderLetterPdf(long, { firstName: "Ada", photo: new Uint8Array(TINY_JPEG) }));
+    expect(pdf.getPageCount()).toBe(1);
   });
 
   it("carries its photograph when it has one", async () => {
