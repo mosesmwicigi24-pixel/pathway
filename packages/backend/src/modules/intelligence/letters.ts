@@ -20,6 +20,19 @@ import type { NotificationService } from "../notifications/service.js";
 import type { ContentIndexService } from "./content.js";
 import type { StoryService } from "./story.js";
 import { LETTER_SYSTEM, LETTER_THEMES, type LetterTheme } from "./prompts.js";
+import {
+  LETTER_SIGNED_BY,
+  issueNo,
+  letterFigures,
+  paragraphsOf,
+  photoForLetter,
+  readingMinutes,
+  scriptureChoices,
+  scriptureFor,
+  type LetterFigure,
+  type LetterPhoto,
+  type LetterScripture,
+} from "./letterExtras.js";
 
 export const DEFAULT_LETTER_TITLE = "Your Sunday Letter";
 export const DEFAULT_LETTER_SALUTATION = "Dear friend,";
@@ -58,6 +71,19 @@ export interface LetterRow {
   read_at: string | null;
 }
 
+/** v3 (the editorial letter, owner 2026-10-07): everything a client needs to
+ *  lay the letter out like a designed page — all derived, none model-written. */
+export interface LetterV3 extends LetterRow {
+  issue_no: number;
+  reading_minutes: number;
+  paragraphs: string[];
+  scripture: LetterScripture | null;
+  photo: LetterPhoto | null;
+  figures: LetterFigure[];
+  signed_by: { name: string; role: string };
+  pdf_url: string;
+}
+
 export interface ParsedLetter {
   title: string;
   salutation: string;
@@ -72,6 +98,11 @@ interface StoredHighlights {
   moments?: unknown;
   next_step?: unknown;
   share_line?: unknown;
+  // v3, frozen at compose time (absent on older letters → derived on read)
+  figures?: unknown;
+  photo_id?: unknown;
+  scripture_text?: unknown;
+  scripture_version?: unknown;
 }
 
 /** Raw DB row shape (columns as selected below) before rowFromDb() applies
@@ -261,6 +292,45 @@ export class LettersService {
     };
   }
 
+  /** v3 extras for one letter: the frozen values when present, else derived
+   *  the same way they are frozen (see letterExtras.ts). */
+  private async withExtras(userId: string, raw: RawLetterRow): Promise<LetterV3> {
+    const base = LettersService.rowFromDb(raw);
+    const stored = (raw.highlights ?? {}) as StoredHighlights;
+    const figures = Array.isArray(stored.figures)
+      ? (stored.figures as LetterFigure[]).filter((f) => f && typeof f.value === "string" && typeof f.label === "string")
+      : await letterFigures(this.pool, userId, base.week_of);
+    let scripture: LetterScripture | null = null;
+    if (base.scripture_ref) {
+      scripture =
+        typeof stored.scripture_text === "string"
+          ? { ref: base.scripture_ref, text: stored.scripture_text, version: typeof stored.scripture_version === "string" ? stored.scripture_version : null }
+          : await scriptureFor(this.pool, base.scripture_ref);
+    }
+    return {
+      ...base,
+      issue_no: await issueNo(this.pool, userId, base.week_of),
+      reading_minutes: readingMinutes(base.body),
+      paragraphs: paragraphsOf(base.body),
+      scripture,
+      photo: photoForLetter(base.letter_id, base.theme, base.week_of, typeof stored.photo_id === "string" ? stored.photo_id : null),
+      figures,
+      signed_by: { ...LETTER_SIGNED_BY },
+      pdf_url: `/v1/me/letters/${base.letter_id}/pdf`,
+    };
+  }
+
+  /** One of the member's own letters, with its v3 extras (the PDF uses it). */
+  async getOwn(userId: string, letterId: string): Promise<LetterV3> {
+    const r = await maybeOne<RawLetterRow>(
+      this.pool,
+      `SELECT ${LettersService.SELECT_COLUMNS} FROM pastoral_letters WHERE letter_id = $1 AND user_id = $2`,
+      [letterId, userId],
+    );
+    if (!r) throw new ApiError("NOT_FOUND", "Letter not found");
+    return this.withExtras(userId, r);
+  }
+
   /** The single most valuable next step for this member right now, in the
    *  same shape Home's next-action already hands the client (route/params) —
    *  computed here, NOT by the model, so the letter can never link to a
@@ -342,6 +412,9 @@ export class LettersService {
     }
 
     const firstName = built.facts.name?.split(" ")[0]?.trim() || null;
+    // The verse comes from the church's own library, so its words can always
+    // be shown in full (v3) — the model chooses, the server supplies the text.
+    const choices = await scriptureChoices(this.pool, userId, weekOf);
 
     const raw = await this.provider.complete({
       system: LETTER_SYSTEM,
@@ -356,6 +429,9 @@ export class LettersService {
               ? `Their own previous letters (TRUE — reference the arc only if it genuinely fits; last week's theme was "${lastTheme}", vary it if the content allows):\n${JSON.stringify(priorContext)}\n`
               : "") +
             teaching +
+            (choices.length > 0
+              ? `\n\nScripture you may use — scripture_ref MUST be exactly one of these:\n${choices.map((c) => `- ${c}`).join("\n")}`
+              : "") +
             `\n\nWrite this member's Sunday Letter for the week of ${weekOf}.`,
         },
       ],
@@ -378,10 +454,15 @@ export class LettersService {
       return null;
     }
     const nextStep = await this.computeNextStep(userId, built.facts.level);
+    const figures = await letterFigures(this.pool, userId, weekOf);
+    const scripture = await scriptureFor(this.pool, parsed.scriptureRef);
     const highlightsJson = JSON.stringify({
       moments: parsed.highlights,
       next_step: nextStep,
       share_line: parsed.shareLine,
+      figures,
+      scripture_text: scripture?.text ?? null,
+      scripture_version: scripture?.version ?? null,
     });
 
     const inserted = await maybeOne<RawLetterRow>(
@@ -392,6 +473,17 @@ export class LettersService {
        RETURNING ${LettersService.SELECT_COLUMNS}`,
       [userId, weekOf, parsed.title, parsed.salutation, parsed.theme, parsed.theme, parsed.body, parsed.scriptureRef, highlightsJson],
     );
+    if (inserted) {
+      // Freeze the photograph too (it is chosen per letter id, known only now),
+      // so the archive keeps this week's picture even if the library changes.
+      const photo = photoForLetter(inserted.letter_id, parsed.theme, weekOf);
+      if (photo) {
+        await this.pool.query(
+          `UPDATE pastoral_letters SET highlights = coalesce(highlights, '{}'::jsonb) || jsonb_build_object('photo_id', $2::text) WHERE letter_id = $1`,
+          [inserted.letter_id, photo.id],
+        );
+      }
+    }
     if (inserted && this.notifications) {
       try {
         // payload.title flows straight through dispatch.ts's pushCopy(), which
@@ -451,22 +543,22 @@ export class LettersService {
   }
 
   /** Newest first — the member's own keepable archive of past letters. */
-  async list(userId: string, limit = 20): Promise<LetterRow[]> {
+  async list(userId: string, limit = 20): Promise<LetterV3[]> {
     const rows = await many<RawLetterRow>(
       this.pool,
       `SELECT ${LettersService.SELECT_COLUMNS} FROM pastoral_letters WHERE user_id = $1 ORDER BY week_of DESC LIMIT $2`,
       [userId, Math.min(Math.max(limit, 1), 50)],
     );
-    return rows.map((r) => LettersService.rowFromDb(r));
+    return Promise.all(rows.map((r) => this.withExtras(userId, r)));
   }
 
-  async latest(userId: string): Promise<LetterRow | null> {
+  async latest(userId: string): Promise<LetterV3 | null> {
     const r = await maybeOne<RawLetterRow>(
       this.pool,
       `SELECT ${LettersService.SELECT_COLUMNS} FROM pastoral_letters WHERE user_id = $1 ORDER BY week_of DESC LIMIT 1`,
       [userId],
     );
-    return r ? LettersService.rowFromDb(r) : null;
+    return r ? this.withExtras(userId, r) : null;
   }
 
   async markRead(userId: string, letterId: string): Promise<{ letter_id: string; read_at: string }> {

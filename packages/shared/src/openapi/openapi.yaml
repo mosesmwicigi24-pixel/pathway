@@ -553,6 +553,17 @@ paths:
             written before this contract existed still serve with null-safe
             defaults (a generic title/salutation/theme, empty highlights, no
             next_step/share_line).
+            v3 (2026-10-07, the editorial letter) adds fields that are all
+            DERIVED, never model-written: issue_no (this letter's place in
+            the member's series, from 1); reading_minutes; paragraphs
+            (string[], the body split on blank lines); scripture ({ ref,
+            text | null, version | null } | null, its words from the
+            church's daily-verse library); photo ({ id, url, alt, caption }
+            | null, from the eye-checked nature library by theme and the
+            week's weather season; the bundled theme art stays the fallback);
+            figures ([{ value, label }], 0 to 3 true counts of the letter's
+            week, never a zero); signed_by ({ name, role }); and pdf_url (GET
+            it for the one-page A4 letter). The v2 fields are unchanged.
         "401": { $ref: "#/components/responses/Unauthorized" }
   /me/letters/latest:
     get:
@@ -569,6 +580,24 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         "200": { description: "{ letter_id, read_at }" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Not my letter }
+  /me/letters/{id}/pdf:
+    get:
+      tags: [progress]
+      summary: >-
+        Keep this letter: one of my Sunday Letters as a designed one-page A4
+        PDF (masthead, photograph, the letter, the week's figures, the verse,
+        the next step). A private document (Cache-Control private, no-store;
+        Referrer-Policy no-referrer).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The letter as application/pdf (attachment).
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { description: Not my letter }
   /me/ai:

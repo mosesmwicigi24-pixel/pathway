@@ -21,6 +21,7 @@ import { NotificationService } from "../notifications/service.js";
 import { ContentIndexService } from "./content.js";
 import { StoryService } from "./story.js";
 import { LettersService } from "./letters.js";
+import { renderLetterPdf } from "./letterPdf.js";
 import { SignalsService } from "./signals.js";
 import { LearningService, EXPLAIN_STYLES, type ExplainStyle } from "./learning.js";
 import { LiturgyService } from "./liturgy.js";
@@ -30,6 +31,7 @@ import { EchoesService } from "./echoes.js";
 import { WalkService } from "./walk.js";
 import { PrayerAiService } from "./prayer.js";
 import { ApiError } from "../../http/errors.js";
+import { maybeOne } from "../../db/db.js";
 
 export const intelligenceRouter: Router = Router();
 
@@ -61,6 +63,23 @@ export function registerIntelligence(ctx: AppContext, providerOverride?: AiProvi
 
   r.post("/me/letters/:id/read", auth, handler(async (req, res) => {
     res.json(await letters.markRead(requirePrincipal(req).userId, String(req.params.id ?? "")));
+  }));
+
+  // "Keep this letter" — the letter as one designed A4 page (v3). The member's
+  // own letter only; a private document, never cached or referred onward.
+  r.get("/me/letters/:id/pdf", auth, handler(async (req, res) => {
+    const userId = requirePrincipal(req).userId;
+    const letter = await letters.getOwn(userId, String(req.params.id ?? ""));
+    const who = await maybeOne<{ full_name: string | null }>(ctx.db.primary, `SELECT full_name FROM users WHERE user_id = $1`, [userId]);
+    const firstName = who?.full_name?.trim().split(/\s+/)[0] || null;
+    // Tests run offline (no photo fetch); everywhere else the page carries
+    // its photograph, fetched from the curated library's own URL.
+    const pdf = await renderLetterPdf(letter, { firstName, ...(ctx.env.NODE_ENV === "test" ? { photo: null } : {}) });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="sunday-letter-${letter.week_of}.pdf"`);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.end(Buffer.from(pdf));
   }));
 
   // --- AI Prayer Points (Prayer Room tab 4) — consent-gated (§1.1) ---
