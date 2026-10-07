@@ -952,7 +952,7 @@ function lowestLabel(scores: { [k: string]: unknown }): string {
 // feels personal and changes daily instead of one static sentence for everyone.
 const FALLBACK_GREETINGS = [
   (n: string) => `Grace and peace, ${n} — God is with you in today's step.`,
-  (n: string) => `Good to see you, ${n}. His mercies are new this morning.`,
+  (n: string) => `Good to see you, ${n}. His mercies are new every morning.`,
   (n: string) => `${n}, may you walk closely with Him today.`,
   (n: string) => `Welcome back, ${n} — take one faithful step today.`,
   (n: string) => `${n}, the Lord goes before you today. Be encouraged.`,
