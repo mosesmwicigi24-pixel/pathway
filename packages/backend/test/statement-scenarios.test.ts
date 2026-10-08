@@ -528,9 +528,25 @@ describe("the member's statement right after money moves (real paths, no cache)"
     expect(after.due).toBeUndefined();
     expect(after.partnership).toMatchObject({ pending_claim_minor: 200_000 });
     expect(after.list).toMatchObject({ pending_claim_minor: 200_000 });
+    expect(await partners.getPledge(user, o.pledge_id)).toMatchObject({ pending_claim_minor: 200_000 });
 
     await testPool().query(`UPDATE pledge_claims SET status = 'rejected' WHERE claim_id = $1`, [(claim as { claim_id: string }).claim_id]);
     expect((await rows()).partnership).toMatchObject({ pending_claim_minor: 0 });
+  });
+
+  // ── (o4) ──
+  it("(o4) the tier says what the commitment WILL do until the partner's money lands, then what it does (owner, 2026-10-08)", async () => {
+    const o = await pledge({ shape: "monthly", amount_minor: 600_000, due_day: 15 }, "2026-09-16 08:00:00+00");
+    const tier = async () => ((await partners.partnership(user, now)).tier as { name: string } | null)?.name;
+    expect(await tier()).toMatch(/^will carry /);
+
+    // A claim the office has not confirmed is not money landed.
+    const claim = await partners.createClaim(user, o.pledge_id, { amount_minor: 600_000, currency: "KES", paid_on: "2026-09-19" } as never, now);
+    expect(await tier()).toMatch(/^will carry /);
+
+    // Confirmed, it has landed.
+    await testPool().query(`UPDATE pledge_claims SET status = 'confirmed' WHERE claim_id = $1`, [(claim as { claim_id: string }).claim_id]);
+    expect(await tier()).toMatch(/^carries /);
   });
 
   // ── (p) ──
