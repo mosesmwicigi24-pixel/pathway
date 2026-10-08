@@ -872,3 +872,47 @@ design (a claim counts once confirmed, GIVING.md), but the member is not told.
 - The rig does not run the worker, so badges and receipts are not shown.
 
 Cycle 3 is closed.
+
+### Cycles 5–10 combined, and the final pass — closed (2026-10-08)
+
+**Walked** (§9.7, 2026-10-07): all ten areas on both apps, with every persona, offline and error states, and the largest text. There were two read-only walkers.
+- **iOS:** 98 screens; 0 blockers, 6 major, 32 minor. Evidence: `~/.nuru-e2e/shots/final/ios`.
+- **Android:** 126 screens; 0 blockers, 8 major, the rest minor (most carried from Cycle 4's grammar). Evidence: `~/.nuru-e2e/shots/final/android`.
+
+**Fixed, all of it, in three rounds per app.** Shared words were checked line for line.
+- **Partners:** a claim the office is checking leads, and Pay is quiet. The server added `pending_claim_minor` to pledge reads, so nobody pays twice.
+- **Home:** a failed or paused gift is told in Give's own words.
+- **Offline:** tabs say they show a saved copy, below the header.
+- **Failed reads and loading:** a failed read is "Didn't load just now", never a fact. A loading screen never guesses a state.
+- **Alerts:** answers are readable (navy).
+- **Plans:** "today" means today.
+- **Covered screens:** nothing animates behind a covered Home. Android's three ANRs are gone; cold start (`localRelease`) has a median of 3.5 s.
+- **Prayer Room:** one name, "Share to Corporate", and one audience, the congregation.
+- **Rules 8 and 9:**
+  - dates in one shape;
+  - nothing cut or broken mid-word at the sizes members choose;
+  - nothing under the status band.
+- **The §8.1 grammar carry-overs.**
+- **Server** (#514, #516): the letter in paragraphs, full width, the phone's order, scripture under the photograph; a greeting true at any hour; "will carry" until money lands.
+
+**Decided (owner):**
+- the tier words;
+- paper cards, not navy, for anything that is neither the church's voice nor a next step;
+- Events' strip rolls from today.
+
+These are in §9.1 rule 8 and §9.7. Also kept as designed: You's segment bar above Community's switch (two levels, not two switchers).
+
+**Final state:**
+- iOS `feat/experience` at `3cce941`: 650 tests, 0 failures.
+- Android `feat/experience` at `2f22756`: 1,136 tests, 0 failures.
+
+Neither is merged to `main` or in a store build. Both wait on the owner.
+
+**Left for the owner (content, not app work):**
+- "The Goid News Mission" (typo)
+- Level 6's title
+- two Ablaze series
+- the devotional series named like Level 2
+- cell leaders and departments (in production, not the test rig)
+
+**The programme is closed.** No question fails for a reason this programme can fix.
