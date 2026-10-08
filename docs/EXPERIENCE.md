@@ -527,7 +527,8 @@ check-in, and finding a cell.
    lessons says "Level 2 is being prepared — we'll let you know" (§3's words),
    not "your leader will open Level 2".
 8. **One week shape.** Week strips that show days start on the same day on
-   every screen.
+   every screen. Events' strip is not a week: it shows the next seven days
+   from today, because Events is about what is coming (owner, 2026-10-08).
 
 ### 9.2 Changes (from the Cycle 3 close walks; Cycle 4's walk adds its own)
 | # | Journey | Seen | Cycle 5 |
@@ -588,6 +589,11 @@ The closing walk: all ten areas on both apps, every screen scored on the six
 questions and the §8.1 rules, every persona's state, error and offline on
 every tab. Done when no question fails for a reason this programme can fix,
 and what remains is listed for the owner.
+
+**Decided at the final walk (owner, 2026-10-08):**
+- **Partners tier words:** a partner's tier says what the commitment *will* do ("will carry 3 disciples through a level, every year") until their money has landed. Landed means a gift that succeeded toward a pledge or the recurring gift, or a claim the office confirmed. After that it says "carries". This is set on the server.
+- **Navy:** cards that are neither the church's voice nor a tab's next step become paper cards (option A, rule 1). This covers "Check in to a service", "Quick help from Nuru" and Home's "Support God's work" banner.
+- **Events' strip** rolls from today (rule 8 above).
 
 ## 5. Cycle log
 

@@ -192,16 +192,19 @@ interface Fit {
   leading: number;
   pullQuote: boolean;
 }
-/** Roomiest first. A letter takes the first that ends above the foot. */
-const FITS: readonly Fit[] = [
-  { photoH: 170, body: 12.5, leading: 18.5, pullQuote: true },
-  { photoH: 150, body: 12, leading: 17.5, pullQuote: true },
-  { photoH: 130, body: 11.5, leading: 16.5, pullQuote: true },
-  { photoH: 130, body: 11.5, leading: 16.5, pullQuote: false },
-  { photoH: 110, body: 11, leading: 15.5, pullQuote: false },
-  { photoH: 90, body: 11, leading: 15.5, pullQuote: false },
-  { photoH: 70, body: 10.5, leading: 14.5, pullQuote: false },
-  { photoH: 0, body: 10.5, leading: 14.5, pullQuote: false },
+/** The type, roomiest first, each with the range its photograph may take.
+ *  The photograph gives way first, and exactly as far as the page needs: its
+ *  height is the one block that shrinks point for point, so a near miss costs
+ *  a few points of picture, never the pull quote (a fixed ladder once dropped
+ *  the quote for a single point and left an empty band at the foot). */
+const LEVELS: readonly { body: number; leading: number; pullQuote: boolean; photoMax: number; photoMin: number }[] = [
+  { body: 12.5, leading: 18.5, pullQuote: true, photoMax: 170, photoMin: 130 },
+  { body: 12, leading: 17.5, pullQuote: true, photoMax: 150, photoMin: 110 },
+  { body: 11.5, leading: 16.5, pullQuote: true, photoMax: 130, photoMin: 90 },
+  { body: 11, leading: 15.5, pullQuote: true, photoMax: 110, photoMin: 80 },
+  { body: 11, leading: 15.5, pullQuote: false, photoMax: 110, photoMin: 70 },
+  { body: 10.5, leading: 14.5, pullQuote: false, photoMax: 90, photoMin: 60 },
+  { body: 10, leading: 14, pullQuote: false, photoMax: 80, photoMin: 50 },
 ];
 
 type Fonts = Record<FontKey, PDFFont>;
@@ -221,7 +224,7 @@ function balancedWidth(text: string, font: PDFFont, size: number, max: number): 
   return Math.ceil(hi);
 }
 
-/** The page from the masthead to the week's step; returns where it ends. */
+/** The page from the masthead to the signature; returns where it ends. */
 function layout(pen: Pen, letter: LetterV3, f: Fonts, fit: Fit, photo: { img: PDFImage | null } | null): number {
   let y = H - 46;
 
@@ -251,23 +254,19 @@ function layout(pen: Pen, letter: LetterV3, f: Fonts, fit: Fit, photo: { img: PD
   const titleW = balancedWidth(letter.title, f.serifBold, 21, MEASURE);
   y = block(pen, letter.title, { x: M, y: y - 22, width: titleW, font: f.serifBold, size: 21, leading: 25, color: NAVY }) - 4;
   y = block(pen, letter.salutation, { x: M, y: y - 10, width: MEASURE, font: f.serifItalic, size: 14, leading: 19, color: NAVY }) - 4;
+  // The paragraphs, the letter's own shareable line set as a pull quote after
+  // the first — the phone's order, so the page and the screen read alike.
   letter.paragraphs.forEach((p, i) => {
     y = paragraph(pen, p, { y: y - 2, font: f.serif, capFont: f.serifBold, size: fit.body, leading: fit.leading, dropCap: i === 0 }) - fit.leading * 0.4;
+    if (i === 0 && fit.pullQuote && letter.share_line) {
+      y -= 4;
+      pen.line({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.7, color: GOLD });
+      y = block(pen, `\u201C${letter.share_line}\u201D`, { x: M, y: y - 24, width: MEASURE, font: f.serifItalic, size: 16, leading: 21, color: GOLD_TEXT }) - 4;
+      pen.line({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.7, color: GOLD });
+      y -= 18;
+    }
   });
-
-  // Signed.
-  pen.text("With grace,", { x: M, y: y - 6, size: 10.5, font: f.serifItalic, color: MUTED });
-  pen.text(letter.signed_by.name, { x: M, y: y - 38, size: 30, font: f.signature, color: NAVY });
-  pen.text(spaced(letter.signed_by.role), { x: M, y: y - 52, size: 7.5, font: f.sansBold, color: GOLD_TEXT });
-  y -= 64;
-
-  // The letter's own shareable line, as a pull quote — as on the phone.
-  if (fit.pullQuote && letter.share_line) {
-    pen.line({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.7, color: GOLD });
-    y = block(pen, `\u201C${letter.share_line}\u201D`, { x: M, y: y - 24, width: MEASURE, font: f.serifItalic, size: 16, leading: 21, color: GOLD_TEXT }) - 4;
-    pen.line({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.7, color: GOLD });
-    y -= 14;
-  }
+  y -= 4;
 
   // The week in figures, side by side.
   if (letter.figures.length > 0) {
@@ -302,18 +301,34 @@ function layout(pen: Pen, letter: LetterV3, f: Fonts, fit: Fit, photo: { img: PD
     pen.text(letter.next_step.label, { x: M + 12, y: y - 31, size: 12, font: f.serifBold, color: NAVY });
     y -= boxH;
   }
+
+  // Signed, last — as on the phone.
+  pen.text("With grace,", { x: M, y: y - 18, size: 10.5, font: f.serifItalic, color: MUTED });
+  pen.text(letter.signed_by.name, { x: M, y: y - 48, size: 30, font: f.signature, color: NAVY });
+  pen.text(spaced(letter.signed_by.role), { x: M, y: y - 61, size: 7.5, font: f.sansBold, color: GOLD_TEXT });
+  y -= 68;
   return y;
 }
 
-/** Which fit a letter takes, and where its page then ends. */
+/** Which fit a letter takes, and where its page then ends: the roomiest type
+ *  whose page ends above the foot with the photograph at most as short as
+ *  that type allows; last of all, the page without its photograph. */
 function fitLetter(letter: LetterV3, f: Fonts, withPhoto: boolean): { fit: Fit; end: number } {
   const room = withPhoto ? { img: null } : null;
-  for (const fit of FITS) {
-    const end = layout(new Pen(null), letter, f, fit, room);
+  const measure = (fit: Fit): number => layout(new Pen(null), letter, f, fit, room);
+  for (const lv of LEVELS) {
+    const fit: Fit = { photoH: lv.photoMax, body: lv.body, leading: lv.leading, pullQuote: lv.pullQuote };
+    const end = measure(fit);
     if (end >= FLOOR) return { fit, end };
+    const photoH = Math.floor(lv.photoMax - (FLOOR - end));
+    if (withPhoto && photoH >= lv.photoMin) {
+      const shorter = { ...fit, photoH };
+      return { fit: shorter, end: measure(shorter) };
+    }
   }
-  const fit = FITS[FITS.length - 1]!;
-  return { fit, end: layout(new Pen(null), letter, f, fit, room) };
+  const last = LEVELS[LEVELS.length - 1]!;
+  const fit: Fit = { photoH: 0, body: last.body, leading: last.leading, pullQuote: false };
+  return { fit, end: measure(fit) };
 }
 
 /** The page plan for a letter — for tests: the fit, where the page ends, the

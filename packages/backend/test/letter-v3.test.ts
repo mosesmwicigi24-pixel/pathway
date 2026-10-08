@@ -237,6 +237,35 @@ describe("keep this letter — the A4 page", () => {
     expect(pdf.getPageCount()).toBe(1);
   });
 
+  // A fixed ladder once dropped the quote for a single point and left an empty
+  // band at the foot; the photograph now gives way first, point for point.
+  it("a near miss costs a few points of photograph, never the pull quote — and the page reads in the phone's order", async () => {
+    await letters().runWeekly();
+    const base = (await letters().latest(meId))!;
+    const snug = {
+      ...base,
+      title: "Five mornings in the Word, and a door that is open now",
+      paragraphs: [
+        "This week you finished two lessons and wrote your first reflection, and you came back to the Word on five of seven days. That is the shape of a life being rebuilt from the inside, one honest morning at a time.",
+        "The exam for Level 1 is open now. You are ready for it — not because you have every answer, but because you have walked the ground it asks about. Take it this week, and take it gently.",
+      ],
+      share_line: "An answered prayer does not expire because the month went quiet. It stays answered.",
+      photo: base.photo && { ...base.photo, caption: `\u201C${"quiet word ".repeat(13).trim()}.\u201D \u2014 Psalm 1:1 (WEB)` },
+      figures: [
+        { value: "2", label: "lessons finished" },
+        { value: "5 of 7", label: "days in the Word" },
+        { value: "1", label: "reflection written" },
+      ],
+      scripture: { ref: "Philippians 1:6", text: "being confident of this very thing, that he who began a good work in you will complete it until the day of Jesus Christ.", version: "WEB" },
+    };
+    const plan = await planLetterPage(snug, true);
+    expect(plan.end).toBeGreaterThanOrEqual(plan.floor);
+    expect(plan.fit.pullQuote).toBe(true);
+    expect(plan.fit.photoH).toBeGreaterThan(0);
+    const pdf = await PDFDocument.load(await renderLetterPdf(snug, { firstName: "Ada", photo: new Uint8Array(TINY_JPEG) }));
+    expect(pdf.getPageCount()).toBe(1);
+  });
+
   it("carries its photograph when it has one", async () => {
     await letters().runWeekly();
     const letter = (await letters().latest(meId))!;

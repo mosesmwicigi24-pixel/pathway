@@ -581,8 +581,11 @@ export class PartnersService {
 
   async listPledges(userId: string, now = new Date()): Promise<Record<string, unknown>[]> {
     const rows = await this.pledgeRows(this.pool, `WHERE p.user_id = $1 AND p.status <> 'cancelled'`, [userId]);
+    const claimsChecking = await this.pendingClaimsByPledge(userId);
     const out: Record<string, unknown>[] = [];
-    for (const r of rows) out.push(await this.shape(r, now));
+    for (const r of rows) {
+      out.push({ ...(await this.shape(r, now)), pending_claim_minor: claimsChecking.get(`${r.pledge_id}:${String(r.currency).toUpperCase()}`) ?? 0 });
+    }
     return out;
   }
 
@@ -710,8 +713,11 @@ export class PartnersService {
       `SELECT due_on::text, sequence, channel, sent_at::text FROM pledge_reminders WHERE pledge_id = $1 ORDER BY sent_at DESC LIMIT 20`,
       [pledgeId],
     );
+    const claimsChecking = await this.pendingClaimsByPledge(userId);
     return {
       ...(await this.shape(p)),
+      // The pledge page leads with what the office is checking, as the row does.
+      pending_claim_minor: claimsChecking.get(`${p.pledge_id}:${String(p.currency).toUpperCase()}`) ?? 0,
       payments: payments.map((x) => ({ ...x, amount_minor: Number(x.amount_minor) })),
       reminders,
     };
@@ -780,12 +786,29 @@ export class PartnersService {
 
   // ── the portal payload ────────────────────────────────────────────────
 
-  /** Tier from the monthly commitment: the highest tier the amount reaches. */
-  static tierFor(monthlyMinor: number, currency = "KES"): { name: string; monthly_minor: number; disciples_per_year: number } | null {
+  /** Tier from the monthly commitment: the highest tier the amount reaches.
+   *  Until the partner's money has landed it speaks of what the commitment
+   *  WILL do (owner, 2026-10-08: "'will carry' until money lands") — the final
+   *  walk found "carries 3 disciples through a level" beside KSh 0 paid. */
+  static tierFor(monthlyMinor: number, currency = "KES", given = true): { name: string; monthly_minor: number; disciples_per_year: number } | null {
     const tiers = givingTiers(currency).filter((t) => monthlyMinor >= t.amount_minor);
     const top = tiers[tiers.length - 1];
     if (!top) return null;
-    return { name: top.meaning, monthly_minor: top.amount_minor, disciples_per_year: top.disciples_per_year };
+    const name = given ? top.meaning : top.meaning.replace(/^carries\b/, "will carry");
+    return { name, monthly_minor: top.amount_minor, disciples_per_year: top.disciples_per_year };
+  }
+
+  /** Has any of this partner's money landed — a gift that succeeded toward a
+   *  pledge or the recurring gift, or a claim the office confirmed? */
+  private async partnerMoneyLanded(userId: string): Promise<boolean> {
+    const r = await maybeOne<{ landed: boolean }>(
+      this.pool,
+      `SELECT EXISTS (SELECT 1 FROM transactions t
+                       WHERE t.user_id = $1 AND t.status = 'succeeded' AND (t.pledge_id IS NOT NULL OR t.schedule_id IS NOT NULL))
+           OR EXISTS (SELECT 1 FROM pledge_claims c WHERE c.user_id = $1 AND c.status = 'confirmed') AS landed`,
+      [userId],
+    );
+    return Boolean(r?.landed);
   }
 
   /** Everything a member may point a new pledge at, in the order the picker
@@ -841,7 +864,10 @@ export class PartnersService {
     for (const r of await this.pledgeRows(this.pool, `WHERE p.user_id = $1 AND p.status <> 'cancelled'`, [userId])) {
       const { progress: pr, owed_minor, arrears } = await this.progressDetail(r, now);
       const shaped = this.shapeRow(r, pr, now);
-      pledges.push(shaped);
+      // The row says what the office is checking at any time, not only in the
+      // week a DUE row appears (final walk: a member paid another way on the
+      // 30th and the pledge led with "Pay now" for two weeks).
+      pledges.push({ ...shaped, pending_claim_minor: claimsChecking.get(`${r.pledge_id}:${String(r.currency).toUpperCase()}`) ?? 0 });
       if (r.status !== "active" || !pr.next_due) continue;
       // Overdue or due today → the row asks for the whole catch-up (every
       // incomplete instalment due by today, so one payment brings the member
@@ -884,7 +910,7 @@ export class PartnersService {
       ...base,
       is_partner: Boolean(base.is_partner) || membership?.status === "active",
       membership,
-      tier: PartnersService.tierFor(monthly, String(base.currency ?? "KES")),
+      tier: PartnersService.tierFor(monthly, String(base.currency ?? "KES"), await this.partnerMoneyLanded(userId)),
       committed_monthly_minor: monthly,
       pledges,
       due,
