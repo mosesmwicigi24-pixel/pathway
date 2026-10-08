@@ -137,6 +137,24 @@ bundle, so this is instant and total.
 
 ## Incident ledger
 
+### 2026-10-08 — Final-walk server fixes: the letter PDF in the phone's order, a true greeting, pledges show claims being checked, "will carry" until money lands
+
+**What shipped.** pathway#516 (`178dc3e`, squash-merged on its exact green head d6478e4) on the owner's YES ("deploy when green"). These are server findings from the final walk (EXPERIENCE.md §9.7) and the owner's tier decision:
+- **The A4 letter** follows the phone's order: the first paragraph, the pull quote, the rest, the figures, the verse, the step, and the signature last. At each type size the photograph gives way point for point, so a near miss never drops the pull quote.
+- **Home's fallback greeting** reads "new every morning", true at any hour.
+- **Pledge reads** (`GET /giving/pledges`, `GET /giving/pledges/{id}`, `/giving/partnership` `pledges[]`) carry `pending_claim_minor` at any time, not only in the instalment's due week. It is shown, never subtracted.
+- **The tier line** says "will carry …" until the partner's money has landed, then "carries …". Landed means a gift that succeeded toward a pledge or the recurring gift, or a claim the office confirmed.
+
+No migration.
+
+**Verified.**
+- **Live versions:** the API and worker both run `178dc3e69`, healthy, with 0 restarts. The running dist has `partnerMoneyLanded`, "new every morning" and the continuous photo fit.
+- **Inside the live API container, with no member data:** a sample letter rendered a 585,340-byte `%PDF-`.
+- **Read-only aggregates:** one member holds all 8 recurring gifts and 3 monthly pledges, and their money has landed, so no one reads "will carry" today. No claims are pending.
+- **Health:** the edge `/readyz` returned 200, `/v1/giving/partnership` returned 401 without a token, and the API logged 0 errors after the deploy.
+
+**Rollback.** Redeploy `sha-3453139`. Nothing was migrated or stored.
+
 ### 2026-10-07 — The letter runs the full page in paragraphs; the photograph's caption is scripture
 
 **What shipped.** pathway#514 (`3453139`, squash-merged on its exact green head) on the owner's YES ("deploy when green"). The owner had sent screenshots of the printed letter and the phone, asking for three things: "format the font like the heading to reach the end of the page", paragraphs, and "make the caption below the image scriptural".
