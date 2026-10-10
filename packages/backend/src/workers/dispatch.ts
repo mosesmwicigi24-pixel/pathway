@@ -161,6 +161,12 @@ const PUSH_TEMPLATE_COPY: Record<
   string,
   (p: Record<string, unknown>) => { title: string; body: string }
 > = {
+  // Ekklesia (the intercessory watch): the service composes an explicit
+  // title/body at the call site; this is the net under it.
+  ekklesia_request: (p) => ({
+    title: str(p.urgency) === "urgent" ? "Ekklesia · urgent" : "Ekklesia · a need for the watch",
+    body: str(p.body) || "A need has been brought to the watch. Will you stand in the gap today?",
+  }),
   badge_awarded: (p) => ({
     title: "New badge!",
     body: str(p.name)

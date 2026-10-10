@@ -56,6 +56,7 @@
 | Scores | /me/scores (+/word,/prayer,/habits,/curriculum,/attendance) |
 | Giving | /giving/{intents,paypal/capture,history,transactions/:id(/receipt.pdf),statement.pdf,schedules(/:id/cancel)}; /products(/:id/purchase) |
 | Prayer / verses | /prayer-wall/* , /me/prayers(+/:id/share-to-wall), /me/verses |
+| Ekklesia (intercessory watch) | /ekklesia, /ekklesia/summary, /ekklesia/{join,leave}, /ekklesia/members/:userId/role, /ekklesia/requests(+/:id, /intercede, /updates, /answered, /pinned) |
 | Events (member) | /calendar(/series, parse), /events/:id (+rsvp, posts), /me/{rsvps,cell-summary}, /moments |
 | Community | /community/threads (+:id/comments) |
 | Gifts / gamification | /gifts/*, /me/gifts, /me/achievements, /badges, /cells/:id/milestones |
