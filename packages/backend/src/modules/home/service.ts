@@ -32,9 +32,9 @@ export type HomeRoute =
  *  set of things with a real deadline or a real person waiting. */
 export type NudgeKind =
   | "reflection_due" | "quiz_in_progress" | "level_review" | "letter_unread"
-  | "cell_gathering" | "plan_day_due" | "reading_invite" | "chat_unread";
+  | "cell_gathering" | "plan_day_due" | "reading_invite" | "chat_unread" | "ekklesia_watch";
 export type NudgeRoute =
-  | "devotional" | "quiz" | "level_exam" | "letter" | "cell" | "plan" | "reading_invite" | "chat";
+  | "devotional" | "quiz" | "level_exam" | "letter" | "cell" | "plan" | "reading_invite" | "chat" | "ekklesia";
 export interface HomeNudge {
   id: string;
   kind: NudgeKind;
@@ -688,6 +688,34 @@ export class HomeService {
           body: "Someone in your community is waiting on you.",
           cta_label: "Open chat", route: "chat", params: { conversationId: r.conversation_id },
           accent: "steady", priority: 50, due: null,
+        });
+      }
+    });
+
+    // Ekklesia — an intercessor's watch: active needs they have not yet prayed
+    // today. Only for members of the watch; everyone else meets Ekklesia through
+    // the Home card and the invitations, never through a nag.
+    await safe(async () => {
+      const r = await maybeOne<{ n: number; urgent: number }>(
+        this.pool,
+        `SELECT count(*)::int AS n, (count(*) FILTER (WHERE r.urgency = 'urgent'))::int AS urgent
+           FROM ekklesia_requests r
+           JOIN ekklesia_members m ON m.congregation_id = r.congregation_id AND m.user_id = $1 AND m.status = 'active'
+          WHERE NOT r.is_hidden AND NOT r.is_answered
+            AND NOT EXISTS (SELECT 1 FROM ekklesia_intercessions i
+                             WHERE i.request_id = r.request_id AND i.user_id = $1
+                               AND i.prayed_on = (now() AT TIME ZONE 'Africa/Nairobi')::date)`,
+        [userId],
+      );
+      if (r && r.n > 0) {
+        out.push({
+          id: "ekklesia_watch", kind: "ekklesia_watch",
+          title: r.n === 1 ? "1 need waits on the watch" : `${r.n} needs wait on the watch`,
+          body: r.urgent > 0
+            ? (r.urgent === 1 ? "One of them is urgent. Stand in the gap today." : `${r.urgent} are urgent. Stand in the gap today.`)
+            : "Stand in the gap for a few minutes today.",
+          cta_label: "Intercede", route: "ekklesia",
+          accent: r.urgent > 0 ? "gold" : "navy", priority: r.urgent > 0 ? 72 : 58, due: "today",
         });
       }
     });

@@ -6477,6 +6477,112 @@ paths:
       responses:
         "200": { description: Wall }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /ekklesia:
+    get:
+      tags: [progress]
+      summary: "Ekklesia, the intercessory watch: the group, its counts, and its requests (?status=active|answered). Request bodies are returned to intercessors only; others get a three-item preview of titles."
+      responses:
+        "200": { description: The watch }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /ekklesia/summary:
+    get:
+      tags: [progress]
+      summary: Small summary for the Home card and the invitations on other pages (membership, counts, needs-me-today, latest three titles).
+      responses:
+        "200": { description: Summary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ekklesia/join:
+    post:
+      tags: [progress]
+      summary: Join the watch as an intercessor (idempotent; re-joining after leaving restores membership).
+      responses:
+        "200": { description: Joined }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ekklesia/leave:
+    post:
+      tags: [progress]
+      summary: Leave the watch.
+      responses:
+        "200": { description: Left }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ekklesia/members/{userId}/role:
+    post:
+      tags: [progress]
+      summary: "Leaders appoint or stand down a leader of the watch ({role: intercessor|leader})."
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Updated }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /ekklesia/requests:
+    post:
+      tags: [progress]
+      summary: Bring a need to the watch (any member of the congregation). Idempotent by request_id + client_mutation_id; every intercessor is notified once.
+      responses:
+        "201": { description: Brought }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /ekklesia/requests/{id}:
+    get:
+      tags: [progress]
+      summary: One request, its updates and the intercessors standing on it (intercessors, the requester and leaders only).
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Request }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [progress]
+      summary: Withdraw a request (the requester) or take it down (a leader).
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Removed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /ekklesia/requests/{id}/intercede:
+    post:
+      tags: [progress]
+      summary: "\"I interceded today\" — one row per intercessor per day; a second call today is a no-op. Intercessors only (403 with details.join=true otherwise)."
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Counted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /ekklesia/requests/{id}/updates:
+    post:
+      tags: [progress]
+      summary: Write back to the watch — an update, or a testimony (kind update|testimony). The requester or any intercessor.
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "201": { description: Written }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /ekklesia/requests/{id}/answered:
+    post:
+      tags: [progress]
+      summary: "Close a need as answered, with a note ({answered, note?}). The requester or a leader."
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Updated }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /ekklesia/requests/{id}/pinned:
+    post:
+      tags: [progress]
+      summary: "Pin or unpin a request at the top of the watch ({pinned}). Leaders only."
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Updated }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /me/prayers/{id}/share-to-wall:
     post:
       tags: [progress]
