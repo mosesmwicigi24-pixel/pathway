@@ -66,6 +66,7 @@ const SOURCES: readonly FilterOption[] = [
   { value: "", label: "All" },
   { value: "app", label: "Member app" },
   { value: "website", label: "Website" },
+  { value: "paybill", label: "Paybill (direct)" },
   { value: "admin", label: "Office" },
 ];
 const YES_NO: readonly FilterOption[] = [

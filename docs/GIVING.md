@@ -385,3 +385,73 @@ separate one-time gift while the schedule still charges on its day — the
 member gives twice that cycle. The spec lists "Pay now / Resume" for
 schedules; the choice is to show the collection day instead of Pay for an
 active gift, or to build "pay this cycle now" on the server.
+
+## 15. Paid straight to the paybill number (2026-10-11)
+
+Until now the only M-Pesa money the system knew about was money it ASKED for:
+an STK prompt the app or website sent, settled when Safaricom confirmed it. A
+member who opens M-Pesa themselves — Lipa na M-Pesa → Pay Bill → the church's
+business number — paid into the same till, and the hub, the reports and their
+own statement never heard of it. The owner's rule: **any transaction that goes
+through our M-Pesa or paybill number is reflected in the hub and in the
+reports, and only completed giving counts.**
+
+**Wire.** Daraja's C2B URLs. `POST /v1/webhooks/mpesa/c2b/<MPESA_C2B_SECRET>/
+validation` answers `ResultCode 0` to every payment (the church takes every
+gift). `…/confirmation` is Safaricom telling us a payment landed. Daraja signs
+nothing, so the proof is the secret segment of the URL: a long random token
+set on the server (`MPESA_C2B_SECRET`, by name only, §5.10) and handed to
+Safaricom by the URL registration (`POST /admin/finance/mpesa/c2b/register`,
+finance:manage, or the Finance → Settings → Paybill payments button). A wrong
+or missing secret is a 404 and nothing is written. `ResponseType: Completed`
+means a payment is never held hostage to our uptime: Safaricom completes it
+and the confirmation arrives when we are back.
+
+**One payment, one record** (`FinancialService.recordPaybillPayment`). The
+same shillings can arrive through both doors — the STK callback AND the C2B
+confirmation — so a confirmation is, in order:
+1. *already on the books* — the prompt's callback settled it and captured the
+   same receipt code (`TransID`): nothing written, event `matched_prompt`;
+2. *a waiting prompt of ours* — same amount, same payer when Safaricom shows
+   the number (it is masked for most paybills), inside 20 minutes, and exactly
+   one such prompt: the prompt is confirmed the usual way (Safaricom is asked;
+   the sweeper finishes it if Safaricom cannot say yet); nothing is written
+   twice;
+3. *a payment nobody asked for* — recorded as a SUCCEEDED `source = 'paybill'`
+   gift: against the member whose number paid when the number is visible and
+   belongs to exactly one member (their receipt is queued, their statement
+   shows it), else memberless (payer name kept, attributable through the
+   receipt code); posted cash:mpesa → the fund the payer typed as the account
+   number (a fund code, a fund's name, or the first word of either), else the
+   general fund; `created_at` = Safaricom's `TransTime`, so it lands on the day
+   it was actually paid; `bill_reference` keeps what they typed.
+The mirror (`foldPaybillDuplicate`): if a paybill row was recorded in case 3
+and the member's prompt then settles with the same receipt, the paybill row is
+reversed in the settling transaction — status refunded, a balanced reversing
+pair, the reason on the row, the receipt kept as the trace (migration 225 lets
+a reversed row share the code) — and the C2B event points at the prompt. Every
+confirmation, whatever became of it, is in `mpesa_c2b_events` (outcome
+recorded | matched_prompt | duplicate | rejected, the raw payload), so the
+treasurer's M-Pesa statement always reconciles line by line.
+
+**Where it shows.** Overview "Given today" (with how many came straight to the
+paybill), the income figures and channel breakdown, Transactions (source
+filter "Paybill (direct)"), every report — including the new **Daily giving**
+report (`GET /admin/finance/reports/daily`, Finance → Reports → Daily giving):
+total given per day, every day of the period, with the rail of each shilling
+(M-Pesa prompt · M-Pesa paybill · Card · PayPal · Airtel Money · Office) and a
+CSV — and the member's own statement in both apps. Only succeeded gifts are
+money anywhere: failed, cancelled and still-processing prompts are counted
+(Overview "Failed in period", Reconciliation) but never summed.
+
+**Verify.** `test/mpesa-paybill.test.ts` (parser, the webhook and its 404s,
+stranger / member / replay / other-shortcode / malformed, all three orders of
+prompt-vs-confirmation including the fold with balanced books, the daily
+report's totals and CSV, the overview's today, the register call and its
+masked status) and `test/mpesa-paybill-off.test.ts` (the server without a
+secret refuses everything). Prod: set `MPESA_C2B_SECRET` (≥ 16 random
+characters) and, if the API is not on the same origin as `MPESA_CALLBACK_URL`,
+`MPESA_C2B_PUBLIC_ORIGIN`; deploy; run migration 225; register the URLs from
+Settings; pay the paybill KSh 1 from a member's phone and watch it appear on
+the Overview within seconds.
+

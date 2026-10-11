@@ -210,7 +210,11 @@ Reads (finance:view):
   (remaining this year), partners (count, behind), counts (processing, failed in
   period, pending claims, expenses awaiting approval, failing schedules), fund
   balances (top), 12-month series per currency `{month, income, expenses}`,
-  `alerts: [{kind, count, link}]`.
+  `today: { day, by_currency: [{ currency, total_minor, count, paybill_minor,
+  paybill_count, prompt_minor, prompt_count }] }` (succeeded gifts so far today,
+  EAT), `alerts: [{kind, count, link}]`. Income is SUCCEEDED gifts only — a
+  failed, cancelled or still-processing prompt is never money here, nor in any
+  report, statement or the day-by-day report.
 - `GET /transactions?from&to&fund&status&channel&source&q&pledged(any|yes|no)
   &need(any|yes|no)&cursor&limit` (q matches receipt code, member name/phone,
   giver name, provider ref) → rows incl. member name, fund, channel, source,
@@ -238,6 +242,14 @@ Reads (finance:view):
   per currency + totals; `GET /reports/expenses?year&by(category|fund)`;
   `GET /reports/pledges?year` → per month pledged / paid / kept / missed /
   behind count; each with `.csv`.
+- `GET /reports/daily?from&to` → total given per day (succeeded gifts only, by
+  the EAT day they were given), per currency: every day of the period (zero
+  when nothing came) with `total_minor`, `count` and one cell per rail —
+  `mpesa` (a prompt the app or website sent), `paybill` (paid straight to the
+  paybill number), `card`, `paypal`, `airtel`, `office` (recorded by hand or a
+  confirmed claim) — plus period totals, `days_with_gifts`, `best_day`; at most
+  400 days; `.csv` (currency, day, total, gifts, then amount and count per
+  rail, a TOTAL row per currency). Defaults: this month to date.
 - `GET /reports/financial-position?as_of` → per currency: cash account balances
   (assets), fund balances, other (sales:media), totals, `balanced`; `.csv`.
   `GET /reports/income-expenditure?from&to` → per currency: income by fund
@@ -257,6 +269,19 @@ Reads (finance:view):
   `fund.`, `finance.`).
 - `GET /settings` → providers (configured on/off, env names only), receipt
   counter (next), giving tiers, reminder policy (read-only text).
+- `GET /config` (existing) now also carries `paybill`: `{ enabled, shortcode,
+  last_registered_at, registered_shortcode, confirmation_url (secret masked),
+  last_30_days: { recorded, matched_prompt, duplicate, rejected } }`.
+- `POST /mpesa/c2b/register` (finance:manage) → tells Safaricom where paybill
+  (C2B) confirmations go (Daraja RegisterURL, ResponseType Completed), built
+  from `MPESA_C2B_PUBLIC_ORIGIN` (or `MPESA_CALLBACK_URL`'s origin) and
+  `MPESA_C2B_SECRET`; keeps the answer in `mpesa_c2b_registrations`; audited
+  `finance.mpesa.c2b_registered`. 422 until the server has its settings.
+- `POST /v1/webhooks/mpesa/c2b/<MPESA_C2B_SECRET>/validation` and
+  `/confirmation` (no session; the secret in the URL is the proof) — see
+  GIVING.md §15. Every confirmation becomes a row in `mpesa_c2b_events` with
+  its outcome; a payment nobody prompted becomes a succeeded `source =
+  'paybill'` transaction with ledger legs cash:mpesa → fund.
 - Existing reads stay: `/summary`, `/trend` (fixed: per currency), `/config`,
   `/schedules` (+ `status`, `attention` filters), `/admin/campaigns*` (raised
   bounded by `ends_on`), `/admin/partners*`, `/admin/departments/needs`.

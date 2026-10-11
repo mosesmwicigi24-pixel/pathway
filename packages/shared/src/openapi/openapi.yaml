@@ -2865,7 +2865,7 @@ paths:
         - { name: fund, in: query, required: false, schema: { type: string } }
         - { name: status, in: query, required: false, schema: { type: string, enum: [requires_action, processing, succeeded, failed, refunded] } }
         - { name: channel, in: query, required: false, schema: { $ref: "#/components/schemas/FinanceChannel" } }
-        - { name: source, in: query, required: false, schema: { type: string, enum: [app, website, admin] } }
+        - { name: source, in: query, required: false, schema: { type: string, enum: [app, website, admin, paybill] } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 } }
         - { name: pledged, in: query, required: false, schema: { type: string, enum: [any, "yes", "no"], default: any } }
         - { name: need, in: query, required: false, schema: { type: string, enum: [any, "yes", "no"], default: any } }
@@ -3076,6 +3076,43 @@ paths:
       parameters:
         - { name: year, in: query, required: false, schema: { type: integer, minimum: 2000, maximum: 2999 } }
         - { name: by, in: query, required: false, schema: { type: string, enum: [fund, channel, source], default: fund } }
+      responses:
+        "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
+        "400": { description: "VALIDATION_FAILED" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/daily:
+    get:
+      operationId: financeReportsDaily
+      tags: [portal]
+      summary: "finance:view. Total given per day — succeeded gifts by the EAT day they were given, per currency, with the rail each came in on."
+      description: >-
+        Every day of the period is listed (zero when nothing came); rails are
+        mpesa (a prompt the app or website sent), paybill (paid straight to the
+        paybill number), card, paypal, airtel, office (everything the office
+        recorded by hand, and confirmed claims). Failed, cancelled and
+        still-processing prompts are not here; a reversed gift drops out of its
+        day. Defaults: this month to date. At most 400 days.
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: The day-by-day report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FinanceDailyReport" }
+        "400": { description: "VALIDATION_FAILED — a malformed or too-long period." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/reports/daily.csv:
+    get:
+      operationId: financeReportsDailyCsv
+      tags: [portal]
+      summary: "finance:view + finance:export. The day-by-day report as CSV: currency, day, total, gifts, then amount and count per rail — with a TOTAL row per currency."
+      parameters:
+        - { name: from, in: query, required: false, schema: { type: string, format: date } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date } }
       responses:
         "200": { description: "CSV download", content: { text/csv: { schema: { type: string } } } }
         "400": { description: "VALIDATION_FAILED" }
@@ -6273,7 +6310,7 @@ paths:
         - { name: fund, in: query, required: false, schema: { type: string }, description: Fund code. }
         - { name: status, in: query, required: false, schema: { type: string, enum: [requires_action, processing, succeeded, failed, refunded] } }
         - { name: channel, in: query, required: false, schema: { $ref: "#/components/schemas/FinanceChannel" } }
-        - { name: source, in: query, required: false, schema: { type: string, enum: [app, website, admin] } }
+        - { name: source, in: query, required: false, schema: { type: string, enum: [app, website, admin, paybill] } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 } }
         - { name: pledged, in: query, required: false, schema: { type: string, enum: [any, "yes", "no"], default: any } }
         - { name: need, in: query, required: false, schema: { type: string, enum: [any, "yes", "no"], default: any } }
@@ -6384,10 +6421,29 @@ paths:
   /admin/finance/config:
     get:
       tags: [giving]
-      summary: Admin (view). Read-only config — funds + provider availability (no secrets, §5.6).
+      summary: Admin (view). Read-only config — funds + provider availability (no secrets, §5.6) + paybill (C2B) status.
+      description: >-
+        `paybill`: { enabled, shortcode, last_registered_at, registered_shortcode,
+        confirmation_url (secret masked), last_30_days: { recorded, matched_prompt,
+        duplicate, rejected } }.
       responses:
-        "200": { description: Funds and provider availability }
+        "200": { description: "Funds, provider availability and paybill status" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
+  /admin/finance/mpesa/c2b/register:
+    post:
+      tags: [giving]
+      summary: finance:manage. Register the paybill (C2B) confirmation and validation URLs with Safaricom.
+      description: >-
+        A one-off per shortcode, repeated after a domain change. Builds the URLs
+        from MPESA_C2B_PUBLIC_ORIGIN (or MPESA_CALLBACK_URL's origin) and
+        MPESA_C2B_SECRET, calls Daraja's RegisterURL with ResponseType Completed,
+        and keeps Safaricom's answer (mpesa_c2b_registrations; audited
+        finance.mpesa.c2b_registered). The response masks the secret.
+      responses:
+        "200": { description: "{ registration_id, registered_at, shortcode, response, confirmation_url }" }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "422": { description: "UNPROCESSABLE — MPESA_C2B_SECRET, MPESA_SHORTCODE or the public origin is not set." }
+        "503": { description: "PROVIDER_NOT_CONFIGURED — M-Pesa is not wired on this server." }
 
   # --- Growth domains (Contract Matrix B6) ---
   /gifts/questions:
@@ -8906,6 +8962,63 @@ paths:
         - { name: provider, in: path, required: true, schema: { type: string, enum: [mpesa, airtel] } }
       responses:
         "200": { description: "Acknowledged — { received: true }" }
+  /webhooks/mpesa/c2b/{token}/validation:
+    post:
+      tags: [system]
+      summary: Daraja C2B validation — every payment to the paybill number is accepted.
+      description: >-
+        Safaricom asks before completing a payment to the shortcode. The church
+        takes every gift, so the answer is always ResultCode 0; what the payment
+        is for is worked out from the confirmation. Daraja signs nothing: the
+        proof is the secret segment of the URL (MPESA_C2B_SECRET), handed to
+        Safaricom by the URL registration and known to nobody else. A wrong or
+        missing secret is a 404.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "{ ResultCode: 0, ResultDesc: Accepted }" }
+        "404": { description: "Not ours." }
+  /webhooks/mpesa/c2b/{token}/confirmation:
+    post:
+      tags: [system]
+      summary: Daraja C2B confirmation — a payment landed on the paybill number, prompted or not.
+      description: >-
+        One payment, one record. If the STK callback already settled this receipt
+        code, nothing is written. If a prompt of ours for the same amount (and the
+        same payer, when Safaricom shows the number) is still waiting, the prompt
+        is confirmed the usual way. Otherwise the payment is recorded as a
+        SUCCEEDED gift from source `paybill` — against the member whose number
+        paid when the number is visible and belongs to exactly one member, else
+        memberless — posted to the ledger (cash:mpesa → the fund the payer named
+        as the account number, else general), dated when Safaricom says it was
+        paid. Every confirmation is kept in mpesa_c2b_events with its outcome;
+        a replay is a no-op. Safaricom gets its own {ResultCode, ResultDesc} back.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [TransID, BusinessShortCode, TransAmount]
+              properties:
+                TransactionType: { type: string, example: Pay Bill }
+                TransID: { type: string, description: "The M-Pesa receipt code on the payer's SMS and the church's statement." }
+                TransTime: { type: string, description: "YYYYMMDDHHmmss, EAT." }
+                TransAmount: { type: string, description: "Whole shillings, e.g. \"1000.00\"." }
+                BusinessShortCode: { type: string }
+                BillRefNumber: { type: string, description: "What the payer typed as the account number." }
+                MSISDN: { type: string, description: "The paying number — masked by Safaricom for most paybills." }
+                FirstName: { type: string }
+                MiddleName: { type: string }
+                LastName: { type: string }
+      responses:
+        "200": { description: "{ ResultCode: 0, ResultDesc: Success }" }
+        "400": { description: "VALIDATION_FAILED — not a payment." }
+        "404": { description: "Not ours." }
   /webhooks/website-contact:
     post:
       tags: [system]
@@ -12198,7 +12311,7 @@ components:
         balance_minor: { type: integer, format: int64, description: "credits − debits on the fund's account; negative when more left the fund than came in." }
     FinanceOverview:
       type: object
-      required: [period, currencies, income, expenses, net, outstanding_pledges, partners, counts, fund_balances, channels, series, alerts]
+      required: [period, currencies, income, expenses, net, outstanding_pledges, partners, counts, fund_balances, channels, today, series, alerts]
       properties:
         period:
           type: object
@@ -12281,6 +12394,25 @@ components:
               name: { type: string }
               is_active: { type: boolean }
               balances: { type: array, items: { $ref: "#/components/schemas/FinanceCurrencyBalance" } }
+        today:
+          type: object
+          description: "Today (EAT) at a glance: succeeded gifts so far, and how many came straight through the paybill number or an M-Pesa prompt."
+          required: [day, by_currency]
+          properties:
+            day: { type: string, format: date }
+            by_currency:
+              type: array
+              items:
+                type: object
+                required: [currency, total_minor, count, paybill_minor, paybill_count, prompt_minor, prompt_count]
+                properties:
+                  currency: { type: string }
+                  total_minor: { type: integer, format: int64 }
+                  count: { type: integer }
+                  paybill_minor: { type: integer, format: int64 }
+                  paybill_count: { type: integer }
+                  prompt_minor: { type: integer, format: int64 }
+                  prompt_count: { type: integer }
         channels:
           type: array
           description: Money received per cash account in the period, net of reversals.
@@ -12344,7 +12476,7 @@ components:
         account_name: { type: [string, "null"] }
         method: { type: [string, "null"], description: "Legacy: the raw provider (stripe | mpesa | airtel | paypal | manual). Prefer channel." }
         channel: { $ref: "#/components/schemas/FinanceChannel" }
-        source: { type: string, enum: [app, website, admin] }
+        source: { type: string, enum: [app, website, admin, paybill], description: "paybill = paid straight to the paybill number (Daraja C2B), prompted by nobody." }
         provider: { type: string }
         provider_ref: { type: [string, "null"], description: "Provider reference, else the Stripe payment-intent id." }
         receipt_code: { type: [string, "null"], description: "The M-Pesa code of an online M-Pesa gift, or the office receipt (OR-YYYY-NNNNN) of an office-recorded one." }
@@ -12631,6 +12763,55 @@ components:
               debit_minor: { type: integer, format: int64 }
               credit_minor: { type: integer, format: int64 }
               balanced: { type: boolean }
+    FinanceDailyReport:
+      type: object
+      required: [report, period, rails, currencies]
+      properties:
+        report: { type: string, enum: [daily] }
+        period: { type: object, properties: { from: { type: string, format: date }, to: { type: string, format: date } } }
+        rails:
+          type: array
+          items: { type: object, properties: { key: { $ref: "#/components/schemas/FinanceRail" }, label: { type: string } } }
+        currencies:
+          type: array
+          description: KES first, then A–Z; only currencies with data.
+          items:
+            type: object
+            required: [currency, days, totals, days_with_gifts, best_day]
+            properties:
+              currency: { type: string }
+              days:
+                type: array
+                description: Every day in the period, oldest first.
+                items: { $ref: "#/components/schemas/FinanceDailyRow" }
+              totals:
+                type: object
+                properties:
+                  total_minor: { type: integer, format: int64 }
+                  count: { type: integer }
+                  rails: { $ref: "#/components/schemas/FinanceRailCells" }
+              days_with_gifts: { type: integer }
+              best_day: { type: [string, "null"], format: date }
+    FinanceDailyRow:
+      type: object
+      required: [day, total_minor, count, rails]
+      properties:
+        day: { type: string, format: date }
+        total_minor: { type: integer, format: int64 }
+        count: { type: integer }
+        rails: { $ref: "#/components/schemas/FinanceRailCells" }
+    FinanceRail:
+      type: string
+      enum: [mpesa, paybill, card, paypal, airtel, office]
+      description: "mpesa = an STK prompt the app or website sent; paybill = paid straight to the paybill number; office = recorded by hand or a confirmed claim."
+    FinanceRailCells:
+      type: object
+      description: One cell per rail (every rail present, zero when nothing).
+      additionalProperties:
+        type: object
+        properties:
+          amount_minor: { type: integer, format: int64 }
+          count: { type: integer }
     FinanceReportMatrix:
       type: object
       required: [report, year, by, currencies]

@@ -14,7 +14,8 @@ import type { RateLimitStore } from "../../http/rateLimit.js";
 import type { PaymentGateway } from "./gateway.js";
 import {
   sanitizeAccountReference, mobileMoneyFailure, providerIsLive, toMsisdn,
-  type GiftFailure, type GiftFailureCode, type MobileMoneyKey, type MobileMoneyProviders, type MobileMoneyStatus,
+  type C2bUrls, type GiftFailure, type GiftFailureCode, type MobileMoneyKey, type MobileMoneyProviders, type MobileMoneyStatus,
+  type PaybillPayment,
 } from "./providers.js";
 import { paypalIsLive, type PayPalGateway } from "./paypal.js";
 import { giftFailureCopy } from "./giftFailure.js";
@@ -906,6 +907,252 @@ export class FinancialService {
     });
   }
 
+  // ── Paybill (C2B): money that arrived without a prompt ─────────────────────
+
+  /**
+   * A payment made straight to the paybill number, as Safaricom's C2B
+   * confirmation describes it. Three things it can be, decided in this order:
+   *   1. a payment already on the books — the STK callback came first and
+   *      captured the same receipt code (`matched_prompt`, nothing written);
+   *   2. a prompt of ours still waiting — same amount, same payer when
+   *      Safaricom lets us see the number, inside the last 20 minutes — then
+   *      the prompt is confirmed the usual way (Safaricom is asked; the
+   *      sweeper finishes it if Safaricom cannot say yet) and the event is
+   *      recorded against it;
+   *   3. a payment nobody asked for — a member (matched by the paying number
+   *      when it is visible) or a stranger paying the bill directly. It is
+   *      recorded as a SUCCEEDED gift from source `paybill`, posted to the
+   *      ledger (cash:mpesa → fund), dated when Safaricom says it was paid,
+   *      and routed to the fund the payer named as the account number — or
+   *      the general fund when they named nothing we know.
+   * Every confirmation is kept in mpesa_c2b_events with its outcome; a replay
+   * is a no-op. The caller has already proved the request is Safaricom's (the
+   * secret in the URL) and parsed it.
+   */
+  async recordPaybillPayment(
+    p: PaybillPayment,
+    meta: { rawBody: Buffer | string; expectedShortcode?: string | undefined },
+  ): Promise<{ outcome: "recorded" | "matched_prompt" | "duplicate" | "rejected"; transaction_id: string | null; note?: string }> {
+    const eventId = `c2b:${p.trans_id}`;
+    const payload = (() => {
+      try {
+        return JSON.parse(typeof meta.rawBody === "string" ? meta.rawBody : meta.rawBody.toString("utf8")) as unknown;
+      } catch {
+        return { raw: String(meta.rawBody).slice(0, 2000) };
+      }
+    })();
+    const record = async (
+      q: Queryable,
+      outcome: "recorded" | "matched_prompt" | "duplicate" | "rejected",
+      transactionId: string | null,
+      note: string | null,
+    ): Promise<void> => {
+      await q.query(
+        `INSERT INTO mpesa_c2b_events (trans_id, shortcode, trans_time, amount_minor, msisdn, bill_reference, payer_name, outcome, note, transaction_id, payload)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+         ON CONFLICT (trans_id) DO UPDATE SET outcome = EXCLUDED.outcome, note = EXCLUDED.note,
+           transaction_id = COALESCE(EXCLUDED.transaction_id, mpesa_c2b_events.transaction_id)`,
+        [p.trans_id, p.shortcode, p.paid_at, p.amount_minor, p.msisdn, p.bill_reference, p.payer_name, outcome, note, transactionId, JSON.stringify(payload)],
+      );
+    };
+
+    if (meta.expectedShortcode && p.shortcode !== meta.expectedShortcode) {
+      const note = `paid to shortcode ${p.shortcode}, ours is ${meta.expectedShortcode}`;
+      await record(this.pool, "rejected", null, note);
+      return { outcome: "rejected", transaction_id: null, note };
+    }
+
+    // Replays: Safaricom may deliver a confirmation more than once.
+    const seen = await maybeOne<{ transaction_id: string | null; outcome: string }>(
+      this.pool,
+      `SELECT transaction_id, outcome FROM mpesa_c2b_events WHERE trans_id = $1 AND outcome <> 'rejected'`,
+      [p.trans_id],
+    );
+    if (seen) return { outcome: "duplicate", transaction_id: seen.transaction_id };
+
+    // 1. Already on the books through the prompt's own callback.
+    const held = await maybeOne<{ transaction_id: string }>(
+      this.pool,
+      `SELECT transaction_id FROM transactions WHERE receipt_code = $1 AND status <> 'failed' LIMIT 1`,
+      [p.trans_id],
+    );
+    if (held) {
+      await record(this.pool, "matched_prompt", held.transaction_id, "the prompt's callback had already settled it");
+      return { outcome: "matched_prompt", transaction_id: held.transaction_id };
+    }
+
+    // 2. A waiting prompt of ours for this very payment.
+    const candidates = await many<{ transaction_id: string; provider_ref: string }>(
+      this.pool,
+      `SELECT t.transaction_id, t.provider_ref
+         FROM transactions t LEFT JOIN users u ON u.user_id = t.user_id
+        WHERE t.provider = 'mpesa' AND t.status = 'processing' AND t.provider_ref IS NOT NULL AND t.receipt_code IS NULL
+          AND t.currency = 'KES' AND t.amount_minor = $1
+          AND t.created_at > now() - interval '20 minutes'
+          AND ($2::text IS NULL OR u.phone_number = $2 OR t.giver_phone = $2)
+        ORDER BY t.created_at DESC`,
+      [p.amount_minor, p.payer_phone],
+    );
+    if (candidates.length === 1) {
+      const c0 = candidates[0]!;
+      const result = await this.confirmPrompt("mpesa", c0.provider_ref, { receipt: p.trans_id, eventId, rawBody: meta.rawBody });
+      const settled = result.status === "succeeded" || result.duplicate === true;
+      if (settled || result.status === "processing") {
+        await record(this.pool, "matched_prompt", c0.transaction_id, settled ? "confirmed the waiting prompt" : "a waiting prompt; Safaricom's answer is still pending (the sweeper finishes it)");
+        return { outcome: "matched_prompt", transaction_id: c0.transaction_id };
+      }
+      // Safaricom says the prompt failed, yet the money arrived: record the
+      // payment on its own below rather than lose it.
+    }
+
+    // 3. A payment nobody asked for: record it.
+    return tx(this.pool, async (c) => {
+      const dup = await c.query(
+        `INSERT INTO processed_webhooks (event_id, provider, payload_hash) VALUES ($1, 'mpesa', $2)
+         ON CONFLICT (event_id) DO NOTHING RETURNING event_id`,
+        [eventId, sha256(meta.rawBody)],
+      );
+      if (dup.rowCount === 0) return { outcome: "duplicate" as const, transaction_id: null };
+
+      const member = p.payer_phone
+        ? await maybeOne<{ user_id: string; n: number }>(
+            c,
+            `SELECT min(user_id::text)::uuid AS user_id, count(*)::int AS n FROM users WHERE phone_number = $1 AND deleted_at IS NULL`,
+            [p.payer_phone],
+          )
+        : null;
+      const userId = member && member.n === 1 ? member.user_id : null;
+      const fund = await this.paybillFund(c, p.bill_reference);
+      let txnId: string;
+      try {
+        await c.query("SAVEPOINT paybill_row");
+        const row = await one<{ transaction_id: string }>(
+          c,
+          `INSERT INTO transactions (user_id, fund_id, amount_minor, currency, status, provider, provider_ref, idempotency_key,
+                                     created_at, settled_at, verified_at, source, receipt_code, giver_name, giver_phone,
+                                     bill_reference, account_name)
+           VALUES ($1, $2, $3, 'KES', 'succeeded', 'mpesa', $4, $4, COALESCE($5::timestamptz, now()), now(), now(), 'paybill', $6, $7, $8, $9, $9)
+           RETURNING transaction_id`,
+          [userId, fund?.fund_id ?? null, p.amount_minor, eventId, p.paid_at, p.trans_id, userId ? null : p.payer_name, userId ? null : p.payer_phone, p.bill_reference],
+        );
+        await c.query("RELEASE SAVEPOINT paybill_row");
+        txnId = row.transaction_id;
+      } catch (err) {
+        if ((err as { code?: string }).code !== "23505") throw err;
+        // Raced the prompt's own settlement for the same receipt: it won.
+        await c.query("ROLLBACK TO SAVEPOINT paybill_row");
+        const holder = await maybeOne<{ transaction_id: string }>(
+          c, `SELECT transaction_id FROM transactions WHERE receipt_code = $1 AND status <> 'failed' LIMIT 1`, [p.trans_id],
+        );
+        await record(c, "matched_prompt", holder?.transaction_id ?? null, "the prompt's settlement won the race for this receipt");
+        return { outcome: "matched_prompt" as const, transaction_id: holder?.transaction_id ?? null };
+      }
+      await c.query(
+        `INSERT INTO ledger_entries (transaction_id, account, side, amount_minor, currency)
+         VALUES ($1, 'cash:mpesa', 'debit', $2, 'KES'), ($1, $3, 'credit', $2, 'KES')`,
+        [txnId, p.amount_minor, `fund:${fund?.code ?? "general"}`],
+      );
+      await record(c, "recorded", txnId, userId ? "recorded against the member whose number paid" : p.payer_phone ? "recorded; no member has this number" : "recorded; Safaricom masked the payer's number");
+      if (userId) await enqueueOutbox(c, "giving.receipt", { transaction_id: txnId, user_id: userId });
+      await audit(c, userId, "finance.paybill.recorded", "transaction", txnId, {
+        trans_id: p.trans_id, amount_minor: p.amount_minor, fund: fund?.code ?? null, bill_reference: p.bill_reference, member_matched: Boolean(userId),
+      });
+      return { outcome: "recorded" as const, transaction_id: txnId };
+    });
+  }
+
+  /** The fund a paybill payer named as the account number: a fund code
+   *  ("tithe"), a fund's name ("Building Fund"), or the first word of either
+   *  ("tithe 0722…", "Tithe-John") — else the general fund (or none if the
+   *  church has no fund called general). Inactive funds are not matched. */
+  private async paybillFund(q: Queryable, billReference: string | null): Promise<{ fund_id: string; code: string } | null> {
+    const ref = (billReference ?? "").trim().toLowerCase();
+    const tokens = [ref, ref.split(/[\s\-_/:#.,]+/)[0] ?? ""].filter((t) => t.length >= 2);
+    for (const t of tokens) {
+      const f = await maybeOne<{ fund_id: string; code: string }>(
+        q,
+        `SELECT fund_id, code FROM funds WHERE is_active AND (lower(code) = $1 OR lower(name) = $1 OR lower(coalesce(name_sw, '')) = $1) ORDER BY code LIMIT 1`,
+        [t],
+      );
+      if (f) return f;
+    }
+    return maybeOne<{ fund_id: string; code: string }>(q, `SELECT fund_id, code FROM funds WHERE code = 'general'`);
+  }
+
+  /**
+   * One payment, one record (recordPaybillPayment's mirror): when a prompt
+   * settles with a receipt that a paybill row already carries, that row was
+   * the same shillings arriving through the other door. It is reversed here —
+   * status refunded, a balanced reversing pair, the reason on the row — and
+   * keeps its receipt code for the trace (migration 225 lets a reversed row
+   * share the code with the live one). The C2B event now points at the
+   * prompt. Runs inside the settling transaction.
+   */
+  private async foldPaybillDuplicate(c: PoolClient, receipt: string, promptTransactionId: string): Promise<void> {
+    const dupe = await maybeOne<{ transaction_id: string; amount_minor: string; currency: string; fund_code: string | null }>(
+      c,
+      `SELECT t.transaction_id, t.amount_minor, t.currency, f.code AS fund_code
+         FROM transactions t LEFT JOIN funds f ON f.fund_id = t.fund_id
+        WHERE t.receipt_code = $1 AND t.source = 'paybill' AND t.status = 'succeeded' AND t.transaction_id <> $2
+        FOR UPDATE OF t`,
+      [receipt, promptTransactionId],
+    );
+    if (!dupe) return;
+    await c.query(
+      `INSERT INTO ledger_entries (transaction_id, account, side, amount_minor, currency)
+       VALUES ($1, 'cash:mpesa', 'credit', $2, $3), ($1, $4, 'debit', $2, $3)`,
+      [dupe.transaction_id, dupe.amount_minor, dupe.currency, `fund:${dupe.fund_code ?? "general"}`],
+    );
+    await c.query(
+      `UPDATE transactions
+          SET status = 'refunded', reversed_at = now(), reversal_reason = $2
+        WHERE transaction_id = $1`,
+      [dupe.transaction_id, `Same M-Pesa payment ${receipt} as the member's prompted gift ${promptTransactionId}; the paybill confirmation arrived first`],
+    );
+    await c.query(
+      `UPDATE mpesa_c2b_events SET outcome = 'matched_prompt', transaction_id = $2,
+              note = 'the member''s prompt settled with this receipt; the paybill row was reversed as its duplicate'
+        WHERE trans_id = $1`,
+      [receipt, promptTransactionId],
+    );
+    await audit(c, null, "finance.paybill.folded", "transaction", dupe.transaction_id, { receipt, prompt_transaction_id: promptTransactionId });
+  }
+
+  /** Register the paybill (C2B) URLs with Safaricom and keep the answer. */
+  async registerPaybillUrls(actorUserId: string, shortcode: string, urls: C2bUrls): Promise<Record<string, unknown>> {
+    const provider = this.provider("mpesa");
+    if (!provider.registerC2bUrls) throw new ProviderNotConfiguredError("M-Pesa paybill confirmations are not available on this server");
+    const response = await provider.registerC2bUrls(urls);
+    const row = await one<{ registration_id: string; registered_at: string }>(
+      this.pool,
+      `INSERT INTO mpesa_c2b_registrations (shortcode, confirmation_url, validation_url, response, registered_by)
+       VALUES ($1, $2, $3, $4::jsonb, $5) RETURNING registration_id, registered_at`,
+      [shortcode, urls.confirmationUrl, urls.validationUrl, JSON.stringify(response), actorUserId],
+    );
+    await audit(this.pool, actorUserId, "finance.mpesa.c2b_registered", "mpesa_c2b_registration", row.registration_id, { shortcode, response });
+    return { registration_id: row.registration_id, registered_at: row.registered_at, shortcode, response };
+  }
+
+  /** The Settings page's view of paybill confirmations: last registration, and
+   *  how many confirmations landed in the last 30 days by outcome. */
+  async paybillStatus(): Promise<Record<string, unknown>> {
+    const last = await maybeOne<{ registered_at: string; shortcode: string; confirmation_url: string }>(
+      this.pool,
+      `SELECT registered_at, shortcode, confirmation_url FROM mpesa_c2b_registrations ORDER BY registered_at DESC LIMIT 1`,
+    );
+    const counts = await many<{ outcome: string; n: number }>(
+      this.pool,
+      `SELECT outcome, count(*)::int AS n FROM mpesa_c2b_events WHERE received_at > now() - interval '30 days' GROUP BY outcome`,
+    );
+    return {
+      last_registered_at: last?.registered_at ?? null,
+      registered_shortcode: last?.shortcode ?? null,
+      // The token is the secret; show the shape, never the value.
+      confirmation_url: last ? last.confirmation_url.replace(/\/c2b\/[^/]+\//, "/c2b/<secret>/") : null,
+      last_30_days: Object.fromEntries(counts.map((r) => [r.outcome, r.n])),
+    };
+  }
+
   /** True when this provider's callbacks prove themselves (HMAC). */
   mobileMoneySigned(providerKey: MobileMoneyKey): boolean {
     return Boolean(this.mobileMoney?.[providerKey]?.signedCallbacks);
@@ -950,11 +1197,17 @@ export class FinancialService {
       }
 
       if (outcome.kind === "succeeded") {
-        const before = await maybeOne<{ status: string; schedule_id: string | null; schedule_cycle_at: string | null }>(
+        const before = await maybeOne<{ transaction_id: string; status: string; schedule_id: string | null; schedule_cycle_at: string | null }>(
           c,
-          `SELECT status, schedule_id, schedule_cycle_at FROM transactions WHERE provider_ref = $1`,
+          `SELECT transaction_id, status, schedule_id, schedule_cycle_at FROM transactions WHERE provider_ref = $1`,
           [ref],
         );
+        // The same payment may already be on the books from the paybill
+        // confirmation (it can beat the STK callback by minutes). One payment,
+        // one record: the member's prompt is the record — it carries the fund,
+        // the pledge, the schedule — so the paybill row is reversed, in the
+        // same transaction, before the prompt settles.
+        if (outcome.receipt && before) await this.foldPaybillDuplicate(c, outcome.receipt, before.transaction_id);
         await this.settle(c, { provider_ref: ref });
         await c.query(`UPDATE transactions SET verified_at = now() WHERE provider_ref = $1`, [ref]);
         // Capture the M-Pesa receipt code (from the SMS) for the member's

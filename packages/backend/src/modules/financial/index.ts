@@ -1,6 +1,7 @@
 // Module: financial (spec §1.5, §1.10, §3.5, §5.6)
 // Owns: giving, Stripe orchestration, the double-entry ledger, idempotent webhooks.
 import express, { Router, type Request } from "express";
+import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { AppContext } from "../../http/context.js";
 import { authenticate, requirePermission } from "../../http/auth.js";
@@ -12,7 +13,7 @@ import { invitationFor, recordShown, recordOutcome } from "./invitation.js";
 import { CampaignService, CampaignInput } from "./campaigns.js";
 import { registerFinanceBooks } from "./books-routes.js";
 import { buildPaymentGateway, type PaymentGateway } from "./gateway.js";
-import { buildMobileMoneyProviders, type MobileMoneyProviders } from "./providers.js";
+import { buildMobileMoneyProviders, parsePaybillPayment, type MobileMoneyProviders } from "./providers.js";
 import { buildPayPalGateway, type PayPalGateway } from "./paypal.js";
 import { verifyAccessToken } from "../identity/tokens.js";
 import type { RateLimitStore } from "../../http/rateLimit.js";
@@ -449,7 +450,30 @@ export function registerFinancial(
       { key: "airtel", label: "Airtel Money", enabled: Boolean(e.AIRTEL_CALLBACK_SECRET) },
       { key: "paypal", label: "PayPal (USD)", enabled: Boolean(e.PAYPAL_CLIENT_ID && e.PAYPAL_SECRET) },
     ];
-    res.json({ funds, providers, step_up_required: true });
+    const paybill = {
+      // Confirmations are taken only when the URL secret and the shortcode are set.
+      enabled: Boolean(e.MPESA_C2B_SECRET && e.MPESA_SHORTCODE),
+      shortcode: e.MPESA_SHORTCODE ?? null,
+      ...(await svc.paybillStatus()),
+    };
+    res.json({ funds, providers, paybill, step_up_required: true });
+  }));
+
+  /** Register the paybill (C2B) URLs with Safaricom — a one-off per shortcode,
+   *  repeated after a domain change. finance:manage. */
+  r.post("/admin/finance/mpesa/c2b/register", auth, perm("finance", "manage"), handler(async (req, res) => {
+    const e = ctx.env;
+    if (!e.MPESA_C2B_SECRET || !e.MPESA_SHORTCODE) {
+      throw new ApiError("UNPROCESSABLE", "Set MPESA_C2B_SECRET and MPESA_SHORTCODE on the server first");
+    }
+    const origin = e.MPESA_C2B_PUBLIC_ORIGIN ?? (e.MPESA_CALLBACK_URL ? new URL(e.MPESA_CALLBACK_URL).origin : null);
+    if (!origin) throw new ApiError("UNPROCESSABLE", "Set MPESA_C2B_PUBLIC_ORIGIN (or MPESA_CALLBACK_URL) so the URLs can be built");
+    const base = `${origin}/v1/webhooks/mpesa/c2b/${e.MPESA_C2B_SECRET}`;
+    const out = await svc.registerPaybillUrls(requirePrincipal(req).userId, e.MPESA_SHORTCODE, {
+      confirmationUrl: `${base}/confirmation`,
+      validationUrl: `${base}/validation`,
+    });
+    res.json({ ...out, confirmation_url: `${origin}/v1/webhooks/mpesa/c2b/<secret>/confirmation` });
   }));
 
   // Media store (§3.3): catalogue + purchase (access granted on the webhook).
@@ -494,6 +518,41 @@ export function registerFinancial(
       // An unsigned provider's caller learns nothing from the answer — not
       // whether a CheckoutRequestID is ours, nor what we did with it.
       res.json(svc.mobileMoneySigned(provider) ? { received: true, ...result } : { received: true });
+    }),
+  );
+
+  // Paybill (C2B) confirmations: every payment to the shortcode, prompted or
+  // not. Daraja signs nothing here either; the proof is the secret in the URL,
+  // which only Safaricom holds (handed over by the URL registration). A wrong
+  // or missing secret is a 404 — the caller learns nothing. Safaricom expects
+  // its own {ResultCode, ResultDesc} shape back.
+  const c2bTokenOk = (token: string): boolean => {
+    const secret = ctx.env.MPESA_C2B_SECRET;
+    if (!secret) return false;
+    const a = Buffer.from(token);
+    const b = Buffer.from(secret);
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
+  r.post(
+    "/webhooks/mpesa/c2b/:token/validation",
+    express.raw({ type: "*/*", limit: "64kb" }),
+    handler(async (req, res) => {
+      if (!c2bTokenOk(String(req.params.token))) throw new ApiError("NOT_FOUND", "Not found");
+      // Every payment to the church is accepted; what it is for is worked out
+      // from the confirmation.
+      res.json({ ResultCode: 0, ResultDesc: "Accepted" });
+    }),
+  );
+  r.post(
+    "/webhooks/mpesa/c2b/:token/confirmation",
+    express.raw({ type: "*/*", limit: "64kb" }),
+    handler(async (req, res) => {
+      if (!c2bTokenOk(String(req.params.token))) throw new ApiError("NOT_FOUND", "Not found");
+      const body: Buffer | string = Buffer.isBuffer(req.body) ? req.body : JSON.stringify(req.body ?? {});
+      const payment = parsePaybillPayment(body);
+      const result = await svc.recordPaybillPayment(payment, { rawBody: body, expectedShortcode: ctx.env.MPESA_SHORTCODE });
+      ctx.log.info({ trans_id: payment.trans_id, outcome: result.outcome, transaction_id: result.transaction_id }, "mpesa c2b confirmation");
+      res.json({ ResultCode: 0, ResultDesc: "Success" });
     }),
   );
 

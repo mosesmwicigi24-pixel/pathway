@@ -68,6 +68,18 @@ function shiftYears(ymd: string, years: number): string {
 }
 
 /** "YYYY-MM" `n` months before `ym`. */
+/** Every YYYY-MM-DD from `from` to `to` inclusive. */
+function daysBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  const d = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`).getTime();
+  while (d.getTime() <= end && out.length <= 400) {
+    out.push(d.toISOString().slice(0, 10));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
 function monthsBefore(ym: string, n: number): string {
   const total = Number(ym.slice(0, 4)) * 12 + (Number(ym.slice(5, 7)) - 1) - n;
   return `${Math.floor(total / 12)}-${pad2((total % 12) + 1)}`;
@@ -198,7 +210,21 @@ function accountLabel(account: string, fundNames: Map<string, string>): string {
   return account;
 }
 
-const SOURCE_LABELS: Record<string, string> = { app: "App", website: "Website", admin: "Office" };
+const SOURCE_LABELS: Record<string, string> = { app: "App", website: "Website", admin: "Office", paybill: "Paybill" };
+
+/** The rail a gift came in on, for the day-by-day report: a payment made
+ *  straight to the paybill number stands apart from a prompt the app sent,
+ *  and everything the office recorded (cash, bank, cheque, an M-Pesa code
+ *  typed in, a confirmed claim) is one column — the office's own hands. */
+export const RAIL_SQL = `(CASE WHEN t.source = 'paybill' THEN 'paybill'
+                               WHEN t.office_channel IS NOT NULL OR t.provider = 'manual' THEN 'office'
+                               WHEN t.provider = 'stripe' THEN 'card'
+                               ELSE t.provider END)`;
+export const RAILS = ["mpesa", "paybill", "card", "paypal", "airtel", "office"] as const;
+export type Rail = (typeof RAILS)[number];
+export const RAIL_LABELS: Record<Rail, string> = {
+  mpesa: "M-Pesa prompt", paybill: "M-Pesa paybill", card: "Card", paypal: "PayPal", airtel: "Airtel Money", office: "Office",
+};
 
 // ── transactions (the register; also serves FinancialService.listTransactions) ──
 
@@ -209,7 +235,7 @@ export const TransactionsQuery = z.object({
   status: z.enum(["requires_action", "processing", "succeeded", "failed", "refunded"]).optional(),
   // FinanceChannel, plus `stripe` as an alias of `card`.
   channel: z.enum(["card", "mpesa", "airtel", "paypal", "manual", "onhand", "bank", "cheque", "other", "stripe"]).optional(),
-  source: z.enum(["app", "website", "admin"]).optional(),
+  source: z.enum(["app", "website", "admin", "paybill"]).optional(),
   q: z.string().trim().max(80).optional(),
   pledged: z.enum(["any", "yes", "no"]).default("any"),
   need: z.enum(["any", "yes", "no"]).default("any"),
@@ -887,7 +913,10 @@ export class FinanceReportsService {
               (array_agg(t.amount_minor::text ORDER BY t.created_at DESC, t.transaction_id DESC))[1] AS amount_minor,
               (array_agg(t.currency ORDER BY t.created_at DESC, t.transaction_id DESC))[1] AS currency
          FROM transactions t
-        WHERE t.receipt_code IS NOT NULL AND btrim(t.receipt_code) <> '' AND t.status <> 'failed'
+        WHERE t.receipt_code IS NOT NULL AND btrim(t.receipt_code) <> ''
+          -- A reversed row keeps its code as a trace (a paybill duplicate
+          -- folded into the member's prompt, migration 225): not a double.
+          AND t.status NOT IN ('failed', 'refunded')
         GROUP BY 1 HAVING count(*) > 1
         ORDER BY 1`,
     );
@@ -1385,6 +1414,33 @@ export class FinanceReportsService {
     const inc = new Map(income.map((r) => [r.currency, r]));
     const exp = new Map(expenses.map((r) => [r.currency, r]));
 
+    // Today, as the hub reads it at a glance: what has come in so far, and
+    // how much of it walked in through the paybill number.
+    const todayDay = nairobiDate(now);
+    const todayRows = await many<{ currency: string; total: string; n: number; paybill_total: string; paybill_n: number; prompt_total: string; prompt_n: number }>(
+      this.pool,
+      `SELECT t.currency, sum(t.amount_minor)::text AS total, count(*)::int AS n,
+              COALESCE(sum(t.amount_minor) FILTER (WHERE t.source = 'paybill'), 0)::text AS paybill_total,
+              count(*) FILTER (WHERE t.source = 'paybill')::int AS paybill_n,
+              COALESCE(sum(t.amount_minor) FILTER (WHERE t.source <> 'paybill' AND t.office_channel IS NULL AND t.provider = 'mpesa'), 0)::text AS prompt_total,
+              count(*) FILTER (WHERE t.source <> 'paybill' AND t.office_channel IS NULL AND t.provider = 'mpesa')::int AS prompt_n
+         FROM transactions t
+        WHERE t.status = 'succeeded' AND t.created_at >= ${eatStart("$1")} AND t.created_at < ${eatEnd("$1")}
+        GROUP BY t.currency`,
+      [todayDay],
+    );
+    const today = {
+      day: todayDay,
+      by_currency: sortCurrencies(todayRows.map((r) => r.currency), true).map((c) => {
+        const r = todayRows.find((x) => x.currency === c);
+        return {
+          currency: c, total_minor: num(r?.total), count: r?.n ?? 0,
+          paybill_minor: num(r?.paybill_total), paybill_count: r?.paybill_n ?? 0,
+          prompt_minor: num(r?.prompt_total), prompt_count: r?.prompt_n ?? 0,
+        };
+      }),
+    };
+
     const outage = await this.deps.financial.outageCheck(now);
     const alertsSrc: { kind: string; count: number; link: string; message?: string | undefined }[] = [
       { kind: "pending_claims", count: counts?.pending_claims ?? 0, link: "/finance/claims" },
@@ -1430,6 +1486,7 @@ export class FinanceReportsService {
       },
       fund_balances,
       channels,
+      today,
       series: currencies.map((c) => ({
         currency: c,
         months: yms.map((ym) => ({
@@ -1439,6 +1496,70 @@ export class FinanceReportsService {
         })),
       })),
       alerts: alertsSrc.filter((a) => a.count > 0),
+    };
+  }
+
+  // ── day by day ───────────────────────────────────────────────────────────
+
+  /**
+   * Total given per day (succeeded gifts only, dated the EAT day they were
+   * given), per currency, with the rail each shilling came in on: an M-Pesa
+   * prompt the app or website sent, a payment made straight to the paybill
+   * number, card, PayPal, Airtel, or the office's own records. Every day in
+   * the period is listed, at zero when nothing came — a calendar the treasurer
+   * can lay beside the M-Pesa statement. Failed, cancelled and still-
+   * processing prompts are not money and are not here; a reversed gift drops
+   * out of its day.
+   */
+  async reportDaily(input: z.input<typeof PeriodQuery>, now: Date = new Date()): Promise<Record<string, unknown>> {
+    const q = PeriodQuery.parse(input);
+    const period = resolvePeriod(q.from, q.to, now);
+    const days = daysBetween(period.from, period.to);
+    if (days.length > 400) throw new ApiError("VALIDATION_FAILED", "The day-by-day report covers at most 400 days at a time");
+    const cells = await many<{ day: string; currency: string; rail: string; n: number; total: string }>(
+      this.pool,
+      `SELECT ${eatDate("t.created_at")}::text AS day, t.currency, ${RAIL_SQL} AS rail,
+              count(*)::int AS n, sum(t.amount_minor)::text AS total
+         FROM transactions t
+        WHERE t.status = 'succeeded' AND t.created_at >= ${eatStart("$1")} AND t.created_at < ${eatEnd("$2")}
+        GROUP BY 1, 2, 3`,
+      [period.from, period.to],
+    );
+    const currencies = sortCurrencies(cells.map((c) => c.currency), true);
+    const zeroRails = (): Record<Rail, { amount_minor: number; count: number }> =>
+      Object.fromEntries(RAILS.map((r) => [r, { amount_minor: 0, count: 0 }])) as Record<Rail, { amount_minor: number; count: number }>;
+    return {
+      report: "daily",
+      period,
+      rails: RAILS.map((r) => ({ key: r, label: RAIL_LABELS[r] })),
+      currencies: currencies.map((currency) => {
+        const totals = { total_minor: 0, count: 0, rails: zeroRails() };
+        const rows = days.map((day) => {
+          const row = { day, total_minor: 0, count: 0, rails: zeroRails() };
+          for (const c of cells) {
+            if (c.day !== day || c.currency !== currency) continue;
+            const rail = (RAILS as readonly string[]).includes(c.rail) ? (c.rail as Rail) : "office";
+            const amt = num(c.total);
+            row.rails[rail].amount_minor += amt;
+            row.rails[rail].count += c.n;
+            row.total_minor += amt;
+            row.count += c.n;
+            totals.rails[rail].amount_minor += amt;
+            totals.rails[rail].count += c.n;
+            totals.total_minor += amt;
+            totals.count += c.n;
+          }
+          return row;
+        });
+        const given = rows.filter((r) => r.count > 0);
+        return {
+          currency,
+          days: rows,
+          totals,
+          days_with_gifts: given.length,
+          best_day: given.length ? given.reduce((a, b) => (b.total_minor > a.total_minor ? b : a)).day : null,
+        };
+      }),
     };
   }
 

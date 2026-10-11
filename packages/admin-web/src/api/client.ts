@@ -2055,6 +2055,17 @@ export interface TransactionDetail {
 export interface FinanceConfig {
   funds: { code: string; name: string; is_active: boolean }[];
   providers: { key: string; label: string; enabled: boolean }[];
+  /** Payments made straight to the paybill number (Daraja C2B): whether the
+   *  server takes them, and the last URL registration with Safaricom. */
+  paybill: {
+    enabled: boolean;
+    shortcode: string | null;
+    last_registered_at: string | null;
+    registered_shortcode: string | null;
+    /** The secret segment is masked. */
+    confirmation_url: string | null;
+    last_30_days: Partial<Record<"recorded" | "matched_prompt" | "duplicate" | "rejected", number>>;
+  };
   step_up_required: boolean;
 }
 

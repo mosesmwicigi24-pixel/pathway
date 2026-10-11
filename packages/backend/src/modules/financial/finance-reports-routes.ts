@@ -19,7 +19,7 @@ import { sendCsv, minorToMajor, type CsvCell } from "./csv.js";
 import {
   FinanceReportsService, TransactionsQuery, listFinanceTransactions, LedgerQuery, listLedgerPage,
   PeriodQuery, PledgesQuery, IncomeReportQuery, ExpenseReportQuery, YearQuery, StatementsQuery, NeedsQuery, AsOfQuery,
-  GiversQuery, Year, BoolParam,
+  GiversQuery, Year, BoolParam, RAILS, type Rail,
 } from "./finance-reports.js";
 
 export interface FinanceReportsRouteDeps {
@@ -166,6 +166,28 @@ export function registerFinanceReports(r: Router, deps: FinanceReportsRouteDeps)
   }));
   r.get("/admin/finance/reports/expenses.csv", ...exportCsv, handler(async (req, res) => {
     matrixCsv(res, "expenses", await svc.reportExpenses(parseBody(ExpenseReportQuery, req.query)));
+  }));
+  // Total given per day, with the rail each shilling came in on.
+  r.get("/admin/finance/reports/daily", ...view, handler(async (req, res) => {
+    res.json(await svc.reportDaily(parseBody(PeriodQuery, req.query)));
+  }));
+  r.get("/admin/finance/reports/daily.csv", ...exportCsv, handler(async (req, res) => {
+    const out = await svc.reportDaily(parseBody(PeriodQuery, req.query));
+    type RailCell = { amount_minor: number; count: number };
+    type DayRow = { day: string; total_minor: number; count: number; rails: Record<Rail, RailCell> };
+    const currencies = out.currencies as { currency: string; days: DayRow[]; totals: { total_minor: number; count: number; rails: Record<Rail, RailCell> } }[];
+    const period = out.period as { from: string; to: string };
+    const rows: CsvCell[][] = [];
+    const line = (currency: string, day: string, r: { total_minor: number; count: number; rails: Record<Rail, RailCell> }): CsvCell[] => [
+      currency, day, minorToMajor(r.total_minor), r.count,
+      ...RAILS.flatMap((k) => [minorToMajor(r.rails[k].amount_minor), r.rails[k].count]),
+    ];
+    for (const c of currencies) {
+      for (const d of c.days) rows.push(line(c.currency, d.day, d));
+      rows.push(line(c.currency, "TOTAL", c.totals));
+    }
+    sendCsv(res, `finance-daily-giving-${period.from}-to-${period.to}.csv`,
+      ["currency", "day", "total", "gifts", ...RAILS.flatMap((k) => [k, `${k}_gifts`])], rows);
   }));
   r.get("/admin/finance/reports/pledges", ...view, handler(async (req, res) => {
     res.json(await svc.reportPledges(parseBody(YearQuery, req.query)));

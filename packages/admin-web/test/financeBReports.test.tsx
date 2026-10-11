@@ -6,7 +6,7 @@
 // says so plainly.
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { FinanceApi, type FinanceFinancialPosition, type FinanceIncomeExpenditure, type FinanceReportMatrix, type FinanceStatementsPage } from "../src/api/finance";
+import { FinanceApi, type FinanceDailyReport, type FinanceFinancialPosition, type FinanceIncomeExpenditure, type FinanceReportMatrix, type FinanceStatementsPage } from "../src/api/finance";
 import { FinanceReports } from "../src/components/pages/finance/Reports";
 import { FinanceStatements } from "../src/components/pages/finance/Statements";
 import { currentYearEAT, presetRange } from "../src/components/finance/dates";
@@ -22,6 +22,7 @@ vi.mock("../src/api/finance", async (importOriginal) => {
       incomeReport: vi.fn(),
       expensesReport: vi.fn(),
       pledgesReport: vi.fn(),
+      dailyReport: vi.fn(),
       incomeExpenditure: vi.fn(),
       financialPosition: vi.fn(),
       statements: vi.fn(),
@@ -105,6 +106,79 @@ describe("Reports — income matrix", () => {
     expect(compactMajor(125_000_000)).toBe("1.3M");
     expect(compactMajor(4_500_000)).toBe("45k");
     expect(compactMajor(99_900)).toBe("999");
+  });
+});
+
+describe("Reports — daily giving", () => {
+  const cell = (amount_minor = 0, count = 0) => ({ amount_minor, count });
+  const rails = (over: Partial<Record<"mpesa" | "paybill" | "card" | "paypal" | "airtel" | "office", { amount_minor: number; count: number }>> = {}) => ({
+    mpesa: cell(), paybill: cell(), card: cell(), paypal: cell(), airtel: cell(), office: cell(), ...over,
+  });
+  const daily = (): FinanceDailyReport => ({
+    report: "daily",
+    period: { from: "2025-06-01", to: "2025-06-03" },
+    rails: [
+      { key: "mpesa", label: "M-Pesa prompt" }, { key: "paybill", label: "M-Pesa paybill" }, { key: "card", label: "Card" },
+      { key: "paypal", label: "PayPal" }, { key: "airtel", label: "Airtel Money" }, { key: "office", label: "Office" },
+    ],
+    currencies: [
+      {
+        currency: "KES",
+        days: [
+          { day: "2025-06-01", total_minor: 0, count: 0, rails: rails() },
+          { day: "2025-06-02", total_minor: 150_000, count: 2, rails: rails({ mpesa: cell(100_000, 1), paybill: cell(50_000, 1) }) },
+          { day: "2025-06-03", total_minor: 30_000, count: 1, rails: rails({ office: cell(30_000, 1) }) },
+        ],
+        totals: { total_minor: 180_000, count: 3, rails: rails({ mpesa: cell(100_000, 1), paybill: cell(50_000, 1), office: cell(30_000, 1) }) },
+        days_with_gifts: 2,
+        best_day: "2025-06-02",
+      },
+      {
+        currency: "USD",
+        days: [
+          { day: "2025-06-01", total_minor: 0, count: 0, rails: rails() },
+          { day: "2025-06-02", total_minor: 0, count: 0, rails: rails() },
+          { day: "2025-06-03", total_minor: 1_000, count: 1, rails: rails({ paypal: cell(1_000, 1) }) },
+        ],
+        totals: { total_minor: 1_000, count: 1, rails: rails({ paypal: cell(1_000, 1) }) },
+        days_with_gifts: 1,
+        best_day: "2025-06-03",
+      },
+    ],
+  });
+
+  it("lists every day of the period per currency, names the paybill money, and asks the server for this month by default", async () => {
+    vi.mocked(FinanceApi.dailyReport).mockResolvedValue(daily());
+    renderPage(<FinanceReports />, { path: "/finance/reports?tab=daily" });
+    expect(await screen.findByText(/KES · KES 1,800\.00 over 2 of 3 days/)).toBeTruthy();
+    const month = presetRange("this_month");
+    expect(FinanceApi.dailyReport).toHaveBeenCalledWith({ from: month.from, to: month.to });
+    const blocks = [...document.querySelectorAll("[data-currency-block]")].map((b) => b.getAttribute("data-currency-block"));
+    expect(blocks).toEqual(["KES", "USD"]);
+    // The header line says how much walked in through the paybill.
+    expect(screen.getByText(/KES 500\.00 straight to the paybill \(1\)/)).toBeTruthy();
+    // Three day rows in each table (a quiet day is still a row), plus the period footer.
+    const kes = screen.getByRole("table", { name: "Daily giving KES" });
+    expect(kes.querySelectorAll("tbody tr").length).toBe(3);
+    expect(kes.textContent).toContain("1,500.00");
+    expect(kes.textContent).toContain("Period");
+    expect(kes.textContent).not.toContain("1,810.00"); // never KES + USD
+    expect(screen.getAllByRole("columnheader", { name: "M-Pesa paybill" }).length).toBe(2); // one per currency table
+  });
+
+  it("moves the period as one and offers the CSV only with finance:export", async () => {
+    vi.mocked(FinanceApi.dailyReport).mockResolvedValue(daily());
+    renderPage(<FinanceReports />, { path: "/finance/reports?tab=daily&period=last_month", permissions: ["finance:view"] });
+    await screen.findByText(/over 2 of 3 days/);
+    const last = presetRange("last_month");
+    expect(FinanceApi.dailyReport).toHaveBeenLastCalledWith({ from: last.from, to: last.to });
+    expect(screen.queryByText("Export CSV")).toBeNull();
+  });
+
+  it("says plainly when nothing was given", async () => {
+    vi.mocked(FinanceApi.dailyReport).mockResolvedValue({ ...daily(), currencies: [] });
+    renderPage(<FinanceReports />, { path: "/finance/reports?tab=daily" });
+    expect(await screen.findByText(/Nothing given between/)).toBeTruthy();
   });
 });
 
