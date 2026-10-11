@@ -399,8 +399,8 @@ export interface FinanceOverview {
   /** Top 6 funds by KES balance (all time). */
   fund_balances: { code: string; name: string; is_active: boolean; balances: CurrencyBalance[] }[];
   channels: FinanceChannelTotal[];
-  /** Today (EAT) at a glance: succeeded gifts so far, and how many came straight through the paybill number or an M-Pesa prompt. */
-  today: {
+  /** Today (EAT) at a glance: succeeded gifts so far, and how many came straight through the paybill number or an M-Pesa prompt. Absent from servers before 2026-10-11. */
+  today?: {
     day: IsoDate;
     by_currency: { currency: string; total_minor: number; count: number; paybill_minor: number; paybill_count: number; prompt_minor: number; prompt_count: number }[];
   };

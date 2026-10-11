@@ -38,7 +38,9 @@ const PRESETS = ["this_month", "last_month", "this_quarter", "this_year", "last_
 
 /** Income per currency, each with its change against the same period last year. */
 /** "3 gifts · 2 straight to the paybill, 1 prompt" — what today's money is made of. */
-function todayHint(t: Overview["today"]): string {
+function todayHint(t: Overview["today"] | undefined): string {
+  // A server from before 2026-10-11 sends no `today`.
+  if (!t) return "Succeeded gifts so far today, M-Pesa paybill included";
   const count = t.by_currency.reduce((s, c) => s + c.count, 0);
   if (count === 0) return "Nothing has come in yet today (East Africa Time)";
   const paybill = t.by_currency.reduce((s, c) => s + c.paybill_count, 0);
@@ -343,9 +345,9 @@ export function FinanceOverview(): ReactElement {
             label="Given today"
             icon={<CircleDollarSign size={11} />}
             loading={first}
-            value={d ? <PerCurrency amounts={d.today.by_currency.map((t) => ({ currency: t.currency, amount_minor: t.total_minor }))} empty={formatMinor(0, "KES")} /> : "—"}
+            value={d ? <PerCurrency amounts={(d.today?.by_currency ?? []).map((t) => ({ currency: t.currency, amount_minor: t.total_minor }))} empty={formatMinor(0, "KES")} /> : "—"}
             hint={d ? todayHint(d.today) : "Succeeded gifts so far today, M-Pesa paybill included"}
-            onClick={() => navigate(`/finance/transactions?status=succeeded&from=${d?.today.day ?? ""}&to=${d?.today.day ?? ""}`)}
+            onClick={() => navigate(`/finance/transactions?status=succeeded&from=${d?.today?.day ?? ""}&to=${d?.today?.day ?? ""}`)}
           />
           <KpiTile
             label="Expenses"
