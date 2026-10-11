@@ -17,6 +17,28 @@ built in CI and downloaded.
 
 ---
 
+## 0. From GitHub Actions (preferred since 2026-10-11)
+
+**Actions → Deploy → Run workflow** (or `gh workflow run deploy.yml -f sha=<sha>`)
+performs steps 1–3 below from a runner: waits for the image of that commit,
+downloads the CI portal bundle, SSHes to the box, runs
+`pathway-deploy-api.sh <short sha> [--migrate]`, rsyncs the bundle over
+`/var/www/pathway-portal`, then verifies by inspection (running image label
+= full sha, optional `to_regclass` checks via `check_tables`, `/readyz`,
+`/v1` reachable, `version.txt` = full sha). It refuses to start without its
+secrets and fails loudly on any mismatch — it never reports success it did
+not see.
+
+One-off setup, secrets by name only (Settings → Secrets and variables → Actions):
+`DEPLOY_SSH_KEY` (private half of a dedicated `ssh-keygen -t ed25519` pair
+whose public half is in the deploy user's `authorized_keys` on the box),
+`DEPLOY_HOST`, `DEPLOY_USER` (root or passwordless sudo); optional
+`DEPLOY_HOST_KEY` (`ssh-keyscan <host>`), `DEPLOY_PORT`. The box-side
+`MPESA_C2B_SECRET` is minted on the box on first run and never leaves it.
+
+A cloud session can start this workflow but cannot SSH itself; without the
+secrets, the manual steps below remain the way.
+
 ## 1. Backend
 
 ```bash
