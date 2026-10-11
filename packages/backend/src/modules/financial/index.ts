@@ -570,6 +570,9 @@ export function registerFinancial(
   r.post("/admin/partners/claims/:id/reject", auth, perm("finance", "manage"), handler(async (req, res) => {
     res.json(await partners.decideClaim(requirePrincipal(req).userId, String(req.params.id), "reject", notifications));
   }));
+  r.post("/admin/partners/enrol", auth, perm("finance", "manage"), handler(async (req, res) => {
+    res.json(await partners.enrolMany(requirePrincipal(req).userId, parseBody(PartnersService.EnrolMany, req.body ?? {})));
+  }));
   r.post("/admin/partners/remind-behind", auth, perm("finance", "manage"), handler(async (req, res) => {
     res.json(await partners.remindBehind(requirePrincipal(req).userId, notifications));
   }));

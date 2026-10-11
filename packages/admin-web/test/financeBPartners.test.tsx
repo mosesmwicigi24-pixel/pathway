@@ -5,7 +5,8 @@
 // never a namesake's pledges — and the old claims tab now lives on its own page.
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { PartnersApi, type PartnerDetail, type PartnerRow } from "../src/api/client";
+import { AdminApi, PartnersApi, type EnrolPartnersResult, type PartnerDetail, type PartnerRow } from "../src/api/client";
+import { parseRegister } from "../src/components/pages/Partners";
 import { FinanceApi, type FinancePledgeRow, type FinancePledgesPage } from "../src/api/finance";
 import { Partners } from "../src/components/pages/Partners";
 import { FinancePledges } from "../src/components/pages/finance/Pledges";
@@ -16,7 +17,8 @@ vi.mock("../src/api/client", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../src/api/client")>();
   return {
     ...mod,
-    PartnersApi: { ...mod.PartnersApi, list: vi.fn(), detail: vi.fn(), claims: vi.fn(), remind: vi.fn(), remindBehind: vi.fn() },
+    PartnersApi: { ...mod.PartnersApi, list: vi.fn(), detail: vi.fn(), claims: vi.fn(), remind: vi.fn(), remindBehind: vi.fn(), enrol: vi.fn() },
+    AdminApi: { ...mod.AdminApi, engagementReport: vi.fn() },
   };
 });
 vi.mock("../src/api/finance", async (importOriginal) => {
@@ -170,6 +172,51 @@ describe("Partners (/finance/partners)", () => {
     renderPage(<Partners />, { path: "/finance/partners", permissions: ["finance:view"] });
     await screen.findByText("Grace Wanjiru");
     expect(screen.queryByText("Remind everyone behind")).toBeNull();
+  });
+});
+
+describe("Partners — add from a register", () => {
+  it("reads a handwritten register: list numbers, dashes, commas, spaces in numbers", () => {
+    expect(parseRegister("1. Maureen Mutile - 0705000423\n2 Moses Muriuki - 0798156959\nJoe Blessing, 0115 688 290\n17 Irene Kimani\t0708 34 2596\n\nNo Number Here")).toEqual([
+      { full_name: "Maureen Mutile", phone: "0705000423" },
+      { full_name: "Moses Muriuki", phone: "0798156959" },
+      { full_name: "Joe Blessing", phone: "0115688290" },
+      { full_name: "Irene Kimani", phone: "0708342596" },
+      { full_name: "No Number Here", phone: "" },
+    ]);
+  });
+
+  it("checks the list before anything is written, then enrols with the chosen cell", async () => {
+    const preview: EnrolPartnersResult = {
+      dry_run: true,
+      counts: { enrolled: 1, already: 0, created: 1, unknown: 0, ambiguous: 0, invalid: 0 },
+      data: [
+        { full_name: "Maureen Mutile", phone: "+254705000423", outcome: "enrolled", user_id: "u1", member_name: "Grace Wanjiru", note: null },
+        { full_name: "Joe Blessing", phone: "+254115688290", outcome: "created", user_id: null, member_name: null, note: "would be created in Kilimani" },
+      ],
+    };
+    vi.mocked(AdminApi.engagementReport).mockResolvedValue({ bands: {}, cells: [{ cell_group_id: "c1", name: "Kilimani", members: 3, avg_engagement: 0.5, at_risk: 0 }] } as never);
+    vi.mocked(PartnersApi.enrol).mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, dry_run: false });
+    renderPage(<Partners />, { path: "/finance/partners", permissions: ALL_FINANCE });
+    fireEvent.click(await screen.findByText("Add partners"));
+    fireEvent.change(screen.getByLabelText("Register"), { target: { value: "1. Maureen Mutile - 0705000423\n10 Joe Blessing 0115688290" } });
+    await screen.findByText("Create a member in Kilimani");
+    fireEvent.change(screen.getByLabelText("Cell for new members"), { target: { value: "c1" } });
+    fireEvent.click(screen.getByText("Check the list"));
+    expect(await screen.findByText("1 enrolled · 1 new member enrolled")).toBeTruthy();
+    expect(PartnersApi.enrol).toHaveBeenCalledWith({ rows: [{ full_name: "Maureen Mutile", phone: "0705000423" }, { full_name: "Joe Blessing", phone: "0115688290" }], dry_run: true, cell_group_id: "c1" });
+    expect(screen.getByText(/on file as Grace Wanjiru/)).toBeTruthy();
+    expect(screen.getByText("New member, enrolled")).toBeTruthy();
+    fireEvent.click(screen.getByText("Enrol 2"));
+    await waitFor(() => expect(PartnersApi.enrol).toHaveBeenLastCalledWith({ rows: [{ full_name: "Maureen Mutile", phone: "0705000423" }, { full_name: "Joe Blessing", phone: "0115688290" }], dry_run: false, cell_group_id: "c1" }));
+    expect(await screen.findByText("1 enrolled · 1 new member enrolled")).toBeTruthy();
+    expect(screen.queryByLabelText("Register")).toBeNull();
+  });
+
+  it("is not offered without finance:manage", async () => {
+    renderPage(<Partners />, { path: "/finance/partners", permissions: ["finance:view"] });
+    await screen.findByText("Grace Wanjiru");
+    expect(screen.queryByText("Add partners")).toBeNull();
   });
 });
 
