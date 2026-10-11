@@ -30,6 +30,11 @@ x-mpesa-env: &mpesa-env
   MPESA_ENV: ${MPESA_ENV:-sandbox}
   MPESA_TX_TYPE: ${MPESA_TX_TYPE:-CustomerPayBillOnline}
   MPESA_CALLBACK_URL: ${MPESA_CALLBACK_URL:-https://pathway.nuruplace.org/v1/webhooks/mobilemoney/mpesa}
+  # Paybill (C2B) confirmations (GIVING.md §15). This file is an allow-list: a
+  # variable set in .env but not named here never reaches the container, which
+  # is how the 2026-09-02 outage happened. Unset = confirmations are refused.
+  MPESA_C2B_SECRET: ${MPESA_C2B_SECRET:-}
+  MPESA_C2B_PUBLIC_ORIGIN: ${MPESA_C2B_PUBLIC_ORIGIN:-}
 
 # Streaming hostnames — the api hands them to encoders and the worker builds
 # its radio provider from them (buildStreamProvider needs ICECAST_SOURCE_HOST
