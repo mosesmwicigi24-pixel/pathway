@@ -1,0 +1,195 @@
+name: Deploy
+
+# Deploys ONE commit of this repo to pathway.nuruplace.org, by the runbook in
+# docs/DEPLOYMENT.md, from a GitHub runner instead of a laptop. Nothing here
+# is new: it runs the same box-side script (/usr/local/sbin/pathway-deploy-api.sh)
+# and the same portal rsync a human would, then verifies by inspection.
+#
+# Why: the owner's sessions (phone, cloud) have no SSH onto the box, so every
+# merge waited for someone at a terminal. This makes "Deploy" a button
+# (Actions → Deploy → Run workflow), and lets a cloud session press it.
+#
+# Secrets (repo Settings → Secrets and variables → Actions), by name only:
+#   DEPLOY_SSH_KEY   private key of a DEDICATED deploy key pair (ssh-keygen -t ed25519);
+#                    its public half goes in the deploy user's ~/.ssh/authorized_keys on the box
+#   DEPLOY_HOST      the box's hostname or IP for SSH (not the Cloudflare-fronted name)
+#   DEPLOY_USER      the SSH user: root, or one with passwordless sudo
+#   DEPLOY_HOST_KEY  optional: the box's host key line for known_hosts (ssh-keyscan <host>);
+#                    without it the key is fetched on first contact
+#   DEPLOY_PORT      optional: SSH port (default 22)
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit to deploy (default: the commit this run is started from)"
+        required: false
+        default: ""
+      api:
+        description: "Deploy the backend image"
+        type: boolean
+        default: true
+      migrate:
+        description: "Run migrations before recreating api + worker"
+        type: boolean
+        default: true
+      portal:
+        description: "Deploy the portal bundle"
+        type: boolean
+        default: true
+      check_tables:
+        description: "Comma-separated relations that must exist afterwards (to_regclass), e.g. mpesa_c2b_events"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  PUBLIC_HOST: https://pathway.nuruplace.org
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Secrets present
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          missing=""
+          [ -n "$KEY" ]  || missing="$missing DEPLOY_SSH_KEY"
+          [ -n "$HOST" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$USER" ] || missing="$missing DEPLOY_USER"
+          if [ -n "$missing" ]; then
+            echo "::error::Deploy secrets not set:$missing — add them under Settings → Secrets and variables → Actions (see the header of this workflow)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha != '' && inputs.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Resolve the commit
+        id: sha
+        run: |
+          full="$(git rev-parse HEAD)"
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "short=${full:0:7}" >> "$GITHUB_OUTPUT"
+          echo "Deploying $full"
+
+      - name: Wait for the backend image to be built
+        if: ${{ inputs.api }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL: ${{ steps.sha.outputs.full }}
+        run: |
+          for i in $(seq 1 60); do
+            state="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build-image.yml --commit "$FULL" \
+                       --json status,conclusion --jq '.[0] | (.status + ":" + (.conclusion // ""))')"
+            case "$state" in
+              completed:success) echo "image for $FULL is built"; exit 0 ;;
+              completed:*)       echo "::error::Build backend image for $FULL ended $state"; exit 1 ;;
+              "")                echo "no Build backend image run for $FULL yet" ;;
+              *)                 echo "image build is $state" ;;
+            esac
+            sleep 15
+          done
+          echo "::error::Gave up waiting for the backend image of $FULL"; exit 1
+
+      - name: Fetch the portal bundle built by CI
+        if: ${{ inputs.portal }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL: ${{ steps.sha.outputs.full }}
+        run: |
+          run_id=""
+          for i in $(seq 1 60); do
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$FULL" --status success \
+                        --json databaseId --jq '.[0].databaseId // empty')"
+            [ -n "$run_id" ] && break
+            echo "no green CI run for $FULL yet"; sleep 15
+          done
+          [ -n "$run_id" ] || { echo "::error::No green CI run for $FULL; the portal bundle only exists for commits on main that passed CI"; exit 1; }
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n "portal-$FULL" -D portal-new
+          test -f portal-new/index.html
+          grep -qx "$FULL" portal-new/version.txt
+          echo "portal bundle for $FULL fetched from CI run $run_id"
+
+      - name: SSH
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+          PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          if [ -n "$HOST_KEY" ]; then printf '%s\n' "$HOST_KEY" > ~/.ssh/known_hosts
+          else ssh-keyscan -p "${PORT:-22}" -H "$HOST" > ~/.ssh/known_hosts 2>/dev/null; fi
+          chmod 600 ~/.ssh/known_hosts
+          printf 'Host box\n  HostName %s\n  Port %s\n  User %s\n  IdentityFile ~/.ssh/deploy_key\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n' \
+            "$HOST" "${PORT:-22}" "$USER" > ~/.ssh/config
+          ssh box 'echo "connected as $(id -un) on $(hostname)"'
+
+      - name: Deploy the API (box-side script, migrations when asked)
+        if: ${{ inputs.api }}
+        env:
+          FULL: ${{ steps.sha.outputs.full }}
+          SHORT: ${{ steps.sha.outputs.short }}
+          MIGRATE: ${{ inputs.migrate }}
+          TABLES: ${{ inputs.check_tables }}
+        run: |
+          flag=""; [ "$MIGRATE" = true ] && flag="--migrate"
+          ssh box 'if [ "$(id -u)" = 0 ]; then bash -s; else sudo -n bash -s; fi' -- <<EOF
+          set -euo pipefail
+          cd /opt/pathway
+          git pull --ff-only
+          # Secrets stay on the box: the C2B token is minted here once and never leaves.
+          grep -q '^MPESA_C2B_SECRET=' .env || printf 'MPESA_C2B_SECRET=%s\n' "\$(openssl rand -hex 24)" >> .env
+          /usr/local/sbin/pathway-deploy-api.sh "$SHORT" $flag
+          COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.vps.yml"
+          running="\$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "\$(\$COMPOSE ps -q api)")"
+          echo "api container is built from \$running"
+          [ "\$running" = "$FULL" ] || { echo "::error::api is running \$running, not $FULL"; exit 1; }
+          if [ -n "$TABLES" ]; then
+            for t in \$(echo "$TABLES" | tr ',' ' '); do
+              got="\$(\$COMPOSE exec -T postgres psql -U nuru -d nuru -tAc "SELECT to_regclass('\$t')")"
+              [ "\$got" = "\$t" ] || { echo "::error::relation \$t does not exist after migrate"; exit 1; }
+              echo "relation \$t exists"
+            done
+          fi
+          \$COMPOSE ps
+          EOF
+
+      - name: Deploy the portal (rsync over the served directory)
+        if: ${{ inputs.portal }}
+        run: |
+          rsync -a --delete --rsync-path='if [ "$(id -u)" = 0 ]; then rsync; else sudo -n rsync; fi' \
+            portal-new/ box:/var/www/pathway-portal/
+
+      - name: Verify from outside
+        env:
+          FULL: ${{ steps.sha.outputs.full }}
+          PORTAL: ${{ inputs.portal }}
+        run: |
+          set -e
+          code="$(curl -s -o /dev/null -w '%{http_code}' "$PUBLIC_HOST/readyz")"
+          echo "readyz $code"; [ "$code" = 200 ]
+          code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{}' "$PUBLIC_HOST/v1/auth/login")"
+          echo "v1 reachable: $code"; [ "$code" = 400 ]
+          if [ "$PORTAL" = true ]; then
+            served="$(curl -s -H 'cache-control: no-cache' "$PUBLIC_HOST/version.txt" | tr -d '[:space:]')"
+            echo "portal serves $served"
+            [ "$served" = "$FULL" ] || { echo "::error::portal still serves $served (cache or wrong root)"; exit 1; }
+          fi
+          echo "Deployed $FULL"
