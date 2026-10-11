@@ -2300,6 +2300,18 @@ export interface PledgeClaimRow {
   currency_mismatch?: boolean | undefined;
 }
 
+export interface EnrolPartnersInput {
+  rows: { full_name: string; phone: string }[];
+  cell_group_id?: string;
+  dry_run?: boolean;
+}
+export type EnrolOutcome = "enrolled" | "already" | "created" | "unknown" | "ambiguous" | "invalid";
+export interface EnrolPartnersResult {
+  dry_run: boolean;
+  counts: Record<EnrolOutcome, number>;
+  data: { full_name: string; phone: string; outcome: EnrolOutcome; user_id: string | null; member_name: string | null; note: string | null }[];
+}
+
 export const PartnersApi = {
   list: (q: { q?: string; status?: PartnerStatusFilter; sort?: PartnerSort } = {}) =>
     api.get<{ data: PartnerRow[]; summary: PartnersSummary }>("/admin/partners", { params: q }).then((r) => r.data),
@@ -2310,6 +2322,9 @@ export const PartnersApi = {
     api.post<RemindResult>(`/admin/partners/${encodeURIComponent(userId)}/remind`, body).then((r) => r.data),
   /** finance:manage. Every partner with a pledge that is behind. */
   remindBehind: () => api.post<RemindBehindResult>("/admin/partners/remind-behind", {}).then((r) => r.data),
+  /** finance:manage. Enrol a register of names and phone numbers as partners — matched by number;
+   *  a number nobody has becomes a new member in `cell_group_id`. `dry_run` reports without writing. */
+  enrol: (body: EnrolPartnersInput) => api.post<EnrolPartnersResult>("/admin/partners/enrol", body).then((r) => r.data),
   /** finance:view. Pending claims, oldest first. */
   claims: () => api.get<{ data: PledgeClaimRow[] }>("/admin/partners/claims").then((r) => r.data.data),
   /** finance:manage. Records a succeeded manual gift attributed to the pledge. 422 = already decided. */

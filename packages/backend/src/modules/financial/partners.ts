@@ -24,6 +24,7 @@ import {
 } from "./partnerStatementMath.js";
 import { renderPartnersStatementPdf, type PartnersStatementPledgeBlock, type PartnersStatementCommitment, type StatementGroup } from "./statementPdf.js";
 import { needRaisedMinor } from "../departments/service.js";
+import { normalizePhone } from "../../lib/phone.js";
 
 export type PledgeShape = "monthly" | "total";
 export type PledgeLabel = "on_track" | "behind" | "fulfilled" | "paused";
@@ -373,6 +374,103 @@ export class PartnersService {
     );
     await audit(this.pool, userId, "partners.joined", "partner_memberships", userId, {});
     return row;
+  }
+
+  /** The office's list of people to enrol as partners (POST /admin/partners/enrol). */
+  static readonly EnrolMany = z.object({
+    rows: z.array(z.object({
+      full_name: z.string().trim().min(1).max(255),
+      // Any text: a bad number is reported as `invalid` on its own line, not
+      // refused for the whole register.
+      phone: z.string().trim().min(1).max(40),
+    })).min(1).max(500),
+    /** Where a number nobody has yet becomes a new member. Without it such a
+     *  row is reported as `unknown` and nothing is created. */
+    cell_group_id: z.string().uuid().optional(),
+    /** Report what WOULD happen, write nothing. */
+    dry_run: z.boolean().default(false),
+  });
+
+  /**
+   * Enrol a list of people as partners, from a handwritten register or a
+   * pastor's phone (owner, 2026-10-11: the names and numbers from the
+   * December register go into Partners). Each row is matched by its phone
+   * number, the one thing both the register and the app agree on:
+   *   enrolled  — a member with that number, now an active partner (joined
+   *               the usual way, audited as the office's act);
+   *   already   — that member was an active partner before;
+   *   created   — nobody had that number; a Student was created in
+   *               `cell_group_id` (L1·M1 enrollment) and enrolled;
+   *   unknown   — nobody had that number and no cell was given;
+   *   ambiguous — two members share the number: the office decides by hand;
+   *   invalid   — not a phone number.
+   * Idempotent: running the same list twice reports `already` for everyone.
+   */
+  async enrolMany(adminId: string, input: z.infer<typeof PartnersService.EnrolMany>): Promise<{
+    dry_run: boolean;
+    counts: Record<"enrolled" | "already" | "created" | "unknown" | "ambiguous" | "invalid", number>;
+    data: Array<{ full_name: string; phone: string; outcome: string; user_id: string | null; member_name: string | null; note: string | null }>;
+  }> {
+    const counts = { enrolled: 0, already: 0, created: 0, unknown: 0, ambiguous: 0, invalid: 0 };
+    const data: Array<{ full_name: string; phone: string; outcome: string; user_id: string | null; member_name: string | null; note: string | null }> = [];
+    const cell = input.cell_group_id
+      ? await maybeOne<{ cell_group_id: string; congregation_id: string; name: string }>(
+          this.pool, `SELECT cell_group_id, congregation_id, name FROM cell_groups WHERE cell_group_id = $1`, [input.cell_group_id],
+        )
+      : null;
+    if (input.cell_group_id && !cell) throw new ApiError("VALIDATION_FAILED", "Unknown cell group");
+
+    const seen = new Set<string>();
+    for (const row of input.rows) {
+      const phone = normalizePhone(row.phone);
+      const push = (outcome: keyof typeof counts, user_id: string | null, member_name: string | null, note: string | null): void => {
+        counts[outcome] += 1;
+        data.push({ full_name: row.full_name, phone: phone ?? row.phone, outcome, user_id, member_name, note });
+      };
+      if (!phone || !/^\+[1-9][0-9]{6,14}$/.test(phone)) { push("invalid", null, null, "not a phone number"); continue; }
+      if (seen.has(phone)) { push("already", null, null, "listed twice"); continue; }
+      seen.add(phone);
+
+      const matches = await many<{ user_id: string; full_name: string; status: string | null }>(
+        this.pool,
+        `SELECT u.user_id, u.full_name, pm.status
+           FROM users u LEFT JOIN partner_memberships pm ON pm.user_id = u.user_id
+          WHERE u.phone_number = $1 AND u.deleted_at IS NULL
+          ORDER BY u.created_at`,
+        [phone],
+      );
+      if (matches.length > 1) { push("ambiguous", null, null, `${matches.length} members share this number`); continue; }
+      const m = matches[0];
+      if (m) {
+        if (m.status === "active") { push("already", m.user_id, m.full_name, null); continue; }
+        if (!input.dry_run) {
+          await this.join(m.user_id);
+          await audit(this.pool, adminId, "partners.enrolled_by_office", "partner_memberships", m.user_id, { phone, full_name: row.full_name });
+        }
+        push("enrolled", m.user_id, m.full_name, m.status ? `was ${m.status}` : null);
+        continue;
+      }
+      if (!cell) { push("unknown", null, null, "no member has this number; choose a cell to create one"); continue; }
+      if (input.dry_run) { push("created", null, null, `would be created in ${cell.name}`); continue; }
+      const created = await tx(this.pool, async (c) => {
+        const u = await one<{ user_id: string }>(
+          c,
+          `INSERT INTO users (full_name, phone_number, cell_group_id, congregation_id, role)
+           VALUES ($1, $2, $3, $4, 'Student') RETURNING user_id`,
+          [row.full_name, phone, cell.cell_group_id, cell.congregation_id],
+        );
+        await c.query(
+          `INSERT INTO enrollments (user_id, current_level, start_level, start_module_sequence) VALUES ($1, 1, 1, 1)`,
+          [u.user_id],
+        );
+        await c.query(`INSERT INTO partner_memberships (user_id) VALUES ($1)`, [u.user_id]);
+        await audit(c, adminId, "member.added", "users", u.user_id, { cell_group_id: cell.cell_group_id, via: "partners.enrol" });
+        await audit(c, adminId, "partners.enrolled_by_office", "partner_memberships", u.user_id, { phone, full_name: row.full_name, created: true });
+        return u.user_id;
+      });
+      push("created", created, row.full_name, `created in ${cell.name}`);
+    }
+    return { dry_run: input.dry_run, counts, data };
   }
 
   async membership(userId: string): Promise<{ status: string; joined_at: string; reminders_enabled: boolean } | null> {

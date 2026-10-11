@@ -37,12 +37,16 @@ import {
   Search,
   Send,
   Target,
+  UserPlus,
   Users,
   Wallet,
   X,
 } from "lucide-react";
 import {
+  AdminApi,
   PartnersApi,
+  type EnrolOutcome,
+  type EnrolPartnersResult,
   type AdminScheduleRow,
   type PartnerDetail,
   type PartnerPledge,
@@ -370,6 +374,7 @@ export function Partners(): ReactElement {
   // hero-level action feedback ("Remind everyone behind").
   const [heroNotice, setHeroNotice] = useState<Result | null>(null);
   const [askRemindAll, setAskRemindAll] = useState(false);
+  const [enrolOpen, setEnrolOpen] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 250);
@@ -580,6 +585,9 @@ export function Partners(): ReactElement {
               </span>
             </button>
             {canManage ? (
+              <ActionButton dark icon={<UserPlus size={13} />} label="Add partners" onClick={() => setEnrolOpen(true)} />
+            ) : null}
+            {canManage ? (
               <ActionButton
                 dark
                 icon={<Send size={13} />}
@@ -738,6 +746,17 @@ export function Partners(): ReactElement {
         onCancel={() => setAskRemindAll(false)}
       />
 
+      {enrolOpen ? (
+        <EnrolPartnersDrawer
+          onClose={() => setEnrolOpen(false)}
+          onDone={(r) => {
+            setEnrolOpen(false);
+            setHeroNotice({ tone: "ok", text: enrolSummary(r) });
+            void loadList();
+          }}
+        />
+      ) : null}
+
       {selectedId ? (
         <PartnerDrawer
           key={selectedId}
@@ -750,6 +769,128 @@ export function Partners(): ReactElement {
         />
       ) : null}
     </div>
+  );
+}
+
+/* ====================== ENROL FROM A REGISTER ====================== */
+
+const OUTCOME_WORDS: Record<EnrolOutcome, { label: string; tone: string }> = {
+  enrolled: { label: "Enrolled", tone: "#067647" },
+  created: { label: "New member, enrolled", tone: "#067647" },
+  already: { label: "Already a partner", tone: "#475467" },
+  unknown: { label: "No member has this number", tone: "#B54708" },
+  ambiguous: { label: "Two members share this number", tone: "#B54708" },
+  invalid: { label: "Not a phone number", tone: "#B42318" },
+};
+
+/** "4 enrolled · 2 new members · 1 already a partner". */
+function enrolSummary(r: EnrolPartnersResult): string {
+  const c = r.counts;
+  const parts = [
+    c.enrolled ? `${c.enrolled} enrolled` : null,
+    c.created ? `${c.created} new member${c.created === 1 ? "" : "s"} enrolled` : null,
+    c.already ? `${c.already} already a partner` : null,
+    c.unknown ? `${c.unknown} unknown number${c.unknown === 1 ? "" : "s"}` : null,
+    c.ambiguous ? `${c.ambiguous} ambiguous` : null,
+    c.invalid ? `${c.invalid} not a number` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "Nothing to do";
+}
+
+/** "Maureen Mutile - 0705000423" / "Maureen Mutile, 0705000423" / tab-separated → rows. */
+export function parseRegister(text: string): { full_name: string; phone: string }[] {
+  const rows: { full_name: string; phone: string }[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/^\s*\d+[.)]?\s*/, "").trim(); // "1. " / "12) " list numbers
+    if (!line) continue;
+    const m = /^(.*?)[\s,;:–—\t-]+(\+?[0-9][0-9 -]{5,}[0-9])\s*\.?$/.exec(line);
+    if (m) rows.push({ full_name: m[1]!.replace(/[\s,;:–—-]+$/, "").trim(), phone: m[2]!.replace(/[\s-]/g, "") });
+    else rows.push({ full_name: line, phone: "" });
+  }
+  return rows;
+}
+
+function EnrolPartnersDrawer({ onClose, onDone }: { onClose: () => void; onDone: (r: EnrolPartnersResult) => void }): ReactElement {
+  const [text, setText] = useState("");
+  const [cells, setCells] = useState<{ cell_group_id: string; name: string }[]>([]);
+  const [cellId, setCellId] = useState("");
+  const [preview, setPreview] = useState<EnrolPartnersResult | null>(null);
+  const [busy, setBusy] = useState<"preview" | "enrol" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    void AdminApi.engagementReport().then((r) => setCells(r.cells.map((c) => ({ cell_group_id: c.cell_group_id, name: c.name })))).catch(() => {});
+  }, []);
+  const rows = useMemo(() => parseRegister(text), [text]);
+  const run = async (dry: boolean): Promise<void> => {
+    setBusy(dry ? "preview" : "enrol");
+    setError(null);
+    try {
+      const r = await PartnersApi.enrol({ rows, dry_run: dry, ...(cellId ? { cell_group_id: cellId } : {}) });
+      if (dry) setPreview(r);
+      else onDone(r);
+    } catch (e) {
+      setError(financeErrorMessage(e, dry ? "Could not check the list." : "Could not enrol the list."));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const inputS: CSSProperties = { width: "100%", padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 8, fontSize: 13, background: "#fff" };
+  return (
+    <DrawerShell
+      title="Add partners from a register"
+      onClose={onClose}
+      footer={
+        <div className="flex items-center" style={{ gap: 8, justifyContent: "flex-end" }}>
+          <ActionButton icon={<Search size={13} />} label="Check the list" onClick={() => void run(true)} busy={busy === "preview"} disabledTip={rows.length === 0 ? "Paste the register first" : undefined} />
+          <ActionButton
+            icon={<UserPlus size={13} />}
+            label={preview ? `Enrol ${preview.counts.enrolled + preview.counts.created}` : "Enrol"}
+            tone="primary"
+            onClick={() => void run(false)}
+            busy={busy === "enrol"}
+            disabledTip={!preview ? "Check the list first" : preview.counts.enrolled + preview.counts.created === 0 ? "Nobody to enrol" : undefined}
+          />
+        </div>
+      }
+    >
+      <div className="flex flex-col" style={{ gap: 12 }}>
+        <p style={{ fontSize: 12.5, color: "var(--muted-foreground)", margin: 0 }}>
+          One person per line, name then phone — exactly as a register reads: <span style={{ fontFamily: MONO }}>Maureen Mutile - 0705000423</span>. Each line is matched to a member by the number. Check first; nothing is written until you enrol.
+        </p>
+        <textarea
+          value={text}
+          onChange={(e) => { setText(e.target.value); setPreview(null); }}
+          rows={10}
+          placeholder={"Maureen Mutile - 0705000423\nMoses Muriuki - 0798156959"}
+          aria-label="Register"
+          style={{ ...inputS, fontFamily: MONO, resize: "vertical" }}
+        />
+        <label style={{ fontSize: 12.5 }}>
+          <span style={{ display: "block", fontWeight: 600, color: NAVY, marginBottom: 4 }}>A number nobody has yet</span>
+          <select value={cellId} onChange={(e) => { setCellId(e.target.value); setPreview(null); }} style={inputS} aria-label="Cell for new members">
+            <option value="">Leave them out (report as unknown)</option>
+            {cells.map((c) => <option key={c.cell_group_id} value={c.cell_group_id}>Create a member in {c.name}</option>)}
+          </select>
+        </label>
+        {error ? <div style={{ fontSize: 12.5, color: "#B42318" }}>{error}</div> : null}
+        {preview ? (
+          <div>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: NAVY, marginBottom: 6 }}>{enrolSummary(preview)}</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }} aria-label="Register check">
+              <tbody>
+                {preview.data.map((r, i) => (
+                  <tr key={i} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td style={{ padding: "6px 4px", color: NAVY }}>{r.full_name}{r.member_name && r.member_name !== r.full_name ? <span style={{ color: "var(--muted-foreground)" }}> · on file as {r.member_name}</span> : null}</td>
+                    <td style={{ padding: "6px 4px", fontFamily: MONO, whiteSpace: "nowrap" }}>{r.phone}</td>
+                    <td style={{ padding: "6px 4px", color: OUTCOME_WORDS[r.outcome]?.tone ?? NAVY, whiteSpace: "nowrap" }}>{OUTCOME_WORDS[r.outcome]?.label ?? r.outcome}{r.note ? <span style={{ color: "var(--muted-foreground)" }}> · {r.note}</span> : null}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </div>
+    </DrawerShell>
   );
 }
 
