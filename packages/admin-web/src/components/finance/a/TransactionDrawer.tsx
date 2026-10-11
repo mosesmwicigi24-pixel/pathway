@@ -28,7 +28,7 @@ import { useAsync } from "./hooks";
 
 type Tx = FinanceTransactionDetail["transaction"];
 
-export const SOURCE_LABELS: Readonly<Record<string, string>> = { app: "Member app", website: "Website", admin: "Office" };
+export const SOURCE_LABELS: Readonly<Record<string, string>> = { app: "Member app", website: "Website", admin: "Office", paybill: "Paybill (paid directly)" };
 
 /** Where an office row / a confirmed claim / a provider payment came from, in words. */
 export function channelText(t: Pick<Tx, "channel" | "office_channel" | "source" | "provider">): string {

@@ -35,6 +35,84 @@ export type MobileMoneyStatus =
   | { state: "failed"; code: string; desc?: string | undefined }
   | { state: "pending" };
 
+/**
+ * One payment made to the paybill number, as Daraja's C2B confirmation
+ * describes it (Lipa na M-Pesa → Pay Bill, prompted by us or not). The
+ * `trans_id` is the receipt code on the payer's SMS and on the church's
+ * M-Pesa statement — the one key the treasurer can reconcile with.
+ */
+export interface PaybillPayment {
+  trans_id: string;
+  shortcode: string;
+  /** Whole shillings → minor units. */
+  amount_minor: number;
+  /** Safaricom's TransTime (YYYYMMDDHHmmss, EAT) as an instant; null when absent. */
+  paid_at: Date | null;
+  /** As received. Safaricom masks the payer's number for most paybills, so
+   *  this is a hash more often than a number; `payer_phone` is the E.164
+   *  number when it IS one. */
+  msisdn: string | null;
+  payer_phone: string | null;
+  payer_name: string | null;
+  /** What the payer typed as the account number, verbatim (trimmed). */
+  bill_reference: string | null;
+  transaction_type: string | null;
+}
+
+/** Parse Daraja's C2B confirmation (or validation) body. Throws on a body
+ *  that does not describe a payment; never on an odd field. */
+export function parsePaybillPayment(rawBody: Buffer | string): PaybillPayment {
+  const body = typeof rawBody === "string" ? rawBody : rawBody.toString("utf8");
+  let p: Record<string, unknown>;
+  try {
+    p = JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    throw new ApiError("VALIDATION_FAILED", "Malformed M-Pesa C2B payload");
+  }
+  if (!p || typeof p !== "object") throw new ApiError("VALIDATION_FAILED", "Malformed M-Pesa C2B payload");
+  const str = (k: string): string | null => {
+    const v = p[k];
+    if (v === null || v === undefined) return null;
+    const t = String(v).trim();
+    return t === "" ? null : t;
+  };
+  const transId = str("TransID");
+  const shortcode = str("BusinessShortCode");
+  const amountRaw = str("TransAmount");
+  if (!transId || !shortcode || amountRaw === null) throw new ApiError("VALIDATION_FAILED", "Malformed M-Pesa C2B payload");
+  // TransAmount is whole shillings, sometimes "1000.00"; never floats into money.
+  const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(amountRaw);
+  if (!m) throw new ApiError("VALIDATION_FAILED", "Malformed M-Pesa C2B amount");
+  const amountMinor = Number(m[1]) * 100 + Number((m[2] ?? "0").padEnd(2, "0"));
+  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) throw new ApiError("VALIDATION_FAILED", "Malformed M-Pesa C2B amount");
+  const msisdn = str("MSISDN");
+  const payerPhone = msisdn && /^(?:\+?254|0)?[17]\d{8}$/.test(msisdn) ? `+254${msisdn.replace(/^\+?254|^0/, "")}` : null;
+  const name = [str("FirstName"), str("MiddleName"), str("LastName")].filter((x): x is string => Boolean(x)).join(" ");
+  const tt = str("TransTime");
+  let paidAt: Date | null = null;
+  if (tt && /^\d{14}$/.test(tt)) {
+    const d = new Date(`${tt.slice(0, 4)}-${tt.slice(4, 6)}-${tt.slice(6, 8)}T${tt.slice(8, 10)}:${tt.slice(10, 12)}:${tt.slice(12, 14)}+03:00`);
+    paidAt = Number.isNaN(d.getTime()) ? null : d;
+  }
+  return {
+    trans_id: transId.toUpperCase(),
+    shortcode,
+    amount_minor: amountMinor,
+    paid_at: paidAt,
+    msisdn,
+    payer_phone: payerPhone,
+    payer_name: name || null,
+    bill_reference: str("BillRefNumber")?.slice(0, 120) ?? null,
+    transaction_type: str("TransactionType"),
+  };
+}
+
+/** The two URLs Safaricom calls for a paybill payment. */
+export interface C2bUrls {
+  confirmationUrl: string;
+  validationUrl: string;
+}
+
 export interface MobileMoneyProvider {
   readonly key: MobileMoneyKey;
   /**
@@ -52,6 +130,10 @@ export interface MobileMoneyProvider {
   /** Ask the provider what happened to a prompt. `pending` = no answer yet
    *  (still on the phone, or the provider could not say) — never a guess. */
   queryStatus(ref: string): Promise<MobileMoneyStatus>;
+  /** Tell the provider where to send paybill (C2B) confirmations. Only a
+   *  provider that has such a thing implements it. Returns the provider's
+   *  own answer, for the audit row. */
+  registerC2bUrls?(urls: C2bUrls): Promise<Record<string, unknown>>;
 }
 
 /**
@@ -127,6 +209,13 @@ export class FakeMobileMoneyProvider implements MobileMoneyProvider {
   async queryStatus(ref: string): Promise<MobileMoneyStatus> {
     this.queried.push(ref);
     return this.outcomes.get(ref) ?? { state: "pending" };
+  }
+
+  /** The C2B URL pairs a test registered, in order. */
+  readonly c2bRegistrations: C2bUrls[] = [];
+  async registerC2bUrls(urls: C2bUrls): Promise<Record<string, unknown>> {
+    this.c2bRegistrations.push(urls);
+    return { ResponseCode: "0", ResponseDescription: "Success (fake)" };
   }
 
   sign(rawBody: string): string {
@@ -374,6 +463,27 @@ export class DarajaMpesaProvider implements MobileMoneyProvider {
       result_code: String(cb.ResultCode),
       result_desc: typeof cb.ResultDesc === "string" ? cb.ResultDesc.slice(0, 200) : undefined,
     };
+  }
+
+  /**
+   * C2B Register URL (one-off per shortcode; Safaricom keeps the last pair).
+   * `ResponseType: Completed` means a payment whose validation call never
+   * reaches us is still completed on Safaricom's side — money is never held
+   * hostage to our uptime; the confirmation arrives when we are back.
+   */
+  async registerC2bUrls(urls: C2bUrls): Promise<Record<string, unknown>> {
+    const token = await this.accessToken();
+    const json = await this.fetchJson(`${this.base}/mpesa/c2b/v1/registerurl`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        ShortCode: this.cfg.shortcode,
+        ResponseType: "Completed",
+        ConfirmationURL: urls.confirmationUrl,
+        ValidationURL: urls.validationUrl,
+      }),
+    });
+    return (json && typeof json === "object" ? json : { response: json }) as Record<string, unknown>;
   }
 
   private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {

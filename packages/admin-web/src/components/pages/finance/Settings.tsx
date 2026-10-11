@@ -317,6 +317,81 @@ function Providers({ s }: { s: Settings }): ReactElement {
   );
 }
 
+/** Payments made straight to the paybill number (Daraja C2B): are they being
+ *  taken, when were the URLs last registered with Safaricom, and the button
+ *  that registers them (finance:manage). */
+function Paybill(): ReactElement {
+  const cfg = useAsync(() => FinanceApi.config(), "config", { errorFallback: "Could not read the paybill status." });
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const p = cfg.data?.paybill;
+  const last = p?.last_30_days ?? {};
+  const register = async (): Promise<void> => {
+    setBusy(true);
+    setErr(null);
+    setDone(null);
+    try {
+      const r = await FinanceApi.registerPaybillUrls();
+      setDone(`Registered with Safaricom for paybill ${r.shortcode} — confirmations now come to ${r.confirmation_url}.`);
+      cfg.reload();
+    } catch (e) {
+      setErr(financeErrorMessage(e, "Safaricom did not accept the registration."));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <SectionCard
+      title="Paybill payments"
+      icon={<CreditCard size={15} />}
+      subtitle="A member who pays the paybill number from their own M-Pesa menu, with no prompt from the app, is recorded the moment Safaricom confirms it — on the Overview, in Transactions, in every report and on their statement."
+    >
+      {cfg.error ? <ErrorState message={cfg.error} onRetry={cfg.reload} /> : !p ? <Skeleton width="100%" height={60} /> : (
+        <div className="flex flex-col" style={{ gap: 12 }}>
+          <div className="flex items-center flex-wrap" style={{ gap: 12 }}>
+            {p.enabled ? <StatusChip status="active" label="Taking paybill confirmations" /> : <StatusChip status="inactive" label="Off" />}
+            {p.shortcode ? <span style={{ fontSize: 12.5, color: FIN.muted }}>Paybill <span style={{ fontFamily: FIN.mono, color: FIN.navy }}>{p.shortcode}</span></span> : null}
+            <span style={{ fontSize: 12.5, color: FIN.muted }}>
+              {p.last_registered_at
+                ? `URLs last registered with Safaricom ${new Date(p.last_registered_at).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })}${p.registered_shortcode && p.registered_shortcode !== p.shortcode ? ` (for ${p.registered_shortcode})` : ""}.`
+                : "URLs not yet registered with Safaricom — until they are, direct paybill payments do not reach the system."}
+            </span>
+          </div>
+          <div className="flex items-center flex-wrap" style={{ gap: 14 }}>
+            <Stat label="Recorded" value={last.recorded ?? 0} />
+            <Stat label="Matched a prompt" value={last.matched_prompt ?? 0} />
+            <Stat label="Duplicates" value={last.duplicate ?? 0} />
+            <Stat label="Rejected" value={last.rejected ?? 0} />
+            <span style={{ fontSize: 11.5, color: FIN.muted }}>confirmations in the last 30 days</span>
+          </div>
+          <Explain style={{ maxWidth: 640 }}>
+            {p.enabled
+              ? "The server reads MPESA_C2B_SECRET and MPESA_SHORTCODE (values never shown here). Register again after a domain change. A payment the app prompted for arrives through both doors and is kept once; a payment nobody prompted is recorded against the member whose number paid, or as memberless when Safaricom masks the number, to the fund typed as the account number — else the general fund."
+              : "Set MPESA_C2B_SECRET (a long random token) and MPESA_SHORTCODE on the server, deploy, then register the URLs here."}
+          </Explain>
+          <div className="flex items-center flex-wrap" style={{ gap: 10 }}>
+            <Button onClick={register} busy={busy} disabled={!p.enabled || busy}>
+              {p.last_registered_at ? "Register the URLs with Safaricom again" : "Register the URLs with Safaricom"}
+            </Button>
+            {done ? <span style={{ fontSize: 12.5, color: FIN.navy }}>{done}</span> : null}
+            {err ? <span style={{ fontSize: 12.5, color: FIN.danger }}>{err}</span> : null}
+          </div>
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }): ReactElement {
+  return (
+    <div>
+      <div className="nuru-eyebrow">{label}</div>
+      <div style={{ fontFamily: FIN.mono, fontSize: 18, color: FIN.navy, fontWeight: 600 }}>{value.toLocaleString()}</div>
+    </div>
+  );
+}
+
 function Numbering({ s }: { s: Settings }): ReactElement {
   return (
     <SectionCard title="Office receipt numbers" icon={<Hash size={15} />} subtitle="Every gift the office records gets the next number — one sequence per year, no gaps, never reused.">
@@ -454,6 +529,7 @@ export function FinanceSettings(): ReactElement {
       ) : (
         <>
           <Providers s={s} />
+          <Paybill />
           <Numbering s={s} />
           <TiersAndReminders s={s} />
         </>

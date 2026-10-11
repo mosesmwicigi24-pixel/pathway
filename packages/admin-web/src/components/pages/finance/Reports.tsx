@@ -7,7 +7,7 @@
 // (finance:export).
 import type { ReactElement } from "react";
 import { BarChart3 } from "lucide-react";
-import { FINANCE_CSV, FinanceApi, type ExpensesReportBy, type FinancePledgesReport, type IncomeReportBy } from "../../../api/finance";
+import { FINANCE_CSV, FINANCE_RAILS, FINANCE_RAIL_LABELS, FinanceApi, type ExpensesReportBy, type FinanceDailyReport, type FinancePledgesReport, type IncomeReportBy } from "../../../api/finance";
 import {
   Card,
   DataTable,
@@ -33,9 +33,10 @@ import { MatrixBlock } from "../../finance/b/ReportMatrix";
 import { FinancialPositionView, IncomeExpenditureView } from "../../finance/b/ReportStatements";
 import { Segmented, YearSelect } from "../../finance/b/ui";
 
-const TAB_KEYS = ["income", "expenses", "pledges", "ie", "position"] as const;
+const TAB_KEYS = ["daily", "income", "expenses", "pledges", "ie", "position"] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 const TABS = [
+  { key: "daily", label: "Daily giving" },
   { key: "income", label: "Income" },
   { key: "expenses", label: "Expenses" },
   { key: "pledges", label: "Pledges" },
@@ -99,6 +100,92 @@ function MatrixTab({ kind, year }: { kind: "income" | "expenses"; year: number }
       ) : (
         res.data.currencies.map((block) => (
           <MatrixBlock key={block.currency} block={block} rowHeader={by.row} emptyText={`No ${noun} in ${block.currency} in ${year}.`} chart={kind === "income"} />
+        ))
+      )}
+    </>
+  );
+}
+
+/* ---------- Daily giving ---------- */
+
+const DAILY_PRESETS: readonly DatePreset[] = ["this_month", "last_month", "this_quarter", "custom"];
+type DailyRow = FinanceDailyReport["currencies"][number]["days"][number];
+
+/** Total given per day — succeeded gifts only, every day of the period, with
+ *  the rail each shilling came in on (an M-Pesa prompt the app sent, a payment
+ *  made straight to the paybill number, card, PayPal, Airtel, the office). */
+function DailyTab(): ReactElement {
+  const [presetRaw] = useUrlParam("period", "this_month");
+  const [fromRaw] = useUrlParam("from", "");
+  const [toRaw] = useUrlParam("to", "");
+  const setUrl = useSetUrlParams();
+  const preset: DatePreset = (DAILY_PRESETS as readonly string[]).includes(presetRaw) ? (presetRaw as DatePreset) : "this_month";
+  const period: PeriodValue = preset === "custom" ? periodFor("custom", new Date(), { from: fromRaw, to: toRaw }) : periodFor(preset);
+  const res = useResource(() => FinanceApi.dailyReport({ from: period.from, to: period.to }), `daily:${period.from}:${period.to}`, { errorFallback: "Could not load the daily giving report." });
+  const rails = FINANCE_RAILS;
+  const columns = (currency: string): Column<DailyRow>[] => [
+    { key: "day", header: "Day", cell: (d) => fmtDay(d.day), nowrap: true },
+    { key: "total", header: "Total given", cell: (d) => <span style={{ fontWeight: d.total_minor > 0 ? 700 : 400, color: d.total_minor > 0 ? FIN.navy : FIN.muted }}>{formatMinor(d.total_minor, currency, { withCode: false })}</span>, align: "right", mono: true },
+    { key: "gifts", header: "Gifts", cell: (d) => (d.count > 0 ? d.count : <span style={{ color: FIN.muted }}>0</span>), align: "right", mono: true },
+    ...rails.map((r): Column<DailyRow> => ({
+      key: r,
+      header: <span title={`${FINANCE_RAIL_LABELS[r]} — amount (gifts)`}>{FINANCE_RAIL_LABELS[r]}</span>,
+      cell: (d) => d.rails[r].count > 0 ? <>{formatMinor(d.rails[r].amount_minor, currency, { withCode: false })} <span style={{ color: FIN.muted, fontSize: 11 }}>({d.rails[r].count})</span></> : <span style={{ color: FIN.muted }}>—</span>,
+      align: "right", mono: true,
+    })),
+  ];
+  return (
+    <>
+      <FilterBar
+        period={period}
+        presets={DAILY_PRESETS}
+        onPeriodChange={(p) =>
+          setUrl(p.preset === "custom" ? { period: "custom", from: p.from, to: p.to } : { period: p.preset === "this_month" ? null : p.preset, from: null, to: null })
+        }
+        trailing={<ExportButton path={FINANCE_CSV.dailyReport} params={{ from: period.from, to: period.to }} filename={`daily-giving-${period.from}-to-${period.to}`} />}
+      />
+      <span style={{ fontSize: 12, color: FIN.muted }}>
+        Succeeded gifts only, by the East Africa day they were given — a payment made straight to the paybill number counts the moment Safaricom confirms it. Failed and still-processing prompts are not money and are not here; a reversed gift drops out of its day.
+      </span>
+      {res.error ? (
+        <ErrorState message={res.error} onRetry={res.reload} />
+      ) : !res.data ? (
+        <Loading />
+      ) : res.data.currencies.length === 0 ? (
+        <Card>
+          <EmptyState title={`Nothing given between ${fmtDay(period.from)} and ${fmtDay(period.to)}`}>Every day of the period will be listed here the moment a gift succeeds — an M-Pesa prompt, a payment straight to the paybill, a card, or a gift the office records.</EmptyState>
+        </Card>
+      ) : (
+        res.data.currencies.map((c) => (
+          <section key={c.currency} aria-label={`${c.currency} table`} data-currency-block={c.currency}>
+            <SectionCard
+              title={`${c.currency} · ${formatMinor(c.totals.total_minor, c.currency)} over ${c.days_with_gifts} of ${c.days.length} days`}
+              subtitle={`${c.totals.count.toLocaleString()} gifts${c.best_day ? ` · best day ${fmtDay(c.best_day)}` : ""}${c.totals.rails.paybill.count > 0 ? ` · ${formatMinor(c.totals.rails.paybill.amount_minor, c.currency)} straight to the paybill (${c.totals.rails.paybill.count})` : ""}. Amounts in ${c.currency}.`}
+              flush
+            >
+              <DataTable
+                ariaLabel={`Daily giving ${c.currency}`}
+                columns={columns(c.currency)}
+                rows={c.days}
+                rowKey={(d) => d.day}
+                minWidth={980}
+                footer={
+                  <tr style={{ borderTop: `2px solid ${FIN.border}`, background: FIN.surface }}>
+                    {[
+                      "Period",
+                      formatMinor(c.totals.total_minor, c.currency, { withCode: false }),
+                      String(c.totals.count),
+                      ...rails.map((r) => (c.totals.rails[r].count > 0 ? `${formatMinor(c.totals.rails[r].amount_minor, c.currency, { withCode: false })} (${c.totals.rails[r].count})` : "—")),
+                    ].map((v, i) => (
+                      <td key={i} style={{ padding: "10px 16px", fontSize: 12.5, fontWeight: 700, color: FIN.navy, fontFamily: i === 0 ? undefined : FIN.mono, textAlign: i === 0 ? "left" : "right", whiteSpace: "nowrap" }}>
+                        {v}
+                      </td>
+                    ))}
+                  </tr>
+                }
+              />
+            </SectionCard>
+          </section>
         ))
       )}
     </>
@@ -253,6 +340,7 @@ export function FinanceReports(): ReactElement {
       }
       tabs={<Tabs tabs={TABS} value={tab} onChange={setTab} ariaLabel="Reports" />}
     >
+      {tab === "daily" ? <DailyTab /> : null}
       {tab === "income" ? <MatrixTab key="income" kind="income" year={year} /> : null}
       {tab === "expenses" ? <MatrixTab key="expenses" kind="expenses" year={year} /> : null}
       {tab === "pledges" ? <PledgesTab year={year} /> : null}

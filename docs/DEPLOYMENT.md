@@ -676,3 +676,21 @@ caches deterministically).
 **Prevention.** Any future bounded-output deep-tier call: budget ≥ 4x the
 expected visible output, and no catch without a log line. `ai_usage_events`
 "success" must not be read as "output usable".
+
+## Paybill (C2B) confirmations — one-off setup (2026-10-11)
+
+Direct payments to the paybill number reach the system only after these three
+steps (GIVING.md §15):
+1. On the API host set `MPESA_C2B_SECRET` to a long random token (≥ 16 chars;
+   `openssl rand -hex 24`) and, when the public API origin differs from the
+   origin of `MPESA_CALLBACK_URL`, `MPESA_C2B_PUBLIC_ORIGIN=https://<host>`.
+   Secrets by name only; never in git.
+2. Deploy and run migration 225 (`pnpm db:migrate`); verify
+   `to_regclass('mpesa_c2b_events')` and `to_regclass('mpesa_c2b_registrations')`.
+3. In the portal, Finance → Settings → Paybill payments → "Register the URLs
+   with Safaricom" (finance:manage). Daraja keeps the LAST pair registered for
+   the shortcode, so re-register after any domain change. Verify: pay the
+   paybill KSh 1 from a phone; `SELECT * FROM mpesa_c2b_events ORDER BY
+   received_at DESC LIMIT 1` shows outcome `recorded` and the Overview's
+   "Given today" moves.
+

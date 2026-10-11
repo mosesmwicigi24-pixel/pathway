@@ -54,6 +54,16 @@ const EnvSchema = z.object({
   MPESA_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
   MPESA_TX_TYPE: z.enum(["CustomerPayBillOnline", "CustomerBuyGoodsOnline"]).default("CustomerPayBillOnline"),
   MPESA_CALLBACK_URL: z.string().optional(), // public HTTPS https://<host>/v1/webhooks/mobilemoney/mpesa
+  // --- M-Pesa C2B (payments made straight to the paybill number, prompted or
+  // not). Daraja signs nothing, so the confirmation URL carries a long random
+  // token that only Safaricom knows (it is handed over by the URL
+  // registration): POST /v1/webhooks/mpesa/c2b/<MPESA_C2B_SECRET>/confirmation.
+  // Unset = paybill confirmations are refused and nothing is recorded. ---
+  MPESA_C2B_SECRET: z.string().min(16).optional(),
+  // The public origin the C2B URLs are built on when registering them with
+  // Safaricom, e.g. https://pathway.nuruplace.org. Falls back to the origin of
+  // MPESA_CALLBACK_URL.
+  MPESA_C2B_PUBLIC_ORIGIN: z.string().url().optional(),
   // --- PayPal (Orders v2). PayPal can't transact KES, so PayPal gifts settle in
   // USD (the entered amount is treated as USD). Secrets by name only (§5.10). ---
   PAYPAL_CLIENT_ID: z.string().optional(),

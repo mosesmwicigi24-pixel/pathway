@@ -321,7 +321,8 @@ export type FinanceChannel = "card" | "mpesa" | "airtel" | "paypal" | "manual" |
 /** How the office received or paid money (onhand = physical cash). */
 export type OfficeChannel = "onhand" | "bank" | "cheque" | "mpesa" | "other";
 export type TransactionStatus = "requires_action" | "processing" | "succeeded" | "failed" | "refunded";
-export type TransactionSource = "app" | "website" | "admin";
+/** paybill = paid straight to the paybill number (Daraja C2B), prompted by nobody. */
+export type TransactionSource = "app" | "website" | "admin" | "paybill";
 export type AnyYesNo = "any" | "yes" | "no";
 export type LedgerSide = "debit" | "credit";
 export type JournalKind = "expense" | "expense_void" | "transfer" | "opening" | "reversal";
@@ -398,6 +399,11 @@ export interface FinanceOverview {
   /** Top 6 funds by KES balance (all time). */
   fund_balances: { code: string; name: string; is_active: boolean; balances: CurrencyBalance[] }[];
   channels: FinanceChannelTotal[];
+  /** Today (EAT) at a glance: succeeded gifts so far, and how many came straight through the paybill number or an M-Pesa prompt. */
+  today: {
+    day: IsoDate;
+    by_currency: { currency: string; total_minor: number; count: number; paybill_minor: number; paybill_count: number; prompt_minor: number; prompt_count: number }[];
+  };
   /** 12 months per currency, oldest first, the last being `to`'s month. month = "YYYY-MM". */
   series: { currency: string; months: { month: string; income_minor: number; expenses_minor: number }[] }[];
   /** Only kinds with count > 0; `link` is the web route that opens the queue. */
@@ -688,6 +694,38 @@ export interface FinanceReportMatrix {
     rows: { key: string; label: string; months: number[]; total_minor: number }[];
     totals: { months: number[]; total_minor: number };
   }[];
+}
+
+/** The rail a gift came in on, for the day-by-day report. */
+export type FinanceRail = "mpesa" | "paybill" | "card" | "paypal" | "airtel" | "office";
+export const FINANCE_RAILS: readonly FinanceRail[] = ["mpesa", "paybill", "card", "paypal", "airtel", "office"];
+export const FINANCE_RAIL_LABELS: Readonly<Record<FinanceRail, string>> = {
+  mpesa: "M-Pesa prompt", paybill: "M-Pesa paybill", card: "Card", paypal: "PayPal", airtel: "Airtel Money", office: "Office",
+};
+export type FinanceRailCells = Record<FinanceRail, { amount_minor: number; count: number }>;
+export interface FinanceDailyRow { day: IsoDate; total_minor: number; count: number; rails: FinanceRailCells }
+/** GET /admin/finance/reports/daily — total given per day, succeeded gifts only. */
+export interface FinanceDailyReport {
+  report: "daily";
+  period: { from: IsoDate; to: IsoDate };
+  rails: { key: FinanceRail; label: string }[];
+  currencies: {
+    currency: string;
+    /** Every day in the period, oldest first (zero when nothing came). */
+    days: FinanceDailyRow[];
+    totals: { total_minor: number; count: number; rails: FinanceRailCells };
+    days_with_gifts: number;
+    best_day: IsoDate | null;
+  }[];
+}
+/** POST /admin/finance/mpesa/c2b/register */
+export interface PaybillRegistration {
+  registration_id: string;
+  registered_at: string;
+  shortcode: string;
+  response: Record<string, unknown>;
+  /** The secret is masked. */
+  confirmation_url: string;
 }
 
 /** GET /admin/finance/reports/pledges */
@@ -1337,6 +1375,7 @@ export const FINANCE_CSV = {
   incomeReport: `${F}/reports/income.csv`,
   expensesReport: `${F}/reports/expenses.csv`,
   pledgesReport: `${F}/reports/pledges.csv`,
+  dailyReport: `${F}/reports/daily.csv`,
   financialPosition: `${F}/reports/financial-position.csv`,
   incomeExpenditure: `${F}/reports/income-expenditure.csv`,
   statements: `${F}/statements.csv`,
@@ -1381,6 +1420,8 @@ export const FinanceApi = {
   expensesReport: (q: { year?: number | null | undefined; by?: ExpensesReportBy | undefined } = {}) => get<FinanceReportMatrix>(`${F}/reports/expenses`, q),
   /** GET /admin/finance/reports/pledges?year */
   pledgesReport: (q: { year?: number | null | undefined } = {}) => get<FinancePledgesReport>(`${F}/reports/pledges`, q),
+  /** GET /admin/finance/reports/daily?from&to — total given per day (succeeded only), per currency, by rail. */
+  dailyReport: (q: PeriodQuery = {}) => get<FinanceDailyReport>(`${F}/reports/daily`, q),
   /** GET /admin/finance/reports/financial-position?as_of (default today). */
   financialPosition: (q: { as_of?: IsoDate | null | undefined } = {}) => get<FinanceFinancialPosition>(`${F}/reports/financial-position`, q),
   /** GET /admin/finance/reports/income-expenditure?from&to */
@@ -1417,6 +1458,8 @@ export const FinanceApi = {
   trend: (months?: number) => get<FinanceTrend>(`${F}/trend`, { months }),
   /** GET /admin/finance/config — funds + provider availability. */
   config: () => get<FinanceConfig>(`${F}/config`),
+  /** POST /admin/finance/mpesa/c2b/register — finance:manage; tells Safaricom where paybill confirmations go. */
+  registerPaybillUrls: () => post<PaybillRegistration>(`${F}/mpesa/c2b/register`),
   /** GET /admin/finance/collection-health?days (1–90, default 30) — Giving Cycle 9. */
   collectionHealth: (days?: number) => get<CollectionHealth>(`${F}/collection-health`, { days }),
   /** GET /admin/finance/schedules — recurring gifts with collection health. */
@@ -1518,6 +1561,7 @@ export const FinanceApi = {
   expensesReportCsv: (q: { year?: number | null | undefined; by?: ExpensesReportBy | undefined }, filename = "expenses-report.csv") => downloadCsv(FINANCE_CSV.expensesReport, q, filename),
   /** finance:export. */
   pledgesReportCsv: (q: { year?: number | null | undefined }, filename = "pledges-report.csv") => downloadCsv(FINANCE_CSV.pledgesReport, q, filename),
+  dailyReportCsv: (q: PeriodQuery, filename = "daily-giving.csv") => downloadCsv(FINANCE_CSV.dailyReport, q, filename),
   /** finance:export. */
   financialPositionCsv: (q: { as_of?: IsoDate | null | undefined }, filename = "financial-position.csv") => downloadCsv(FINANCE_CSV.financialPosition, q, filename),
   /** finance:export. */
