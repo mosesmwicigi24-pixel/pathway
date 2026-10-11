@@ -681,10 +681,13 @@ expected visible output, and no catch without a log line. `ai_usage_events`
 
 Direct payments to the paybill number reach the system only after these three
 steps (GIVING.md §15):
-1. On the API host set `MPESA_C2B_SECRET` to a long random token (≥ 16 chars;
-   `openssl rand -hex 24`) and, when the public API origin differs from the
-   origin of `MPESA_CALLBACK_URL`, `MPESA_C2B_PUBLIC_ORIGIN=https://<host>`.
-   Secrets by name only; never in git.
+1. On the API host add to `/opt/pathway/.env`: `MPESA_C2B_SECRET=<long random
+   token>` (≥ 16 chars; `openssl rand -hex 24`) and, when the public API origin
+   differs from the origin of `MPESA_CALLBACK_URL`,
+   `MPESA_C2B_PUBLIC_ORIGIN=https://<host>`. Secrets by name only; never in git.
+   `docker-compose.vps.yml` is an allow-list and names both variables (from
+   this change) — `git pull` in `/opt/pathway` so the box's compose file
+   carries them, or a value in `.env` never reaches the container.
 2. Deploy and run migration 225 (`pnpm db:migrate`); verify
    `to_regclass('mpesa_c2b_events')` and `to_regclass('mpesa_c2b_registrations')`.
 3. In the portal, Finance → Settings → Paybill payments → "Register the URLs
