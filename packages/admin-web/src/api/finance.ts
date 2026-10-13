@@ -472,9 +472,38 @@ export interface FinanceTransactionRow {
   reversal_reason: string | null;
   created_at: IsoDateTime;
   settled_at: IsoDateTime | null;
+  /** Failed rows: why, in the member's words (null otherwise). */
+  failure?: FinanceGiftFailure | null;
+  /** The provider's own words for a failure. */
+  failure_detail?: string | null;
+  /** Failed rows only: the same giver gave successfully (same currency) within
+   *  7 days after. Null for any other status. */
+  gave_after?: boolean | null;
 }
-/** totals: amount_minor = Σ SUCCEEDED amounts; count = every matching row, any status. */
-export type FinanceTransactionsPage = ListEnvelope<FinanceTransactionRow>;
+/** A failed gift's reason, as the member is told. */
+export interface FinanceGiftFailure {
+  code: string;
+  reason: string;
+  hint: string;
+  retryable: boolean;
+}
+/** FinanceTransactionsTotal — amount_minor = Σ SUCCEEDED (money received);
+ *  attempted_minor = Σ every matching row (the value of a Failed report);
+ *  count = every matching row, any status. */
+export interface FinanceTransactionsTotal extends CurrencyTotal {
+  attempted_minor?: number;
+}
+/** FinanceFailureReason — one reason in a Failed report. */
+export interface FinanceFailureReason extends FinanceGiftFailure {
+  count: number;
+  /** How many of these givers gave successfully within 7 days after. */
+  gave_after: number;
+  by_currency: CurrencyTotal[];
+}
+export type FinanceTransactionsPage = ListEnvelope<FinanceTransactionRow, FinanceTransactionsTotal> & {
+  /** Only when status=failed: why they failed, most frequent first. */
+  failure_reasons?: FinanceFailureReason[];
+};
 
 /** FinanceLedgerLeg — a posting a transaction owns. */
 export interface FinanceLedgerLeg {
