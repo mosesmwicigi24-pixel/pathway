@@ -441,10 +441,11 @@ describe("finance reports — the clean books of a small church year", () => {
     expect(marchIds).not.toContain(t.T14b);
     const april = (await get("/admin/finance/transactions?from=2025-04-01&to=2025-04-30&limit=200")).body;
     expect(april.data.map((r: any) => r.transaction_id)).toContain(t.T14b);
-    // Totals: succeeded amount; count = every row (the refunded cheque and the failed M-Pesa count).
+    // Totals: succeeded amount; count = every row (the refunded cheque and the failed M-Pesa count);
+    // attempted = every row's amount (+ the failed 10,000 and the reversed cheque) — the Failed report's figure.
     expect(april.totals).toEqual([
-      { currency: "KES", amount_minor: 145656, count: 4 },
-      { currency: "USD", amount_minor: 1999, count: 1 },
+      { currency: "KES", amount_minor: 145656, attempted_minor: 225656, count: 4 },
+      { currency: "USD", amount_minor: 1999, attempted_minor: 1999, count: 1 },
     ]);
     const idsOf = async (qs: string) => (await get(`/admin/finance/transactions?${qs}&limit=200`)).body.data.map((r: any) => r.transaction_id).sort();
     expect(await idsOf("pledged=yes")).toEqual([t.T2, t.T3, t.T4, t.T5, t.T6, t.T19, t.T20].sort());

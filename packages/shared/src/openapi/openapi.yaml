@@ -6367,7 +6367,9 @@ paths:
         (created_at, then transaction_id). `before` — a created_at instant or a
         cursor — is the earlier paging parameter and still works; prefer `cursor`.
         Rows are additive over the earlier register row. totals: amount_minor =
-        Σ succeeded amounts, count = every matching row (any status), per currency.
+        Σ succeeded amounts, attempted_minor = Σ every matching amount, count =
+        every matching row (any status), per currency. With status=failed the
+        page also carries failure_reasons (the Failed report).
       parameters:
         - { name: from, in: query, required: false, schema: { type: string, format: date } }
         - { name: to, in: query, required: false, schema: { type: string, format: date } }
@@ -12558,6 +12560,9 @@ components:
         reversed_by: { type: [string, "null"], format: uuid }
         reversed_by_name: { type: [string, "null"] }
         reversal_reason: { type: [string, "null"] }
+        gave_after:
+          type: [boolean, "null"]
+          description: "Failed rows only: the same giver (the member, or for a gift without a member the same phone) gave successfully in the same currency within 7 days after. Null for any other status."
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time }
     FinanceTransactionsPage:
@@ -12568,7 +12573,33 @@ components:
         next_cursor: { type: [string, "null"], description: Opaque; pass back as `cursor`. Null on the last page. }
         totals:
           type: array
-          description: "Per currency over the WHOLE filtered set: amount_minor = Σ succeeded amounts; count = every matching row, any status."
+          description: "Per currency over the WHOLE filtered set: amount_minor = Σ succeeded amounts; attempted_minor = Σ every matching row's amount, any status; count = every matching row, any status."
+          items: { $ref: "#/components/schemas/FinanceTransactionsTotal" }
+        failure_reasons:
+          type: array
+          description: "Only when status=failed: why those gifts failed, one row per reason, most frequent first. Unknown provider codes read as declined, as the member is told."
+          items: { $ref: "#/components/schemas/FinanceFailureReason" }
+    FinanceTransactionsTotal:
+      type: object
+      description: One currency's transactions total over the WHOLE filtered set — never a sum across currencies.
+      required: [currency, amount_minor, attempted_minor, count]
+      properties:
+        currency: { type: string, example: KES }
+        amount_minor: { type: integer, format: int64, description: Σ succeeded amounts — money received. }
+        attempted_minor: { type: integer, format: int64, description: "Σ every matching row's amount, any status — the value of a Failed report." }
+        count: { type: integer }
+    FinanceFailureReason:
+      type: object
+      required: [code, reason, hint, retryable, count, gave_after, by_currency]
+      properties:
+        code: { type: string, enum: [cancelled, unreachable, expired, insufficient_funds, wrong_pin, busy, limit_exceeded, declined, system, no_phone, no_answer] }
+        reason: { type: string, description: "What happened, as the member is told." }
+        hint: { type: string, description: What the member should do next. }
+        retryable: { type: boolean }
+        count: { type: integer }
+        gave_after: { type: integer, description: How many of these givers gave successfully within 7 days after. }
+        by_currency:
+          type: array
           items: { $ref: "#/components/schemas/FinanceCurrencyTotal" }
     FinanceLedgerLeg:
       type: object

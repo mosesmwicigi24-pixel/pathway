@@ -279,6 +279,18 @@ function transactionFilters(q: TransactionsFilter, P: Params): string[] {
   return w;
 }
 
+/** For a failed gift only: did the same giver (the member, or for a gift
+ *  without a member the same phone) give successfully in the same currency
+ *  within seven days after? The Failed report's "gave again" — who still
+ *  needs a call and who already sorted it out. Null for any other status. */
+export const GAVE_AFTER_DAYS = 7;
+const GAVE_AFTER_SQL = `CASE WHEN t.status = 'failed' THEN EXISTS (
+         SELECT 1 FROM transactions s
+          WHERE s.status = 'succeeded' AND s.currency = t.currency
+            AND s.created_at > t.created_at AND s.created_at <= t.created_at + interval '${GAVE_AFTER_DAYS} days'
+            AND ((t.user_id IS NOT NULL AND s.user_id = t.user_id)
+              OR (t.user_id IS NULL AND t.giver_phone IS NOT NULL AND s.giver_phone = t.giver_phone))) END`;
+
 const TXN_COLUMNS = `
        t.transaction_id, t.user_id, u.full_name, u.phone_number AS member_phone,
        ${DISPLAY_NAME_SQL} AS display_name,
@@ -293,6 +305,7 @@ const TXN_COLUMNS = `
        t.recorded_by, rb.full_name AS recorded_by_name,
        t.reversed_at, t.reversed_by, vb.full_name AS reversed_by_name, t.reversal_reason,
        t.failure_code, t.failure_detail, t.fee_cover_minor,
+       ${GAVE_AFTER_SQL} AS gave_after,
        t.created_at, t.settled_at`;
 
 const TXN_DETAIL_JOINS = `
@@ -325,6 +338,23 @@ function shapeTxn(r: Record<string, unknown>): FinanceTransactionRow {
 }
 
 export interface CurrencyTotal { currency: string; amount_minor: number; count: number }
+/** A transactions total: amount_minor stays Σ succeeded (money received);
+ *  attempted_minor is Σ every matching row, any status — the value of a
+ *  Failed report, where nothing was received. */
+export interface TransactionsTotal extends CurrencyTotal { attempted_minor: number }
+
+/** Why the failed gifts in a filter failed: one row per reason (unknown codes
+ *  fold into "declined", as the member is told), per-currency amounts, and
+ *  how many of those givers gave again within GAVE_AFTER_DAYS. */
+export interface FailureReasonRow {
+  code: string;
+  reason: string;
+  hint: string;
+  retryable: boolean;
+  count: number;
+  gave_after: number;
+  by_currency: { currency: string; amount_minor: number; count: number }[];
+}
 
 function totalsFrom(rows: { currency: string; amount_minor: unknown; count: unknown }[]): CurrencyTotal[] {
   const by = new Map(rows.map((r) => [r.currency, r]));
@@ -338,23 +368,59 @@ export async function listFinanceTransactions(
   pool: Queryable,
   input: TransactionsQueryInput,
   opts: { all?: boolean } = {},
-): Promise<{ data: FinanceTransactionRow[]; next_cursor: string | null; totals: CurrencyTotal[] }> {
+): Promise<{ data: FinanceTransactionRow[]; next_cursor: string | null; totals: TransactionsTotal[]; failure_reasons?: FailureReasonRow[] }> {
   const q = TransactionsQuery.parse(input);
 
   const T = new Params();
   const tw = transactionFilters(q, T);
-  const totals = totalsFrom(
-    await many<{ currency: string; amount_minor: string; count: number }>(
-      pool,
-      `SELECT t.currency,
-              COALESCE(sum(t.amount_minor) FILTER (WHERE t.status = 'succeeded'), 0)::text AS amount_minor,
-              count(*)::int AS count
-         ${TXN_FROM}
-        WHERE ${tw.length ? tw.join(" AND ") : "TRUE"}
-        GROUP BY t.currency`,
-      T.values,
-    ),
+  const totalRows = await many<{ currency: string; amount_minor: string; attempted_minor: string; count: number }>(
+    pool,
+    `SELECT t.currency,
+            COALESCE(sum(t.amount_minor) FILTER (WHERE t.status = 'succeeded'), 0)::text AS amount_minor,
+            COALESCE(sum(t.amount_minor), 0)::text AS attempted_minor,
+            count(*)::int AS count
+       ${TXN_FROM}
+      WHERE ${tw.length ? tw.join(" AND ") : "TRUE"}
+      GROUP BY t.currency`,
+    T.values,
   );
+  const attempted = new Map(totalRows.map((r) => [r.currency, num(r.attempted_minor)]));
+  const totals: TransactionsTotal[] = totalsFrom(totalRows).map((t) => ({ ...t, attempted_minor: attempted.get(t.currency) ?? 0 }));
+
+  // The Failed report's "why": only when the filter is failed gifts.
+  let failure_reasons: FailureReasonRow[] | undefined;
+  if (q.status === "failed" && !opts.all) {
+    const R = new Params();
+    const rw = transactionFilters(q, R);
+    const grouped = await many<{ code: string | null; currency: string; count: number; amount_minor: string; gave_after: number }>(
+      pool,
+      `SELECT t.failure_code AS code, t.currency, count(*)::int AS count,
+              COALESCE(sum(t.amount_minor), 0)::text AS amount_minor,
+              count(*) FILTER (WHERE ${GAVE_AFTER_SQL})::int AS gave_after
+         ${TXN_FROM}
+        WHERE ${rw.length ? rw.join(" AND ") : "TRUE"}
+        GROUP BY t.failure_code, t.currency`,
+      R.values,
+    );
+    const by = new Map<string, FailureReasonRow>();
+    for (const g of grouped) {
+      const copy = giftFailureCopy(g.code ?? "declined")!;
+      const row = by.get(copy.code) ?? { code: copy.code, reason: copy.reason, hint: copy.hint, retryable: copy.retryable, count: 0, gave_after: 0, by_currency: [] };
+      row.count += g.count;
+      row.gave_after += g.gave_after;
+      const cur = row.by_currency.find((c) => c.currency === g.currency);
+      if (cur) {
+        cur.amount_minor += num(g.amount_minor);
+        cur.count += g.count;
+      } else {
+        row.by_currency.push({ currency: g.currency, amount_minor: num(g.amount_minor), count: g.count });
+      }
+      by.set(copy.code, row);
+    }
+    failure_reasons = [...by.values()]
+      .map((r) => ({ ...r, by_currency: sortCurrencies(r.by_currency.map((c) => c.currency)).map((c) => r.by_currency.find((x) => x.currency === c)!) }))
+      .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
+  }
 
   const P = new Params();
   const w = transactionFilters(q, P);
@@ -395,6 +461,7 @@ export async function listFinanceTransactions(
     data: page.map(shapeTxn),
     next_cursor: hasMore && last ? encodeCursor([String(last.cursor_ts), String(last.receipt_code ?? ""), String(last.transaction_id)]) : null,
     totals,
+    ...(failure_reasons ? { failure_reasons } : {}),
   };
 }
 

@@ -75,7 +75,9 @@ export function registerFinanceReports(r: Router, deps: FinanceReportsRouteDeps)
         "receipt_code", "name", "member_phone", "giver_phone", "pledge", "need", "office_reference", "recorded_by",
         "reversed_at", "reversal_reason", "provider_ref",
         // Giving Cycles 2–3, appended so existing sheets keep their columns.
-        "failure_reason", "provider_detail", "fee_cover"],
+        "failure_reason", "provider_detail", "fee_cover",
+        // The Failed report (2026-10-13): did that giver give again within 7 days.
+        "gave_again"],
       data.map((t) => [
         cell(t.created_at), cell(t.settled_at), t.transaction_id, t.status, minorToMajor(t.amount_minor), t.currency,
         cell(t.fund), cell(t.fund_name), cell(t.channel), cell(t.source), cell(t.receipt_code), cell(t.display_name),
@@ -83,6 +85,7 @@ export function registerFinanceReports(r: Router, deps: FinanceReportsRouteDeps)
         cell(t.recorded_by_name), cell(t.reversed_at), cell(t.reversal_reason), cell(t.provider_ref),
         cell((t.failure as { reason?: string } | null)?.reason ?? null), cell(t.failure_detail),
         t.fee_cover_minor === null || t.fee_cover_minor === undefined ? "" : minorToMajor(Number(t.fee_cover_minor)),
+        t.gave_after === true ? "yes" : t.gave_after === false ? "no" : "",
       ]),
     );
   }));

@@ -165,9 +165,11 @@ describe("Clear resets every filter at once (one navigation)", () => {
     );
     await waitFor(() => expect(api.transactions).toHaveBeenCalledWith(expect.objectContaining({ status: "failed", channel: "mpesa", q: "grace", pledged: "yes" })));
     fireEvent.click(await screen.findByRole("button", { name: "Clear" }));
-    await waitFor(() => expect(api.transactions).toHaveBeenLastCalledWith(expect.objectContaining({ status: null, channel: null, source: null, q: null, fund: null, pledged: "any", need: "any" })));
+    // A bare ?status=failed link opened the Failed report; Clear keeps the report.
+    await waitFor(() => expect(api.transactions).toHaveBeenLastCalledWith(expect.objectContaining({ status: "failed", channel: null, source: null, q: null, fund: null, pledged: "any", need: "any" })));
     const p = search();
     for (const k of ["status", "channel", "source", "pledged", "need", "q", "fund", "period", "from", "to"]) expect(p.has(k), k).toBe(false);
+    expect(p.get("report")).toBe("failed");
     expect(p.get("tx")).toBe("keep-me"); // an open drawer is not a filter
     expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
   });
@@ -201,6 +203,90 @@ describe("Clear resets every filter at once (one navigation)", () => {
     expect(p.get("tab")).toBe("journals");
     expect(p.has("jkind")).toBe(false);
     expect(p.has("jperiod")).toBe(false);
+  });
+});
+
+describe("Transactions — the Succeeded and Failed reports", () => {
+  const row = (over: Record<string, unknown>) => ({ ...detail().transaction, ...over });
+
+  it("opens on Succeeded: only succeeded gifts are asked for, the total reads Received, no status filter", async () => {
+    api.transactions.mockResolvedValue({
+      data: [row({ transaction_id: "ok-1", display_name: "Grace Wanjiru" })],
+      next_cursor: null,
+      totals: [{ currency: "KES", amount_minor: 100_000, attempted_minor: 100_000, count: 1 }],
+    });
+    renderApp(
+      <>
+        <FinanceTransactions />
+        <Loc />
+      </>,
+      { route: "/finance/transactions" },
+    );
+    await waitFor(() => expect(api.transactions).toHaveBeenCalledWith(expect.objectContaining({ status: "succeeded" })));
+    expect(screen.getByRole("tab", { name: "Succeeded" }).getAttribute("aria-selected")).toBe("true");
+    expect(await screen.findByText("Received")).toBeTruthy();
+    expect(screen.getByRole("table", { name: "Succeeded transactions" })).toBeTruthy();
+    expect(screen.queryByLabelText("Status")).toBeNull();
+  });
+
+  it("Failed: what did not arrive, why, and who gave again", async () => {
+    api.transactions.mockImplementation(async (q: { status?: string | null }) =>
+      q.status === "failed"
+        ? {
+            data: [
+              row({ transaction_id: "f-1", status: "failed", display_name: "Amina Wanjiru", failure: { code: "cancelled", reason: "The M-Pesa prompt was cancelled.", hint: "Give again.", retryable: false }, gave_after: true }),
+              row({ transaction_id: "f-2", status: "failed", display_name: "Baraka Otieno", failure: { code: "insufficient_funds", reason: "There wasn't enough in the M-Pesa account.", hint: "Top up.", retryable: false }, gave_after: false }),
+            ],
+            next_cursor: null,
+            totals: [{ currency: "KES", amount_minor: 0, attempted_minor: 250_000, count: 2 }],
+            failure_reasons: [
+              { code: "cancelled", reason: "The M-Pesa prompt was cancelled.", hint: "Give again whenever you're ready.", retryable: false, count: 1, gave_after: 1, by_currency: [{ currency: "KES", amount_minor: 50_000, count: 1 }] },
+              { code: "insufficient_funds", reason: "There wasn't enough in the M-Pesa account.", hint: "Top up, or try a smaller amount.", retryable: false, count: 1, gave_after: 0, by_currency: [{ currency: "KES", amount_minor: 200_000, count: 1 }] },
+            ],
+          }
+        : EMPTY_PAGE,
+    );
+    renderApp(
+      <>
+        <FinanceTransactions />
+        <Loc />
+      </>,
+      { route: "/finance/transactions" },
+    );
+    fireEvent.click(await screen.findByRole("tab", { name: "Failed" }));
+    await waitFor(() => expect(api.transactions).toHaveBeenLastCalledWith(expect.objectContaining({ status: "failed" })));
+    expect(search().get("report")).toBe("failed");
+    // The strip shows what the givers tried to give, not the 0 received.
+    expect(await screen.findByText("Did not arrive")).toBeTruthy();
+    expect(screen.getAllByText(/KES\s?2,500\.00/).length).toBeGreaterThan(0);
+    const reasons = screen.getByRole("list", { name: "Failure reasons" });
+    expect(within(reasons).getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByText("1 of 2 gave again within 7 days. The rest may need a call.")).toBeTruthy();
+    const table = screen.getByRole("table", { name: "Failed transactions" });
+    expect(within(table).getByText("Gave again")).toBeTruthy();
+    expect(within(table).getByText("Not yet")).toBeTruthy();
+    expect(within(table).getByText("There wasn't enough in the M-Pesa account.")).toBeTruthy();
+  });
+
+  it("All transactions brings back the status filter, unfiltered", async () => {
+    renderApp(
+      <>
+        <FinanceTransactions />
+        <Loc />
+      </>,
+      { route: "/finance/transactions?report=failed" },
+    );
+    await waitFor(() => expect(api.transactions).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" })));
+    fireEvent.click(screen.getByRole("tab", { name: "All transactions" }));
+    await waitFor(() => expect(api.transactions).toHaveBeenLastCalledWith(expect.objectContaining({ status: null })));
+    expect(screen.getByLabelText("Status")).toBeTruthy();
+    expect(search().get("report")).toBe("all");
+  });
+
+  it("a ?status=processing link (Overview, Reconciliation) lands on All with that status", async () => {
+    renderApp(<FinanceTransactions />, { route: "/finance/transactions?status=processing" });
+    await waitFor(() => expect(api.transactions).toHaveBeenCalledWith(expect.objectContaining({ status: "processing" })));
+    expect(screen.getByRole("tab", { name: "All transactions" }).getAttribute("aria-selected")).toBe("true");
   });
 });
 
@@ -245,7 +331,7 @@ describe("Transaction drawer — Reverse", () => {
 describe("write actions follow the capability — hidden, not greyed", () => {
   it("Transactions: Record a gift and Export need manage / export; nothing while /me loads", async () => {
     renderApp(<FinanceTransactions />, { permissions: null });
-    expect(await screen.findByText("Register")).toBeTruthy();
+    expect(await screen.findByText("Succeeded gifts")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Record a gift/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Export CSV/ })).toBeNull();
     cleanup();

@@ -328,6 +328,16 @@ Writes (idempotent where money is created; every write audited `finance.*`):
   CSV, detail drawer (ledger legs, receipt, member/pledge links, Reverse for
   manual entries), **Record a gift** drawer (member search or walk-in /
   anonymous, fund, amount, channel, reference, date, optional pledge/need).
+  **Two reports as tabs (2026-10-13)** over the same register, `?report=`:
+  **Succeeded** (default; status=succeeded; strip "Received"), **Failed**
+  (status=failed; strip "Did not arrive" = `totals[].attempted_minor`, the
+  value the givers tried to give; a "Why they failed" card from
+  `failure_reasons` — the member's words, count, amount per currency, how many
+  gave again; columns "Why it failed" and "Gave again?" = `gave_after`, a
+  succeeded gift by the same member, or for a memberless gift the same phone,
+  same currency, within 7 days), and **All transactions** (the status filter as
+  before). A bare `?status=` link lands on the matching tab; Clear keeps the
+  tab. The CSV follows the tab and carries `gave_again`.
 - **Pledges**: register with standing chips, overdue since, kept/due, totals,
   CSV; row → member partner drawer.
 - **Partners**: the existing page moved here; the drawer gains the partner's
