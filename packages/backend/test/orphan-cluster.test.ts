@@ -13,6 +13,7 @@
 import { describe, it, expect } from "vitest";
 import {
   clusterRunningIn,
+  clusterStartingIn,
   describeCluster,
   findOrphanClusters,
   findTestClusters,
@@ -20,7 +21,7 @@ import {
 } from "./helpers/orphanCluster.js";
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -271,5 +272,29 @@ describe("the temp-dir sweep never takes a running cluster's directory", () => {
 
   it("the sweep asks it before removing anything", () => {
     expect(setupSource).toMatch(/clusterRunningIn\(full\)/);
+  });
+
+  // 2026-10-30: postmaster.pid only exists once Postgres is up, so a suite started
+  // a second after another swept its directory out from under initdb.
+  it("a directory touched recently may be one a run is still setting up", () => {
+    const dir = scratch();
+    try {
+      expect(clusterStartingIn(dir)).toBe(true);
+      const anHourAgo = new Date(Date.now() - 60 * 60_000);
+      utimesSync(dir, anHourAgo, anHourAgo);
+      expect(clusterStartingIn(dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a directory that has gone is not", () => {
+    const dir = scratch();
+    rmSync(dir, { recursive: true, force: true });
+    expect(clusterStartingIn(dir)).toBe(false);
+  });
+
+  it("the sweep asks that too", () => {
+    expect(setupSource).toMatch(/clusterStartingIn\(full\)/);
   });
 });

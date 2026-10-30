@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   clusterRunningIn,
+  clusterStartingIn,
   describeCluster,
   findOrphanClusters,
   findTestClusters,
@@ -112,8 +113,8 @@ async function awaitFreePort(timeoutMs = 60_000): Promise<void> {
  * Remove test cluster directories left by runs that died before teardown. Each
  * is ~180 MB; 1.6 GB of them was found on one machine, having helped fill the
  * disk whose filling killed the run that created the newest one. Only
- * directories with no live process are touched — on any port, from any
- * checkout.
+ * directories with no live process, and none a run may still be setting up, are
+ * touched — on any port, from any checkout.
  */
 function sweepAbandonedDataDirs(): void {
   const live = new Set(findTestClusters(TEST_PG_PORT).map((c) => c.dataDir));
@@ -121,8 +122,9 @@ function sweepAbandonedDataDirs(): void {
   for (const dir of readdirSync(tmpdir()).filter((d) => d.startsWith("nuru-pg-"))) {
     const full = join(tmpdir(), dir);
     // Spared whatever port it serves: another checkout's suite may be running
-    // out of it right now (clusterRunningIn, 2026-10-05).
-    if (live.has(full) || full === currentDataDir || clusterRunningIn(full)) continue;
+    // out of it right now (clusterRunningIn, 2026-10-05), or about to be
+    // (clusterStartingIn, 2026-10-30).
+    if (live.has(full) || full === currentDataDir || clusterRunningIn(full) || clusterStartingIn(full)) continue;
     try {
       rmSync(full, { recursive: true, force: true });
       freed += 1;

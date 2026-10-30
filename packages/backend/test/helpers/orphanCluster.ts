@@ -49,7 +49,7 @@
 // reads as owned, which costs a named failure instead of a reap: the cheap way
 // round to be wrong.
 import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** Our test clusters live in mkdtemp(tmpdir(), "nuru-pg-") directories. */
@@ -58,6 +58,8 @@ const DATA_DIR_MARKER = "nuru-pg-";
 const BINARY_MARKER = "node_modules";
 /** Who a process is handed to when its parent dies: launchd, or init. */
 const ADOPTIVE_PARENT_PID = 1;
+/** Far longer than a run ever takes to get from mkdtemp to a postmaster.pid. */
+const STARTUP_GRACE_MS = 10 * 60_000;
 
 export interface TestCluster {
   pid: number;
@@ -186,6 +188,25 @@ export function clusterRunningIn(dataDir: string): boolean {
     return true;
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "EPERM"; // alive, just not ours to signal
+  }
+}
+
+/**
+ * Could a run still be bringing a Postgres up in `dataDir`?
+ *
+ * clusterRunningIn only sees a postmaster once it has written postmaster.pid, and
+ * a run creates its directory seconds before that, while initdb fills it. For
+ * those seconds a directory in use looks exactly like an abandoned one: on
+ * 2026-10-30 a suite started a second after another swept its directory out from
+ * under initdb ("Postgres init script exited with code 1"). initdb keeps touching
+ * the directory as it works, so one touched recently is left for a later sweep. A
+ * crashed run's directory waits a few minutes longer; a live one survives.
+ */
+export function clusterStartingIn(dataDir: string): boolean {
+  try {
+    return Date.now() - statSync(dataDir).mtimeMs < STARTUP_GRACE_MS;
+  } catch {
+    return false; // already gone: nothing to spare
   }
 }
 
