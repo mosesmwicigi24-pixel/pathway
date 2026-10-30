@@ -76,8 +76,8 @@ async function awaitFreePort(timeoutMs = 60_000): Promise<void> {
         throw new Error(
           `Port ${TEST_PG_PORT} is still in use after ${timeoutMs}ms. A suite that is still running holds it ` +
             `(${running.map(describeCluster).join("; ")}). Stopping its cluster would fail that suite, so it ` +
-            `was left alone deliberately. Let it finish, or stop that run with: ` +
-            `kill ${running.map((cluster) => cluster.parentPid).join(" ")}`,
+            `was left alone deliberately. Let it finish, or stop it with Ctrl-C where it was started: killing ` +
+            `the run's pid alone leaves its test workers running against this port.`,
         );
       }
       const stranger = clusters.length === 0;

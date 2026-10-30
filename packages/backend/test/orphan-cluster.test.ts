@@ -89,6 +89,14 @@ describe("the error message no longer sends anyone down a dead end", () => {
     expect(setupSource).toContain("A suite that is still running holds it");
     expect(setupSource).toContain("running.map(describeCluster)");
   });
+
+  it("never RECOMMENDS killing a running suite's pid", () => {
+    // Measured 2026-10-30: `kill <run pid>` frees the port, but a test worker was
+    // still running 40 seconds later, free to write into whatever starts there next.
+    // Ctrl-C signals the whole process group and left no stray workers.
+    expect(setupSource).toContain("Ctrl-C where it was started");
+    expect(setupSource).not.toContain("kill ${running");
+  });
 });
 
 describe("abandoned data directories are swept", () => {
