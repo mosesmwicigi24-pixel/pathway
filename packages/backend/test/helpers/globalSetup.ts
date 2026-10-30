@@ -9,7 +9,14 @@ import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { clusterRunningIn, findOrphanClusters, reapOrphanCluster } from "./orphanCluster.js";
+import {
+  clusterRunningIn,
+  describeCluster,
+  findOrphanClusters,
+  findTestClusters,
+  isOrphaned,
+  reapOrphanCluster,
+} from "./orphanCluster.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const backendRoot = join(here, "..", "..");
@@ -51,26 +58,28 @@ const portInUse = (): Promise<boolean> =>
  * Anything on that port that is NOT ours is still a hard error — reaping a
  * developer's real database because it happened to be on 55432 would be a far
  * worse failure than the one being fixed.
+ *
+ * A cluster whose run is still alive is not a previous run's at all: it is
+ * another suite, from this checkout or any other, since they all share the port.
+ * That one is waited for and never signalled.
  */
 async function awaitFreePort(timeoutMs = 60_000): Promise<void> {
-  if (await portInUse()) {
-    for (const orphan of findOrphanClusters(TEST_PG_PORT)) {
-      const { pid, signal, dataDirRemoved } = reapOrphanCluster(orphan);
-      // Say it out loud. A test harness that silently kills processes is its own
-      // kind of problem.
-      console.warn(
-        `[test] reaped an orphaned embedded Postgres on port ${TEST_PG_PORT} ` +
-          `(pid ${pid}, ${signal}${dataDirRemoved ? ", data dir removed" : ""}). ` +
-          `Left by a previous run that died before teardown.`,
-      );
-    }
-  }
-
   const deadline = Date.now() + timeoutMs;
+  const reaped = new Set<number>();
   for (;;) {
     if (!(await portInUse())) return;
     if (Date.now() > deadline) {
-      const stranger = findOrphanClusters(TEST_PG_PORT).length === 0;
+      const clusters = findTestClusters(TEST_PG_PORT);
+      const running = clusters.filter((cluster) => !isOrphaned(cluster));
+      if (running.length > 0) {
+        throw new Error(
+          `Port ${TEST_PG_PORT} is still in use after ${timeoutMs}ms. A suite that is still running holds it ` +
+            `(${running.map(describeCluster).join("; ")}). Stopping its cluster would fail that suite, so it ` +
+            `was left alone deliberately. Let it finish, or stop that run with: ` +
+            `kill ${running.map((cluster) => cluster.parentPid).join(" ")}`,
+        );
+      }
+      const stranger = clusters.length === 0;
       throw new Error(
         `Port ${TEST_PG_PORT} is still in use after ${timeoutMs}ms. ` +
           (stranger
@@ -79,6 +88,20 @@ async function awaitFreePort(timeoutMs = 60_000): Promise<void> {
             : `An orphaned test cluster would not stop, even after SIGINT and SIGKILL. Check free disk ` +
               `space — a Postgres shutdown has to write a checkpoint. Then: kill -9 $(lsof -ti :${TEST_PG_PORT})`) +
           ` — the suite refuses to run against a stale cluster.`,
+      );
+    }
+    // Asked on every pass, not once on the way in: the run being waited for can
+    // die during the wait, and then nothing else will ever stop its cluster.
+    for (const orphan of findOrphanClusters(TEST_PG_PORT)) {
+      if (reaped.has(orphan.pid)) continue;
+      reaped.add(orphan.pid);
+      const { pid, signal, dataDirRemoved } = reapOrphanCluster(orphan);
+      // Say it out loud. A test harness that silently kills processes is its own
+      // kind of problem.
+      console.warn(
+        `[test] reaped an orphaned embedded Postgres on port ${TEST_PG_PORT} ` +
+          `(pid ${pid}, ${signal}${dataDirRemoved ? ", data dir removed" : ""}). ` +
+          `Left by a previous run that died before teardown.`,
       );
     }
     await new Promise((r) => setTimeout(r, 500));
@@ -93,7 +116,7 @@ async function awaitFreePort(timeoutMs = 60_000): Promise<void> {
  * checkout.
  */
 function sweepAbandonedDataDirs(): void {
-  const live = new Set(findOrphanClusters(TEST_PG_PORT).map((o) => o.dataDir));
+  const live = new Set(findTestClusters(TEST_PG_PORT).map((c) => c.dataDir));
   let freed = 0;
   for (const dir of readdirSync(tmpdir()).filter((d) => d.startsWith("nuru-pg-"))) {
     const full = join(tmpdir(), dir);

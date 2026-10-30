@@ -31,6 +31,23 @@
 //   * its command line contains our data-directory marker (`nuru-pg-`), and
 //   * it is the embedded-postgres binary from a node_modules tree.
 // A system postgres matches neither.
+//
+// Those two prove a process is OURS. They do not prove it is ABANDONED, and every
+// checkout and worktree shares this port, so a healthy cluster on it is usually
+// another suite mid-run. Reproduced on 2026-10-30: a suite started beside a running
+// one reaped its cluster and logged "Left by a previous run that died before
+// teardown" while that run was alive. 233 of the victim's 358 tests failed, and its
+// workers, still connecting to the shared port, deadlocked the new suite's own
+// setup, so neither run survived.
+//
+// So a cluster is an orphan only when its run is gone, and the kernel says so.
+// embedded-postgres spawns the postmaster directly from the run's process, and a
+// process whose parent dies is handed to pid 1 (launchd, init) on the spot. That
+// needs no owner file, which could go stale, and it protects suites on older
+// branches, which would never have written one. Where something other than pid 1
+// adopts orphans (a Linux subreaper such as `systemd --user`) a dead run's cluster
+// reads as owned, which costs a named failure instead of a reap: the cheap way
+// round to be wrong.
 import { execFileSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -39,16 +56,20 @@ import { join } from "node:path";
 const DATA_DIR_MARKER = "nuru-pg-";
 /** …and are started by the vendored binary, never a system install. */
 const BINARY_MARKER = "node_modules";
+/** Who a process is handed to when its parent dies: launchd, or init. */
+const ADOPTIVE_PARENT_PID = 1;
 
-export interface OrphanCluster {
+export interface TestCluster {
   pid: number;
   /** The -D data directory, so it can be removed once the process is gone. */
   dataDir: string | null;
   command: string;
+  /** The run that started it, until that run dies and pid 1 adopts it. */
+  parentPid: number;
 }
 
-/** Every process listening on `port`, narrowed to ones that are ours. */
-export function findOrphanClusters(port: number): OrphanCluster[] {
+/** Every process listening on `port`, narrowed to ones that are ours, running or not. */
+export function findTestClusters(port: number): TestCluster[] {
   let pids: string[] = [];
   try {
     pids = execFileSync("lsof", ["-ti", `:${port}`], { encoding: "utf8" }).trim().split("\n").filter(Boolean);
@@ -56,22 +77,43 @@ export function findOrphanClusters(port: number): OrphanCluster[] {
     return []; // lsof exits non-zero when nothing is listening — that is the good case.
   }
 
-  const found: OrphanCluster[] = [];
+  const found: TestCluster[] = [];
   for (const raw of pids) {
     const pid = Number(raw);
     if (!Number.isInteger(pid) || pid <= 1) continue;
-    let command = "";
+    let processInfo = "";
     try {
-      command = execFileSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" }).trim();
+      processInfo = execFileSync("ps", ["-p", String(pid), "-o", "ppid=", "-o", "command="], { encoding: "utf8" }).trim();
     } catch {
       continue; // vanished between lsof and ps
     }
+    const [, parentPid = "", command = ""] = /^(\d+)\s+(.*)$/s.exec(processInfo) ?? [];
     // Both markers, or we leave it strictly alone.
     if (!command.includes(DATA_DIR_MARKER) || !command.includes(BINARY_MARKER)) continue;
     const dataDir = /-D\s+(\S+)/.exec(command)?.[1] ?? null;
-    found.push({ pid, dataDir, command });
+    found.push({ pid, dataDir, command, parentPid: Number(parentPid) });
   }
   return found;
+}
+
+/** Has the run that started this cluster gone? See the header for why this is the test. */
+export function isOrphaned(cluster: TestCluster): boolean {
+  return cluster.parentPid === ADOPTIVE_PARENT_PID;
+}
+
+/** Our clusters on `port` whose run is gone: the only ones it is safe to stop. */
+export function findOrphanClusters(port: number): TestCluster[] {
+  return findTestClusters(port).filter(isOrphaned);
+}
+
+/**
+ * A cluster in words someone can act on. vitest retitles itself `node (vitest)`,
+ * so a run's own command line says nothing about where it lives; the path of the
+ * postmaster's binary does.
+ */
+export function describeCluster({ pid, parentPid, command }: TestCluster): string {
+  const checkout = command.split(`/${BINARY_MARKER}/`)[0];
+  return `postgres pid ${pid}, started by run pid ${parentPid} from ${checkout}`;
 }
 
 /**
@@ -80,7 +122,7 @@ export function findOrphanClusters(port: number): OrphanCluster[] {
  * say so out loud rather than reaping silently.
  */
 export function reapOrphanCluster(
-  orphan: OrphanCluster,
+  orphan: TestCluster,
   { graceMs = 5_000, sleep = (ms: number) => execFileSync("sleep", [String(ms / 1000)]) } = {},
 ): { pid: number; signal: "SIGINT" | "SIGKILL"; dataDirRemoved: boolean } {
   let signal: "SIGINT" | "SIGKILL" = "SIGINT";
