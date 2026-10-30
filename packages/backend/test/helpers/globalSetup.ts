@@ -155,6 +155,28 @@ async function importEmbeddedPostgres(): Promise<EmbeddedPostgresCtor> {
   return mod.default;
 }
 
+/**
+ * Start the cluster, going back to waiting if another suite took the port first.
+ *
+ * awaitFreePort cannot settle this alone: initdb takes seconds after it returns,
+ * and suites waiting on the same run are all released the moment it finishes. With
+ * two waiters, one lost the bind in three trials out of three. embedded-postgres
+ * reports that as a bare `undefined`, so the run died with "Unknown Error" and no
+ * tests, instead of waiting and naming the holder like any other suite.
+ */
+async function startCluster(): Promise<void> {
+  for (;;) {
+    try {
+      await epg.start();
+      return;
+    } catch (err) {
+      if (!(await portInUse())) throw err;
+      console.warn(`[test] lost port ${TEST_PG_PORT} during setup; waiting for it to come free.`);
+      await awaitFreePort();
+    }
+  }
+}
+
 export async function setup(): Promise<void> {
   // A previous run's cluster can outlive its vitest process (its shutdown
   // checkpoint takes seconds and grows with the run). Binding would fail and the
@@ -175,7 +197,7 @@ export async function setup(): Promise<void> {
     persistent: false,
   });
   await epg.initialise();
-  await epg.start();
+  await startCluster();
   await epg.createDatabase("nuru_test");
 
   await migrationRunner({
@@ -197,7 +219,15 @@ export async function setup(): Promise<void> {
 }
 
 export async function teardown(): Promise<void> {
-  if (epg) await epg.stop();
+  // stop() waits for the postmaster's 'exit' event, which has already fired if the
+  // cluster died during the run or never got the port. It would never return, the
+  // listeners below would never be dropped, and async-exit-hook would exit 0 ten
+  // seconds later: a postmaster killed mid-run left 14 of 15 tests failed and an
+  // exit code of 0 (2026-10-30).
+  if (epg) {
+    if (clusterRunningIn(currentDataDir)) await epg.stop();
+    else rmSync(currentDataDir, { recursive: true, force: true });
+  }
   // The cluster is down, so async-exit-hook's at-exit cleanup has nothing left to
   // do — and leaving it registered would force process.exit(0) over a failing
   // run's exit code. Drop it and let the real exit code stand.

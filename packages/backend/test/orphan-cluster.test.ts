@@ -241,6 +241,23 @@ describe("a cluster is only an orphan once its run is gone", () => {
   });
 });
 
+// 2026-10-30: suites that wait instead of killing are all released together, so
+// one always loses the port after finding it free. These need two real suites to
+// exercise; the source is pinned, as the rest of this file does.
+describe("a suite that loses the port during setup", () => {
+  it("goes back to waiting instead of dying on embedded-postgres's bare undefined", () => {
+    expect(setupSource).toContain("await startCluster();");
+    expect(setupSource).not.toMatch(/await epg\.start\(\);\s*await epg\.createDatabase/);
+    expect(setupSource).toMatch(/if \(!\(await portInUse\(\)\)\) throw err;[\s\S]{0,160}await awaitFreePort\(\);/);
+  });
+
+  it("still fails as a failure: teardown never waits on a postmaster that has gone", () => {
+    // stop() would hang on an 'exit' event that has already fired, and
+    // async-exit-hook would then end the run with exit code 0.
+    expect(setupSource).toMatch(/if \(clusterRunningIn\(currentDataDir\)\) await epg\.stop\(\)/);
+  });
+});
+
 // 2026-10-05: a run on a private port (55437) swept the data directory of a
 // suite running on 55432 — mid-run, 815 tests failed on "could not open file
 // base/16384/…". The sweep only spared clusters on ITS OWN port. A directory a
