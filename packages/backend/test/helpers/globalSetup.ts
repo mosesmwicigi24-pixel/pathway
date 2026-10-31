@@ -9,7 +9,15 @@ import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { clusterRunningIn, findOrphanClusters, reapOrphanCluster } from "./orphanCluster.js";
+import {
+  clusterRunningIn,
+  clusterStartingIn,
+  describeCluster,
+  findOrphanClusters,
+  findTestClusters,
+  isOrphaned,
+  reapOrphanCluster,
+} from "./orphanCluster.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const backendRoot = join(here, "..", "..");
@@ -51,26 +59,28 @@ const portInUse = (): Promise<boolean> =>
  * Anything on that port that is NOT ours is still a hard error — reaping a
  * developer's real database because it happened to be on 55432 would be a far
  * worse failure than the one being fixed.
+ *
+ * A cluster whose run is still alive is not a previous run's at all: it is
+ * another suite, from this checkout or any other, since they all share the port.
+ * That one is waited for and never signalled.
  */
 async function awaitFreePort(timeoutMs = 60_000): Promise<void> {
-  if (await portInUse()) {
-    for (const orphan of findOrphanClusters(TEST_PG_PORT)) {
-      const { pid, signal, dataDirRemoved } = reapOrphanCluster(orphan);
-      // Say it out loud. A test harness that silently kills processes is its own
-      // kind of problem.
-      console.warn(
-        `[test] reaped an orphaned embedded Postgres on port ${TEST_PG_PORT} ` +
-          `(pid ${pid}, ${signal}${dataDirRemoved ? ", data dir removed" : ""}). ` +
-          `Left by a previous run that died before teardown.`,
-      );
-    }
-  }
-
   const deadline = Date.now() + timeoutMs;
+  const reaped = new Set<number>();
   for (;;) {
     if (!(await portInUse())) return;
     if (Date.now() > deadline) {
-      const stranger = findOrphanClusters(TEST_PG_PORT).length === 0;
+      const clusters = findTestClusters(TEST_PG_PORT);
+      const running = clusters.filter((cluster) => !isOrphaned(cluster));
+      if (running.length > 0) {
+        throw new Error(
+          `Port ${TEST_PG_PORT} is still in use after ${timeoutMs}ms. A suite that is still running holds it ` +
+            `(${running.map(describeCluster).join("; ")}). Stopping its cluster would fail that suite, so it ` +
+            `was left alone deliberately. Let it finish, or stop it with Ctrl-C where it was started: killing ` +
+            `the run's pid alone leaves its test workers running against this port.`,
+        );
+      }
+      const stranger = clusters.length === 0;
       throw new Error(
         `Port ${TEST_PG_PORT} is still in use after ${timeoutMs}ms. ` +
           (stranger
@@ -81,6 +91,20 @@ async function awaitFreePort(timeoutMs = 60_000): Promise<void> {
           ` — the suite refuses to run against a stale cluster.`,
       );
     }
+    // Asked on every pass, not once on the way in: the run being waited for can
+    // die during the wait, and then nothing else will ever stop its cluster.
+    for (const orphan of findOrphanClusters(TEST_PG_PORT)) {
+      if (reaped.has(orphan.pid)) continue;
+      reaped.add(orphan.pid);
+      const { pid, signal, dataDirRemoved } = reapOrphanCluster(orphan);
+      // Say it out loud. A test harness that silently kills processes is its own
+      // kind of problem.
+      console.warn(
+        `[test] reaped an orphaned embedded Postgres on port ${TEST_PG_PORT} ` +
+          `(pid ${pid}, ${signal}${dataDirRemoved ? ", data dir removed" : ""}). ` +
+          `Left by a previous run that died before teardown.`,
+      );
+    }
     await new Promise((r) => setTimeout(r, 500));
   }
 }
@@ -89,17 +113,18 @@ async function awaitFreePort(timeoutMs = 60_000): Promise<void> {
  * Remove test cluster directories left by runs that died before teardown. Each
  * is ~180 MB; 1.6 GB of them was found on one machine, having helped fill the
  * disk whose filling killed the run that created the newest one. Only
- * directories with no live process are touched — on any port, from any
- * checkout.
+ * directories with no live process, and none a run may still be setting up, are
+ * touched — on any port, from any checkout.
  */
 function sweepAbandonedDataDirs(): void {
-  const live = new Set(findOrphanClusters(TEST_PG_PORT).map((o) => o.dataDir));
+  const live = new Set(findTestClusters(TEST_PG_PORT).map((c) => c.dataDir));
   let freed = 0;
   for (const dir of readdirSync(tmpdir()).filter((d) => d.startsWith("nuru-pg-"))) {
     const full = join(tmpdir(), dir);
     // Spared whatever port it serves: another checkout's suite may be running
-    // out of it right now (clusterRunningIn, 2026-10-05).
-    if (live.has(full) || full === currentDataDir || clusterRunningIn(full)) continue;
+    // out of it right now (clusterRunningIn, 2026-10-05), or about to be
+    // (clusterStartingIn, 2026-10-30).
+    if (live.has(full) || full === currentDataDir || clusterRunningIn(full) || clusterStartingIn(full)) continue;
     try {
       rmSync(full, { recursive: true, force: true });
       freed += 1;
@@ -130,6 +155,28 @@ async function importEmbeddedPostgres(): Promise<EmbeddedPostgresCtor> {
   return mod.default;
 }
 
+/**
+ * Start the cluster, going back to waiting if another suite took the port first.
+ *
+ * awaitFreePort cannot settle this alone: initdb takes seconds after it returns,
+ * and suites waiting on the same run are all released the moment it finishes. With
+ * two waiters, one lost the bind in three trials out of three. embedded-postgres
+ * reports that as a bare `undefined`, so the run died with "Unknown Error" and no
+ * tests, instead of waiting and naming the holder like any other suite.
+ */
+async function startCluster(): Promise<void> {
+  for (;;) {
+    try {
+      await epg.start();
+      return;
+    } catch (err) {
+      if (!(await portInUse())) throw err;
+      console.warn(`[test] lost port ${TEST_PG_PORT} during setup; waiting for it to come free.`);
+      await awaitFreePort();
+    }
+  }
+}
+
 export async function setup(): Promise<void> {
   // A previous run's cluster can outlive its vitest process (its shutdown
   // checkpoint takes seconds and grows with the run). Binding would fail and the
@@ -150,7 +197,7 @@ export async function setup(): Promise<void> {
     persistent: false,
   });
   await epg.initialise();
-  await epg.start();
+  await startCluster();
   await epg.createDatabase("nuru_test");
 
   await migrationRunner({
@@ -172,7 +219,15 @@ export async function setup(): Promise<void> {
 }
 
 export async function teardown(): Promise<void> {
-  if (epg) await epg.stop();
+  // stop() waits for the postmaster's 'exit' event, which has already fired if the
+  // cluster died during the run or never got the port. It would never return, the
+  // listeners below would never be dropped, and async-exit-hook would exit 0 ten
+  // seconds later: a postmaster killed mid-run left 14 of 15 tests failed and an
+  // exit code of 0 (2026-10-30).
+  if (epg) {
+    if (clusterRunningIn(currentDataDir)) await epg.stop();
+    else rmSync(currentDataDir, { recursive: true, force: true });
+  }
   // The cluster is down, so async-exit-hook's at-exit cleanup has nothing left to
   // do — and leaving it registered would force process.exit(0) over a failing
   // run's exit code. Drop it and let the real exit code stand.
