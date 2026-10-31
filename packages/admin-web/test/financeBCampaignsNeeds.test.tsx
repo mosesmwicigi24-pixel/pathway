@@ -180,9 +180,11 @@ describe("Department needs (/finance/needs)", () => {
     renderPage(<FinanceNeeds />, { path: "/finance/needs?status=pending", permissions: ["finance:view", "departments:view"] });
     await screen.findByText("New sound desk");
     expect(FinanceApi.needs).toHaveBeenCalledWith(expect.objectContaining({ status: "pending" }));
+    // The hero opens Departments; each row reviews its own department there.
+    expect(screen.getByRole("button", { name: "Departments" })).toBeTruthy();
     const links = screen.getAllByText("Review in Departments");
-    expect(links.length).toBe(2); // the hero's, and the row's
-    fireEvent.click(links[1] as HTMLElement);
+    expect(links.length).toBe(1);
+    fireEvent.click(links[0] as HTMLElement);
     await waitFor(() => expect(screen.getByTestId("location").textContent).toBe("/departments?department=d1"));
   });
 });

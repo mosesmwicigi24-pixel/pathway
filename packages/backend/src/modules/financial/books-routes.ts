@@ -118,6 +118,14 @@ export function registerFinanceBooks(r: Router, deps: FinanceBooksDeps): Finance
   r.post(`${F}/expenses`, auth, manage, handler(async (req, res) => {
     res.status(201).json(await books.recordExpense(me(req), parseBody(FinanceBooks.ExpenseInput, req.body ?? {})));
   }));
+  /** The payment voucher, printable and forwardable (any status). */
+  r.get(`${F}/expenses/:id/voucher.pdf`, auth, view, handler(async (req, res) => {
+    const { filename, pdf } = await books.expenseVoucher(id(req), me(req));
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename.replace(/[^A-Za-z0-9_.-]/g, "-")}"`);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.send(pdf);
+  }));
   r.get(`${F}/expenses/:id`, auth, view, handler(async (req, res) => {
     res.json(await books.getExpense(deps.pool, id(req)));
   }));

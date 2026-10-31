@@ -244,6 +244,17 @@ export async function downloadFile(path: string, params: QueryParams | undefined
   }
 }
 
+/** The file itself (for printing or the share sheet), with the same auth and
+ *  error parsing as downloadFile. */
+export async function fetchFileBlob(path: string, params?: QueryParams): Promise<Blob> {
+  try {
+    const res = await api.get<Blob>(path, { params: cleanParams(params), responseType: "blob", timeout: DOWNLOAD_TIMEOUT_MS });
+    return res.data;
+  } catch (e) {
+    throw await parseBlobError(e);
+  }
+}
+
 /** A CSV twin (finance:export): same filters as its list, every matching row. */
 export function downloadCsv(path: string, params: QueryParams | undefined, filename: string): Promise<void> {
   return downloadFile(path, params, withExtension(filename, ".csv"));
@@ -291,6 +302,8 @@ export const FINANCE_LIMITS = {
   giverName: { min: 2, max: 120 },
   giverPhone: { min: 7, max: 32 },
   reference: { max: 80 },
+  /** An expense's reference: room for a whole M-Pesa confirmation message. */
+  expenseReference: { max: 300 },
   /** A gift's note — printed on the receipt as its name. */
   note: { max: 60 },
   fundName: { min: 2, max: 150 },
@@ -903,6 +916,12 @@ export interface FinanceNeedRow {
   /** Every succeeded gift to the need or to a pledge toward it — the Departments page's own figure. */
   raised_minor: number;
   gifts_count: number;
+  /** Σ approved expenses spent against the need (absent on older servers). */
+  spent_minor?: number;
+  /** Σ recorded expenses against it awaiting approval. */
+  awaiting_minor?: number;
+  /** Expenses against it that are not void. */
+  expenses_count?: number;
   currency: string;
   deadline: IsoDate | null;
   status: NeedStatusValue;
@@ -913,11 +932,14 @@ export interface FinanceNeedRow {
 export interface FinanceNeedTotal extends CurrencyTotal {
   target_minor: number;
   raised_minor: number;
+  spent_minor?: number;
 }
 export type FinanceNeedsPage = ListEnvelope<FinanceNeedRow, FinanceNeedTotal>;
 export type NeedsQuery = PageQuery & {
   /** Default approved. */
   status?: NeedStatusValue | "all" | null | undefined;
+  /** One department's needs. */
+  department_id?: string | null | undefined;
   /** Need title or department name. */
   q?: string | null | undefined;
 };
@@ -1118,6 +1140,12 @@ export interface BooksExpense {
   journal_id: string | null;
   /** The expense_void journal posted when an APPROVED expense is voided. */
   void_journal_id: string | null;
+  /** PV-YYYY-NNNNN — gapless per year, kept when voided. Absent on servers before 2026-10-31. */
+  voucher_no?: string;
+  /** The department the money was spent for; null when none. */
+  department?: { department_id: string; name: string } | null;
+  /** The approved department need it was spent against. */
+  need?: { need_id: string; title: string; status: NeedStatusValue; target_minor: number; currency: string } | null;
 }
 export type BooksExpenseInput = {
   /** Active fund code. */
@@ -1131,6 +1159,8 @@ export type BooksExpenseInput = {
   spent_on: IsoDate;
   channel: OfficeChannel;
   reference?: string | null | undefined;
+  department_id?: string | null | undefined;
+  need_id?: string | null | undefined;
 };
 /** At least one field; only while the expense is recorded. */
 export type BooksExpensePatch = {
@@ -1143,6 +1173,10 @@ export type BooksExpensePatch = {
   spent_on?: IsoDate | undefined;
   channel?: OfficeChannel | undefined;
   reference?: string | null | undefined;
+  /** null clears; another department drops the old department's need. */
+  department_id?: string | null | undefined;
+  /** null clears; a need sets its department. */
+  need_id?: string | null | undefined;
 };
 /** totals: every status in the filter (filter status=recorded,approved to leave voids out). */
 export interface BooksExpenseList extends ListEnvelope<BooksExpense, BooksCurrencyTotal> {
@@ -1155,7 +1189,11 @@ export type ExpensesFilters = PeriodQuery & {
   fund?: string | null | undefined;
   /** Expense category code. */
   category?: string | null | undefined;
-  /** Payee, description or reference. */
+  /** Department id. */
+  department?: string | null | undefined;
+  /** Department need id. */
+  need?: string | null | undefined;
+  /** Payee, description, reference or voucher number. */
   q?: string | null | undefined;
 };
 export type ExpensesQuery = ExpensesFilters & PageQuery;
@@ -1411,6 +1449,7 @@ export const FINANCE_CSV = {
 } as const;
 
 /** The member statement PDFs (finance:view) — for DownloadButton `path` (kind "pdf"). */
+export const expenseVoucherPath = (expenseId: string): string => `${F}/expenses/${id(expenseId)}/voucher.pdf`;
 export const statementPdfPath = (userId: string, kind: "giving" | "partners"): string => `${F}/statements/${id(userId)}/${kind}.pdf`;
 
 /** GET /admin/permissions/catalog — rolesAdmin:view OR users:view OR finance:view. */
@@ -1598,6 +1637,10 @@ export const FinanceApi = {
   /** finance:export. */
   statementsCsv: (q: StatementsFilters, filename = "statements.csv") => downloadCsv(FINANCE_CSV.statements, q, filename),
   /** finance:view. A member's giving statement PDF for a year (404 = no gift that year). */
+  /** The payment voucher of one expense (finance:view), saved as <voucher_no>.pdf. */
+  expenseVoucherPdf: (expenseId: string, filename: string) => downloadPdf(expenseVoucherPath(expenseId), undefined, filename),
+  /** The same voucher as a Blob — to print it or hand it to the share sheet. */
+  expenseVoucherBlob: (expenseId: string) => fetchFileBlob(expenseVoucherPath(expenseId)),
   givingStatementPdf: (userId: string, year: number, filename = `giving-statement-${year}.pdf`) => downloadPdf(statementPdfPath(userId, "giving"), { year }, filename),
   /** finance:view. A member's Partners statement PDF for a year (404 = never a partner). */
   partnerStatementPdf: (userId: string, year: number, filename = `partners-statement-${year}.pdf`) => downloadPdf(statementPdfPath(userId, "partners"), { year }, filename),

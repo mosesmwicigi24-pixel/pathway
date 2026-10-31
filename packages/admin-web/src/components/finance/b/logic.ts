@@ -391,6 +391,10 @@ export interface ExpenseFormValues {
   spent_on: string;
   channel: OfficeChannel | "";
   reference: string;
+  /** "" = not tied to a department. */
+  department_id: string;
+  /** "" = not spent against a need. */
+  need_id: string;
 }
 
 export type ExpenseFormErrors = Partial<Record<keyof ExpenseFormValues, string>>;
@@ -414,7 +418,7 @@ export function validateExpenseForm(f: ExpenseFormValues, now: Date = new Date()
   const dateError = backdateError(f.spent_on, now);
   if (dateError) errors.spent_on = dateError;
   if (!f.channel) errors.channel = "How was it paid?";
-  if (reference.length > FINANCE_LIMITS.reference.max) errors.reference = `At most ${FINANCE_LIMITS.reference.max} characters.`;
+  if (reference.length > FINANCE_LIMITS.expenseReference.max) errors.reference = `At most ${FINANCE_LIMITS.expenseReference.max} characters.`;
   if (Object.keys(errors).length > 0 || !amount.ok || !f.channel) return { errors, body: null };
   return {
     errors,
@@ -428,6 +432,8 @@ export function validateExpenseForm(f: ExpenseFormValues, now: Date = new Date()
       spent_on: f.spent_on,
       channel: f.channel,
       reference: reference || null,
+      department_id: f.department_id || null,
+      need_id: f.need_id || null,
     },
   };
 }
@@ -444,6 +450,8 @@ export function expenseFormFrom(e: BooksExpense): ExpenseFormValues {
     spent_on: e.spent_on,
     channel: e.channel,
     reference: e.reference ?? "",
+    department_id: e.department?.department_id ?? "",
+    need_id: e.need?.need_id ?? "",
   };
 }
 
@@ -459,7 +467,50 @@ export function expensePatch(original: BooksExpense, body: BooksExpenseInput): B
   if (body.spent_on !== original.spent_on) p.spent_on = body.spent_on;
   if (body.channel !== original.channel) p.channel = body.channel;
   if ((body.reference ?? null) !== (original.reference ?? null)) p.reference = body.reference ?? null;
+  if ((body.department_id ?? null) !== (original.department?.department_id ?? null)) p.department_id = body.department_id ?? null;
+  if ((body.need_id ?? null) !== (original.need?.need_id ?? null)) p.need_id = body.need_id ?? null;
   return p;
+}
+
+/** The M-Pesa transaction code at the start of a pasted confirmation message
+ *  ("UJVJ205LTV Confirmed. Ksh21,000.00 sent to …"), for an M-Pesa expense;
+ *  null otherwise. The server lifts the same code onto the voucher. */
+export function mpesaCodeOf(channel: string, reference: string | null | undefined): string | null {
+  if (channel !== "mpesa" || !reference) return null;
+  return /^[A-Z0-9]{10}\b/.exec(reference.trim())?.[0] ?? null;
+}
+
+const WORD_ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+const WORD_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+function wordsBelow1000(n: number): string {
+  const parts: string[] = [];
+  const h = Math.floor(n / 100);
+  const r = n % 100;
+  if (h) parts.push(`${WORD_ONES[h]} hundred`);
+  if (r) parts.push(r < 20 ? WORD_ONES[r]! : WORD_TENS[Math.floor(r / 10)]! + (r % 10 ? `-${WORD_ONES[r % 10]}` : ""));
+  return parts.join(" ");
+}
+/** 21600 → "twenty-one thousand six hundred" (the voucher's own words). */
+export function numberInWords(n: number): string {
+  n = Math.floor(Math.abs(n));
+  if (n === 0) return "zero";
+  const scales = ["", " thousand", " million", " billion", " trillion"];
+  const out: string[] = [];
+  for (let i = 0; n > 0 && i < scales.length; i++) {
+    const chunk = n % 1000;
+    if (chunk) out.unshift(wordsBelow1000(chunk) + scales[i]);
+    n = Math.floor(n / 1000);
+  }
+  return out.join(" ");
+}
+const CURRENCY_WORDS: Record<string, [string, string]> = { KES: ["Kenya shillings", "cents"], USD: ["US dollars", "cents"] };
+/** 2160000, "KES" → "Twenty-one thousand six hundred Kenya shillings only" — as the voucher prints it. */
+export function amountInWords(amount_minor: number, currency: string): string {
+  const [unit, sub] = CURRENCY_WORDS[currency.toUpperCase()] ?? [currency.toUpperCase(), "cents"];
+  const cents = Math.abs(amount_minor) % 100;
+  const s = `${numberInWords(Math.floor(Math.abs(amount_minor) / 100))} ${unit}${cents ? ` and ${numberInWords(cents)} ${sub}` : ""} only`;
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /* ====================================================================== */

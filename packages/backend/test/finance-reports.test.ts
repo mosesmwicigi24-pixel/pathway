@@ -961,7 +961,7 @@ describe("finance reports — the clean books of a small church year", () => {
     )).rows[0];
     expect(need).toMatchObject({ raised_minor: Number(truth.s), gifts_count: truth.n, target_minor: 200000, fund_code: "mission", department_name: "Missions Team", status: "approved" });
     expect(need.raised_minor).toBe(45000);
-    expect(res.body.totals).toEqual([{ currency: "KES", amount_minor: 45000, count: 2, target_minor: 300000, raised_minor: 45000 }]);
+    expect(res.body.totals).toEqual([{ currency: "KES", amount_minor: 45000, count: 2, target_minor: 300000, raised_minor: 45000, spent_minor: 0 }]);
     expect((await get("/admin/finance/needs", viewerTok)).body.data.map((n: any) => n.need_id)).toEqual([ids.need]);
     expect((await get("/admin/finance/needs?status=pending&limit=1", viewerTok)).body.data.map((n: any) => n.need_id)).toEqual([ids.need2]);
     expect((await get("/admin/departments/needs", viewerTok)).status).toBe(403);

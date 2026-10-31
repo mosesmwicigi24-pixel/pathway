@@ -18,6 +18,7 @@ import { buildPayPalGateway, type PayPalGateway } from "./paypal.js";
 import { verifyAccessToken } from "../identity/tokens.js";
 import type { RateLimitStore } from "../../http/rateLimit.js";
 import { ApiError } from "../../http/errors.js";
+import { many } from "../../db/db.js";
 import { registerFinanceReports } from "./finance-reports-routes.js";
 
 export const financialRouter: Router = Router();
@@ -456,7 +457,13 @@ export function registerFinancial(
       shortcode: e.MPESA_SHORTCODE ?? null,
       ...(await svc.paybillStatus()),
     };
-    res.json({ funds, providers, paybill, step_up_required: true });
+    // Where an expense can be booked: active departments, with the fund each
+    // usually spends from (a clerk with finance rights may lack departments:view).
+    const departments = await many<{ department_id: string; name: string; fund_code: string | null }>(
+      ctx.db.primary,
+      `SELECT department_id, name, fund_code FROM departments WHERE status = 'active' ORDER BY name`,
+    );
+    res.json({ funds, providers, paybill, departments, step_up_required: true });
   }));
 
   /** Register the paybill (C2B) URLs with Safaricom — a one-off per shortcode,
