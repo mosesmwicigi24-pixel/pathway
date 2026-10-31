@@ -6,6 +6,11 @@
 // voiding an approved expense posts the reversing entry. Filters (status —
 // several at once — fund, category, when it was spent, search) live in the URL;
 // the totals cover the whole filtered set, per currency and per status.
+//
+// 2026-10-31: every expense carries its payment voucher number (PV-…) and,
+// optionally, the department and need it was spent for — a Department filter,
+// ?need=<id> from the Needs page, and ?record=1&department=…&need=… opens the
+// form already pointed at that need.
 import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, Plus, ReceiptText } from "lucide-react";
@@ -34,7 +39,7 @@ import {
 } from "../../finance/kit";
 import { sortTotals } from "../../finance/money";
 import { DATE_PRESETS, fmtDateTimeEAT, fmtDay, fmtRange, presetRange, rangeError, type DatePreset } from "../../finance/dates";
-import { useExpenseCategories, useFunds, useSetUrlParams } from "../../finance/b/hooks";
+import { useDepartmentOptions, useExpenseCategories, useFunds, useSetUrlParams } from "../../finance/b/hooks";
 import { ExpenseDrawer } from "../../finance/b/ExpenseDrawer";
 import { ExpenseFormDrawer } from "../../finance/b/ExpenseForm";
 import { Stacked, ToggleChips } from "../../finance/b/ui";
@@ -56,10 +61,14 @@ export function FinanceExpenses(): ReactElement {
   const caps = useFinanceCaps();
   const funds = useFunds();
   const categories = useExpenseCategories();
+  const departments = useDepartmentOptions();
   const [params] = useSearchParams();
   const [statusRaw, setStatusRaw] = useUrlParam("status", DEFAULT_STATUS);
   const [fund, setFund] = useUrlParam("fund", "");
   const [category, setCategory] = useUrlParam("category", "");
+  const [department] = useUrlParam("department", "");
+  const [need] = useUrlParam("need", "");
+  const [recordParam] = useUrlParam("record", "");
   const [q, setQ] = useUrlParam("q", "");
   const [spentRaw, setSpent] = useUrlParam("spent", "this_year");
   const [fromRaw, setFrom] = useUrlParam("from", "");
@@ -88,26 +97,38 @@ export function FinanceExpenses(): ReactElement {
     spent === "any" ? { from: null, to: null } : spent === "custom" ? (customError ? { from: null, to: null } : { from: fromRaw, to: toRaw }) : presetRange(spent);
 
   const filters: ExpensesFilters = useMemo(
-    () => ({ status: statuses, fund: fund || null, category: category || null, q: q || null, from: period.from, to: period.to }),
-    [statuses, fund, category, q, period.from, period.to],
+    () => ({ status: statuses, fund: fund || null, category: category || null, department: department || null, need: need || null, q: q || null, from: period.from, to: period.to }),
+    [statuses, fund, category, department, need, q, period.from, period.to],
   );
   const list = usePagedList((cursor) => FinanceApi.expenses({ ...filters, cursor, limit: 100 }), JSON.stringify(filters), { errorFallback: "Could not load the expenses." });
   const byStatus = list.page?.totals_by_status ?? [];
   const firstLoad = list.loading && !list.page;
 
+  // ?record=1 (from the Needs page) opens the form at that department / need — once.
   const [recordOpen, setRecordOpen] = useState(false);
+  useEffect(() => {
+    if (recordParam === "1" && caps.manage) setRecordOpen(true);
+  }, [recordParam, caps.manage]);
+  const preset = useMemo(
+    () => (recordParam === "1" && department ? { department_id: department, need_id: need || undefined } : null),
+    [recordParam, department, need],
+  );
   const [editing, setEditing] = useState<BooksExpense | null>(null);
   const [editedByMe, setEditedByMe] = useState<Set<string>>(() => new Set());
   const [version, setVersion] = useState(0);
 
   const statusText = statuses.length === 3 ? "every status" : statuses.map((s) => STATUS_OPTIONS.find((o) => o.key === s)?.label.toLowerCase()).join(" + ");
   const periodText = spent === "any" ? "any date" : spent === "custom" ? (customError ? "any date" : fmtRange({ from: fromRaw, to: toRaw })) : fmtRange(presetRange(spent));
-  const clearable = statusRaw !== DEFAULT_STATUS || Boolean(fund || category || q) || spent !== "this_year";
+  const clearable = statusRaw !== DEFAULT_STATUS || Boolean(fund || category || department || need || q) || spent !== "this_year";
 
   const columns: Column<BooksExpense>[] = [
-    { key: "spent", header: "Spent on", cell: (e) => fmtDay(e.spent_on), mono: true },
+    { key: "spent", header: "Spent on", cell: (e) => <Stacked primary={fmtDay(e.spent_on)} secondary={e.voucher_no} />, mono: true },
     { key: "payee", header: "Paid to", cell: (e) => <Stacked primary={e.payee} secondary={e.description ?? undefined} strong />, width: 240 },
-    { key: "category", header: "Category", cell: (e) => e.category.name },
+    {
+      key: "category",
+      header: "For",
+      cell: (e) => <Stacked primary={e.department?.name ?? e.category.name} secondary={e.department ? [e.need?.title, e.category.name].filter(Boolean).join(" · ") : undefined} />,
+    },
     { key: "fund", header: "Fund", cell: (e) => e.fund.name },
     { key: "channel", header: "Paid by", cell: (e) => <Stacked primary={channelLabel(e.channel)} secondary={e.reference ? <span style={{ fontFamily: FIN.mono }}>{e.reference}</span> : undefined} /> },
     { key: "amount", header: "Amount", cell: (e) => <MoneyText amount_minor={e.amount_minor} currency={e.currency} strong style={e.status === "void" ? { textDecoration: "line-through", color: FIN.muted } : undefined} />, align: "right" },
@@ -160,16 +181,34 @@ export function FinanceExpenses(): ReactElement {
       <FilterBar
         search={q}
         onSearchChange={setQ}
-        searchPlaceholder="Payee, description or reference"
+        searchPlaceholder="Payee, description, reference or PV number"
         selects={[
           { key: "spent", label: "Spent", value: spent, options: SPENT_OPTIONS, onChange: setSpent },
           { key: "fund", label: "Fund", value: fund, options: [{ value: "", label: "All" }, ...funds.funds.map((f) => ({ value: f.code, label: f.name }))], onChange: setFund },
           { key: "category", label: "Category", value: category, options: [{ value: "", label: "All" }, ...categories.categories.map((c) => ({ value: c.code, label: c.name }))], onChange: setCategory },
+          {
+            key: "department",
+            label: "Department",
+            value: department,
+            options: [
+              { value: "", label: "All" },
+              ...departments.departments.map((d) => ({ value: d.department_id, label: d.name })),
+              ...(department && !departments.departments.some((d) => d.department_id === department) ? [{ value: department, label: "This department" }] : []),
+            ],
+            onChange: (v: string) => setUrl({ department: v || null, need: null }),
+          },
         ]}
         clearable={clearable}
-        onClear={() => setUrl({ status: null, fund: null, category: null, q: null, spent: null, from: null, to: null })}
+        onClear={() => setUrl({ status: null, fund: null, category: null, department: null, need: null, record: null, q: null, spent: null, from: null, to: null })}
         trailing={<ToggleChips ariaLabel="Status" options={STATUS_OPTIONS} value={statuses} onChange={(next) => setStatusRaw(next.join(","))} />}
       />
+      {need ? (
+        <div className="flex items-center flex-wrap" style={{ gap: 8, fontSize: 12.5, color: FIN.navy }}>
+          <span className="nuru-eyebrow">Spent against one need</span>
+          <span>{list.rows[0]?.need?.title ?? "this need"}</span>
+          <Button onClick={() => setUrl({ need: null })}>Show every need</Button>
+        </div>
+      ) : null}
       {spent === "custom" ? (
         <div className="flex items-center flex-wrap" style={{ gap: 8 }}>
           <span className="nuru-eyebrow">Spent between</span>
@@ -233,13 +272,17 @@ export function FinanceExpenses(): ReactElement {
         expense={editing}
         funds={funds.funds}
         categories={categories.categories}
+        departments={departments.departments}
+        preset={editing ? null : preset}
         onClose={() => {
           setRecordOpen(false);
           setEditing(null);
+          if (recordParam) setUrl({ record: null });
         }}
         onSaved={(saved, mode) => {
           setRecordOpen(false);
           setEditing(null);
+          if (recordParam) setUrl({ record: null });
           if (mode === "edited") setEditedByMe((s) => new Set(s).add(saved.expense_id));
           setVersion((v) => v + 1);
           setOpenId(saved.expense_id);

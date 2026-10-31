@@ -3378,6 +3378,7 @@ paths:
         raised).
       parameters:
         - { name: status, in: query, required: false, schema: { type: string, enum: [pending, approved, rejected, closed, all], default: approved } }
+        - { name: department_id, in: query, required: false, schema: { type: string, format: uuid }, description: One department's needs. }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 80 }, description: "Need title or department name." }
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
@@ -5917,9 +5918,11 @@ paths:
         - { name: status, in: query, schema: { type: string }, description: "One status or a comma list of recorded|approved|void (e.g. recorded,approved)." }
         - { name: fund, in: query, schema: { type: string }, description: Fund code. }
         - { name: category, in: query, schema: { type: string }, description: Expense category code. }
+        - { name: department, in: query, schema: { type: string, format: uuid }, description: Only expenses booked to this department. }
+        - { name: need, in: query, schema: { type: string, format: uuid }, description: Only expenses spent against this department need. }
         - { name: from, in: query, schema: { type: string, format: date }, description: "spent_on ≥ from (inclusive)." }
         - { name: to, in: query, schema: { type: string, format: date }, description: "spent_on ≤ to (inclusive)." }
-        - { name: q, in: query, schema: { type: string, maxLength: 80 }, description: "Matches payee, description or reference (case-insensitive)." }
+        - { name: q, in: query, schema: { type: string, maxLength: 80 }, description: "Matches payee, description, reference or voucher number (case-insensitive)." }
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -5947,7 +5950,7 @@ paths:
               schema: { $ref: "#/components/schemas/BooksExpense" }
         "400": { description: "VALIDATION_FAILED — a field out of bounds or spent_on not a date." }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
-        "422": { description: "INVALID_DATE — spent_on after today or more than 366 days ago (EAT); UNPROCESSABLE — unknown or inactive fund or category." }
+        "422": { description: "INVALID_DATE — spent_on after today or more than 366 days ago (EAT); UNPROCESSABLE — unknown or inactive fund or category, an unknown or archived department, a need that is not approved (or closed) or belongs to another department." }
   /admin/finance/expenses.csv:
     get:
       tags: [giving]
@@ -5957,12 +5960,14 @@ paths:
         - { name: status, in: query, schema: { type: string } }
         - { name: fund, in: query, schema: { type: string } }
         - { name: category, in: query, schema: { type: string } }
+        - { name: department, in: query, schema: { type: string, format: uuid } }
+        - { name: need, in: query, schema: { type: string, format: uuid } }
         - { name: from, in: query, schema: { type: string, format: date } }
         - { name: to, in: query, schema: { type: string, format: date } }
         - { name: q, in: query, schema: { type: string, maxLength: 80 } }
       responses:
         "200":
-          description: "text/csv; charset=utf-8 attachment. Columns: expense_id, spent_on, payee, category, fund, description, amount, currency, channel, reference, status, recorded_by, recorded_at, approved_by, approved_at, voided_by, voided_at, void_reason."
+          description: "text/csv; charset=utf-8 attachment. Columns: expense_id, spent_on, payee, category, fund, description, amount, currency, channel, reference, status, recorded_by, recorded_at, approved_by, approved_at, voided_by, voided_at, void_reason, voucher_no, department, need."
           content:
             text/csv:
               schema: { type: string }
@@ -6003,6 +6008,28 @@ paths:
         "403": { $ref: "#/components/responses/ForbiddenScope" }
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { description: "INVALID_DATE — spent_on outside [today − 366 days, today] (EAT); UNPROCESSABLE — no longer recorded (approved or void), or an unknown/inactive fund or category." }
+  /admin/finance/expenses/{id}/voucher.pdf:
+    get:
+      tags: [giving]
+      operationId: financeBooksExpenseVoucher
+      summary: "finance:view. The expense's payment voucher as a printable A4 PDF — any status (a void voucher prints VOID)."
+      description: >-
+        Voucher number, status, amount in figures and in words, payee, date paid,
+        fund, category, department and need (with the need's target and approved
+        spending so far), how it was paid and the reference (an M-Pesa code is
+        lifted out of a pasted confirmation message), purpose, who prepared and
+        who approved it, a blank "received by" block to sign, and who printed it
+        when. Attachment named <voucher_no>.pdf; Cache-Control private, no-store.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: The voucher.
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "403": { $ref: "#/components/responses/ForbiddenScope" }
+        "404": { description: NOT_FOUND — no such expense. }
   /admin/finance/expenses/{id}/approve:
     post:
       tags: [giving]
@@ -6491,9 +6518,10 @@ paths:
       description: >-
         `paybill`: { enabled, shortcode, last_registered_at, registered_shortcode,
         confirmation_url (secret masked), last_30_days: { recorded, matched_prompt,
-        duplicate, rejected } }.
+        duplicate, rejected } }. `departments`: the active departments
+        [{ department_id, name, fund_code }] an expense can be booked to.
       responses:
-        "200": { description: "Funds, provider availability and paybill status" }
+        "200": { description: "Funds, provider availability, paybill status and the active departments" }
         "403": { $ref: "#/components/responses/ForbiddenScope" }
   /admin/finance/mpesa/c2b/register:
     post:
@@ -11299,9 +11327,27 @@ components:
       required:
         [expense_id, fund, category, payee, description, amount_minor, currency, spent_on, channel, reference, status,
          recorded_by, recorded_by_name, recorded_at, approved_by, approved_by_name, approved_at,
-         voided_by, voided_by_name, voided_at, void_reason, journal_id, void_journal_id]
+         voided_by, voided_by_name, voided_at, void_reason, journal_id, void_journal_id, voucher_no, department, need]
       properties:
         expense_id: { type: string, format: uuid }
+        voucher_no: { type: string, description: "PV-YYYY-NNNNN — gapless per Nairobi year of recording; kept when the expense is voided.", example: PV-2026-00014 }
+        department:
+          type: [object, "null"]
+          description: The department the money was spent for; null when none (rent, utilities…).
+          required: [department_id, name]
+          properties:
+            department_id: { type: string, format: uuid }
+            name: { type: string }
+        need:
+          type: [object, "null"]
+          description: The approved department need it was spent against, if any.
+          required: [need_id, title, status, target_minor, currency]
+          properties:
+            need_id: { type: string, format: uuid }
+            title: { type: string }
+            status: { type: string, enum: [pending, approved, rejected, closed] }
+            target_minor: { type: integer, format: int64 }
+            currency: { type: string }
         fund: { $ref: "#/components/schemas/BooksFundRef" }
         category: { $ref: "#/components/schemas/BooksCategoryRef" }
         payee: { type: string }
@@ -11336,7 +11382,9 @@ components:
         currency: { type: string, enum: [KES, USD] }
         spent_on: { type: string, format: date, description: "Within [today − 366 days, today] (EAT), else 422 INVALID_DATE. Approval posts at spent_on 12:00 EAT." }
         channel: { type: string, enum: [onhand, bank, cheque, mpesa, other], description: "How it was paid; decides the cash account credited on approval." }
-        reference: { type: [string, "null"], maxLength: 80 }
+        reference: { type: [string, "null"], maxLength: 300, description: "Cheque or bank reference, or the whole M-Pesa confirmation message." }
+        department_id: { type: [string, "null"], format: uuid, description: An active department. Implied by need_id when omitted. }
+        need_id: { type: [string, "null"], format: uuid, description: "An approved (or closed) need; must belong to department_id when both are sent." }
     BooksExpensePatch:
       type: object
       additionalProperties: false
@@ -11350,7 +11398,9 @@ components:
         currency: { type: string, enum: [KES, USD] }
         spent_on: { type: string, format: date }
         channel: { type: string, enum: [onhand, bank, cheque, mpesa, other] }
-        reference: { type: [string, "null"], maxLength: 80 }
+        reference: { type: [string, "null"], maxLength: 300 }
+        department_id: { type: [string, "null"], format: uuid, description: "null clears. Moving to another department drops a need of the old one." }
+        need_id: { type: [string, "null"], format: uuid, description: null clears; a need sets its department. }
     BooksExpenseList:
       type: object
       required: [data, next_cursor, totals, totals_by_status]
@@ -13204,7 +13254,7 @@ components:
         data: { type: array, items: { $ref: "#/components/schemas/FinanceGiver" } }
     FinanceNeedRow:
       type: object
-      required: [need_id, title, why, department_id, department_name, fund_code, target_minor, raised_minor, gifts_count, currency, deadline, status, created_at, decided_at]
+      required: [need_id, title, why, department_id, department_name, fund_code, target_minor, raised_minor, gifts_count, spent_minor, awaiting_minor, expenses_count, currency, deadline, status, created_at, decided_at]
       properties:
         need_id: { type: string, format: uuid }
         title: { type: string }
@@ -13215,6 +13265,9 @@ components:
         target_minor: { type: integer, format: int64 }
         raised_minor: { type: integer, format: int64 }
         gifts_count: { type: integer }
+        spent_minor: { type: integer, format: int64, description: Σ APPROVED expenses spent against the need. }
+        awaiting_minor: { type: integer, format: int64, description: Σ recorded expenses against it still awaiting approval. }
+        expenses_count: { type: integer, description: Expenses against it that are not void. }
         currency: { type: string }
         deadline: { type: [string, "null"], format: date }
         status: { type: string, enum: [pending, approved, rejected, closed] }
@@ -13222,13 +13275,14 @@ components:
         decided_at: { type: [string, "null"], format: date-time }
     FinanceNeedTotal:
       type: object
-      required: [currency, amount_minor, count, target_minor, raised_minor]
+      required: [currency, amount_minor, count, target_minor, raised_minor, spent_minor]
       properties:
         currency: { type: string }
         amount_minor: { type: integer, format: int64, description: "= raised_minor (the common totals shape)." }
         count: { type: integer }
         target_minor: { type: integer, format: int64 }
         raised_minor: { type: integer, format: int64 }
+        spent_minor: { type: integer, format: int64 }
     FinanceNeedsPage:
       type: object
       required: [data, next_cursor, totals]

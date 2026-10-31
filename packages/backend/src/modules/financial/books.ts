@@ -27,6 +27,7 @@ import { pledgeTitleFor } from "./partners.js";
 import { PLEDGE_PAYS_TO_CODE, PLEDGE_PAYS_TO_JOINS } from "./constants.js";
 import { nairobiDate } from "./partnerStatementMath.js";
 import { minorToMajor, type CsvCell } from "./csv.js";
+import { amountInWords, renderVoucherPdf } from "./voucherPdf.js";
 
 // ── vocabulary ────────────────────────────────────────────────────────────
 
@@ -300,6 +301,26 @@ async function legsOut(c: Queryable, where: "transaction_id" | "journal_id", ids
 export type BooksTransaction = Record<string, unknown> & { transaction_id: string; status: string };
 
 // ── the service ───────────────────────────────────────────────────────────
+
+const CHANNEL_WORDS: Record<string, string> = { onhand: "Cash", bank: "Bank transfer", cheque: "Cheque", mpesa: "M-Pesa", other: "Other" };
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** 2160000, "KES" → "KES 21,600.00". */
+function money(minor: number, currency: string): string {
+  const neg = minor < 0;
+  const abs = Math.abs(minor);
+  const whole = Math.floor(abs / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${neg ? "-" : ""}${currency.toUpperCase()} ${whole}.${String(abs % 100).padStart(2, "0")}`;
+}
+/** "2026-10-31" → "31 Oct 2026". */
+function dayLabel(ymdText: string): string {
+  const [y, m, d] = ymdText.slice(0, 10).split("-").map(Number);
+  return `${d} ${MONTHS[(m ?? 1) - 1]} ${y}`;
+}
+/** An instant as the church reads it: "31 Oct 2026, 16:16 EAT". */
+function instantLabel(isoText: string): string {
+  const t = new Date(new Date(isoText).getTime() + 3 * 3_600_000).toISOString();
+  return `${dayLabel(t)}, ${t.slice(11, 16)} EAT`;
+}
 
 export class FinanceBooks {
   constructor(
@@ -1022,7 +1043,12 @@ export class FinanceBooks {
     currency,
     spent_on: ymd,
     channel: z.enum(OFFICE_CHANNELS),
-    reference: optText(1, 80),
+    // Long enough for a whole M-Pesa confirmation message pasted as it came.
+    reference: optText(1, 300),
+    /** The department the money was spent for (none for rent, utilities…). */
+    department_id: z.string().uuid().nullish(),
+    /** The approved department need it was spent against; implies its department. */
+    need_id: z.string().uuid().nullish(),
   });
   static readonly ExpensePatch = z
     .object({
@@ -1034,7 +1060,9 @@ export class FinanceBooks {
       currency: currency.optional(),
       spent_on: ymd.optional(),
       channel: z.enum(OFFICE_CHANNELS).optional(),
-      reference: patchText(1, 80),
+      reference: patchText(1, 300),
+      department_id: z.string().uuid().nullable().optional(),
+      need_id: z.string().uuid().nullable().optional(),
     })
     .strict()
     .refine(nonEmpty, { message: "Nothing to change" });
@@ -1042,6 +1070,8 @@ export class FinanceBooks {
     status: commaList(EXPENSE_STATUSES),
     fund: z.string().trim().max(40).optional(),
     category: z.string().trim().max(40).optional(),
+    department: z.string().uuid().optional(),
+    need: z.string().uuid().optional(),
     from: ymd.optional(),
     to: ymd.optional(),
     q: z.string().trim().max(80).optional(),
@@ -1054,10 +1084,14 @@ export class FinanceBooks {
            e.payee, e.description, e.amount_minor::text AS amount_minor, e.currency, e.spent_on::text AS spent_on, e.channel, e.reference, e.status,
            e.recorded_by, ur.full_name AS recorded_by_name, e.recorded_at, e.recorded_at::text AS recorded_at_text,
            e.approved_by, ua.full_name AS approved_by_name, e.approved_at,
-           e.voided_by, uv.full_name AS voided_by_name, e.voided_at, e.void_reason, e.journal_id, e.void_journal_id
+           e.voided_by, uv.full_name AS voided_by_name, e.voided_at, e.void_reason, e.journal_id, e.void_journal_id,
+           e.voucher_no, e.department_id, d.name AS department_name, e.need_id, n.title AS need_title, n.status AS need_status,
+           n.target_minor::text AS need_target_minor, n.currency AS need_currency
       FROM expenses e
       JOIN funds f ON f.fund_id = e.fund_id
       JOIN expense_categories ec ON ec.category_id = e.category_id
+      LEFT JOIN departments d ON d.department_id = e.department_id
+      LEFT JOIN department_needs n ON n.need_id = e.need_id
       LEFT JOIN users ur ON ur.user_id = e.recorded_by
       LEFT JOIN users ua ON ua.user_id = e.approved_by
       LEFT JOIN users uv ON uv.user_id = e.voided_by`;
@@ -1087,6 +1121,17 @@ export class FinanceBooks {
       void_reason: (r.void_reason as string | null) ?? null,
       journal_id: (r.journal_id as string | null) ?? null,
       void_journal_id: (r.void_journal_id as string | null) ?? null,
+      voucher_no: String(r.voucher_no),
+      department: r.department_id ? { department_id: String(r.department_id), name: String(r.department_name) } : null,
+      need: r.need_id
+        ? {
+            need_id: String(r.need_id),
+            title: String(r.need_title),
+            status: String(r.need_status),
+            target_minor: Number(r.need_target_minor),
+            currency: String(r.need_currency),
+          }
+        : null,
     };
   }
 
@@ -1107,19 +1152,51 @@ export class FinanceBooks {
     return k;
   }
 
+  /** Where an expense's money went: a department, and optionally one of its
+   *  needs. A need implies its department; a need must be approved (or
+   *  closed — the bill for a finished need can arrive late); an archived
+   *  department takes no new spending. */
+  private async allocation(c: Queryable, departmentId: string | null, needId: string | null): Promise<{ department_id: string | null; need_id: string | null }> {
+    if (needId) {
+      const n = await maybeOne<{ department_id: string; status: string; title: string }>(
+        c, `SELECT department_id, status, title FROM department_needs WHERE need_id = $1`, [needId],
+      );
+      if (!n) throw new ApiError("UNPROCESSABLE", "Unknown department need");
+      if (n.status !== "approved" && n.status !== "closed") {
+        throw new ApiError("UNPROCESSABLE", `"${n.title}" is ${n.status} — only an approved need can be spent against`);
+      }
+      if (departmentId && departmentId !== n.department_id) {
+        throw new ApiError("UNPROCESSABLE", `"${n.title}" belongs to another department`);
+      }
+      departmentId = n.department_id;
+    }
+    if (departmentId) {
+      const d = await maybeOne<{ status: string; name: string }>(c, `SELECT status, name FROM departments WHERE department_id = $1`, [departmentId]);
+      if (!d) throw new ApiError("UNPROCESSABLE", "Unknown department");
+      if (d.status !== "active") throw new ApiError("UNPROCESSABLE", `${d.name} is archived — restore it in Departments first`);
+    }
+    return { department_id: departmentId, need_id: needId };
+  }
+
   async recordExpense(actorId: string, input: z.infer<typeof FinanceBooks.ExpenseInput>, now: Date = new Date()): Promise<Record<string, unknown>> {
     assertBooksDate("spent_on", input.spent_on, now);
     const id = await tx(this.pool, async (c) => {
       const fund = await this.activeFund(c, input.fund);
       const cat = await this.activeCategory(c, input.category);
-      const e = await one<{ expense_id: string }>(
+      const where = await this.allocation(c, input.department_id ?? null, input.need_id ?? null);
+      // The PV- number is issued by the expenses_voucher_no trigger (migration 226).
+      const e = await one<{ expense_id: string; voucher_no: string }>(
         c,
-        `INSERT INTO expenses (fund_id, category_id, payee, description, amount_minor, currency, spent_on, channel, reference, recorded_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING expense_id`,
-        [fund.fund_id, cat.category_id, input.payee, input.description, input.amount_minor, input.currency, input.spent_on, input.channel, input.reference, actorId],
+        `INSERT INTO expenses (fund_id, category_id, payee, description, amount_minor, currency, spent_on, channel, reference, recorded_by,
+                               department_id, need_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING expense_id, voucher_no`,
+        [fund.fund_id, cat.category_id, input.payee, input.description, input.amount_minor, input.currency, input.spent_on, input.channel, input.reference, actorId,
+          where.department_id, where.need_id],
       );
+      const voucher = e.voucher_no;
       await audit(c, actorId, "expense.recorded", "expenses", e.expense_id, {
         fund: fund.code, category: cat.code, payee: input.payee, amount_minor: input.amount_minor, currency: input.currency, spent_on: input.spent_on, channel: input.channel,
+        voucher_no: voucher, department_id: where.department_id, need_id: where.need_id,
       });
       return e.expense_id;
     });
@@ -1129,7 +1206,9 @@ export class FinanceBooks {
   async updateExpense(actorId: string, id: string, patch: z.infer<typeof FinanceBooks.ExpensePatch>, now: Date = new Date()): Promise<Record<string, unknown>> {
     if (patch.spent_on !== undefined) assertBooksDate("spent_on", patch.spent_on, now);
     await tx(this.pool, async (c) => {
-      const e = await maybeOne<{ status: string }>(c, `SELECT status FROM expenses WHERE expense_id = $1 FOR UPDATE`, [id]);
+      const e = await maybeOne<{ status: string; department_id: string | null; need_id: string | null }>(
+        c, `SELECT status, department_id, need_id FROM expenses WHERE expense_id = $1 FOR UPDATE`, [id],
+      );
       if (!e) throw new ApiError("NOT_FOUND", "Expense not found");
       if (e.status !== "recorded") throw new ApiError("UNPROCESSABLE", `An ${e.status === "approved" ? "approved" : "void"} expense cannot be edited — void it and record it again`);
       const sets: string[] = [];
@@ -1145,6 +1224,15 @@ export class FinanceBooks {
       for (const k of ["payee", "description", "amount_minor", "currency", "spent_on", "channel", "reference"] as const) {
         if (patch[k] !== undefined) put(k, patch[k]);
       }
+      if (patch.department_id !== undefined || patch.need_id !== undefined) {
+        const dept = patch.department_id !== undefined ? patch.department_id : e.department_id;
+        // Moving to another department drops a need that belongs to the old one.
+        const need = patch.need_id !== undefined ? patch.need_id : patch.department_id !== undefined && patch.department_id !== e.department_id ? null : e.need_id;
+        const where = await this.allocation(c, dept, need);
+        if (where.department_id !== e.department_id) put("department_id", where.department_id);
+        if (where.need_id !== e.need_id) put("need_id", where.need_id);
+      }
+      if (sets.length === 0) return;
       await c.query(`UPDATE expenses SET ${sets.join(", ")} WHERE expense_id = $1`, params);
       // The editor is one of the expense's makers — approveExpense reads this.
       await audit(c, actorId, "expense.updated", "expenses", id, { changes });
@@ -1225,17 +1313,77 @@ export class FinanceBooks {
     return this.getExpense(this.pool, id);
   }
 
+  /** The payment voucher PDF for one expense (any status — a void voucher
+   *  prints VOID), with who printed it and when. finance:view. */
+  async expenseVoucher(id: string, printedBy: string, now: Date = new Date()): Promise<{ filename: string; pdf: Buffer }> {
+    const e = (await this.getExpense(this.pool, id)) as {
+      expense_id: string; voucher_no: string; status: "recorded" | "approved" | "void"; payee: string; description: string | null;
+      amount_minor: number; currency: string; spent_on: string; channel: OfficeChannel; reference: string | null;
+      fund: { name: string }; category: { name: string };
+      department: { department_id: string; name: string } | null;
+      need: { need_id: string; title: string; target_minor: number; currency: string } | null;
+      recorded_by_name: string | null; recorded_at: string; approved_by_name: string | null; approved_at: string | null;
+      voided_by_name: string | null; voided_at: string | null; void_reason: string | null; journal_id: string | null;
+    };
+    const ctx = await one<{ church: string | null; printer: string | null; need_spent: string | null }>(
+      this.pool,
+      `SELECT COALESCE(
+                (SELECT c.name FROM departments d JOIN congregations c ON c.congregation_id = d.congregation_id WHERE d.department_id = $2),
+                (SELECT c.name FROM expenses x JOIN users u ON u.user_id = x.recorded_by JOIN congregations c ON c.congregation_id = u.congregation_id WHERE x.expense_id = $1),
+                (SELECT c.name FROM users u JOIN congregations c ON c.congregation_id = u.congregation_id WHERE u.user_id = $3)
+              ) AS church,
+              (SELECT full_name FROM users WHERE user_id = $3) AS printer,
+              (SELECT sum(amount_minor)::text FROM expenses WHERE need_id = $4 AND status = 'approved') AS need_spent`,
+      [id, e.department?.department_id ?? null, printedBy, e.need?.need_id ?? null],
+    );
+    const code = e.channel === "mpesa" && e.reference ? (/^[A-Z0-9]{10}\b/.exec(e.reference.trim())?.[0] ?? null) : null;
+    const pdf = await renderVoucherPdf({
+      church: ctx.church ?? "Nuru Place Church",
+      voucherNo: e.voucher_no,
+      status: e.status,
+      amountLabel: money(e.amount_minor, e.currency),
+      amountWords: amountInWords(e.amount_minor, e.currency),
+      payee: e.payee,
+      spentOn: dayLabel(e.spent_on),
+      fund: e.fund.name,
+      category: e.category.name,
+      department: e.department?.name ?? null,
+      need: e.need?.title ?? null,
+      needLine: e.need
+        ? `Need "${e.need.title}": target ${money(e.need.target_minor, e.need.currency)} · approved spending against it so far ${money(Number(ctx.need_spent ?? 0), e.need.currency)}`
+        : null,
+      channel: CHANNEL_WORDS[e.channel] ?? e.channel,
+      mpesaCode: code,
+      reference: e.reference,
+      description: e.description,
+      preparedBy: e.recorded_by_name ?? "—",
+      preparedAt: instantLabel(e.recorded_at),
+      approvedBy: e.approved_by_name,
+      approvedAt: e.approved_at ? instantLabel(e.approved_at) : null,
+      voidedBy: e.voided_by_name,
+      voidedAt: e.voided_at ? instantLabel(e.voided_at) : null,
+      voidReason: e.void_reason,
+      expenseId: e.expense_id,
+      journalRef: e.journal_id ? e.journal_id.slice(0, 8) : null,
+      generatedBy: ctx.printer ?? "the finance office",
+      generatedAt: instantLabel(now.toISOString()),
+    });
+    return { filename: `${e.voucher_no}.pdf`, pdf };
+  }
+
   private expenseFilters(q: Omit<z.infer<typeof FinanceBooks.ExpenseQuery>, "cursor" | "limit">): { where: string[]; params: unknown[] } {
     const params: unknown[] = [];
     const where: string[] = ["TRUE"];
     if (q.status.length) { params.push(q.status); where.push(`e.status = ANY($${params.length}::text[])`); }
     if (q.fund) { params.push(q.fund); where.push(`f.code = $${params.length}`); }
     if (q.category) { params.push(q.category); where.push(`ec.code = $${params.length}`); }
+    if (q.department) { params.push(q.department); where.push(`e.department_id = $${params.length}::uuid`); }
+    if (q.need) { params.push(q.need); where.push(`e.need_id = $${params.length}::uuid`); }
     if (q.from) { params.push(q.from); where.push(`e.spent_on >= $${params.length}::date`); }
     if (q.to) { params.push(q.to); where.push(`e.spent_on <= $${params.length}::date`); }
     if (q.q) {
       params.push(`%${q.q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`);
-      where.push(`(e.payee ILIKE $${params.length} OR e.description ILIKE $${params.length} OR e.reference ILIKE $${params.length})`);
+      where.push(`(e.payee ILIKE $${params.length} OR e.description ILIKE $${params.length} OR e.reference ILIKE $${params.length} OR e.voucher_no ILIKE $${params.length})`);
     }
     return { where, params };
   }
@@ -1288,7 +1436,9 @@ export class FinanceBooks {
       `${FinanceBooks.EXPENSE_SELECT} WHERE ${where.join(" AND ")} ORDER BY e.spent_on DESC, e.recorded_at DESC, e.expense_id DESC`,
       params,
     );
-    const header = ["expense_id", "spent_on", "payee", "category", "fund", "description", "amount", "currency", "channel", "reference", "status", "recorded_by", "recorded_at", "approved_by", "approved_at", "voided_by", "voided_at", "void_reason"];
+    const header = ["expense_id", "spent_on", "payee", "category", "fund", "description", "amount", "currency", "channel", "reference", "status", "recorded_by", "recorded_at", "approved_by", "approved_at", "voided_by", "voided_at", "void_reason",
+      // 2026-10-31, appended so existing sheets keep their columns.
+      "voucher_no", "department", "need"];
     return {
       header,
       rows: rows.map((r) => [
@@ -1298,6 +1448,7 @@ export class FinanceBooks {
         (r.recorded_by_name as string | null) ?? null, iso(r.recorded_at),
         (r.approved_by_name as string | null) ?? null, iso(r.approved_at),
         (r.voided_by_name as string | null) ?? null, iso(r.voided_at), (r.void_reason as string | null) ?? null,
+        String(r.voucher_no), (r.department_name as string | null) ?? null, (r.need_title as string | null) ?? null,
       ]),
     };
   }

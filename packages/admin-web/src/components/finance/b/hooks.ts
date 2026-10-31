@@ -132,6 +132,23 @@ export interface FundOption {
   is_active: boolean;
 }
 
+export interface DepartmentOption {
+  department_id: string;
+  name: string;
+  fund_code: string | null;
+}
+
+/** The active departments an expense can be booked to — from the finance
+ *  config, so a finance clerk without departments:view still sees them. */
+export function useDepartmentOptions(): { departments: DepartmentOption[]; nameOf: (id: string | null | undefined) => string | null; loading: boolean } {
+  const res = useResource(() => FinanceApi.config().then((c) => c.departments ?? []), "departments", { errorFallback: "Could not load the departments." });
+  return useMemo(() => {
+    const departments = res.data ?? [];
+    const byId = new Map(departments.map((d) => [d.department_id, d.name]));
+    return { departments, nameOf: (id) => (id ? (byId.get(id) ?? null) : null), loading: res.loading };
+  }, [res.data, res.loading]);
+}
+
 /** Every fund (active and inactive) for selects and code → name look-ups —
  *  GET /admin/finance/config (finance:view, the light read). */
 export function useFunds(): { funds: FundOption[]; active: FundOption[]; nameOf: (code: string | null | undefined) => string; loading: boolean; error: string | null } {

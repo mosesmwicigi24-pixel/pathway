@@ -2066,6 +2066,8 @@ export interface FinanceConfig {
     confirmation_url: string | null;
     last_30_days: Partial<Record<"recorded" | "matched_prompt" | "duplicate" | "rejected", number>>;
   };
+  /** Active departments an expense can be booked to (absent on servers before 2026-10-31). */
+  departments?: { department_id: string; name: string; fund_code: string | null }[];
   step_up_required: boolean;
 }
 

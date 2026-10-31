@@ -761,7 +761,7 @@ describe("expenses — maker-checker", () => {
     expect(csv.status).toBe(200);
     expect(csv.headers["content-type"]).toContain("text/csv");
     const lines = csv.text.replace(/^﻿/, "").trim().split("\r\n");
-    expect(lines[0]).toBe("expense_id,spent_on,payee,category,fund,description,amount,currency,channel,reference,status,recorded_by,recorded_at,approved_by,approved_at,voided_by,voided_at,void_reason");
+    expect(lines[0]).toBe("expense_id,spent_on,payee,category,fund,description,amount,currency,channel,reference,status,recorded_by,recorded_at,approved_by,approved_at,voided_by,voided_at,void_reason,voucher_no,department,need");
     expect(lines).toHaveLength(3);
     expect(csv.text).toContain(`"'=HYPERLINK(""http://evil"")"`);
     expect(csv.text).toContain(",300.00,KES,");

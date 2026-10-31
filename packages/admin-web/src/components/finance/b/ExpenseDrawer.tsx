@@ -1,18 +1,26 @@
-// One expense and its whole trail (Finance → Expenses): recorded → edited →
+// One expense as a payment voucher (Finance → Expenses; redesigned 2026-10-31):
+// the voucher card first — status, PV number, the amount in figures and in
+// words, who was paid, when and how — then Download / Print / Share the PDF
+// voucher (for accountability: a pastor, the payee, an auditor), then where the
+// money went (department, need, fund, category), the payment details (an
+// M-Pesa code lifted out of a pasted confirmation message), the purpose, and
+// the accountability trail.
+//
+// The trail (Finance → Expenses): recorded → edited →
 // approved → voided, who and when, with the actions the person may take —
 // Edit (recorded only, finance:manage), Approve (finance:approve; never by a
 // maker unless SuperAdmin — maker-checker, §2) and Void (finance:manage, with a
 // reason). Approving and voiding state their consequence first, including what
 // it does to the fund's balance (an approval may overdraw a fund — the money
 // has already left — so that is a warning, never a block).
-import { useState, type ReactElement } from "react";
-import { Ban, CheckCircle2, Pencil } from "lucide-react";
-import { FinanceApi, financeErrorCode, FINANCE_LIMITS, type BooksExpense, type FinanceAuditRow } from "../../../api/finance";
+import { useState, type ReactElement, type ReactNode } from "react";
+import { Ban, CheckCircle2, Download, Pencil, Printer, Share2 } from "lucide-react";
+import { FinanceApi, financeErrorCode, financeErrorMessage, FINANCE_LIMITS, saveBlob, type BooksExpense, type FinanceAuditRow } from "../../../api/finance";
 import { Button, ConfirmDialog, Drawer, FIN, MoneyText, Notice, Skeleton, StatusChip, channelLabel, useFinanceCaps, useFinanceToast } from "../kit";
 import { formatMinor } from "../money";
 import { fmtDateTimeEAT, fmtDay } from "../dates";
 import { useMyIdentity, useResource } from "./hooks";
-import { SAME_PERSON_SENTENCE, approveConsequence, approveGate, eatDayOf, fundBalanceIn, fundImpact, voidConsequence, type FundImpact } from "./logic";
+import { SAME_PERSON_SENTENCE, amountInWords, approveConsequence, approveGate, eatDayOf, fundBalanceIn, fundImpact, mpesaCodeOf, voidConsequence, type FundImpact } from "./logic";
 import { KeyValues, SubHead, Trail, type TrailStep } from "./ui";
 
 /** The "expense.updated" audit rows for one expense — who edited it while it
@@ -177,7 +185,7 @@ export function ExpenseDrawer({
       <Drawer
         open
         title={expense.payee}
-        subtitle={`${amount} · ${expense.category.name} · spent ${fmtDay(expense.spent_on)}`}
+        subtitle={[expense.voucher_no, expense.department?.name ?? expense.category.name, `paid ${fmtDay(expense.spent_on)}`].filter(Boolean).join(" · ")}
         onClose={onClose}
         footer={
           <>
@@ -199,36 +207,69 @@ export function ExpenseDrawer({
           </>
         }
       >
-        <div className="flex items-center flex-wrap" style={{ gap: 8, marginBottom: 14 }}>
-          <StatusChip status={expense.status} />
-          <MoneyText amount_minor={expense.amount_minor} currency={expense.currency} strong style={{ fontSize: 18, color: FIN.navy }} />
-        </div>
+        <VoucherCard expense={expense} />
+        {expense.voucher_no ? <VoucherActions expense={expense} /> : null}
         {blocked ? (
-          <Notice tone="warn" style={{ marginBottom: 14 }}>
+          <Notice tone="warn" style={{ marginTop: 14 }}>
             {blocked}
           </Notice>
         ) : null}
+        {expense.status === "recorded" && !blocked ? (
+          <Notice tone="info" style={{ marginTop: 14 }}>
+            Awaiting approval: nothing is posted until a second person approves it. Its voucher prints “Awaiting approval” until then.
+          </Notice>
+        ) : null}
+        {expense.status === "void" ? (
+          <Notice tone="error" style={{ marginTop: 14 }}>
+            Void{expense.voided_by_name ? ` — ${expense.voided_by_name}` : ""}: “{expense.void_reason ?? ""}”. The voucher keeps its number and prints VOID.
+          </Notice>
+        ) : null}
         {res.error ? (
-          <Notice tone="error" style={{ marginBottom: 14 }}>
+          <Notice tone="error" style={{ marginTop: 14 }}>
             {res.error}
           </Notice>
         ) : null}
+
+        <SubHead>Where the money went</SubHead>
         <KeyValues
           items={[
-            { label: "Paid from", value: expense.fund.name },
+            {
+              label: "Department",
+              value: expense.department ? expense.department.name : <span style={{ color: FIN.muted }}>Not tied to a department</span>,
+            },
+            {
+              label: "Department need",
+              value: expense.need ? (
+                <>
+                  {expense.need.title}
+                  <span style={{ display: "block", fontSize: 11.5, color: FIN.muted, marginTop: 2 }}>Target {formatMinor(expense.need.target_minor, expense.need.currency)}</span>
+                </>
+              ) : (
+                <span style={{ color: FIN.muted }}>—</span>
+              ),
+            },
+            { label: "Paid from fund", value: expense.fund.name },
             { label: "Category", value: expense.category.name },
-            { label: "Paid by", value: channelLabel(expense.channel) },
-            { label: "Reference", value: expense.reference ? <span style={{ fontFamily: FIN.mono }}>{expense.reference}</span> : "—" },
-            { label: "Spent on", value: <span style={{ fontFamily: FIN.mono }}>{fmtDay(expense.spent_on)}</span>, title: "The economic date — approval posts on this day" },
-            { label: "Amount", value: <MoneyText amount_minor={expense.amount_minor} currency={expense.currency} strong /> },
           ]}
         />
-        {expense.description ? <p style={{ fontSize: 13, color: FIN.navy, marginTop: 12, lineHeight: 1.5 }}>{expense.description}</p> : null}
-        <SubHead aside={trail.data?.more ? "Older edits may not be listed — see Audit" : trail.error ? "Edits could not be read" : undefined}>Trail</SubHead>
+
+        <SubHead>Payment</SubHead>
+        <PaymentDetails expense={expense} />
+
+        <SubHead>Purpose</SubHead>
+        {expense.description ? (
+          <blockquote style={{ margin: 0, padding: "10px 14px", borderLeft: `3px solid ${FIN.gold}`, background: FIN.input, borderRadius: "0 10px 10px 0", fontSize: 13.5, color: FIN.navy, lineHeight: 1.55 }}>
+            {expense.description}
+          </blockquote>
+        ) : (
+          <p style={{ margin: 0, fontSize: 13, color: FIN.muted }}>No description was given{canEdit ? " — Edit to add what it was for; the voucher prints it." : "."}</p>
+        )}
+
+        <SubHead aside={trail.data?.more ? "Older edits may not be listed — see Audit" : trail.error ? "Edits could not be read" : "Maker and checker are always two people"}>Accountability trail</SubHead>
         <Trail steps={steps} />
         {expense.journal_id || expense.void_journal_id ? (
           <p style={{ fontSize: 11.5, color: FIN.muted, marginTop: 14, fontFamily: FIN.mono }}>
-            {expense.journal_id ? `Journal ${expense.journal_id.slice(0, 8)}` : ""}
+            {expense.journal_id ? `Ledger journal ${expense.journal_id.slice(0, 8)}` : ""}
             {expense.void_journal_id ? ` · reversal ${expense.void_journal_id.slice(0, 8)}` : ""}
           </p>
         ) : null}
@@ -265,5 +306,154 @@ export function ExpenseDrawer({
         onCancel={() => setDialog(null)}
       />
     </>
+  );
+}
+
+/** The top of the drawer: the voucher as it prints — status and number, the
+ *  amount in figures and words, and who was paid, when and how. */
+function VoucherCard({ expense }: { expense: BooksExpense }): ReactElement {
+  return (
+    <section
+      aria-label="Voucher"
+      style={{ position: "relative", padding: "16px 18px 18px", borderRadius: 14, background: "#FBF7EC", border: `1px solid #EFE3C4`, borderLeft: `4px solid ${FIN.gold}` }}
+    >
+      <div className="flex items-center justify-between flex-wrap" style={{ gap: 8 }}>
+        <StatusChip status={expense.status} />
+        {expense.voucher_no ? (
+          <span style={{ fontFamily: FIN.mono, fontSize: 12.5, fontWeight: 700, color: FIN.navy, letterSpacing: 0.4 }} title="Payment voucher number">
+            {expense.voucher_no}
+          </span>
+        ) : null}
+      </div>
+      <div style={{ marginTop: 12, fontSize: 10.5, fontWeight: 700, letterSpacing: 0.8, textTransform: "uppercase", color: "#A87F2E" }}>Amount paid</div>
+      <MoneyText
+        amount_minor={expense.amount_minor}
+        currency={expense.currency}
+        strong
+        style={{ display: "block", fontFamily: FIN.display, fontSize: 30, lineHeight: 1.15, color: FIN.navy, textDecoration: expense.status === "void" ? "line-through" : undefined }}
+      />
+      <div style={{ fontSize: 12.5, fontStyle: "italic", color: FIN.navy, opacity: 0.8, marginTop: 2 }}>{amountInWords(expense.amount_minor, expense.currency)}</div>
+      <div className="flex flex-wrap" style={{ gap: "6px 18px", marginTop: 12, fontSize: 13, color: FIN.navy }}>
+        <span>
+          <span style={{ color: FIN.muted }}>Paid to </span>
+          <strong>{expense.payee}</strong>
+        </span>
+        <span>
+          <span style={{ color: FIN.muted }}>on </span>
+          <span style={{ fontFamily: FIN.mono }}>{fmtDay(expense.spent_on)}</span>
+        </span>
+        <span>
+          <span style={{ color: FIN.muted }}>by </span>
+          {channelLabel(expense.channel)}
+        </span>
+      </div>
+    </section>
+  );
+}
+
+/** Paid by, the code or reference, and the whole pasted message beneath. */
+function PaymentDetails({ expense }: { expense: BooksExpense }): ReactElement {
+  const code = mpesaCodeOf(expense.channel, expense.reference);
+  const rest = code && expense.reference ? expense.reference.trim().slice(code.length).trim() : null;
+  const items: { label: string; value: ReactNode; title?: string }[] = [
+    { label: "Paid by", value: channelLabel(expense.channel) },
+    code
+      ? { label: "M-Pesa code", value: <span style={{ fontFamily: FIN.mono, fontWeight: 700, letterSpacing: 0.5 }}>{code}</span> }
+      : { label: "Reference", value: expense.reference ? <span style={{ fontFamily: FIN.mono }}>{expense.reference}</span> : <span style={{ color: FIN.muted }}>—</span> },
+    { label: "Spent on", value: <span style={{ fontFamily: FIN.mono }}>{fmtDay(expense.spent_on)}</span>, title: "The economic date — approval posts on this day" },
+  ];
+  return (
+    <>
+      <KeyValues items={items} />
+      {rest ? (
+        <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 10, border: `1px dashed ${FIN.border}`, fontSize: 12, color: FIN.muted, lineHeight: 1.5, overflowWrap: "anywhere" }}>
+          <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", display: "block", marginBottom: 3 }}>M-Pesa message</span>
+          {rest}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/** Whether this browser can hand a PDF to the share sheet (phones, mostly). */
+function canSharePdf(): boolean {
+  try {
+    if (typeof navigator === "undefined" || typeof navigator.canShare !== "function" || typeof File === "undefined") return false;
+    return navigator.canShare({ files: [new File([new Blob(["%PDF-"])], "v.pdf", { type: "application/pdf" })] });
+  } catch {
+    return false;
+  }
+}
+
+/** Download, print or share the voucher PDF — the accountability record. */
+function VoucherActions({ expense }: { expense: BooksExpense }): ReactElement {
+  const toast = useFinanceToast();
+  const [busy, setBusy] = useState<"download" | "print" | "share" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const filename = `${expense.voucher_no ?? "voucher"}.pdf`;
+  const shareable = canSharePdf();
+
+  const run = async (kind: "download" | "print" | "share"): Promise<void> => {
+    if (busy) return;
+    setError(null);
+    // A print tab must open inside the click, before any await, or it is blocked.
+    const tab = kind === "print" ? window.open("", "_blank") : null;
+    setBusy(kind);
+    try {
+      if (kind === "download") {
+        await FinanceApi.expenseVoucherPdf(expense.expense_id, filename);
+        toast(`Saved ${filename}`);
+        return;
+      }
+      const blob = await FinanceApi.expenseVoucherBlob(expense.expense_id);
+      const pdf = blob.type === "application/pdf" ? blob : new Blob([blob], { type: "application/pdf" });
+      if (kind === "print") {
+        if (!tab) {
+          saveBlob(pdf, filename);
+          toast("Your browser blocked the print tab — the voucher was downloaded instead", "warn");
+          return;
+        }
+        const url = URL.createObjectURL(pdf);
+        tab.location.href = url;
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        return;
+      }
+      const file = new File([pdf], filename, { type: "application/pdf" });
+      await navigator.share({
+        files: [file],
+        title: `Payment voucher ${expense.voucher_no ?? ""}`.trim(),
+        text: `${formatMinor(expense.amount_minor, expense.currency)} paid to ${expense.payee} on ${fmtDay(expense.spent_on)}`,
+      });
+    } catch (e) {
+      tab?.close();
+      if (e instanceof DOMException && e.name === "AbortError") return; // the share sheet was closed
+      setError(financeErrorMessage(e, "Could not get the voucher."));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div className="flex flex-wrap items-center" style={{ gap: 8 }}>
+        <Button icon={<Download size={13} />} busy={busy === "download"} onClick={() => void run("download")}>
+          Download voucher
+        </Button>
+        <Button icon={<Printer size={13} />} busy={busy === "print"} onClick={() => void run("print")}>
+          Print
+        </Button>
+        {shareable ? (
+          <Button icon={<Share2 size={13} />} busy={busy === "share"} onClick={() => void run("share")}>
+            Share
+          </Button>
+        ) : null}
+      </div>
+      <p style={{ margin: "6px 0 0", fontSize: 11.5, color: FIN.muted }}>A one-page PDF with the amount in words, who prepared and approved it, and a line for the person paid to sign.</p>
+      {error ? (
+        <Notice tone="error" style={{ marginTop: 8 }}>
+          {error}
+        </Notice>
+      ) : null}
+    </div>
   );
 }

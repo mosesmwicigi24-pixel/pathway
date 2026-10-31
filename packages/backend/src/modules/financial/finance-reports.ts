@@ -730,6 +730,8 @@ export const StatementsQuery = z.object({
 });
 export const NeedsQuery = z.object({
   status: z.enum(["pending", "approved", "rejected", "closed", "all"]).default("approved"),
+  /** One department's needs (the expense form's "spent against" list). */
+  department_id: z.string().uuid().optional(),
   q: z.string().trim().max(80).optional(),
   cursor: z.string().max(400).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -1863,14 +1865,19 @@ export class FinanceReportsService {
     const P = new Params();
     const w: string[] = [];
     if (q.status !== "all") w.push(`n.status = ${P.add(q.status)}`);
+    if (q.department_id) w.push(`n.department_id = ${P.add(q.department_id)}::uuid`);
     if (q.q) {
       const like = P.add(likeContains(q.q));
       w.push(`(n.title ILIKE ${like} OR d.name ILIKE ${like})`);
     }
-    const rows = await many<{ need_id: string; title: string; why: string; department_id: string; department_name: string; target_minor: string; currency: string; deadline: string | null; status: string; created_at: Date; decided_at: Date | null; cursor_ts: string }>(
+    const rows = await many<{ need_id: string; title: string; why: string; department_id: string; department_name: string; target_minor: string; currency: string; deadline: string | null; status: string; created_at: Date; decided_at: Date | null; cursor_ts: string; spent_minor: string; awaiting_minor: string; expenses_count: number }>(
       this.pool,
       `SELECT n.need_id, n.title, n.why, n.department_id, d.name AS department_name, n.target_minor::text AS target_minor,
-              n.currency, n.deadline::text AS deadline, n.status, n.created_at, n.decided_at, ${cursorTs("n.created_at")} AS cursor_ts
+              n.currency, n.deadline::text AS deadline, n.status, n.created_at, n.decided_at, ${cursorTs("n.created_at")} AS cursor_ts,
+              -- What was spent against the need (approved vouchers) and what waits for approval.
+              (SELECT COALESCE(sum(x.amount_minor), 0)::text FROM expenses x WHERE x.need_id = n.need_id AND x.status = 'approved') AS spent_minor,
+              (SELECT COALESCE(sum(x.amount_minor), 0)::text FROM expenses x WHERE x.need_id = n.need_id AND x.status = 'recorded') AS awaiting_minor,
+              (SELECT count(*)::int FROM expenses x WHERE x.need_id = n.need_id AND x.status <> 'void') AS expenses_count
          FROM department_needs n JOIN departments d ON d.department_id = n.department_id
         WHERE ${w.length ? w.join(" AND ") : "TRUE"}
         ORDER BY n.created_at DESC, n.need_id DESC`,
@@ -1891,6 +1898,9 @@ export class FinanceReportsService {
         target_minor: Number(r.target_minor),
         raised_minor: giving.raised_minor,
         gifts_count: giving.gifts,
+        spent_minor: Number(r.spent_minor),
+        awaiting_minor: Number(r.awaiting_minor),
+        expenses_count: r.expenses_count,
         currency: r.currency,
         deadline: r.deadline,
         status: r.status,
@@ -1902,7 +1912,10 @@ export class FinanceReportsService {
     const totals = sortCurrencies(shaped.map((s) => String(s.currency))).map((c) => {
       const mine = shaped.filter((s) => s.currency === c);
       const raised = mine.reduce((a, s) => a + Number(s.raised_minor), 0);
-      return { currency: c, amount_minor: raised, count: mine.length, target_minor: mine.reduce((a, s) => a + Number(s.target_minor), 0), raised_minor: raised };
+      return {
+        currency: c, amount_minor: raised, count: mine.length, target_minor: mine.reduce((a, s) => a + Number(s.target_minor), 0), raised_minor: raised,
+        spent_minor: mine.reduce((a, s) => a + Number(s.spent_minor), 0),
+      };
     });
     const { page, next_cursor } = pageBy(shaped, (s) => [String(s.cursor_ts), String(s.need_id)], "desc", q.cursor, q.limit);
     return {

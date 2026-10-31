@@ -345,9 +345,35 @@ Writes (idempotent where money is created; every write audited `finance.*`):
 - **Claims**: the claims queue as its own page (confirm/reject).
 - **Recurring gifts**: schedules with needs-attention filter, run-rate totals.
 - **Campaigns**: list + create/edit/go live/end + reach; raised vs goal.
-- **Department needs**: approved/pending needs with raised vs target (links to
-  Departments for approval).
+- **Department needs**: approved/pending needs with raised vs target and, since
+  2026-10-31, **spent** (approved payment vouchers against the need) and what
+  awaits approval. With departments:manage the page runs needs: **New need**
+  (any active department; approved at once by default — the office is the
+  approver), Approve / Reject (with a reason sent to the submitter) / Close in
+  place. With finance:manage, **Record expense** opens the expense form already
+  pointed at the need (`/finance/expenses?record=1&department=…&need=…`); "N
+  expenses" lists them (`?need=…`). Departments themselves are made in
+  Departments (linked).
 - **Expenses**: list + record + approve (maker-checker) + void; totals; CSV.
+  Since 2026-10-31 (migration 226) every expense has a **payment voucher
+  number** `PV-YYYY-NNNNN` — gapless per Nairobi year of recording, issued by
+  the `expenses_voucher_no` trigger, kept when voided — and may be booked to a
+  **department** and one of its **approved needs** (a need implies its
+  department; pending/rejected needs, another department's need and archived
+  departments are refused; moving department drops the old need). Filters:
+  department, need; search matches the PV number. The reference holds up to
+  300 characters so a whole M-Pesa confirmation can be pasted; its code is
+  lifted out on screen and on the voucher. The drawer leads with the voucher
+  (status, PV number, amount in figures and words, payee, date, channel), then
+  **Download voucher / Print / Share** (share sheet where the browser has
+  one), where the money went, payment details, purpose and the accountability
+  trail. **The voucher PDF** (`GET /admin/finance/expenses/{id}/voucher.pdf`,
+  finance:view, any status) is one A4 page in Fraunces/Inter: church, PV
+  number, status stamp (APPROVED / AWAITING APPROVAL / VOID watermark), amount
+  in figures and words, payee, fund, category, department, need (with target
+  and approved spending so far), channel, M-Pesa code or reference, purpose,
+  prepared-by / approved-by with times, a blank received-by block to sign,
+  and who printed it when.
 - **Budgets**: year budget, lines editor (12 months), approve, budget vs actual
   with variance.
 - **Funds**: balances, activity, create/edit/deactivate, transfer between funds,
