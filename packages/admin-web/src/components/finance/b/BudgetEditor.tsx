@@ -6,7 +6,7 @@
 // so the months always add back to the year). Saving replaces ALL lines
 // (PUT, finance:manage); the books' rules are checked first so the grid can
 // point at the cell. Read-only for anyone without finance:manage.
-import { useEffect, useId, useMemo, useState, type CSSProperties, type ReactElement } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement } from "react";
 import { Plus, Save, Trash2, Wand2 } from "lucide-react";
 import { FinanceApi, financeErrorMessage, FINANCE_LIMITS, type BooksBudgetDetail, type BooksExpenseCategory, type BudgetLineKind } from "../../../api/finance";
 import { Button, FIN, Notice, inputStyle, selectStyle, useFinanceToast } from "../kit";
@@ -50,7 +50,13 @@ export function BudgetEditor({
   const [spreadFor, setSpreadFor] = useState<string | null>(null);
   const [annual, setAnnual] = useState("");
 
+  // Reset the grid only when a different budget arrives (after a save, a
+  // reload, another year). On mount the state already holds `saved`: a reset
+  // there would run after the first paint and wipe a cell typed in between.
+  const shown = useRef(saved);
   useEffect(() => {
+    if (shown.current === saved) return;
+    shown.current = saved;
     setLines(saved);
     setTried(false);
     setServerError(null);
