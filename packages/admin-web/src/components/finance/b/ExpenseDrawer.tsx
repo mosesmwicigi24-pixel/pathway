@@ -361,7 +361,6 @@ function PaymentDetails({ expense }: { expense: BooksExpense }): ReactElement {
       ? { label: "M-Pesa code", value: <span style={{ fontFamily: FIN.mono, fontWeight: 700, letterSpacing: 0.5 }}>{code}</span> }
       : { label: "Reference", value: expense.reference ? <span style={{ fontFamily: FIN.mono }}>{expense.reference}</span> : <span style={{ color: FIN.muted }}>—</span> },
     { label: "Spent on", value: <span style={{ fontFamily: FIN.mono }}>{fmtDay(expense.spent_on)}</span>, title: "The economic date — approval posts on this day" },
-    { label: "Amount", value: <MoneyText amount_minor={expense.amount_minor} currency={expense.currency} strong /> },
   ];
   return (
     <>

@@ -90,12 +90,59 @@ export function FinanceNeeds(): ReactElement {
   const firstLoad = list.loading && list.totals.length === 0 && list.rows.length === 0;
   const needCount = list.totals.reduce((n, t) => n + t.count, 0);
 
+  /** What may be done to a need, shown under its title so it is never scrolled out of sight. */
+  const actionsFor = (n: FinanceNeedRow): ReactElement => (
+    <div className="flex items-center flex-wrap" style={{ gap: 6 }} onClick={(e) => e.stopPropagation()}>
+      {canDecide && n.status === "pending" ? (
+        <>
+          <Button size="sm" variant="primary" icon={<CheckCircle2 size={12} />} onClick={() => setDeciding({ need: n, decision: "approve" })}>
+            Approve
+          </Button>
+          <Button size="sm" variant="ghost" icon={<XCircle size={12} />} onClick={() => setDeciding({ need: n, decision: "reject" })}>
+            Reject
+          </Button>
+        </>
+      ) : null}
+      {caps.manage && n.status === "approved" ? (
+        <Button
+          size="sm"
+          icon={<ReceiptText size={12} />}
+          title="Record a payment out of this need — it opens the expense form already pointed at it"
+          onClick={() => navigate(`/finance/expenses?record=1&department=${encodeURIComponent(n.department_id)}&need=${encodeURIComponent(n.need_id)}`)}
+        >
+          Record expense
+        </Button>
+      ) : null}
+      {(n.expenses_count ?? 0) > 0 ? (
+        <Button size="sm" variant="ghost" onClick={() => navigate(`/finance/expenses?need=${encodeURIComponent(n.need_id)}&spent=any`)}>
+          {n.expenses_count} {n.expenses_count === 1 ? "expense" : "expenses"}
+        </Button>
+      ) : null}
+      {canDecide && n.status === "approved" ? (
+        <Button size="sm" variant="ghost" onClick={() => setDeciding({ need: n, decision: "close" })}>
+          Close
+        </Button>
+      ) : null}
+      {canReview && !canDecide ? (
+        <Button size="sm" variant="ghost" icon={<ExternalLink size={12} />} onClick={() => navigate(`/departments?department=${encodeURIComponent(n.department_id)}`)} title={`Open ${n.department_name} in Departments`}>
+          Review in Departments
+        </Button>
+      ) : null}
+    </div>
+  
+  );
+
   const columns: Column<FinanceNeedRow>[] = [
     {
       key: "need",
       header: "Need",
-      cell: (n) => <Stacked primary={n.title} secondary={<span title={n.why}>{n.why.length > 90 ? `${n.why.slice(0, 90)}…` : n.why}</span>} strong />,
-      width: 280,
+      cell: (n) => (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <Stacked primary={n.title} secondary={<span title={n.why}>{n.why.length > 90 ? `${n.why.slice(0, 90)}…` : n.why}</span>} strong />
+          {actionsFor(n)}
+        </div>
+      ),
+      width: 300,
     },
     { key: "dept", header: "Department", cell: (n) => n.department_name },
     { key: "target", header: "Target", cell: (n) => <MoneyText amount_minor={n.target_minor} currency={n.currency} />, align: "right" },
@@ -151,51 +198,6 @@ export function FinanceNeeds(): ReactElement {
       key: "books_to",
       header: <span title="Where a gift to this need is booked: the department's fund when it names an active one, else the fund the giver chose.">Books to</span>,
       cell: (n) => (n.fund_code ? funds.nameOf(n.fund_code) : <span style={{ color: FIN.muted }}>The gift's own fund</span>),
-    },
-    {
-      key: "actions",
-      header: "",
-      align: "right",
-      hidden: !canDecide && !canReview && !caps.manage && !caps.view,
-      cell: (n) => (
-        <div className="flex items-center justify-end flex-wrap" style={{ gap: 6 }} onClick={(e) => e.stopPropagation()}>
-          {canDecide && n.status === "pending" ? (
-            <>
-              <Button size="sm" variant="primary" icon={<CheckCircle2 size={12} />} onClick={() => setDeciding({ need: n, decision: "approve" })}>
-                Approve
-              </Button>
-              <Button size="sm" variant="ghost" icon={<XCircle size={12} />} onClick={() => setDeciding({ need: n, decision: "reject" })}>
-                Reject
-              </Button>
-            </>
-          ) : null}
-          {caps.manage && n.status === "approved" ? (
-            <Button
-              size="sm"
-              icon={<ReceiptText size={12} />}
-              title="Record a payment out of this need — it opens the expense form already pointed at it"
-              onClick={() => navigate(`/finance/expenses?record=1&department=${encodeURIComponent(n.department_id)}&need=${encodeURIComponent(n.need_id)}`)}
-            >
-              Record expense
-            </Button>
-          ) : null}
-          {(n.expenses_count ?? 0) > 0 ? (
-            <Button size="sm" variant="ghost" onClick={() => navigate(`/finance/expenses?need=${encodeURIComponent(n.need_id)}&spent=any`)}>
-              {n.expenses_count} {n.expenses_count === 1 ? "expense" : "expenses"}
-            </Button>
-          ) : null}
-          {canDecide && n.status === "approved" ? (
-            <Button size="sm" variant="ghost" onClick={() => setDeciding({ need: n, decision: "close" })}>
-              Close
-            </Button>
-          ) : null}
-          {canReview && !canDecide ? (
-            <Button size="sm" variant="ghost" icon={<ExternalLink size={12} />} onClick={() => navigate(`/departments?department=${encodeURIComponent(n.department_id)}`)} title={`Open ${n.department_name} in Departments`}>
-              Review in Departments
-            </Button>
-          ) : null}
-        </div>
-      ),
     },
   ];
 
@@ -262,7 +264,7 @@ export function FinanceNeeds(): ReactElement {
                   : "No approved needs yet."
                 : "No needs with this status."
           }
-          minWidth={1380}
+          minWidth={1180}
           {...pagedTableProps(list)}
         />
       </SectionCard>
