@@ -37,7 +37,7 @@ async function liveCampaign(opts: {
 async function settledMember(): Promise<string> {
   const id = (await createUser({ congregationId: cong, phone: `+2547${Date.now() % 100000000}` })).user_id;
   await testPool().query(
-    `UPDATE users SET created_at = now() - interval '60 days' WHERE user_id = $1`, [id]);
+    `UPDATE users SET created_at = $2::timestamptz - interval '60 days' WHERE user_id = $1`, [id, MIDMORNING]);
   return id;
 }
 
