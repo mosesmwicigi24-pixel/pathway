@@ -9,6 +9,7 @@ describe("optional narration configuration", () => {
     const env = loadEnv({ ...base, ELEVENLABS_API_KEY: "", NARRATION_GLOBAL_DAILY_CHARACTERS: "", NARRATION_USER_DAILY_CHARACTERS: "" });
     expect(env.ELEVENLABS_API_KEY).toBeUndefined();
     expect(env.NARRATION_GLOBAL_DAILY_CHARACTERS).toBeUndefined();
+    expect(env.NARRATION_ENABLED).toBe("false");
     expect(env.ELEVENLABS_VOICE_ID).toBe("nPczCjzI2devNBz1zQrb");
   });
 

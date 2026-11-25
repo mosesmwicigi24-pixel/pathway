@@ -23,10 +23,10 @@ export function registerPlanNarration(ctx: AppContext, injected?: NarrationServi
   const router = Router();
   const auth = authenticate(ctx.env);
   const { ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID,
-    NARRATION_GLOBAL_DAILY_CHARACTERS, NARRATION_USER_DAILY_CHARACTERS } = ctx.env;
+    NARRATION_ENABLED, NARRATION_GLOBAL_DAILY_CHARACTERS, NARRATION_USER_DAILY_CHARACTERS } = ctx.env;
   const redis = ctx.redis;
   let service: NarrationService | undefined = injected;
-  if (!service && redis && ELEVENLABS_API_KEY && NARRATION_GLOBAL_DAILY_CHARACTERS && NARRATION_USER_DAILY_CHARACTERS) {
+  if (!service && NARRATION_ENABLED === "true" && redis && ELEVENLABS_API_KEY && NARRATION_GLOBAL_DAILY_CHARACTERS && NARRATION_USER_DAILY_CHARACTERS) {
     const quota = new RedisNarrationQuota(redis, NARRATION_GLOBAL_DAILY_CHARACTERS, NARRATION_USER_DAILY_CHARACTERS);
     const provider = new ElevenLabsNarrationProvider(ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID);
     const scripture = new ScriptureService(buildScriptureProvider(ctx.env), ctx.env.YOUVERSION_LANGUAGE_RANGES, redis);
