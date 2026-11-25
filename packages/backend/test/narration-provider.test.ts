@@ -11,6 +11,7 @@ describe("ElevenLabsNarrationProvider", () => {
     const [url, options] = request.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(`https://api.elevenlabs.io/v1/text-to-speech/${voice}`);
     expect(options.headers).toMatchObject({ "xi-api-key": "test-secret" });
+    expect(options.redirect).toBe("error");
     expect(JSON.parse(options.body as string)).toEqual({ text: "Welcome to today's reading.", model_id: "eleven_multilingual_v2" });
   });
 

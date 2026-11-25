@@ -25,6 +25,8 @@ export class ElevenLabsNarrationProvider {
     try {
       const response = await this.request(`https://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}`, {
         method: "POST",
+        // Do not forward the provider credential through an HTTP redirect.
+        redirect: "error",
         headers: { "xi-api-key": this.apiKey, "content-type": "application/json", accept: "audio/mpeg" },
         body: JSON.stringify({ text, model_id: this.modelId }),
         signal: controller.signal,
