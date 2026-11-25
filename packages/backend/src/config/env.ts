@@ -90,6 +90,14 @@ const EnvSchema = z.object({
   YOUVERSION_APP_KEY: z.string().optional(),
   YOUVERSION_LANGUAGE_RANGES: z.string().default("en"),
 
+  // Plan narration is disabled unless the key, Redis, and both daily limits
+  // are present. The key stays on the server; voice/model can be rotated.
+  ELEVENLABS_API_KEY: z.preprocess((v) => v === "" ? undefined : v, z.string().min(1).optional()),
+  ELEVENLABS_VOICE_ID: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).default("nPczCjzI2devNBz1zQrb"),
+  ELEVENLABS_MODEL_ID: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).default("eleven_multilingual_v2"),
+  NARRATION_GLOBAL_DAILY_CHARACTERS: z.preprocess((v) => v === "" ? undefined : v, z.coerce.number().int().positive().optional()),
+  NARRATION_USER_DAILY_CHARACTERS: z.preprocess((v) => v === "" ? undefined : v, z.coerce.number().int().positive().optional()),
+
   CLOUDINARY_URL: z.string().optional(),
   CERT_SIGNING_KEY: z.string().optional(),
   PUSH_PROVIDER_KEY: z.string().optional(),
