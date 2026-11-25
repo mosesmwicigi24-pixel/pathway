@@ -105,6 +105,13 @@ services:
       # rate-limited Claude key degrades to a real model rather than to the
       # offline canned responder.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Optional plan narration: an absent key or budget keeps it disabled.
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-nPczCjzI2devNBz1zQrb}
+      ELEVENLABS_MODEL_ID: ${ELEVENLABS_MODEL_ID:-eleven_multilingual_v2}
+      NARRATION_ENABLED: ${NARRATION_ENABLED:-false}
+      NARRATION_GLOBAL_DAILY_CHARACTERS: ${NARRATION_GLOBAL_DAILY_CHARACTERS:-}
+      NARRATION_USER_DAILY_CHARACTERS: ${NARRATION_USER_DAILY_CHARACTERS:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
       ANTHROPIC_MODEL_FAST: ${ANTHROPIC_MODEL_FAST:-claude-haiku-4-5-20251001}
       ANTHROPIC_MODEL_DEEP: ${ANTHROPIC_MODEL_DEEP:-claude-opus-5}

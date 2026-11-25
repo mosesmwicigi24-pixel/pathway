@@ -7,4 +7,5 @@ export * from "./types/models.js";
 export * from "./types/sync.js";
 export * from "./types/api.js";
 export * from "./types/dto.js";
+export * from "./types/narration.js";
 export * from "./constants.js";
