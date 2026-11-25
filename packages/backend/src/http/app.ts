@@ -42,6 +42,7 @@ import { registerGrowth } from "../modules/growth/index.js";
 import { registerThoughts } from "../modules/thoughts/index.js";
 import { registerCommunity } from "../modules/community/index.js";
 import { registerGrowthContent } from "../modules/growth-content/index.js";
+import { registerPlanNarration } from "../modules/growth-content/narration-router.js";
 import { registerScores } from "../modules/scores/index.js";
 import { registerHome } from "../modules/home/index.js";
 import { registerPrayerWall } from "../modules/prayer-wall/index.js";
@@ -196,6 +197,7 @@ export function createApp(ctx: AppContext): Express {
   v1.use(registerAssistant(ctx));
   v1.use(registerIntelligence(ctx));
   v1.use(registerGrowthContent(ctx));
+  v1.use(registerPlanNarration(ctx));
   v1.use(registerScores(ctx));
   v1.use(registerHome(ctx));
   v1.use(registerPrayerWall(ctx));

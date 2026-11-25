@@ -9,6 +9,15 @@
 
 Last full audit: **2026-07-12** (two-direction agent sweep; see §Standardization below).
 
+### Reading-plan narration (2026-11-26; in review)
+
+The member iOS and Android apps consume the same gated plan narration contract.
+The server owns plan access, script revision checks, provider credentials, caching,
+and character budgets. Both clients retain device speech when the service is
+unavailable. The admin web and iPad portal do not expose the member plan reader;
+the retired React Native member client continues using its existing behavior.
+Production activation and end-to-end provider playback remain to be verified.
+
 ---
 
 ## 0. What "the same thing" means

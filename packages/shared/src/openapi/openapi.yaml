@@ -7077,6 +7077,50 @@ paths:
         "200": { description: Plan }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /growth/plans/{id}/days/{day}/narration/{part}:
+    get:
+      tags: [progress]
+      operationId: planNarrationManifest
+      summary: Get the authorized plan narration script and its content version.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: day, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 366 } }
+        - { name: part, in: path, required: true, schema: { type: string, enum: [word, respond] } }
+      responses:
+        "200":
+          description: Ordered script and its version; only after the day gate is checked.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [words, version]
+                properties:
+                  words: { type: array, items: { type: string }, maxItems: 100 }
+                  version: { type: string, pattern: '^[a-f0-9]{64}$' }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: Day is locked }
+        "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+  /growth/plans/{id}/days/{day}/narration/{part}/{version}/{index}/audio:
+    post:
+      tags: [progress]
+      operationId: planNarrationAudio
+      summary: Synthesize or retrieve one authorized paragraph of narration.
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+        - { name: day, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 366 } }
+        - { name: part, in: path, required: true, schema: { type: string, enum: [word, respond] } }
+        - { name: version, in: path, required: true, schema: { type: string, pattern: '^[a-f0-9]{64}$' } }
+        - { name: index, in: path, required: true, schema: { type: integer, minimum: 0, maximum: 99 } }
+      responses:
+        "200":
+          description: MP3 audio for the requested paragraph.
+          content:
+            audio/mpeg:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { description: The day is locked or the script version changed }
+        "429": { description: Narration character budget exhausted }
+        "503": { $ref: "#/components/responses/UpstreamUnavailable" }
   /growth/plans/{id}/start:
     post:
       tags: [progress]
