@@ -8,6 +8,8 @@ import type { LoginResult, MeResponse, MfaElevation, MfaEnroll, PendingMutation,
 import type { TokenVault } from "../auth/tokenVault";
 import { navigationRef } from "../navigation/navigationRef";
 import { apiBaseUrl } from "../config";
+import { clearQueryCache } from "./query";
+import { isRejectedRefresh } from "../auth/refreshFailure";
 import type {
   Achievements,
   AssembledQuiz,
@@ -97,7 +99,7 @@ export function installAuth(vault: TokenVault): void {
     (res) => res,
     async (error: AxiosError) => {
       const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
-      if (error.response?.status === 401 && original && !original._retry) {
+      if (error.response?.status === 401 && original && !original._retry && !original.url?.includes("/auth/token/refresh")) {
         original._retry = true;
         const refreshToken = await vault.getRefresh();
         if (refreshToken) {
@@ -112,11 +114,15 @@ export function installAuth(vault: TokenVault): void {
             original.headers.Authorization = `Bearer ${pair.access_token}`;
             return api(original);
           } catch (refreshErr) {
+            // A timeout or server outage does not establish that the session is
+            // revoked; keep the offline session and cached data in that case.
+            if (!isRejectedRefresh(refreshErr)) return Promise.reject(refreshErr);
             // Session is genuinely dead (refresh token revoked/expired) — the only
             // ways out besides explicit logout. Clear the vault and return to Login
             // so the user re-authenticates. (Offline failures are network errors,
             // not 401s, so they never reach here — the session stays put.)
             await vault.clear().catch(() => undefined);
+            await clearQueryCache().catch(() => undefined);
             if (navigationRef.isReady()) navigationRef.reset({ index: 0, routes: [{ name: "Login" }] });
             return Promise.reject(refreshErr);
           }

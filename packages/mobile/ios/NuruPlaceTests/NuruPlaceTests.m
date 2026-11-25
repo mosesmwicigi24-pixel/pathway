@@ -1,66 +1,24 @@
 #import <UIKit/UIKit.h>
 #import <XCTest/XCTest.h>
 
-#import <React/RCTLog.h>
-#import <React/RCTRootView.h>
-
-#define TIMEOUT_SECONDS 600
-#define TEXT_TO_LOOK_FOR @"Welcome to React"
-
 @interface NuruPlaceTests : XCTestCase
-
 @end
 
 @implementation NuruPlaceTests
 
-- (BOOL)findSubviewInView:(UIView *)view matching:(BOOL (^)(UIView *view))test
+- (void)testSceneCreatesAVisibleRootWindow
 {
-  if (test(view)) {
-    return YES;
-  }
-  for (UIView *subview in [view subviews]) {
-    if ([self findSubviewInView:subview matching:test]) {
-      return YES;
-    }
-  }
-  return NO;
-}
-
-- (void)testRendersWelcomeScreen
-{
-  UIViewController *vc = [[[RCTSharedApplication() delegate] window] rootViewController];
-  NSDate *date = [NSDate dateWithTimeIntervalSinceNow:TIMEOUT_SECONDS];
-  BOOL foundElement = NO;
-
-  __block NSString *redboxError = nil;
-#ifdef DEBUG
-  RCTSetLogFunction(
-      ^(RCTLogLevel level, RCTLogSource source, NSString *fileName, NSNumber *lineNumber, NSString *message) {
-        if (level >= RCTLogLevelError) {
-          redboxError = message;
-        }
-      });
-#endif
-
-  while ([date timeIntervalSinceNow] > 0 && !foundElement && !redboxError) {
-    [[NSRunLoop mainRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
-    [[NSRunLoop mainRunLoop] runMode:NSRunLoopCommonModes beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
-
-    foundElement = [self findSubviewInView:vc.view
-                                  matching:^BOOL(UIView *view) {
-                                    if ([view.accessibilityLabel isEqualToString:TEXT_TO_LOOK_FOR]) {
-                                      return YES;
-                                    }
-                                    return NO;
-                                  }];
+  NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:15];
+  UIWindow *window = nil;
+  while ([deadline timeIntervalSinceNow] > 0) {
+    window = [UIApplication sharedApplication].delegate.window;
+    if (window.windowScene != nil && window.rootViewController != nil && !window.hidden) break;
+    [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
   }
 
-#ifdef DEBUG
-  RCTSetLogFunction(RCTDefaultLogFunction);
-#endif
-
-  XCTAssertNil(redboxError, @"RedBox error: %@", redboxError);
-  XCTAssertTrue(foundElement, @"Couldn't find element with text '%@' in %d seconds", TEXT_TO_LOOK_FOR, TIMEOUT_SECONDS);
+  XCTAssertNotNil(window.windowScene, @"The app must attach its window to an iOS scene.");
+  XCTAssertNotNil(window.rootViewController, @"The app must install its React Native root controller.");
+  XCTAssertFalse(window.hidden, @"The app's root window must be visible.");
 }
 
 @end

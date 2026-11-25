@@ -22,7 +22,7 @@ import type { KeyValueStore } from "./db/keyValueStore";
 import { EncryptedKeyValueStore } from "./db/encryptedKeyValueStore";
 import { createKeychainCipher } from "./db/keychainCipher";
 import { getSyncEngine } from "./sync/engineProvider";
-import { hydrateQueryCache } from "./api/query";
+import { beginQuerySession, hydrateQueryCache } from "./api/query";
 import { startAttendanceTracking } from "./engagement/attendanceTracker";
 import { startDwellTracking } from "./engagement/dwellTracker";
 import { getConnectivity, setConnectivity } from "./net/connectivity";
@@ -61,15 +61,14 @@ export function App(): ReactElement {
     setConnectivity(new NetInfoConnectivity()); // real online/offline detection
     installAuth(getVault()); // attach Bearer + 401-refresh-retry against the vault
 
-    // Warm the read-cache from disk AND read the saved session in parallel, THEN pick
-    // the entry screen. Gating the (already-brief) splash on hydration means the first
-    // authed screen paints its last-known data instantly from disk — no spinner and no
-    // waiting on the network on a cold open (§1.7). It then refreshes silently.
+    // Read the session before hydrating cached member data. An authenticated
+    // cold launch can then paint its last-known data and refresh in the background.
     void (async () => {
-      const [refresh] = await Promise.all([
-        getVault().getRefresh().catch(() => null),
-        hydrateQueryCache().catch(() => undefined),
-      ]);
+      const refresh = await getVault().getRefresh().catch(() => null);
+      if (refresh) {
+        beginQuerySession();
+        await hydrateQueryCache();
+      }
       setBootRoute(refresh ? "Tabs" : "Login");
       // Best-effort device registration for an already-authed session (platform +
       // app version + device model). Optional + idempotent server-side; failures

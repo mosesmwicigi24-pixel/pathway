@@ -61,10 +61,23 @@ function wireAppState(): void {
 // result replaces it; when it hasn't, the cached copy simply stays.
 const PERSIST_PREFIX = "rq:";
 let persistEnabled = false;
+let sessionActive = false;
+let sessionGeneration = 0;
+const pendingWrites = new Set<Promise<void>>();
+let cleanupInFlight: Promise<void> | null = null;
+
+/** Enable reads for the current authenticated session after any cleanup. */
+export function beginQuerySession(): void {
+  sessionActive = true;
+  persistEnabled = true;
+  wireAppState();
+}
 
 function persist(key: string, entry: Entry): void {
-  if (!persistEnabled || entry.status !== "success" || entry.data === undefined) return;
-  void AsyncStorage.setItem(PERSIST_PREFIX + key, JSON.stringify({ d: entry.data, t: entry.fetchedAt ?? 0 })).catch(() => undefined);
+  if (!sessionActive || !persistEnabled || entry.status !== "success" || entry.data === undefined) return;
+  const write = AsyncStorage.setItem(PERSIST_PREFIX + key, JSON.stringify({ d: entry.data, t: entry.fetchedAt ?? 0 }));
+  pendingWrites.add(write);
+  void write.then(() => pendingWrites.delete(write), () => pendingWrites.delete(write));
 }
 
 /** Load persisted reads into the cache (call once at app start). Each entry is
@@ -72,12 +85,15 @@ function persist(key: string, entry: Entry): void {
  *  background. Never throws — if AsyncStorage is unavailable the app just runs
  *  in-memory only. */
 export async function hydrateQueryCache(): Promise<void> {
+  if (!sessionActive) return;
+  const generation = sessionGeneration;
   persistEnabled = true;
   wireAppState(); // start refreshing queries on app-foreground
   try {
     const keys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(PERSIST_PREFIX));
     if (keys.length === 0) return;
     const pairs = await Promise.all(keys.map(async (k) => [k, await AsyncStorage.getItem(k)] as const));
+    if (!sessionActive || generation !== sessionGeneration) return;
     for (const [k, v] of pairs) {
       if (!v) continue;
       const key = k.slice(PERSIST_PREFIX.length);
@@ -119,6 +135,8 @@ function dataEqual(a: unknown, b: unknown): boolean {
 }
 
 async function runFetch<T>(key: string, fetcher: () => Promise<T>, opts: { silent?: boolean } = {}): Promise<void> {
+  if (!sessionActive) return;
+  const generation = sessionGeneration;
   const prev = cache.get(key);
   const silent = opts.silent === true;
   // A first/explicit load flips to "loading" so the screen can show its state; a
@@ -134,6 +152,7 @@ async function runFetch<T>(key: string, fetcher: () => Promise<T>, opts: { silen
   }
   try {
     const data = await fetcher();
+    if (!sessionActive || generation !== sessionGeneration) return;
     const prevData = cache.get(key)?.data;
     if (prevData !== undefined && dataEqual(prevData, data)) {
       // Unchanged: keep the SAME data reference (so React doesn't re-render) and only
@@ -147,6 +166,7 @@ async function runFetch<T>(key: string, fetcher: () => Promise<T>, opts: { silen
     persist(key, ok);
     emit(key);
   } catch (error) {
+    if (!sessionActive || generation !== sessionGeneration) return;
     if (silent) return; // a failed background refresh stays invisible over good data
     const cur = cache.get(key);
     const failed: Entry<T> = { status: "error", error };
@@ -189,6 +209,7 @@ export function refreshQueries(prefix: string): void {
  *  show immediately). Marks it fresh so the optimistic value isn't refetched away
  *  until the next explicit refresh/invalidate. */
 export function setQueryData<T>(key: string, updater: (prev: T | undefined) => T): void {
+  if (!sessionActive) return;
   const prev = cache.get(key) as Entry<T> | undefined;
   const next: Entry<T> = { status: "success", data: updater(prev?.data), fetchedAt: Date.now() };
   cache.set(key, next);
@@ -198,13 +219,25 @@ export function setQueryData<T>(key: string, updater: (prev: T | undefined) => T
 
 /** Wipe all cached data (used on sign-out so a new session never sees stale
  *  data) — both in memory and the persisted mirror. */
-export function clearQueryCache(): void {
+export async function clearQueryCache(): Promise<void> {
+  if (cleanupInFlight) return cleanupInFlight;
+  sessionActive = false;
+  sessionGeneration += 1;
   const keys = [...cache.keys()];
   cache.clear();
   keys.forEach(emit);
-  void AsyncStorage.getAllKeys()
-    .then((ks) => Promise.all(ks.filter((k) => k.startsWith(PERSIST_PREFIX)).map((k) => AsyncStorage.removeItem(k))))
-    .catch(() => undefined);
+  cleanupInFlight = (async () => {
+    await Promise.allSettled([...pendingWrites]);
+    const persisted = await AsyncStorage.getAllKeys();
+    const results = await Promise.allSettled(persisted.filter((k) => k.startsWith(PERSIST_PREFIX)).map((k) => AsyncStorage.removeItem(k)));
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failure) throw failure.reason;
+  })();
+  try {
+    await cleanupInFlight;
+  } finally {
+    cleanupInFlight = null;
+  }
 }
 
 export interface QueryResult<T> {

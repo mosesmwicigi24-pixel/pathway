@@ -23,6 +23,9 @@ export class EncryptedKeyValueStore implements KeyValueStore {
     try {
       return await this.cipher.decrypt(raw);
     } catch {
+      // Unlike a refetchable cache entry, the mutation queue may contain the
+      // only copy of a member's work. Treating it as absent would overwrite it.
+      if (key === "np:queue") throw new Error("The offline mutation queue could not be decrypted.");
       // Unreadable (corrupt / key rotated) → treat as absent rather than crash.
       return null;
     }

@@ -14,6 +14,11 @@ server's authority never change; the experience layer does.
 1. **Where am I?** 2. **What matters here?** 3. **What can I do?**
 4. **What happens next?** 5. **What have I completed?** 6. **What needs my attention?**
 
+Exam and quiz results: a non-passing score is headed “Keep going”, followed by
+the actual score, pass mark, and review/retry options. Do not describe every
+score as “Almost there”; that can be misleading when the score is far from the
+pass mark. This is presentation only; scoring and progression stay server-led.
+
 A screen that cannot answer one of these in a glance is not finished.
 
 ## 2. Principles

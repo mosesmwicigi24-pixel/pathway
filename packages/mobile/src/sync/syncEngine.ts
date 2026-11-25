@@ -34,6 +34,8 @@ const ID_FIELD: Record<string, string> = {
 };
 
 export class SyncEngine {
+  private enqueueTail: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly api: SyncApi,
     private readonly store: LocalStore,
@@ -47,6 +49,12 @@ export class SyncEngine {
     if (MONEY_DOMAINS.has(domain)) {
       throw new Error("Money is never queued offline (§5.6); the giving flow requires connectivity.");
     }
+    const operation = this.enqueueTail.then(() => this.enqueueOne(domain, op, payload));
+    this.enqueueTail = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async enqueueOne(domain: string, op: string, payload: Record<string, unknown>): Promise<PendingMutation> {
     const pending = await this.store.pendingMutations();
     const seq = pending.reduce((max, m) => Math.max(max, m.seq), 0) + 1;
     const mutation: PendingMutation = {
@@ -68,7 +76,10 @@ export class SyncEngine {
     const res = await this.api.push({ ...(this.deviceId ? { device_id: this.deviceId } : {}), mutations });
     // applied + duplicate + rejected all leave the queue (§3.6: rejected are
     // surfaced to the user and removed; duplicates dropped silently).
-    await this.store.clearMutations(res.results.map((r) => r.mutation_id));
+    const sentIds = new Set(mutations.map((m) => m.mutation_id));
+    const settled = res.results.filter((r) => sentIds.has(r.mutation_id) &&
+      (r.status === "applied" || r.status === "duplicate" || r.status === "rejected"));
+    await this.store.clearMutations(settled.map((r) => r.mutation_id));
     return res;
   }
 

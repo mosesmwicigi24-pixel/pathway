@@ -315,9 +315,15 @@ export function ProfileScreen(): ReactElement {
       /* best-effort */
     }
     await getVault().clear();
-    clearQueryCache();
+    let cacheCleared = true;
+    try {
+      await clearQueryCache();
+    } catch {
+      cacheCleared = false;
+    }
     resetAnnouncementAlerts(); // next member re-seeds; don't inherit this user's seen-set
     nav.reset({ index: 0, routes: [{ name: "Login" }] });
+    if (!cacheCleared) Alert.alert("Sign-out needs attention", "This device couldn't clear cached data. Sign in again when device storage is available to finish cleanup.");
   }
 
   // Toggle approximate-location sharing. ON → acquire a coarse, foreground-only
