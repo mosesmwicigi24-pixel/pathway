@@ -8,12 +8,39 @@ const mut = (id: string, seq: number): PendingMutation => ({
 });
 
 describe("AsyncStorageLocalStore", () => {
+  it.each(["{broken", "null", "{}", "", "[null]", '[{"mutation_id":"x"}]'])('preserves an unreadable queue (%s) instead of overwriting it', async (raw) => {
+    const kv = new MemoryKeyValueStore();
+    await kv.setItem("np:queue", raw);
+    const s = new AsyncStorageLocalStore(kv);
+    await expect(s.pendingMutations()).rejects.toThrow("offline mutation queue");
+    await expect(s.enqueueMutation(mut("new", 1))).rejects.toThrow("offline mutation queue");
+    await expect(s.clearMutations(["old"])).rejects.toThrow("offline mutation queue");
+    expect(await kv.getItem("np:queue")).toBe(raw);
+  });
+
   it("queues mutations in seq order and clears applied ones", async () => {
     const s = new AsyncStorageLocalStore(new MemoryKeyValueStore());
     await s.enqueueMutation(mut("b", 2));
     await s.enqueueMutation(mut("a", 1));
     expect((await s.pendingMutations()).map((m) => m.mutation_id)).toEqual(["a", "b"]);
     await s.clearMutations(["a"]);
+    expect((await s.pendingMutations()).map((m) => m.mutation_id)).toEqual(["b"]);
+  });
+
+  it("preserves concurrent writes and clears only the requested mutation", async () => {
+    const s = new AsyncStorageLocalStore(new MemoryKeyValueStore());
+    await Promise.all([s.enqueueMutation(mut("a", 1)), s.enqueueMutation(mut("b", 2))]);
+    await Promise.all([s.clearMutations(["a"]), s.enqueueMutation(mut("c", 3))]);
+    expect((await s.pendingMutations()).map((m) => m.mutation_id)).toEqual(["b", "c"]);
+  });
+
+  it("allows later writes after the underlying queue has been recovered", async () => {
+    const kv = new MemoryKeyValueStore();
+    const s = new AsyncStorageLocalStore(kv);
+    await kv.setItem("np:queue", "broken");
+    await expect(s.enqueueMutation(mut("a", 1))).rejects.toThrow();
+    await kv.setItem("np:queue", "[]");
+    await s.enqueueMutation(mut("b", 1));
     expect((await s.pendingMutations()).map((m) => m.mutation_id)).toEqual(["b"]);
   });
 

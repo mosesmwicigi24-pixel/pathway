@@ -20,15 +20,39 @@ const CURSOR_PREFIX = "np:cursor:";
 const CACHE_PREFIX = "np:cache:";
 
 export class AsyncStorageLocalStore implements LocalStore {
+  private queueWrite: Promise<void> = Promise.resolve();
+
   constructor(private readonly kv: KeyValueStore) {}
+
+  private mutateQueue(change: (queue: PendingMutation[]) => PendingMutation[]): Promise<void> {
+    const operation = this.queueWrite.then(async () => {
+      const queue = await this.readQueue();
+      await this.writeQueue(change(queue));
+    });
+    // A failed write is returned to its caller, but must not poison later attempts.
+    this.queueWrite = operation.catch(() => undefined);
+    return operation;
+  }
 
   private async readQueue(): Promise<PendingMutation[]> {
     const raw = await this.kv.getItem(QUEUE_KEY);
-    if (!raw) return [];
+    if (raw === null) return [];
     try {
-      return JSON.parse(raw) as PendingMutation[];
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed) || !parsed.every((item: unknown) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+        const row = item as Record<string, unknown>;
+        return typeof row.mutation_id === "string" && row.mutation_id.length > 0 &&
+          typeof row.seq === "number" && Number.isSafeInteger(row.seq) && row.seq > 0 &&
+          typeof row.domain === "string" && row.domain.length > 0 &&
+          typeof row.op === "string" && row.op.length > 0 &&
+          !!row.payload && typeof row.payload === "object" && !Array.isArray(row.payload);
+      })) throw new Error("Invalid queue format");
+      return parsed as PendingMutation[];
     } catch {
-      return [];
+      // The queue is the system of record: do not replace unreadable data with
+      // an empty queue on the next write. Leave it intact for recovery.
+      throw new Error("The offline mutation queue could not be read.");
     }
   }
   private writeQueue(q: PendingMutation[]): Promise<void> {
@@ -36,20 +60,18 @@ export class AsyncStorageLocalStore implements LocalStore {
   }
 
   async enqueueMutation(m: PendingMutation): Promise<void> {
-    const q = await this.readQueue();
-    q.push(m);
-    await this.writeQueue(q);
+    await this.mutateQueue((q) => [...q, m]);
   }
 
   async pendingMutations(): Promise<PendingMutation[]> {
+    await this.queueWrite;
     const q = await this.readQueue();
     return [...q].sort((a, b) => a.seq - b.seq);
   }
 
   async clearMutations(ids: string[]): Promise<void> {
     const drop = new Set(ids);
-    const q = (await this.readQueue()).filter((m) => !drop.has(m.mutation_id));
-    await this.writeQueue(q);
+    await this.mutateQueue((q) => q.filter((m) => !drop.has(m.mutation_id)));
   }
 
   async getCursor(domain: string): Promise<number | undefined> {

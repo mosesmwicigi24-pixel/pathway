@@ -8,6 +8,7 @@ import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View 
 import { ArrowLeft, Check, Eye, EyeOff, Lock, Mail, User } from "lucide-react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { NuruApi } from "../api/client";
+import { beginQuerySession, clearQueryCache } from "../api/query";
 import { getVault } from "../auth/vault";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -73,7 +74,10 @@ export function LoginScreen(): ReactElement {
   }
 
   async function enter(tokens: { access_token: string; refresh_token: string }): Promise<void> {
+    // Do not enter a new account until the previous account's cache is gone.
+    await clearQueryCache();
     await getVault().setTokens(tokens.access_token, tokens.refresh_token);
+    beginQuerySession();
     nav.reset({ index: 0, routes: [{ name: "Tabs" }] });
   }
 

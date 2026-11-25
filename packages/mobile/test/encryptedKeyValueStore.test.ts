@@ -48,6 +48,15 @@ describe("EncryptedKeyValueStore", () => {
     expect(await enc.getItem("legacy")).toBeNull();
   });
 
+  it("preserves an undecryptable mutation queue and refuses to overwrite it", async () => {
+    const base = new MemoryKeyValueStore();
+    const s = new AsyncStorageLocalStore(new EncryptedKeyValueStore(base, reverse));
+    await base.setItem("np:queue", "unreadable ciphertext");
+    await expect(s.pendingMutations()).rejects.toThrow("offline mutation queue");
+    await expect(s.enqueueMutation({ mutation_id: "new", seq: 1, domain: "prayer_entries", op: "upsert", payload: {}, status: "pending" })).rejects.toThrow("offline mutation queue");
+    expect(await base.getItem("np:queue")).toBe("unreadable ciphertext");
+  });
+
   it("drives the real LocalStore unchanged when layered underneath it", async () => {
     // The whole point: AsyncStorageLocalStore neither knows nor cares that its KV
     // is encrypted. Same behavior as the plaintext test, now over a cipher.

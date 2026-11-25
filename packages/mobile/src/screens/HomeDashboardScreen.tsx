@@ -162,23 +162,31 @@ export function HomeDashboardScreen(): ReactElement {
     : scriptureVerse;
   const [verseShareOpen, setVerseShareOpen] = useState(false);
   const [verseSaved, setVerseSaved] = useState(false);
-  // Verse-of-the-day reactions: server is source of truth; we keep a local copy so
-  // a tap feels instant (optimistic) and reconcile from the response.
-  const { data: serverReactions } = useVerseReactions();
+  const [verseSaving, setVerseSaving] = useState(false);
+  const verseSaveInFlight = useRef(false);
+  const [verseActionError, setVerseActionError] = useState<string | null>(null);
+  // Keep the server's answer authoritative; overlapping toggle requests can
+  // otherwise arrive out of order or leave an unrecorded reaction selected.
+  const { data: serverReactions, refetch: refetchReactions } = useVerseReactions();
   const [reactions, setReactions] = useState<VerseReactions | null>(null);
+  const [reactionPending, setReactionPending] = useState(false);
+  const reactionInFlight = useRef(false);
   useEffect(() => { if (serverReactions) setReactions(serverReactions); }, [serverReactions]);
-  const reactVerse = useCallback((emoji: string) => {
-    setReactions((prev) => {
-      const counts = { ...(prev?.counts ?? {}) };
-      const mine = prev?.mine ?? null;
-      if (mine) counts[mine] = Math.max(0, (counts[mine] ?? 1) - 1); // drop my old vote
-      const nextMine = mine === emoji ? null : emoji;                // tap-again clears
-      if (nextMine) counts[nextMine] = (counts[nextMine] ?? 0) + 1;
-      const total = Object.values(counts).reduce((a, b) => a + b, 0);
-      return { counts, mine: nextMine, total };
-    });
-    void NuruApi.setVerseReaction(emoji).then(setReactions).catch(() => { /* keep optimistic */ });
-  }, []);
+  const reactVerse = useCallback(async (emoji: string) => {
+    if (reactionInFlight.current) return;
+    reactionInFlight.current = true;
+    setReactionPending(true);
+    setVerseActionError(null);
+    try {
+      setReactions(await NuruApi.setVerseReaction(emoji));
+    } catch {
+      setVerseActionError("Couldn't confirm your reaction. Check your connection and try again.");
+      await refetchReactions();
+    } finally {
+      reactionInFlight.current = false;
+      setReactionPending(false);
+    }
+  }, [refetchReactions]);
   const { data: welcomeVideo, refetch: refetchWelcomeVideo } = useWelcomeVideo();
   const { data: featuredCell, refetch: refetchFeaturedCell } = useFeaturedCell();
   const { data: rhythmServer } = useRhythmToday();
@@ -512,10 +520,12 @@ export function HomeDashboardScreen(): ReactElement {
               return (
                 <Pressable
                   key={emoji}
-                  onPress={() => reactVerse(emoji)}
+                  onPress={() => void reactVerse(emoji)}
+                  disabled={reactionPending}
                   style={[st.verseReactChip, mine && st.verseReactChipOn]}
                   accessibilityRole="button"
-                  accessibilityLabel={`React ${emoji}`}
+                  accessibilityLabel={`React ${emoji}, ${count} reactions`}
+                  accessibilityState={{ selected: mine, disabled: reactionPending }}
                 >
                   <T style={{ fontSize: 15 }}>{emoji}</T>
                   {count > 0 ? (
@@ -528,28 +538,35 @@ export function HomeDashboardScreen(): ReactElement {
           <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.md }}>
             <Pressable
               onPress={() => {
-                if (verseSaved || !verse?.reference) return;
-                setVerseSaved(true); // optimistic — the verse is now in the library
+                if (verseSaved || verseSaveInFlight.current || !verse?.reference) return;
+                verseSaveInFlight.current = true;
+                setVerseSaving(true);
+                setVerseActionError(null);
                 void NuruApi.saveVerse({
                   saved_verse_id: uuidv4(),
                   reference: verse.reference,
                   ...(verse.version ? { version: verse.version } : {}),
                   ...(verse.text ? { verse_text: verse.text } : {}),
                   client_mutation_id: uuidv4(),
-                }).catch(() => setVerseSaved(false));
+                }).then(() => setVerseSaved(true))
+                  .catch(() => setVerseActionError("Couldn't confirm that the verse was saved. Please check your library before trying again."))
+                  .finally(() => { verseSaveInFlight.current = false; setVerseSaving(false); });
               }}
+              disabled={verseSaved || verseSaving}
               style={st.versePillBtn}
               accessibilityRole="button"
               accessibilityLabel="Save verse to your library"
+              accessibilityState={{ disabled: verseSaved || verseSaving, busy: verseSaving }}
             >
               <Heart size={13} color={verseSaved ? palette.gold : palette.ink600} fill={verseSaved ? palette.gold : "none"} />
-              <T variant="micro" style={{ fontWeight: "600", color: verseSaved ? palette.gold : palette.ink600 }}>{verseSaved ? "Saved" : "Save"}</T>
+              <T variant="micro" style={{ fontWeight: "600", color: verseSaved ? palette.gold : palette.ink600 }}>{verseSaved ? "Saved" : verseSaving ? "Saving…" : "Save"}</T>
             </Pressable>
             <Pressable onPress={() => setVerseShareOpen(true)} style={st.versePillBtn} accessibilityRole="button" accessibilityLabel="Share verse to a chat">
               <Share2 size={13} color={palette.ink600} />
               <T variant="micro" style={{ fontWeight: "600", color: palette.ink600 }}>Share</T>
             </Pressable>
           </View>
+          {verseActionError ? <View accessibilityLiveRegion="polite"><T variant="caption" style={{ color: palette.error, marginTop: spacing.sm }}>{verseActionError}</T></View> : null}
         </View>
 
         {verseShareOpen && verse?.text ? (

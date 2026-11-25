@@ -1,6 +1,8 @@
 // Mobile sync engine + local store — pure logic, no React Native runtime.
 import { describe, it, expect, beforeEach } from "vitest";
 import { InMemoryLocalStore } from "../src/db/inMemoryLocalStore";
+import { AsyncStorageLocalStore } from "../src/db/asyncStorageLocalStore";
+import { MemoryKeyValueStore } from "../src/db/keyValueStore";
 import { SyncEngine, type SyncApi } from "../src/sync/syncEngine";
 import type { PendingMutation, SyncPullResponse, SyncPushResponse } from "@nuru/shared";
 
@@ -44,6 +46,27 @@ describe("SyncEngine + InMemoryLocalStore", () => {
     expect((await store.pendingMutations()).length).toBe(2);
   });
 
+  it("assigns distinct ordered sequence numbers to concurrent enqueues", async () => {
+    const persistent = new AsyncStorageLocalStore(new MemoryKeyValueStore());
+    const sharedEngine = new SyncEngine(api, persistent, "device-1");
+    const items = await Promise.all([
+      sharedEngine.enqueue("module_progress", "complete", { module_id: "m1" }),
+      sharedEngine.enqueue("module_progress", "complete", { module_id: "m2" }),
+    ]);
+    expect(items.map((item) => item.seq)).toEqual([1, 2]);
+    expect(await persistent.pendingMutations()).toHaveLength(2);
+  });
+
+  it("does not block later enqueue attempts after a storage error", async () => {
+    const kv = new MemoryKeyValueStore();
+    const persistent = new AsyncStorageLocalStore(kv);
+    const sharedEngine = new SyncEngine(api, persistent, "device-1");
+    await kv.setItem("np:queue", "broken");
+    await expect(sharedEngine.enqueue("module_progress", "complete", { module_id: "m1" })).rejects.toThrow();
+    await kv.setItem("np:queue", "[]");
+    await expect(sharedEngine.enqueue("module_progress", "complete", { module_id: "m2" })).resolves.toMatchObject({ seq: 1 });
+  });
+
   it("push replays the queue and clears applied mutations", async () => {
     await engine.enqueue("module_progress", "complete", { module_id: "m1" });
     const res = await engine.push();
@@ -54,6 +77,25 @@ describe("SyncEngine + InMemoryLocalStore", () => {
 
   it("push is a no-op (null) with an empty queue", async () => {
     expect(await engine.push()).toBeNull();
+  });
+
+  it("retains work when the server returns an unknown status or an unrelated ID", async () => {
+    let e: SyncEngine;
+    const unusual: SyncApi = {
+      pull: () => Promise.resolve({ changes: {}, tombstones: {}, cursors: {} }),
+      push: async () => {
+        await e.enqueue("module_progress", "complete", { module_id: "m2" });
+        return { results: [
+          { mutation_id: "ours", status: "pending" as "applied" },
+          { mutation_id: "another", status: "applied" as const },
+        ] };
+      },
+    };
+    const ids = ["ours", "another"];
+    e = new SyncEngine(unusual, store, "device-1", () => ids.shift()!);
+    await e.enqueue("module_progress", "complete", { module_id: "m1" });
+    await e.push();
+    expect((await store.pendingMutations()).map((m) => m.mutation_id)).toEqual(["ours", "another"]);
   });
 
   it("drops a rejected mutation from the queue but surfaces its reason (§3.6)", async () => {
