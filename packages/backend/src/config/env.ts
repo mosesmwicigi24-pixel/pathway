@@ -95,6 +95,7 @@ const EnvSchema = z.object({
   ELEVENLABS_API_KEY: z.preprocess((v) => v === "" ? undefined : v, z.string().min(1).optional()),
   ELEVENLABS_VOICE_ID: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).default("nPczCjzI2devNBz1zQrb"),
   ELEVENLABS_MODEL_ID: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).default("eleven_multilingual_v2"),
+  NARRATION_ENABLED: z.enum(["true", "false"]).default("false"),
   NARRATION_GLOBAL_DAILY_CHARACTERS: z.preprocess((v) => v === "" ? undefined : v, z.coerce.number().int().positive().optional()),
   NARRATION_USER_DAILY_CHARACTERS: z.preprocess((v) => v === "" ? undefined : v, z.coerce.number().int().positive().optional()),
 

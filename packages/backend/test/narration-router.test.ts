@@ -44,6 +44,18 @@ describe("protected narration routes", () => {
     expect(response.body.error.code).toBe("UPSTREAM_UNAVAILABLE");
   });
 
+  it("remains disabled even with credentials present until explicitly enabled", async () => {
+    const server = express();
+    const disabled = { ...context, redis: {}, env: { ...env, NARRATION_ENABLED: "false", ELEVENLABS_API_KEY: "test-key",
+      NARRATION_GLOBAL_DAILY_CHARACTERS: 10000, NARRATION_USER_DAILY_CHARACTERS: 1000 } } as unknown as AppContext;
+    server.use(registerPlanNarration(disabled));
+    server.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      if (error instanceof ApiError) res.status(error.status).json(error.toBody("test")); else res.status(500).end();
+    });
+    const response = await supertest(server).get(path).set("Authorization", `Bearer ${token}`);
+    expect(response.status).toBe(503);
+  });
+
   it("requires authentication, and only POST may synthesize authorized content", async () => {
     const { request, synthesize } = app();
     expect((await request.get(path)).status).toBe(401);
