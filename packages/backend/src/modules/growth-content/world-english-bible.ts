@@ -90,7 +90,7 @@ export async function worldEnglishPassage(reference: string, request: typeof fet
         if (verse.type !== "verse" || typeof verse.number !== "number" || !Array.isArray(verse.content)) continue;
         const text = verse.content.map((piece: unknown) => typeof piece === "string" ? piece :
           piece && typeof piece === "object" && typeof (piece as { text?: unknown }).text === "string" ? (piece as { text: string }).text : "").filter(Boolean).join(" ").trim();
-        if (verses.has(verse.number) || !text) throw new Error("Invalid Bible verse");
+        if (verses.has(verse.number)) throw new Error("Invalid Bible verse");
         verses.set(verse.number, text);
       }
       chapters.set(key, verses);
