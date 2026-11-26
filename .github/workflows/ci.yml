@@ -13,6 +13,7 @@ name: CI
 # merging; never one shard alone.
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:

@@ -53,8 +53,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/pathway-backend
+          flavor: latest=false
           tags: |
-            type=raw,value=latest
             type=sha,format=short
 
       - name: Build and push (linux/amd64 — the VPS arch)
