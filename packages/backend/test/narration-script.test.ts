@@ -8,7 +8,7 @@ describe("narration script", () => {
       { type: "heading", text: "A New Day" },
       { type: "scripture", reference: "John 3:16", text: null },
       { type: "prose", text: "**Remember** this.\n\n[Read more](https://example.com)" },
-    ], passage)).resolves.toEqual(["A New Day", "John 3, verse 16.", "For God so loved the world.", "Remember this.", "Read more"]);
+    ], passage)).resolves.toEqual(["A New Day", "John 3, verse 16.", "World English Bible.", "For God so loved the world.", "Remember this.", "Read more"]);
     expect(passage).toHaveBeenCalledWith("John 3:16");
   });
 
@@ -17,18 +17,19 @@ describe("narration script", () => {
       async () => { throw new Error("private provider detail"); })).rejects.toThrow("Narration scripture unavailable");
   });
 
-  it("bounds paragraphs without losing text and preserves authored scripture", async () => {
+  it("uses the licensed translation instead of embedded scripture and bounds paragraphs", async () => {
     const text = "word ".repeat(400).trim();
-    const passage = vi.fn();
-    const script = await narrationScript([{ type: "scripture", reference: null, text }], passage);
+    const passage = vi.fn().mockResolvedValue(text);
+    const script = await narrationScript([{ type: "scripture", reference: "John 3:16", text: "Unverified translation" }], passage);
     expect(script.every((p) => p.length <= 1200)).toBe(true);
-    expect(script.join(" ")).toBe(text);
-    expect(passage).not.toHaveBeenCalled();
+    expect(script.slice(2).join(" ")).toBe(text);
+    expect(passage).toHaveBeenCalledWith("John 3:16");
+    await expect(narrationScript([{ type: "scripture", reference: null, text }], passage)).rejects.toThrow("Narration scripture unavailable");
   });
 
   it("reads sequential verse numbers silently but keeps numbers in the passage", async () => {
     const script = await narrationScript([{ type: "scripture", reference: "James 1:22-23",
-      text: "22 Do not merely listen. They waited 430 years. 23 Anyone who listens." }], async () => "");
-    expect(script).toEqual(["James 1, verses 22 to 23.", "Do not merely listen. They waited 430 years. Anyone who listens."]);
+      text: null }], async () => "22 Do not merely listen. They waited 430 years. 23 Anyone who listens.");
+    expect(script).toEqual(["James 1, verses 22 to 23.", "World English Bible.", "Do not merely listen. They waited 430 years. Anyone who listens."]);
   });
 });
