@@ -21,6 +21,7 @@ describe("World English Bible provider", () => {
     { type: "heading", content: ["Heading"] },
     { type: "verse", number: 16, content: [{ text: "First" }, { noteId: 1 }, { text: "verse." }] },
     { type: "verse", number: 17, content: ["Second verse."] },
+    { type: "verse", number: 25, content: [{ noteId: 2 }] },
   ] } };
   it("requests the fixed public-domain source and returns only requested verses", async () => {
     const request = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
@@ -29,6 +30,7 @@ describe("World English Bible provider", () => {
   });
   it("fails closed for missing verses, wrong translation or unavailable source", async () => {
     await expect(worldEnglishPassage("John 3:18", vi.fn().mockResolvedValue(new Response(JSON.stringify(body))))).rejects.toThrow();
+    await expect(worldEnglishPassage("John 3:25", vi.fn().mockResolvedValue(new Response(JSON.stringify(body))))).rejects.toThrow();
     await expect(worldEnglishPassage("John 3:16", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...body, translation: { id: "other" } }))))).rejects.toThrow();
     await expect(worldEnglishPassage("John 3:16", vi.fn().mockResolvedValue(new Response("no", { status: 503 })))).rejects.toThrow();
   });
