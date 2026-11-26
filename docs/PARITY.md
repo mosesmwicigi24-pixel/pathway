@@ -16,6 +16,10 @@ The server owns plan access, script revision checks, provider credentials, cachi
 and character budgets. Both clients retain device speech when the service is
 unavailable. The admin web and iPad portal do not expose the member plan reader;
 the retired React Native member client continues using its existing behavior.
+For cloud narration, Bible passages use the public-domain World English Bible;
+the spoken script identifies that translation because displayed plan text may
+use another translation. The source rejects references it cannot interpret and
+clients fall back to device reading when the source is unavailable.
 Production activation and end-to-end provider playback remain to be verified.
 
 ---

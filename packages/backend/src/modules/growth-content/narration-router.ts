@@ -4,7 +4,8 @@ import type { AppContext } from "../../http/context.js";
 import { authenticate } from "../../http/auth.js";
 import { ApiError } from "../../http/errors.js";
 import { handler, parseBody, requirePrincipal } from "../../http/http.js";
-import { buildScriptureProvider, ScriptureService } from "../curriculum/scripture.js";
+import { cacheGetSet, cacheKeys } from "../../cache.js";
+import { worldEnglishPassage } from "./world-english-bible.js";
 import { GrowthContentService } from "./service.js";
 import { ElevenLabsNarrationProvider } from "./narration-provider.js";
 import { RedisNarrationQuota } from "./narration-quota.js";
@@ -29,12 +30,11 @@ export function registerPlanNarration(ctx: AppContext, injected?: NarrationServi
   if (!service && NARRATION_ENABLED === "true" && redis && ELEVENLABS_API_KEY && NARRATION_GLOBAL_DAILY_CHARACTERS && NARRATION_USER_DAILY_CHARACTERS) {
     const quota = new RedisNarrationQuota(redis, NARRATION_GLOBAL_DAILY_CHARACTERS, NARRATION_USER_DAILY_CHARACTERS);
     const provider = new ElevenLabsNarrationProvider(ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID);
-    const scripture = new ScriptureService(buildScriptureProvider(ctx.env), ctx.env.YOUVERSION_LANGUAGE_RANGES, redis);
     const growth = new GrowthContentService(ctx.db.primary);
     service = new NarrationService({
       voiceId: ELEVENLABS_VOICE_ID, modelId: ELEVENLABS_MODEL_ID,
       authorizedDays: async (userId, planId) => z.object({ days: z.array(Day) }).parse(await growth.planDetail(userId, planId)).days,
-      passage: async (reference) => (await scripture.passage(reference)).text,
+      passage: (reference) => cacheGetSet(redis, cacheKeys.scripture(reference, "world-english-ENGWEBP", "en"), 30 * 24 * 60 * 60, () => worldEnglishPassage(reference)),
       synthesize: (text) => provider.synthesize(text),
       reserve: (userId, count) => quota.reserve(userId, count),
       exclusive: (key, operation) => withNarrationLock(redis, key, operation),

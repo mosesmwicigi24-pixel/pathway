@@ -14,11 +14,11 @@ export async function narrationScript(
   const output: string[] = [];
   for (const block of blocks) {
     if (block.type === "scripture") {
-      if (block.reference) append(output, spokenReference(block.reference));
-      let text = block.text;
-      if (!text && block.reference) {
-        try { text = await passage(block.reference); } catch { throw new NarrationScriptError(); }
-      }
+      if (!block.reference) throw new NarrationScriptError();
+      append(output, spokenReference(block.reference));
+      append(output, "World English Bible.");
+      let text: string;
+      try { text = await passage(block.reference); } catch { throw new NarrationScriptError(); }
       if (!text?.trim()) throw new NarrationScriptError();
       append(output, withoutVerseNumbers(text, block.reference));
     } else {
